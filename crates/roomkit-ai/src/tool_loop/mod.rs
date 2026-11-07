@@ -726,14 +726,17 @@ impl<P: AiProvider> Loop<P> {
                 .map(|called| self.unrun(called.call.clone()))
                 .collect()
         } else {
-            join_all(
-                generation
-                    .calls
+            let calls = &generation.calls;
+            let serving = calls.iter().enumerate().map(|(position, called)| {
+                let id = &called.call.id;
+                let nth = calls
                     .iter()
-                    .map(|called| self.serve(called))
-                    .collect(),
-            )
-            .await
+                    .take(position)
+                    .filter(|earlier| &earlier.call.id == id)
+                    .count();
+                self.serve(called, nth)
+            });
+            join_all(serving.collect()).await
         };
         let mut ran = Ran::default();
         if !unrun {

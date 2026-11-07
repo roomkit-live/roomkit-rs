@@ -18,7 +18,7 @@
 //! the response's rows have in common, which a later turn's history pairs
 //! a call's start and end by (RFC §6.4).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use roomkit_core::model::{
     EventContent, EventId, EventSource, EventType, Metadata, ResponseMetadata, RoomEvent,
@@ -221,18 +221,22 @@ impl Segments {
         self.segment(cancelled)
     }
 
-    /// The ends of the calls still open, each `failed` with `error`, with
-    /// the arguments `ran_with` says it ran with when its gate fixed them,
-    /// and the start row of one whose start was never written (RFC §12.2
-    /// step 13s: no start row stays pending; §10.6.4). Of two calls under one
-    /// id, the first is the one that ran (RFC §12.4).
+    /// The ends of the calls still open: as each ended when `ended` says
+    /// so, by its place among the calls open under its id (a call that
+    /// ended before the cut, Python's `start.ended`), else `failed` with
+    /// `error`, with the arguments `ran_with` says it ran with when its gate
+    /// fixed them; and the start row of one whose start was never written
+    /// (RFC §12.2 step 13s: no start row stays pending; §10.6.4). Of two
+    /// calls under one id, the first is the one that ran (RFC §12.4).
     pub(super) fn close_open(
         &mut self,
         error: &str,
         ran_with: impl Fn(&str) -> Option<Metadata>,
+        ended: impl Fn(&str, usize) -> Option<ToolCallContent>,
     ) -> Vec<RoomEvent> {
         let mut rows = Vec::new();
         let mut ran = HashSet::new();
+        let mut under_id: HashMap<String, usize> = HashMap::new();
         for open in std::mem::take(&mut self.open) {
             if !open.written {
                 rows.push(self.draft(
@@ -240,10 +244,15 @@ impl Segments {
                     EventContent::ToolCall(open.start.clone()),
                 ));
             }
+            let place = under_id.entry(open.start.tool_id.clone()).or_default();
+            let nth = std::mem::replace(place, *place + 1);
+            let first = ran.insert(open.start.tool_id.clone());
+            if let Some(end) = ended(&open.start.tool_id, nth) {
+                rows.push(self.draft(EventType::ToolCallEnd, EventContent::ToolCall(end)));
+                continue;
+            }
             let mut end = open.start;
-            let fixed = ran
-                .insert(end.tool_id.clone())
-                .then(|| ran_with(&end.tool_id));
+            let fixed = first.then(|| ran_with(&end.tool_id));
             if let Some(arguments) = fixed.flatten() {
                 end.arguments = arguments;
             }
@@ -515,7 +524,7 @@ mod tests {
         first.intent = Some("I look it up.".to_owned());
         segments.start(first);
         segments.opened_unwritten(ToolCallContent::new("lookup", "call_2"));
-        let closed = segments.close_open("cancelled", |_| None);
+        let closed = segments.close_open("cancelled", |_| None, |_, _| None);
         let kinds: Vec<(EventType, ToolCallStatus, Option<&str>)> = closed
             .iter()
             .map(|row| {
@@ -553,11 +562,12 @@ mod tests {
         };
         segments.start(call("first"));
         segments.start(call("second"));
-        let closed = segments.close_open("cancelled", |_| {
+        let ran_with = |_: &str| {
             let mut fixed = Metadata::new();
             fixed.insert("q".to_owned(), json!("fixed"));
             Some(fixed)
-        });
+        };
+        let closed = segments.close_open("cancelled", ran_with, |_, _| None);
         let read: Vec<&Value> = closed
             .iter()
             .map(|row| {

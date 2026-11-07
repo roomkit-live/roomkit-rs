@@ -24,7 +24,9 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use roomkit_core::model::{ChannelBinding, ChannelId, Metadata, Room, RoomEvent, RoomId};
+use roomkit_core::model::{
+    ChannelBinding, ChannelId, Metadata, Room, RoomEvent, RoomId, ToolCallContent,
+};
 use tokio::sync::{mpsc, watch};
 
 use self::pump::Pump;
@@ -87,6 +89,9 @@ pub(super) struct OwnerState {
     /// The arguments each call runs with once its gate fixed them, by its
     /// start's frame (`tool_args`).
     pub(super) ran_with: Mutex<HashMap<u64, Metadata>>,
+    /// The end of each call told before its end item, by its start's frame
+    /// (`tool_ended`).
+    pub(super) ended: Mutex<HashMap<u64, ToolCallContent>>,
     /// The items the reader granted, in all: an executor that sends more
     /// fails its turn.
     pub(super) granted: AtomicU64,
@@ -166,6 +171,7 @@ pub(crate) fn open(
         facts,
         waiting: Mutex::new(ExecutionContext::default()),
         ran_with: Mutex::new(HashMap::new()),
+        ended: Mutex::new(HashMap::new()),
         granted: AtomicU64::new(0),
         cancel: watch::Sender::new(None),
         over: watch::Sender::new(false),

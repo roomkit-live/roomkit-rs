@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 use roomkit_core::model::{
     ChannelId, ChannelOutput, ChannelType, DirectEvent, EventContent, EventId, HookAction,
     Metadata, Observation, Room, RoomContext, RoomEvent, RoomId, Timestamp, ToolCall,
-    ToolCallOutcome,
+    ToolCallContent, ToolCallOutcome,
 };
 use roomkit_core::ops::{Environment, SystemEnvironment};
 use roomkit_core::rules::hook_chain::HookOutcome;
@@ -119,6 +119,9 @@ struct Calls {
     ran_with: HashMap<String, Metadata>,
     /// The calls running: let run, not reported yet.
     running: Vec<ToolCall>,
+    /// The ends told before they were read, each with the call's place
+    /// among the open calls under its id.
+    ended: Vec<(usize, ToolCallContent)>,
 }
 
 /// What a call the turn's cut stopped reads (RFC §9.3), as the Python
@@ -609,9 +612,36 @@ impl TurnHost {
     }
 
     /// The end of the call `call_id` was sent: what it ran with is kept no
-    /// more.
+    /// more, nor the end told of it early, the earliest under its id, the
+    /// others under it each one place up.
     pub(crate) fn forget_ran_with(&self, call_id: &str) {
-        self.calls().ran_with.remove(call_id);
+        let mut calls = self.calls();
+        calls.ran_with.remove(call_id);
+        calls
+            .ended
+            .retain(|(nth, end)| end.tool_id != call_id || *nth != 0);
+        for (nth, end) in &mut calls.ended {
+            if end.tool_id == call_id {
+                *nth = nth.saturating_sub(1);
+            }
+        }
+    }
+
+    /// Tells the kit that a call ended as `end` says, before its end is
+    /// read: `nth`, its place among the turn's calls open under its id
+    /// (`0` for the earliest). A cut of the turn before its end is read
+    /// closes it so, where it closes a call that had not ended `cancelled`
+    /// (RFC §12.2 step 13s). Python's private `ToolCallStartMarker.ended`.
+    /// For an AI channel's turn, not a public verb.
+    #[doc(hidden)]
+    pub fn call_ended(&self, nth: usize, end: ToolCallContent) {
+        self.calls().ended.push((nth, end));
+    }
+
+    /// Runs `read` on the ends told early whose end was not sent yet, each
+    /// with its call's place among the calls open under its id.
+    pub(crate) fn with_ended<T>(&self, read: impl FnOnce(&[(usize, ToolCallContent)]) -> T) -> T {
+        read(&self.calls().ended)
     }
 
     fn calls(&self) -> std::sync::MutexGuard<'_, Calls> {

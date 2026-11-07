@@ -12,6 +12,7 @@ use tokio::time::Instant;
 use super::generation::{Called, Partial};
 use super::{Loop, ToolEnd};
 use crate::provider::AiProvider;
+use crate::rows::end_row;
 use crate::skills::ACTIVATE_SKILL;
 use crate::texts;
 use crate::tool_eviction::kept_whole;
@@ -31,11 +32,12 @@ enum Gated {
 }
 
 impl<P: AiProvider> Loop<P> {
-    /// Serves `called`: its gate, then its tool, then the kit's hooks on a
-    /// served result; reports it once to the kit's observers (RFC §9.3:
-    /// every call fires `ON_TOOL_CALL` once), and ends it as the model
+    /// Serves `called`, the `nth` of its round's calls under its id: its
+    /// gate, then its tool, then the kit's hooks on a served result; tells
+    /// the kit its end and reports it once to the kit's observers (RFC
+    /// §9.3: every call fires `ON_TOOL_CALL` once), and ends it as the model
     /// reads it.
-    pub(super) async fn serve(&self, called: &Called) -> ToolEnd {
+    pub(super) async fn serve(&self, called: &Called, nth: usize) -> ToolEnd {
         let started = Instant::now();
         let mut span = None;
         let (ended, asked) = match self.gate(called).await {
@@ -72,13 +74,6 @@ impl<P: AiProvider> Loop<P> {
         let shown = self.model_copy(called, &ended.call, &result, served);
         let reported = ended.ended(outcome, result.clone().into_value());
         log_failure(&reported);
-        if let Some(turn) = &self.turn {
-            if called.duplicate {
-                turn.report_call_under_held_id(&reported);
-            } else {
-                turn.report_tool_call(&reported);
-            }
-        }
         let result = if let Some(asked) = asked {
             self.search
                 .settle(&reported.call.id, &reported.call.name, outcome);
@@ -87,11 +82,29 @@ impl<P: AiProvider> Loop<P> {
         } else {
             shown
         };
-        ToolEnd {
+        let end = ToolEnd {
             outcome,
-            call: reported.call,
+            call: reported.call.clone(),
             result,
             duration: started.elapsed(),
+        };
+        self.tell(called, nth, &reported, &end);
+        end
+    }
+
+    /// Tells the kit how `called`, the `nth` of its round's calls under its
+    /// id, ended, before its end is read: a cut of the turn closes it so
+    /// (RFC §12.2 step 13s), as Python's `ToolCallStartMarker.ended`; then
+    /// reports it to the kit's observers.
+    fn tell(&self, called: &Called, nth: usize, reported: &ToolCallReport, end: &ToolEnd) {
+        let Some(turn) = &self.turn else {
+            return;
+        };
+        turn.call_ended(nth, end_row(end.clone()));
+        if called.duplicate {
+            turn.report_call_under_held_id(reported);
+        } else {
+            turn.report_tool_call(reported);
         }
     }
 

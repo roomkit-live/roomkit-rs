@@ -181,20 +181,22 @@ impl OwnerTurn {
         }
     }
 
-    /// The next end of a call a steering cut left open, cancelled; `None`
-    /// once none is left, the stream over.
+    /// The next end of a call a steering cut left open, cancelled unless it
+    /// ended before the cut; `None` once none is left, the stream over.
     fn cut_end(&mut self) -> Option<Result<RemoteItem, ChannelError>> {
         if self.open.is_empty() {
             self.stage = Stage::Done;
             return None;
         }
-        let (_, start) = self.open.remove(0);
-        let end = ToolCallContent {
+        let (seq, start) = self.open.remove(0);
+        // A call that ended before the cut ends so (`tool_ended`).
+        let told = lock(&self.state.ended).remove(&seq);
+        let end = told.unwrap_or_else(|| ToolCallContent {
             status: ToolCallStatus::Failed,
             outcome: Some(ToolCallOutcome::Cancelled),
             error: Some("cancelled".to_owned()),
             ..start
-        };
+        });
         Some(Ok(RemoteItem::Item(ResponseItem::ToolCallEnd(end))))
     }
 
@@ -338,6 +340,15 @@ impl OwnerTurn {
         if let Some(position) = position {
             self.open.remove(position);
         }
+    }
+
+    /// The end of the `nth` call open under `tool_id` (`0` for the
+    /// earliest), when the executor told it before its end item
+    /// (`tool_ended`): a call that ended before a cut.
+    pub(crate) fn ended_early(&self, tool_id: &str, nth: usize) -> Option<ToolCallContent> {
+        let mut open = self.open.iter().filter(|(_, open)| open.tool_id == tool_id);
+        let (seq, _) = open.nth(nth)?;
+        lock(&self.state.ended).get(seq).cloned()
     }
 
     /// The arguments the open call `tool_id` runs with once its gate fixed

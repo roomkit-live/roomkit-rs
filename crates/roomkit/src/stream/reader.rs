@@ -1161,7 +1161,8 @@ impl Producer {
     async fn close_open(&mut self, error: &str) {
         let stream = self.stream.as_ref();
         let ran_with = |tool_id: &str| stream.and_then(|turn| turn.ran_with(tool_id));
-        for row in self.segments.close_open(error, ran_with) {
+        let ended = |tool_id: &str, nth| stream.and_then(|turn| turn.ended_early(tool_id, nth));
+        for row in self.segments.close_open(error, ran_with, ended) {
             self.commit_as(row, false).await;
         }
     }

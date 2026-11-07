@@ -297,6 +297,10 @@ impl Executor {
         // What the turn's work publishes from now on is no trace's (RFC §6.4).
         self.turn.traced.store(false, Ordering::Release);
         link.close();
+        if !matches!(cut, Some(Cut::LetGo | Cut::Lost(_))) {
+            // A call that ended before its end was read is closed so.
+            host.with_ended(|ended| self.sender.report_ended(ended));
+        }
         match cut {
             Some(Cut::LetGo) => {
                 link.fail_all(&let_go());

@@ -16,6 +16,7 @@ use tokio::time::Instant;
 use super::{Facts, Main, OwnerState, verbs};
 use crate::context::ExecutionContext;
 use crate::turn::TurnKit;
+use crate::turns::codec::decode_end;
 use crate::turns::error::{TurnError, one};
 use crate::turns::pipe::PipeReceiver;
 use crate::turns::timeouts::Beat;
@@ -161,6 +162,11 @@ impl Pump {
             Frame::ToolArgs { start, arguments } => {
                 lock(&self.state.ran_with).insert(start, arguments);
             }
+            // A call's end told before its end item: a cut closes the call
+            // with it (RFC §12.2 step 13s).
+            Frame::ToolEnded { start, end } => {
+                lock(&self.state.ended).insert(start, decode_end(end));
+            }
             Frame::Error { error } => self.hand(Main::Error(error)),
             Frame::End => {
                 self.hand(Main::End);
@@ -196,8 +202,6 @@ impl Pump {
                 event_id,
                 data,
             ),
-            // What the reader settles itself, before it closes (a call's
-            // early end), and the ephemerals no owner of 0.1 publishes.
             Frame::SteerResult { steer_id, loops } => {
                 self.state.steers.answer(&steer_id, loops);
             }
@@ -214,7 +218,8 @@ impl Pump {
                 let turn = self.input_turn();
                 self.turns.inputs.taken(&turn, &request_id, taken);
             }
-            Frame::ToolEnded { .. } | Frame::Ephemeral { .. } => {
+            // The ephemerals no owner of 0.1 publishes.
+            Frame::Ephemeral { .. } => {
                 tracing::trace!(target: "roomkit::turns", turn = %self.state.turn.turn_id, "a frame left unread");
             }
         }

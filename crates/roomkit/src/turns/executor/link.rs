@@ -154,6 +154,35 @@ impl FrameSender {
         drop(self.turn.frames.put(&frame));
     }
 
+    /// Sends, as `tool_ended`, each end in `ended` told before its end was
+    /// read, by its call's place among the calls open under its id: the
+    /// owner closes the call with it at a cut (RFC §12.2 step 13s).
+    pub(crate) fn report_ended(&self, ended: &[(usize, ToolCallContent)]) {
+        let mut sent = lock(&self.state);
+        if sent.silenced {
+            return;
+        }
+        let starts: Vec<(u64, &ToolCallContent)> = ended
+            .iter()
+            .filter_map(|(nth, end)| {
+                let mut open = sent.open.iter().filter(|(_, id)| *id == end.tool_id);
+                let (start, _) = open.nth(*nth)?;
+                Some((*start, end))
+            })
+            .collect();
+        if starts.is_empty() || self.send_burst(&mut sent).is_err() {
+            return;
+        }
+        for (start, end) in starts {
+            sent.open.retain(|(seq, _)| *seq != start);
+            let frame = Frame::ToolEnded {
+                start,
+                end: encode_end(end.clone()),
+            };
+            drop(self.turn.frames.put(&frame));
+        }
+    }
+
     /// Sends the arguments each open call runs with once its gate fixed
     /// them, `ran_with` by the call's id, when they were not sent yet.
     pub(crate) fn report_args(
