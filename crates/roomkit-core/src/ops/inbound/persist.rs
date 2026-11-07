@@ -10,10 +10,10 @@
 //! the cascade's passes and sets are over; then the operation ends.
 //!
 //! A write the store fails is logged, at ERROR (RFC §15.2), and the call
-//! goes on, its error its turn's: each task and observation is written on
-//! its own, those the store fails leaving the others written, and only a
-//! task stored fires `ON_TASK_CREATED`, as Python's `_persist_side_effects`
-//! and `_write_metadata_updates` do.
+//! goes on, a failed write never its error: each task and observation is
+//! written on its own, those the store fails leaving the others written,
+//! and only a task stored fires `ON_TASK_CREATED`, as Python's
+//! `_persist_side_effects` and `_write_metadata_updates` do.
 
 use super::{Machine, Stage, report};
 use std::collections::HashMap;
@@ -99,14 +99,16 @@ const ROOM_NOT_FOUND: &str = "RoomNotFound";
 
 /// Logs that the room metadata updates under `keys` were not written, as
 /// Python's `_write_metadata_updates` does, the keys sorted: the delivery
-/// set stands. A room gone meanwhile is no failure: Python's write of it
-/// returns `None`, and logs nothing.
+/// set stands. A room gone meanwhile is no failure, Python's write of it
+/// returning `None`, nor a write the kit's close cut before it started,
+/// which Python's `except Exception` does not catch: both at DEBUG.
 pub(crate) fn metadata_not_written(room_id: &RoomId, keys: &[String], error: &ErrorRecord) {
-    if error.error_type == ROOM_NOT_FOUND {
+    if error.error_type == ROOM_NOT_FOUND || error.error_type == KIT_CLOSED {
         tracing::debug!(
             target: "roomkit::framework",
             room_id = %room_id,
-            "the room was gone before its metadata updates were written"
+            error_type = %error.error_type,
+            "the room metadata updates were not written: the room is gone or the kit closed"
         );
         return;
     }
