@@ -100,9 +100,10 @@ impl Drop for Lent {
 
 /// Cancels on the server what `client` runs, then closes it: a statement its
 /// caller left goes no further, and the connection serves no one else. Its place
-/// in the pool is kept until it closes, as asyncpg keeps it until its cancel is
-/// done, so the pool never holds more sessions than its size. Without a runtime
-/// to send the cancel from, it only closes: the statement runs on to its end.
+/// in the pool is kept until the cancel request is sent and the connection
+/// closes; asyncpg keeps it until the statement answers the cancel, a moment
+/// later. Without a runtime to send the cancel from, it only closes: the
+/// statement runs on to its end.
 pub(crate) fn cancel_then_close(client: Object, tls: Option<Tls>) {
     let Ok(runtime) = tokio::runtime::Handle::try_current() else {
         drop(Object::take(client));
@@ -130,11 +131,14 @@ impl Drop for Closing {
 
 /// Sends the cancel request of `token`'s connection; one that fails leaves the
 /// connection closing, its statement running on to its end. `tls` is the pool's,
-/// when the crate knows it; otherwise (a pool handed in) the request asks for TLS
-/// that checks no certificate when the connection's mode asks for TLS, as it
-/// carries the connection's key alone and the connection closes after it, then
-/// goes in clear if that fails (an address with no host name, a host rustls
-/// cannot name).
+/// when the crate knows it; otherwise (a pool handed in, whose connector the
+/// crate cannot read) the request asks for TLS that checks no certificate when
+/// the connection's mode asks for TLS, then goes in clear if that fails (an
+/// address with no host name, a host rustls cannot name), which a mode of
+/// `require` refuses before the request is written. asyncpg's request checks as
+/// its connection does; this one does not, and exposes only the session's
+/// number and key, which cancel nothing but the statement cancelled here, on a
+/// connection that runs nothing else and closes right after (HITL f281e902).
 async fn cancel(token: &CancelToken, tls: Option<Tls>) {
     if let Some(tls) = tls {
         drop(token.cancel_query(tls).await);

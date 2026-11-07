@@ -44,7 +44,10 @@ pub struct PostgresStoreOptions {
     /// takes no CA as an end entity; give the server one issued by that CA.
     pub dsn: Option<String>,
     /// A pool of the integrator's, which stays theirs: the store never closes
-    /// it.
+    /// it. The crate cannot read its TLS: the cancel request of a call cut on
+    /// it asks for TLS that checks no certificate when the connection's mode
+    /// asks for TLS, then goes in clear if that fails, never under
+    /// `sslmode=require` (HITL f281e902).
     pub pool: Option<Pool>,
 }
 
@@ -68,7 +71,8 @@ pub struct PostgresKnowledgeSourceOptions {
     /// The connection string, read as [`PostgresStoreOptions::dsn`] is.
     pub dsn: Option<String>,
     /// A pool of the integrator's, a store's for one, which stays theirs: the
-    /// source never closes it.
+    /// source never closes it. The cancel request of a call cut on it checks
+    /// no certificate, as [`PostgresStoreOptions::pool`]'s.
     pub pool: Option<Pool>,
     /// The name its results carry when a document was indexed with no source.
     pub source_name: String,
@@ -113,7 +117,9 @@ pub struct PostgresAdvisoryLockManagerOptions {
     /// A pool of the integrator's, separate from the store's, which stays
     /// theirs: the manager never closes it. Its connections keep
     /// `client_connection_check_interval` at a second, from Postgres 14, set by
-    /// the manager so that the server ends a wait whose client is gone.
+    /// the manager so that the server ends a wait whose client is gone. The
+    /// cancel request of a wait or a release cut on it checks no certificate,
+    /// as [`PostgresStoreOptions::pool`]'s.
     pub pool: Option<Pool>,
     /// How many connections the pool opens at once.
     pub min_size: usize,
