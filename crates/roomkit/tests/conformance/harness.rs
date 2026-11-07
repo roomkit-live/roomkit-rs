@@ -320,7 +320,11 @@ async fn run_step(run: &Arc<Run>, step: &Value, path: &str) -> Vec<Value> {
         if !run.gates.wait_for(gate).await {
             run.problem(format!("{path}: no call reached the gate {gate}"));
         }
-    } else if let Some(room_id) = step["wait_for_lock"].as_str() {
+    } else if step["wait_for_lock"].is_string() {
+        let room = run
+            .resolve(step["wait_for_lock"].clone(), &Scope::default())
+            .await;
+        let room_id = room.as_str().unwrap_or_default();
         let waiters = step["waiters"]
             .as_u64()
             .map_or(1, |waiters| usize::try_from(waiters).unwrap_or(usize::MAX));
