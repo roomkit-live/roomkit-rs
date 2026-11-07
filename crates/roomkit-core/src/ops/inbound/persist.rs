@@ -4,9 +4,8 @@
 //! returned, then the room metadata updates its targets returned (gap
 //! G-049), under the room's lock (`metadata_write`), as Python's
 //! `_persist_side_effects` writes them in that order, before its event's
-//! `AFTER_BROADCAST` hooks run (step 16): those
-//! hooks read them stored, as Python's `_post_plan_effects` writes them
-//! before it starts them. Each stored task's `ON_TASK_CREATED` observers
+//! `AFTER_BROADCAST` hooks run (step 16): those hooks read them stored, as
+//! Python's `_post_plan_effects` writes them before it starts them. Each stored task's `ON_TASK_CREATED` observers
 //! run once it is. What no set stores, a record's side effects, an event's
 //! whose set delivered nothing, the call's own observations, is stored once
 //! the cascade's passes and sets are over; then the operation ends.

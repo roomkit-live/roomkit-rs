@@ -4,7 +4,11 @@
 //! the order they answered, are written on the room once, as a partial
 //! update, under the room's lock. A call that holds the lock meanwhile (a
 //! locked hook writing the room's metadata) writes first, and the set's
-//! updates follow it.
+//! updates follow it. That holds for a set its own call runs while the
+//! call holds the lock, a keyed publication's adopted entry among them:
+//! Python's set runs in the room's lane, outside the lock's execution
+//! context, so its lock and its release are asked of the room's lock
+//! itself, never answered as a nested section's.
 //!
 //! A failure is logged once and the set stands, as Python's `except
 //! Exception` around its `locked` block logs it: the lock refused, the
@@ -49,7 +53,7 @@ impl MetadataWrite {
             room_id: room_id.clone(),
         };
         Self {
-            state: State::Locking(cx.io.issue(request)),
+            state: State::Locking(unnested(cx, request)),
             room_id: room_id.clone(),
             keys: metadata.keys().cloned().collect(),
             metadata,
@@ -110,7 +114,7 @@ impl MetadataWrite {
         let request = HoldRequest::ReleaseLock {
             room_id: self.room_id.clone(),
         };
-        self.state = State::Releasing(cx.io.issue(request));
+        self.state = State::Releasing(unnested(cx, request));
         Progress::Waiting
     }
 
@@ -121,4 +125,14 @@ impl MetadataWrite {
             metadata_not_written(&self.room_id, &self.keys, error);
         }
     }
+}
+
+/// Issues `request`, a lock request, outside any section the set runs
+/// nested in: a lock the call holds, its own or handed, holds it back
+/// until its release, as the room's lock holds back Python's lane.
+fn unnested(cx: &mut Cx<'_>, request: HoldRequest) -> EffectId {
+    let outer = cx.io.nest(None);
+    let effect = cx.io.issue(request);
+    cx.io.nest(outer);
+    effect
 }
