@@ -2989,7 +2989,8 @@ async fn a_call_a_locked_hook_s_task_nests_goes_on_past_the_event_s_caller_gone(
 /// room's lock for the call up to the event's `process_timeout`, which
 /// cuts it, nothing of it stored and nothing reported, and a message sent
 /// then commits (HITL 57923782, 2c9d64f7). Python's cancelled caller
-/// returns at that deadline, roomkit-rs's at once. Python:
+/// returns once the call is over, at the latest at that deadline,
+/// roomkit-rs's at once. Python:
 /// `tests/test_reentrance.py`, the test of the same name.
 #[tokio::test]
 async fn a_call_a_locked_hook_s_task_nests_ends_by_the_event_s_deadline_past_its_caller() {
