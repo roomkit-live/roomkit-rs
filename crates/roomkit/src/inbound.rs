@@ -257,9 +257,10 @@ impl DeliveryHandle {
         }
     }
 
-    /// Whether the delivery will make no further progress: it ran to its
-    /// end, or the kit's close ended it, and a cut's cleanup closed the
-    /// streams it left unread.
+    /// Whether the delivery will make no further progress: the call's own
+    /// delivery ran to its end, though a call its admission work adopted
+    /// and did not wait for may still deliver, or the kit's close ended it,
+    /// and a cut's cleanup closed the streams it left unread.
     pub fn done(&self) -> bool {
         let shared = &self.shared;
         let over = shared.ended.initialized()
@@ -479,20 +480,12 @@ impl Shared {
                 };
                 let joined = tokio::select! {
                     biased;
-                    joined = running => joined,
-                    // Its delivery cancelled, the call is over once its
-                    // turns are: the delivery goes on, detached (RFC §10.1
-                    // "Explicit delivery cancellation").
-                    result = driver::cancelled_end(record) => {
-                        if record.cleanup_incomplete().is_some() {
-                            return Ended::CleanupIncomplete;
-                        }
-                        return Ended::Over(Box::new(result));
-                    }
                     // The call's own cascade over, the run goes on for the
                     // entries it adopted and did not wait for: their answers
                     // and the reading of their streams are their own (RFC
-                    // §9.5.1 Reentrance).
+                    // §9.5.1 Reentrance). Read first: the run's end, the
+                    // kit's close having cut those entries, is not the
+                    // call's.
                     output = driver::own_end(record) => {
                         if record.cleanup_incomplete().is_some() {
                             return Ended::CleanupIncomplete;
@@ -504,6 +497,16 @@ impl Shared {
                             }
                             Err(error) => Ended::Failed(std::sync::Mutex::new(Some(error))),
                         };
+                    }
+                    joined = running => joined,
+                    // Its delivery cancelled, the call is over once its
+                    // turns are: the delivery goes on, detached (RFC §10.1
+                    // "Explicit delivery cancellation").
+                    result = driver::cancelled_end(record) => {
+                        if record.cleanup_incomplete().is_some() {
+                            return Ended::CleanupIncomplete;
+                        }
+                        return Ended::Over(Box::new(result));
                     }
                 };
                 *run = None;
