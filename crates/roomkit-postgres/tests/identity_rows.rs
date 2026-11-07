@@ -145,11 +145,10 @@ async fn a_read_by_id_of_a_record_the_model_cannot_read_quotes_none_of_it() {
                         .add_participant(Participant::new(p1.clone(), room.clone(), sms))
                         .await
                         .unwrap();
+                    // No organization named: a caller naming one learns nothing of
+                    // the row (HITL 3f36d6c8).
                     let kit = RoomKit::new(RoomKitOptions::with_store(store.clone()));
-                    let options = ResolveParticipantOptions {
-                        organization_id: globex(),
-                        ..ResolveParticipantOptions::default()
-                    };
+                    let options = ResolveParticipantOptions::default();
                     let refused = kit
                         .resolve_participant(&room, &p1, &i1, options)
                         .await

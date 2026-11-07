@@ -13,7 +13,7 @@ use roomkit_core::ops::{ChangeMember, MemberChange};
 use super::RoomKit;
 use crate::driver;
 use crate::error::RoomKitError;
-use crate::store::ConversationStore;
+use crate::store::{ConversationStore, StoreError};
 
 /// What [`RoomKit::ensure_participant`] takes beside the room, the channel
 /// and the participant, Python's `ensure_participant(room_id, channel_id,
@@ -150,7 +150,9 @@ impl<S: ConversationStore> RoomKit<S> {
     /// [`RoomKitError::RoomNotFound`] for a room of another organization;
     /// the store's failure to read the identity, a record the model cannot
     /// read among them (`RoomKitError::Value`), once the room and the
-    /// participant are found; nothing is written.
+    /// participant are found; nothing is written. A caller naming an
+    /// organization reads `IdentityNotFound` for a record the model cannot
+    /// read, which proves no organization (RFC §17.2, HITL 3f36d6c8).
     pub async fn resolve_participant(
         &self,
         room_id: &RoomId,
@@ -167,6 +169,7 @@ impl<S: ConversationStore> RoomKit<S> {
             Ok(identity) => (identity, None),
             Err(error) => (None, Some(error)),
         };
+        let scoped = options.organization_id.is_some();
         let change = MemberChange::Resolve {
             participant_id: participant_id.clone(),
             identity_id: identity_id.clone(),
@@ -183,6 +186,11 @@ impl<S: ConversationStore> RoomKit<S> {
             )
             .await;
         match (resolved, unread) {
+            // Python's caller of an organization: the store's `ValueError` is
+            // the identity not found.
+            (Err(RoomKitError::IdentityNotFound(_)), Some(StoreError::Value(_))) if scoped => {
+                Err(RoomKitError::IdentityNotFound(identity_id.clone()))
+            }
             (Err(RoomKitError::IdentityNotFound(_)), Some(error)) => Err(self.read_failed(error)),
             (resolved, _) => resolved,
         }

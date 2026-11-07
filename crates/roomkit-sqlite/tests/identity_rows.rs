@@ -428,7 +428,9 @@ async fn a_record_the_model_cannot_read_serves_no_read() {
 /// Python: `test_a_read_by_id_of_a_record_the_model_cannot_read_quotes_none_of_it` (HITL
 /// 47b7dfc6): the read fails with a fixed error, the id alone, whatever the caller's
 /// organization: the record may be another organization's. Python's `ValueError` is
-/// [`StoreError::Value`], and the kit's `RoomKitError::Value`.
+/// [`StoreError::Value`], and the kit's `RoomKitError::Value`. The kit's
+/// `resolve_participant` names no organization, as a caller naming one learns nothing
+/// of the record (`resolve_participant_for_an_organization_finds_no_unreadable_identity`).
 #[tokio::test]
 async fn a_read_by_id_of_a_record_the_model_cannot_read_quotes_none_of_it() {
     const FIXED: &str = "Identity i1 has a record the model cannot read";
@@ -506,10 +508,7 @@ async fn a_read_by_id_of_a_record_the_model_cannot_read_quotes_none_of_it() {
                             &room,
                             &ParticipantId::new("p1").unwrap(),
                             &i1,
-                            ResolveParticipantOptions {
-                                organization_id: acme(),
-                                ..ResolveParticipantOptions::default()
-                            },
+                            ResolveParticipantOptions::default(),
                         )
                         .await
                         .unwrap_err();
@@ -609,5 +608,48 @@ async fn resolve_participant_checks_the_room_and_the_participant_first() {
             matches!(refused, RoomKitError::ParticipantNotFound { .. })
         };
         assert!(expected, "{missing}: {refused:?}");
+    }
+}
+
+/// Python: `test_resolve_participant_for_an_organization_finds_no_unreadable_identity`
+/// (HITL 3f36d6c8): a caller naming an organization reads `IdentityNotFound` for a
+/// record the model cannot read, which proves no organization, even its own: the
+/// store's fixed error would tell another organization that the id exists (RFC
+/// §17.2). Nothing is written.
+#[tokio::test]
+async fn resolve_participant_for_an_organization_finds_no_unreadable_identity() {
+    let room = RoomId::new("r1").unwrap();
+    let p1 = ParticipantId::new("p1").unwrap();
+    let i1 = IdentityId::new("i1").unwrap();
+    for organization in ["globex", "acme"] {
+        let (_file, store) = with_unreadable(&unreadable_records()[2]).await;
+        let mut held = Room::new(room.clone());
+        held.organization_id = Some(organization.to_owned());
+        store.create_room(held).await.unwrap();
+        let participant =
+            Participant::new(p1.clone(), room.clone(), ChannelId::new("sms").unwrap());
+        store.add_participant(participant).await.unwrap();
+        let before = store.get_participant(&room, &p1).await.unwrap();
+        let kit = RoomKit::new(RoomKitOptions::with_store(store.clone()));
+        let refused = kit
+            .resolve_participant(
+                &room,
+                &p1,
+                &i1,
+                ResolveParticipantOptions {
+                    organization_id: Some(organization.to_owned()),
+                    ..ResolveParticipantOptions::default()
+                },
+            )
+            .await
+            .unwrap_err();
+        let after = store.get_participant(&room, &p1).await.unwrap();
+        kit.close().await.unwrap();
+        store.close().await;
+        assert!(
+            matches!(&refused, RoomKitError::IdentityNotFound(id) if *id == i1),
+            "{organization}: {refused:?}"
+        );
+        assert_eq!(after, before, "{organization}");
     }
 }
