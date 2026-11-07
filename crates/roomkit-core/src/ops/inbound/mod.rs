@@ -82,6 +82,7 @@ mod host_post;
 mod identity;
 mod instructions;
 mod job;
+mod metadata_write;
 mod named_room;
 mod off_lock;
 mod pass;

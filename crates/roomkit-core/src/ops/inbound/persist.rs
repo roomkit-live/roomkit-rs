@@ -1,8 +1,10 @@
 //! Step 15 of the inbound pipeline (RFC §10.1 step 15). A delivery set,
 //! once over, stores what it and its event's pass collected: the tasks and
 //! observations its event's `BEFORE_BROADCAST` hooks gave and its targets
-//! returned, and the room metadata updates its targets returned (gap
-//! G-049), before its event's `AFTER_BROADCAST` hooks run (step 16): those
+//! returned, then the room metadata updates its targets returned (gap
+//! G-049), under the room's lock (`metadata_write`), as Python's
+//! `_persist_side_effects` writes them in that order, before its event's
+//! `AFTER_BROADCAST` hooks run (step 16): those
 //! hooks read them stored, as Python's `_post_plan_effects` writes them
 //! before it starts them. Each stored task's `ON_TASK_CREATED` observers
 //! run once it is. What no set stores, a record's side effects, an event's
@@ -15,11 +17,12 @@
 //! and only a task stored fires `ON_TASK_CREATED`, as Python's
 //! `_persist_side_effects` and `_write_metadata_updates` do.
 
+use super::metadata_write::MetadataWrite;
 use super::{Machine, Stage, report};
 use std::collections::HashMap;
 
 use crate::model::{
-    ErrorRecord, Metadata, Observation, RoomContext, RoomEvent, RoomId, RoomUpdates, Task, TaskId,
+    ErrorRecord, Metadata, Observation, RoomContext, RoomEvent, RoomId, Task, TaskId,
 };
 use crate::ops::protocol::{EffectId, KIT_CLOSED, Outcome, StoreRequest, Unpersisted};
 use crate::ops::{Cx, Progress};
@@ -199,8 +202,12 @@ pub(super) struct SetEffects {
     hooks: (Vec<Task>, Vec<Observation>),
     /// The write of its tasks and observations under way, with its tasks.
     stored: Option<(EffectId, Vec<Task>)>,
-    /// The write of its room metadata updates under way, with their keys.
-    updated: Option<(EffectId, Vec<String>)>,
+    /// Its room metadata updates, written once its tasks and observations
+    /// are.
+    metadata: Metadata,
+    /// The write of its room metadata updates under way, under the room's
+    /// lock.
+    updated: Option<MetadataWrite>,
     /// What the writes leave the set's outcome: the tasks stored, whose
     /// `ON_TASK_CREATED` observers run.
     written: Written,
@@ -231,9 +238,9 @@ impl SetEffects {
     }
 
     /// Asks for the hooks' tasks and observations then `tasks` and
-    /// `observations`, the set's targets', to be stored in `room_id`, and
-    /// `metadata` to be written on it, those there are; done at once with
-    /// none (Python's `_persist_side_effects`).
+    /// `observations`, the set's targets', to be stored in `room_id`, then
+    /// `metadata` to be written on it under the room's lock, those there
+    /// are; done at once with none (Python's `_persist_side_effects`).
     pub(super) fn write(
         &mut self,
         cx: &mut Cx<'_>,
@@ -244,6 +251,7 @@ impl SetEffects {
         let (mut all_tasks, mut all_observations) = self.take_hooks();
         all_tasks.extend(tasks);
         all_observations.extend(observations);
+        self.metadata = metadata;
         if !all_tasks.is_empty() || !all_observations.is_empty() {
             let effect = cx.io.issue(StoreRequest::PersistSideEffects {
                 room_id: room_id.clone(),
@@ -251,20 +259,18 @@ impl SetEffects {
                 observations: all_observations,
             });
             self.stored = Some((effect, all_tasks));
+            return Progress::Waiting;
         }
-        if !metadata.is_empty() {
-            let keys = metadata.keys().cloned().collect();
-            // Its keys only: it never overwrites the counters of an event
-            // committed meanwhile, so it needs no lock.
-            let effect = cx.io.issue(StoreRequest::UpdateRoom {
-                room_id: room_id.clone(),
-                updates: RoomUpdates {
-                    updated_at: Some(cx.env.now()),
-                    metadata,
-                    ..RoomUpdates::default()
-                },
-            });
-            self.updated = Some((effect, keys));
+        self.write_metadata(cx, room_id)
+    }
+
+    /// Writes the set's room metadata updates, if any, under the room's
+    /// lock, as Python's `_write_metadata_updates` does once the tasks and
+    /// observations are written.
+    fn write_metadata(&mut self, cx: &mut Cx<'_>, room_id: &RoomId) -> Progress<Written> {
+        if !self.metadata.is_empty() {
+            let metadata = std::mem::take(&mut self.metadata);
+            self.updated = Some(MetadataWrite::start(cx, room_id, metadata));
         }
         self.progress()
     }
@@ -277,7 +283,7 @@ impl SetEffects {
             || self
                 .updated
                 .as_ref()
-                .is_some_and(|(updated, _)| *updated == effect)
+                .is_some_and(|updated| updated.awaits(effect))
     }
 
     /// Whether a write is under way.
@@ -286,19 +292,24 @@ impl SetEffects {
     }
 
     /// Takes the answer of one of the writes, made in `room_id`; one that
-    /// failed is logged.
+    /// failed is logged. The tasks and observations written, the metadata
+    /// updates are.
     pub(super) fn accept(
         &mut self,
+        cx: &mut Cx<'_>,
         room_id: &RoomId,
         effect: EffectId,
         outcome: Outcome,
     ) -> Progress<Written> {
         if let Some((_, tasks)) = self.stored.take_if(|(stored, _)| *stored == effect) {
             self.written.tasks = stored_tasks(room_id, tasks, outcome.into_persisted());
-        } else if let Some((_, keys)) = self.updated.take_if(|(updated, _)| *updated == effect)
-            && let Err(error) = outcome.into_stored()
+            return self.write_metadata(cx, room_id);
+        }
+        if let Some(updated) = self.updated.as_mut()
+            && updated.awaits(effect)
+            && matches!(updated.accept(cx, outcome), Progress::Done(()))
         {
-            metadata_not_written(room_id, &keys, &error);
+            self.updated = None;
         }
         self.progress()
     }

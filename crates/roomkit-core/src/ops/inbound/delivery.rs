@@ -454,7 +454,7 @@ impl DeliverySet {
         outcome: Outcome,
     ) -> Progress<SetOutcome> {
         if self.effects.writing() {
-            return self.on_written(effect, outcome);
+            return self.on_written(cx, effect, outcome);
         }
         if self.record.is_some() {
             return self.on_record(cx, outcome);
@@ -665,8 +665,16 @@ impl DeliverySet {
     }
 
     /// Takes the answer of one of the set's writes.
-    fn on_written(&mut self, effect: EffectId, outcome: Outcome) -> Progress<SetOutcome> {
-        match self.effects.accept(&self.event.room_id, effect, outcome) {
+    fn on_written(
+        &mut self,
+        cx: &mut Cx<'_>,
+        effect: EffectId,
+        outcome: Outcome,
+    ) -> Progress<SetOutcome> {
+        match self
+            .effects
+            .accept(cx, &self.event.room_id, effect, outcome)
+        {
             Progress::Waiting => Progress::Waiting,
             Progress::Done(written) => self.written(written),
         }

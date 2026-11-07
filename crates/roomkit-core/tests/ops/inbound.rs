@@ -950,19 +950,24 @@ mod metadata_updates {
         sim
     }
 
+    /// Python: `core/mixins/helpers.py::_write_metadata_updates` (RMK-1511):
+    /// once its set is over, under the room's lock, taken again off the
+    /// set's place in the lane.
     #[test]
     fn are_written_on_the_room_once_their_set_is_over() {
         let mut sim = tagging_room();
         sim.send(Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(
             (
-                sim.trace[sim.trace.len() - 2..].to_vec(),
+                sim.trace[sim.trace.len() - 4..].to_vec(),
                 sim.room.metadata.get("tier")
             ),
             (
                 vec![
                     "leave lane room_1 evt_1".to_owned(),
-                    "update room room_1 Active".to_owned()
+                    "lock room_1".to_owned(),
+                    "update room room_1 Active".to_owned(),
+                    "release room_1".to_owned()
                 ],
                 Some(&json!("gold"))
             )
@@ -992,11 +997,13 @@ mod metadata_updates {
     }
 
     /// RFC §10.1 step 15: a delivery set that collected a task and a
-    /// metadata update writes both once it is over, the task first, each
-    /// answered on its own; the call ends once both are, the task stored
-    /// and the room tagged.
+    /// metadata update writes both once it is over, the task first, then
+    /// the update under the room's lock, as Python's
+    /// `_persist_side_effects` writes tasks, observations, then
+    /// `_write_metadata_updates` (RMK-1511); the call ends once both are,
+    /// the task stored and the room tagged.
     #[test]
-    fn are_written_after_the_tasks_each_write_answered_on_its_own() {
+    fn are_written_after_the_tasks_under_the_room_s_lock() {
         let mut sim = Sim::new();
         sim.transport("sms");
         sim.agent(
@@ -1021,7 +1028,7 @@ mod metadata_updates {
         let result = sim.send(Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(
             (
-                sim.trace[sim.trace.len() - 3..].to_vec(),
+                sim.trace[sim.trace.len() - 5..].to_vec(),
                 sim.tasks.len(),
                 sim.room.metadata.get("tier"),
                 result.error
@@ -1030,7 +1037,9 @@ mod metadata_updates {
                 vec![
                     "leave lane room_1 evt_1".to_owned(),
                     "persist 1 tasks, 0 observations".to_owned(),
-                    "update room room_1 Active".to_owned()
+                    "lock room_1".to_owned(),
+                    "update room room_1 Active".to_owned(),
+                    "release room_1".to_owned()
                 ],
                 1,
                 Some(&json!("gold")),
