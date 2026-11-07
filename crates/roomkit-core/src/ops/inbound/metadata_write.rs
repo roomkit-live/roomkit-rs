@@ -8,7 +8,10 @@
 //! call holds the lock, a keyed publication's adopted entry among them:
 //! Python's set runs in the room's lane, outside the lock's execution
 //! context, so its lock and its release are asked of the room's lock
-//! itself, never answered as a nested section's.
+//! itself, never answered as a nested section's. A delegated turn writes
+//! its agents' updates on its child room the same way, as an operation of
+//! its own (`ops::delegation`), as Python's `_broadcast_and_collect` goes
+//! through `_persist_side_effects`.
 //!
 //! A failure is logged once and the set stands, as Python's `except
 //! Exception` around its `locked` block logs it: the lock refused, the
@@ -35,7 +38,7 @@ enum State {
 /// The write of one set's room metadata updates, as a sub-machine of the
 /// set's side effects.
 #[derive(Debug)]
-pub(super) struct MetadataWrite {
+pub(crate) struct MetadataWrite {
     room_id: RoomId,
     /// The updates, taken once written.
     metadata: Metadata,
@@ -48,7 +51,7 @@ pub(super) struct MetadataWrite {
 
 impl MetadataWrite {
     /// Takes the room's lock to write `metadata` on `room_id`.
-    pub(super) fn start(cx: &mut Cx<'_>, room_id: &RoomId, metadata: Metadata) -> Self {
+    pub(crate) fn start(cx: &mut Cx<'_>, room_id: &RoomId, metadata: Metadata) -> Self {
         let request = HoldRequest::AcquireLockForRecord {
             room_id: room_id.clone(),
         };
@@ -62,7 +65,7 @@ impl MetadataWrite {
     }
 
     /// Whether the write waits for `effect`.
-    pub(super) fn awaits(&self, effect: EffectId) -> bool {
+    pub(crate) fn awaits(&self, effect: EffectId) -> bool {
         match self.state {
             State::Locking(awaited) | State::Writing(awaited) | State::Releasing(awaited) => {
                 awaited == effect
@@ -72,7 +75,7 @@ impl MetadataWrite {
 
     /// Takes the answer to the write's outstanding effect: done once the
     /// lock is released, or was never taken.
-    pub(super) fn accept(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Progress<()> {
+    pub(crate) fn accept(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Progress<()> {
         match self.state {
             State::Locking(_) => match outcome.into_locked() {
                 Ok(()) => self.write(cx),

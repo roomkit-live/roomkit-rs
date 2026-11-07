@@ -1,10 +1,12 @@
 //! A delegated turn (RFC §23.3 steps 4 to 6): the task's description, a
 //! system message only the child room's intelligence channels read,
-//! committed outside the pipeline, then handed to each of them. In a child
-//! room no transport is shared into, what they answer is kept as the room's
-//! trace, each row committed as it is, crossing no hook and riding no lane,
-//! a streamed answer's rows as its reader ends them, which nobody else
-//! reads. In one a transport is shared into, what they answer is committed
+//! committed outside the pipeline, then handed to each of them. What they
+//! return beside their answers is stored first (`side_effects`), their room
+//! metadata updates under the room's lock. In a child room no transport is
+//! shared into, what they answer is kept as the room's trace, each row
+//! committed as it is, crossing no hook and riding no lane, a streamed
+//! answer's rows as its reader ends them, which nobody else reads. In one a
+//! transport is shared into, what they answer is committed
 //! as a room's responses are, through `BEFORE_BROADCAST`, the agent's right
 //! to write and the room's lane, a stream read by the room's reader, so
 //! that the transport is told the answers as its binding reads
@@ -15,17 +17,17 @@ mod collected;
 mod nested;
 mod not_asked;
 mod room_path;
+mod side_effects;
 
 use std::collections::VecDeque;
 use std::sync::Arc;
 
 use self::collected::{Buffered, Collected, Failure, Streamed};
 use self::nested::Nested;
+use self::side_effects::RoomMetadataWrite;
 use super::events::{CommitRecord, MutationError};
 use super::failure_log::{self, Log};
-use super::inbound::{
-    Inbound, InboundError, error_event, metadata_not_written, stamp_response, stored_tasks,
-};
+use super::inbound::{Inbound, InboundError, error_event, stamp_response};
 use super::protocol::{
     ChannelOutcome, ChannelRequest, Delivered, Effect, EffectId, Entry, EntryId, InboundResult,
     Next, Notice, Operation, Outcome, ProtocolError, Request, Settled, SpanNote, Step,
@@ -34,8 +36,7 @@ use super::protocol::{
 use super::{Environment, KitConfig};
 use crate::model::{
     ChannelBinding, ChannelCategory, ChannelId, ChannelOutput, ErrorRecord, EventStatus, EventType,
-    Metadata, Observation, RoomContext, RoomEvent, RoomId, RoomUpdates, Task, Timestamp,
-    Visibility,
+    Metadata, RoomContext, RoomEvent, RoomId, Task, Visibility,
 };
 use crate::rules::hook_registry::HookTrigger;
 use crate::rules::permissions;
@@ -103,18 +104,24 @@ pub struct DelegatedTurn {
     /// The stream being read: its read, the answer's slot, and the
     /// response's correlation id.
     reading: Option<(EffectId, usize, String)>,
-    /// The side effects' writes outstanding.
+    /// The writes of tasks and observations outstanding: the turns', and
+    /// those of the agents not asked.
     persisting: Vec<EffectId>,
     /// The context the turns were asked with, which `ON_TASK_CREATED`'s
     /// observers read.
     asked_context: Option<Box<RoomContext>>,
-    /// The tasks the turns filed, by the write that stores them, and those
-    /// stored whose `ON_TASK_CREATED` has not fired yet.
+    /// The write of the turns' tasks and observations, with their tasks,
+    /// until it is answered, and the tasks stored whose `ON_TASK_CREATED`
+    /// has not fired yet.
     filing: Option<(EffectId, Vec<Task>)>,
     created: Vec<Task>,
-    /// The write of the room metadata updates the turns returned, with
-    /// their keys.
-    updating: Option<(EffectId, Vec<String>)>,
+    /// The room metadata updates the turns returned, written once their
+    /// tasks and observations are stored, and that write, under the room's
+    /// lock.
+    metadata: Metadata,
+    updating: Option<Nested<RoomMetadataWrite>>,
+    /// The turns' answers, committed once their side effects are stored.
+    answering: Option<(Vec<Buffered>, Vec<Streamed>)>,
     /// The agent the task is given to, whose turn a stream's failure ends
     /// when several agents streamed.
     agent_id: Option<ChannelId>,
@@ -163,8 +170,10 @@ impl DelegatedTurn {
             persisting: Vec::new(),
             asked_context: None,
             filing: None,
-            updating: None,
             created: Vec::new(),
+            metadata: Metadata::new(),
+            updating: None,
+            answering: None,
             agent_id: None,
             reached: 0,
             failures: Vec::new(),
@@ -296,9 +305,8 @@ impl DelegatedTurn {
     }
 
     /// Once every turn answered: their side effects to store, then their
-    /// answers committed, as the trace or by the room's path when a
-    /// transport is shared into the room (RFC §23.3 step 5).
-    fn collect(&mut self, environment: &dyn Environment, effects: &mut Vec<Effect>) {
+    /// answers to commit (RFC §23.3 step 5).
+    fn collect(&mut self, effects: &mut Vec<Effect>) {
         let asked = std::mem::take(&mut self.asked);
         let mut collected = Collected::default();
         for (turn, binding, outcome) in asked {
@@ -314,72 +322,24 @@ impl DelegatedTurn {
             collected.tasks,
             collected.observations,
             collected.metadata,
-            (environment.now(), effects),
+            effects,
         );
-        if room_path::shares_a_transport(&self.bindings) {
-            self.take_the_room_path(collected.buffered, collected.streamed);
-        } else {
-            self.keep_the_trace(collected.buffered, collected.streamed, environment);
-        }
+        self.answering = Some((collected.buffered, collected.streamed));
     }
 
-    /// Stores the side effects the turns returned (RFC §10.1 step 15), the
-    /// room's metadata updates stamped `now` as a room's are.
-    fn persist(
-        &mut self,
-        tasks: Vec<Task>,
-        observations: Vec<Observation>,
-        metadata: Metadata,
-        (now, effects): (Timestamp, &mut Vec<Effect>),
-    ) {
-        if !tasks.is_empty() || !observations.is_empty() {
-            let write = self.issue(StoreRequest::PersistSideEffects {
-                room_id: self.room_id.clone(),
-                tasks: tasks.clone(),
-                observations,
-            });
-            self.persisting.push(write.id);
-            if !tasks.is_empty() {
-                self.filing = Some((write.id, tasks));
-            }
-            effects.push(write);
-        }
-        if !metadata.is_empty() {
-            let keys = metadata.keys().cloned().collect();
-            let write = self.issue(StoreRequest::UpdateRoom {
-                room_id: self.room_id.clone(),
-                updates: RoomUpdates {
-                    updated_at: Some(now),
-                    metadata,
-                    ..RoomUpdates::default()
-                },
-            });
-            self.persisting.push(write.id);
-            self.updating = Some((write.id, keys));
-            effects.push(write);
-        }
-    }
-
-    /// Takes the answer of a write of the turns' side effects (RFC §23.3
-    /// step 5, written as a room's are, §10.1 step 15): each one the store
-    /// failed is logged, as Python's `_persist_side_effects` and
-    /// `_write_metadata_updates` log it, and the tasks stored are kept for
-    /// their `ON_TASK_CREATED`.
-    fn persisted(&mut self, id: EffectId, outcome: Outcome) {
-        self.persisting.retain(|write| *write != id);
-        if let Some((_, keys)) = self.updating.take_if(|(write, _)| *write == id) {
-            if let Err(error) = outcome.into_stored() {
-                metadata_not_written(&self.room_id, &keys, &error);
-            }
+    /// Once the turns' side effects are stored, as Python's
+    /// `_broadcast_and_collect` stores them first: their answers committed,
+    /// as the trace or by the room's path when a transport is shared into
+    /// the room (RFC §23.3 step 5).
+    fn answer(&mut self, environment: &dyn Environment) {
+        let Some((buffered, streamed)) = self.answering.take() else {
             return;
+        };
+        if room_path::shares_a_transport(&self.bindings) {
+            self.take_the_room_path(buffered, streamed);
+        } else {
+            self.keep_the_trace(buffered, streamed, environment);
         }
-        let tasks = self
-            .filing
-            .take_if(|(write, _)| *write == id)
-            .map(|(_, tasks)| tasks)
-            .unwrap_or_default();
-        let stored = stored_tasks(&self.room_id, tasks, outcome.into_persisted());
-        self.created.extend(stored);
     }
 
     /// The answers kept as the trace: the buffered answers' rows to commit,
@@ -673,6 +633,8 @@ impl DelegatedTurn {
             && self.streams.is_empty()
             && self.reading.is_none()
             && self.persisting.is_empty()
+            && self.side_effects_stored()
+            && self.answering.is_none()
             && self.room_path.is_none()
             && self.not_asked.is_empty()
             && self.recording.is_none()
@@ -692,13 +654,19 @@ impl Operation for DelegatedTurn {
         let all_answered =
             !self.asked.is_empty() && self.asked.iter().all(|(_, _, outcome)| outcome.is_some());
         if all_answered {
-            self.collect(environment, &mut effects);
+            self.collect(&mut effects);
+        }
+        self.advance_side_effects(environment, &mut effects);
+        if self.side_effects_stored() {
+            // In Python's order: the stored tasks' observers, the turns'
+            // failures, then their answers.
+            self.tasks_created(environment);
+            self.report_failures(environment);
+            self.answer(environment);
         }
         self.advance_rows(environment, &mut effects);
         self.advance_streams(environment, &mut effects);
         self.advance_room_path(environment, &mut effects);
-        self.report_failures(environment);
-        self.tasks_created(environment);
         let next = if !effects.is_empty() {
             Next::Effects(effects)
         } else if let Some(error) = self.failed.take() {
@@ -794,6 +762,9 @@ impl Operation for DelegatedTurn {
         if let Some(path) = self.room_path.as_mut().filter(|path| path.owns(id)) {
             return path.complete(id, outcome);
         }
+        if self.updating_owns(id) {
+            return self.complete_update(id, outcome);
+        }
         if self.persisting.contains(&id) {
             self.persisted(id, outcome);
             return Ok(());
@@ -850,66 +821,5 @@ fn unexpected(effect: EffectId, expected: &'static str) -> ProtocolError {
         effect,
         expected,
         got: "another outcome",
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use pretty_assertions::assert_eq;
-    use serde_json::json;
-
-    use super::*;
-    use crate::model::{ChannelType, EventId, EventSource, TextContent};
-
-    fn room() -> RoomId {
-        RoomId::new("room_1::task-1").unwrap()
-    }
-
-    fn description() -> RoomEvent {
-        RoomEvent::at(
-            EventId::new("evt_1").unwrap(),
-            room(),
-            EventType::Message,
-            EventSource::new(ChannelId::new("system").unwrap(), ChannelType::SYSTEM),
-            TextContent::new("Find it."),
-            Timestamp::UNIX_EPOCH,
-        )
-    }
-
-    // Python: core/mixins/_child_execution.py _broadcast_and_collect, which
-    // writes a delegated turn's metadata updates as a room's turn does
-    // (core/mixins/helpers.py _write_metadata_updates, whose
-    // patch_room_metadata stamps updated_at); no test of its own (RMK-1188).
-    #[test]
-    fn a_delegated_turn_s_metadata_updates_are_written_stamped_now() {
-        let mut turn = DelegatedTurn::new(Arc::new(KitConfig::default()), room(), description());
-        let now = Timestamp::UNIX_EPOCH;
-        let mut metadata = Metadata::new();
-        metadata.insert("stage".to_owned(), json!("found"));
-        let mut effects = Vec::new();
-        turn.persist(
-            Vec::new(),
-            Vec::new(),
-            metadata.clone(),
-            (now, &mut effects),
-        );
-
-        let written: Vec<_> = effects
-            .iter()
-            .map(|effect| {
-                let Request::Store(StoreRequest::UpdateRoom { room_id, updates }) = &effect.request
-                else {
-                    panic!("not a room's write: {:?}", effect.request);
-                };
-                (
-                    room_id.clone(),
-                    updates.updated_at,
-                    updates.metadata.clone(),
-                )
-            })
-            .collect();
-        assert_eq!(written, vec![(room(), Some(now), metadata)]);
     }
 }
