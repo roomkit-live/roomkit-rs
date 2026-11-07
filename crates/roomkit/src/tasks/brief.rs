@@ -12,7 +12,10 @@
 //!
 //! A `delegate_task` call's brief carries what its model passed with the
 //! task and its agent's previous tasks, set apart as data the same way: a
-//! model wrote them, and they may hold what a tool returned (RFC §6.4).
+//! model wrote them, and they may hold what a tool returned (RFC §6.4). Its
+//! task, which the model wrote too, is set apart in a frame of its own once
+//! a block follows it, so that it cannot read as one of the runtime's
+//! blocks after it.
 
 use roomkit_core::model::{ChannelId, EventContent, EventType, Metadata, RoomContext};
 use roomkit_core::rules::transcoding::text_of;
@@ -44,6 +47,10 @@ const MAX_CONTEXT_CHARS: usize = 4000;
 /// The tag the calling agent's previous tasks are set apart in: Python's
 /// `PREVIOUS_TASKS_TAG`.
 const PREVIOUS_TASKS_TAG: &str = "previous_tasks";
+
+/// The tag a `delegate_task` call's task is set apart in, once a block
+/// follows it: Python's `TASK_TAG`.
+const TASK_TAG: &str = "task";
 
 /// How many of the room's last messages a background task is handed:
 /// Python's `BACKGROUND_CONVERSATION`.
@@ -182,15 +189,20 @@ pub(crate) fn previous_tasks_block(tasks: &[String]) -> Option<String> {
     ))
 }
 
-/// A `delegate_task` call's brief: its `task`, then the `blocks` it has;
-/// `None` when it has none, for the worker to read the task as it is.
+/// A `delegate_task` call's brief: its `task`, set apart as its model
+/// wrote it, then the `blocks` it has; `None` when it has none, for the
+/// worker to read the task as it is, its whole instruction (RFC §6.4).
 /// Python's `task_brief`.
 pub(crate) fn task_brief(task: &str, blocks: [Option<String>; 3]) -> Option<String> {
     let held: Vec<String> = blocks.into_iter().flatten().collect();
     if held.is_empty() {
         return None;
     }
-    let mut parts = vec![task.to_owned()];
+    let framed = format!(
+        "Your task, as the delegating agent wrote it:\n{}",
+        fence(TASK_TAG, task)
+    );
+    let mut parts = vec![framed];
     parts.extend(held);
     Some(parts.join("\n\n"))
 }
