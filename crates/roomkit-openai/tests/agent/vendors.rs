@@ -125,11 +125,12 @@ async fn a_host_selects_the_dialect_by_the_class_on_a_server_of_its_own() {
                 (Value::Null, empty.clone())
             ]
         );
+        // The round's text and its calls, one message as the turn sent it
+        // (RMK-1370).
         assert_eq!(
             reasoning(&requests[3]),
             [
-                (json!("Let me look."), json!("absent")),
-                (Value::Null, empty.clone()),
+                (json!("Let me look."), empty.clone()),
                 (Value::Null, empty.clone()),
                 (json!("Sunny."), json!("absent")),
             ]
