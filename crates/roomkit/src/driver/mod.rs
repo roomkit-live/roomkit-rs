@@ -1034,6 +1034,8 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             // The turn the call awaits is cut before the call is dropped,
             // so its executor reads its cancel before it goes on.
             self.cut.extend(self.shared.cut_turn(*effect));
+            // A read given up before it ran tells no entry.
+            drop(self.shared.entry_read_turns(*effect));
             if let Some(call) = self.call_of_effect.remove(effect) {
                 call.abort();
                 self.effect_of_task.remove(&call.id());
@@ -1527,13 +1529,17 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         self.entry_answers.remove(&entry);
         self.entry_cancels.remove(&entry);
         let cleanup = self.entry_cleanups.remove(&entry);
-        let cut = self.entry_cut.remove(&entry);
-        if let (Some(_), Some(cleanup)) = (&cut, cleanup) {
-            cleanup.cut_over();
-        }
         let closing = self.inner.tasks.is_closing() && !self.inner.tasks.spares(&self.marks);
-        let reason = cut.or_else(|| closing.then(|| KIT_CLOSED.to_owned()));
+        let reason = self
+            .entry_cut
+            .remove(&entry)
+            .or_else(|| closing.then(|| KIT_CLOSED.to_owned()));
         if let Some(reason) = reason {
+            // Cut by its caller or by the kit's close, as Python's close
+            // cancels every cascade, the adopted call's own among them.
+            if let Some(cleanup) = cleanup {
+                cleanup.cut_over();
+            }
             result.cancellation_reason.get_or_insert(reason);
         }
         if let Some(completion) = self.deliveries.remove(&entry) {

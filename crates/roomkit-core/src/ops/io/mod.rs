@@ -406,8 +406,8 @@ impl Io {
         }
     }
 
-    /// Marks `effect`, a commit issued for the next step, as storing an
-    /// answer of `of`'s cascade (`Effect::answers`).
+    /// Marks `effect`, a commit or a stream's read issued for the next step,
+    /// as storing or reading an answer of `of`'s cascade (`Effect::answers`).
     pub(crate) fn answers(&mut self, effect: EffectId, of: AnswerOf) {
         if let Some(issued) = self.issued.iter_mut().find(|issued| issued.id == effect) {
             issued.answers = Some(of);

@@ -223,10 +223,11 @@ impl EntryCleanup {
         self.read_turns.clone()
     }
 
-    /// The entry's cascade is over, cut: a turn whose stream it read over
-    /// without its executor's end leaves its cleanup incomplete, as Python's
-    /// cleanup reads `end_owed` on every stream of the adopted call's
-    /// cascade. Told before its handle reads the end.
+    /// The entry's cascade is over, cut by its caller or by the kit's close:
+    /// a turn whose stream it read over without its executor's end leaves
+    /// its cleanup incomplete, as Python's cleanup reads `end_owed` on every
+    /// stream of the adopted call's cascade. Told before its handle reads
+    /// the end.
     pub(super) fn cut_over(&self) {
         if self.read_turns.any_owed() {
             self.owed.store(true, Ordering::Release);

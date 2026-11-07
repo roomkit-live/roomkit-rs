@@ -485,29 +485,39 @@ fn adopting(kit: &RoomKit, target: &ReadingOn) -> Cancelled {
 
 /// [`adopting`], the handle cancelled within `bound`.
 fn adopting_within(kit: &RoomKit, target: &ReadingOn, bound: Duration) -> Cancelled {
-    adopting_until(kit, Arc::clone(&target.past_the_end), bound, false)
+    let past_the_end = Arc::clone(&target.past_the_end);
+    adopting_until(kit, past_the_end, Some(bound), false).0
 }
+
+/// The handle of the call an off-lock hook made, kept for the test.
+type Kept = Arc<Mutex<Option<DeliveryHandle>>>;
 
 /// Registers an off-lock hook whose body, on `hello`, makes a deferred call
 /// into the room, adopted beside the event, then cancels its handle within
 /// `bound` once `target` read the first item of its stream, and blocks
-/// `hello`: nothing more is delivered.
-fn cutting_its_read(kit: &RoomKit, target: &ReadingOn, bound: Duration) -> Cancelled {
-    adopting_until(kit, Arc::clone(&target.read), bound, true)
+/// `hello`: nothing more is delivered. The handle is kept.
+fn cutting_its_read(kit: &RoomKit, target: &ReadingOn, bound: Duration) -> (Cancelled, Kept) {
+    adopting_until(kit, Arc::clone(&target.read), Some(bound), true)
 }
 
-/// The hook of [`adopting`]: the handle cancelled within `bound` once
-/// `told`, `hello` blocked after when `blocks`.
+/// [`cutting_its_read`], the handle kept uncancelled.
+fn keeping_its_read(kit: &RoomKit, target: &ReadingOn) -> Kept {
+    adopting_until(kit, Arc::clone(&target.read), None, true).1
+}
+
+/// The hook of [`adopting`]: the handle kept, cancelled within `bound`, if
+/// any, once `told`, `hello` blocked after when `blocks`.
 fn adopting_until(
     kit: &RoomKit,
     told: Arc<tokio::sync::Notify>,
-    bound: Duration,
+    bound: Option<Duration>,
     blocks: bool,
-) -> Cancelled {
-    let cancelled = Cancelled::default();
-    let (kit_of_hook, seen) = (kit.clone(), Arc::clone(&cancelled));
+) -> (Cancelled, Kept) {
+    let (cancelled, kept) = (Cancelled::default(), Kept::default());
+    let (kit_of_hook, seen, keeps) = (kit.clone(), Arc::clone(&cancelled), Arc::clone(&kept));
     let body = move |event: RoomEvent, _: RoomContext| {
         let (kit, seen, told) = (kit_of_hook.clone(), Arc::clone(&seen), Arc::clone(&told));
+        let keeps = Arc::clone(&keeps);
         async move {
             let hello = matches!(&event.content, EventContent::Text(text) if text.body == "hello");
             if !hello {
@@ -515,14 +525,17 @@ fn adopting_until(
             }
             let handle = deferred_saying(&kit, "side").await;
             told.notified().await;
-            let start = Instant::now();
-            let cancel = handle.cancel(with_timeout(bound)).await;
-            let reason = match cancel {
-                Ok(result) => Some(result.cancellation_reason),
-                Err(RoomKitError::Timeout) => None,
-                Err(error) => panic!("{error:?}"),
-            };
-            *seen.lock().unwrap() = Some((reason, start.elapsed()));
+            *keeps.lock().unwrap() = Some(handle.clone());
+            if let Some(bound) = bound {
+                let start = Instant::now();
+                let cancel = handle.cancel(with_timeout(bound)).await;
+                let reason = match cancel {
+                    Ok(result) => Some(result.cancellation_reason),
+                    Err(RoomKitError::Timeout) => None,
+                    Err(error) => panic!("{error:?}"),
+                };
+                *seen.lock().unwrap() = Some((reason, start.elapsed()));
+            }
             Ok::<_, crate::HookError>(if blocks {
                 // Nothing more to deliver: the test is the side call's.
                 HookResult::block("adopted", BlockOptions::default())
@@ -538,7 +551,7 @@ fn adopting_until(
     };
     kit.hook(HookTrigger::BeforeBroadcast, body, options)
         .unwrap();
-    cancelled
+    (cancelled, kept)
 }
 
 // Python: tests/test_turns_cleanup.py::test_an_adopted_call_s_handle_waits_for_the_end_of_a_stream_it_never_read
@@ -599,8 +612,8 @@ async fn an_adopted_call_whose_unread_turn_s_end_is_owed_times_out() {
 // at its cancel bound without its executor's end, the cleanup incomplete
 // (lanes.py _cleanup reads end_owed on every stream of the cascade): Python's
 // cancel raises TimeoutError at that bound, well within its own timeout, as a
-// deferred call's; its executor ending the turn, the cancel returns at once
-// (RMK-1510).
+// deferred call's, and so does every wait after it; its executor ending the
+// turn, the cancel and the waits return at once (RMK-1510).
 #[tokio::test(start_paused = true)]
 async fn an_adopted_call_whose_read_turn_s_end_is_owed_times_out() {
     let mut seen = Vec::new();
@@ -610,19 +623,76 @@ async fn an_adopted_call_whose_read_turn_s_end_is_owed_times_out() {
         if stuck {
             stuck_executor(&kit);
         }
-        let cancelled = cutting_its_read(&kit, &target, Duration::from_secs(30));
+        let (cancelled, kept) = cutting_its_read(&kit, &target, Duration::from_secs(30));
         let said = tokio::time::timeout(Duration::from_secs(100), says(&kit, "hello")).await;
         said.unwrap().unwrap();
+        let handle = kept.lock().unwrap().take().expect("a handle");
+        let waits = [handle.wait().await, handle.wait().await];
         kit.close().await.unwrap();
-        seen.push(cancelled.lock().unwrap().take().expect("cancelled"));
+        let waits = waits.map(|waited| match waited {
+            Ok(result) => Some(result.cancellation_reason),
+            Err(RoomKitError::Timeout) => None,
+            Err(error) => panic!("{error:?}"),
+        });
+        seen.push((cancelled.lock().unwrap().take().expect("cancelled"), waits));
     }
-    let [(stuck, stuck_at), (ends, ends_at)] = seen.try_into().unwrap();
+    let [
+        ((stuck, stuck_at), stuck_waits),
+        ((ends, ends_at), ends_waits),
+    ] = seen.try_into().unwrap();
+    let cancelled = Some(Some("caller_cancelled".to_owned()));
     assert_eq!(
-        (stuck, ends),
-        (None, Some(Some("caller_cancelled".to_owned())))
+        (stuck, stuck_waits, ends, ends_waits),
+        (
+            None,
+            [None, None],
+            cancelled.clone(),
+            [cancelled.clone(), cancelled]
+        )
     );
     assert!(at(stuck_at, Duration::from_secs(5)), "{stuck_at:?}");
     assert!(at(ends_at, Duration::ZERO), "{ends_at:?}");
+}
+
+// Python: tests/test_turns_cleanup.py::test_a_wait_past_the_kit_s_close_on_an_adopted_call_whose_turn_s_end_is_owed_times_out
+// The kit's close cancels every cascade in flight, an adopted call's own among
+// them (core/_closing.py Cascades.cut): a turn its target read when the close
+// cut it, its end owed, fails every wait on its handle with TimeoutError, as a
+// deferred call's (RMK-1510).
+#[tokio::test(start_paused = true)]
+async fn a_wait_past_the_kit_s_close_on_an_adopted_call_whose_turn_s_end_is_owed_times_out() {
+    let target = ReadingOn::flushing(Duration::ZERO);
+    let kit = room(holding(), &target).await;
+    kit.inner.turns.set_timeouts(crate::turns::TurnTimeouts {
+        cancel: Duration::from_millis(50),
+        ..Default::default()
+    });
+    stuck_executor(&kit);
+    let kept = keeping_its_read(&kit, &target);
+    let said = tokio::spawn({
+        let kit = kit.clone();
+        async move { says(&kit, "hello").await }
+    });
+    // Paused time: the hook keeps the handle once the target reads.
+    let mut handle = None;
+    for _ in 0..1000 {
+        handle = kept.lock().unwrap().take();
+        if handle.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    let handle = handle.expect("a handle");
+    kit.close().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(100), said)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let waits = [handle.wait().await, handle.wait().await];
+    for waited in waits {
+        assert!(matches!(waited, Err(RoomKitError::Timeout)), "{waited:?}");
+    }
 }
 
 /// Makes `kit`'s turns run on an executor stuck in a blocking call, which
