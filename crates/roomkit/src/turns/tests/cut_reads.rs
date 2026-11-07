@@ -10,20 +10,21 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
+use roomkit_core::model::hook::AllowOptions;
 use roomkit_core::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventContent, InboundMessage, RoomContext, RoomEvent, TextContent,
+    EventContent, HookResult, InboundMessage, RoomContext, RoomEvent, TextContent,
 };
 use serde_json::{Value, json};
 use tokio::time::Instant;
 
 use super::support::{
-    ReadingOn, Step, Streaming, Stuck, Timed, Waiting, bind, kit_with, of_type, room_id,
+    ReadingOn, Step, Streaming, Stuck, Timed, Waiting, bind, kit_with, of_type, room_id, says,
 };
 use crate::turns::observe::{Carried, Fate};
 use crate::{
-    CancelOptions, Channel, ChannelError, DeliveryHandle, InboundResult, ProcessInboundOptions,
-    RoomKit, RoomKitError,
+    CancelOptions, Channel, ChannelError, DeliveryHandle, HookOptions, HookTrigger, InboundResult,
+    ProcessInboundOptions, RoomKit, RoomKitError,
 };
 
 /// A deferred call into a room whose agent's stream is `steps` and whose
@@ -44,10 +45,16 @@ async fn room(steps: Vec<Step>, target: &ReadingOn) -> RoomKit {
 
 /// A deferred call into `kit`'s room: its handle.
 async fn deferred(kit: &RoomKit) -> DeliveryHandle {
+    deferred_saying(kit, "Hi").await
+}
+
+/// A deferred call into `kit`'s room, Alice writing `text` by SMS: its
+/// handle.
+async fn deferred_saying(kit: &RoomKit, text: &str) -> DeliveryHandle {
     let message = InboundMessage::new(
         ChannelId::new("sms").unwrap(),
         "+15550001",
-        TextContent::new("Hi"),
+        TextContent::new(text),
     );
     let result = kit
         .process_inbound(
@@ -463,6 +470,82 @@ async fn a_handle_whose_unread_stream_is_closing_is_not_done() {
         assert!(at(elapsed, Duration::from_secs(1)), "{elapsed:?}");
         assert!(waited.is_err(), "delivering: {delivering}, {waited:?}");
     }
+}
+
+/// What the cancel of an adopted call's handle returned, read by the hook that
+/// made it: its `cancellation_reason`, or `None` for a `Timeout`, and when.
+type Cancelled = Arc<Mutex<Option<(Option<Option<String>>, Duration)>>>;
+
+/// Registers an off-lock hook whose body, on `hello`, makes a deferred call
+/// into the room, adopted beside the event, then cancels its handle within
+/// 1 s once `target` read one stream to its end.
+fn adopting(kit: &RoomKit, target: &ReadingOn) -> Cancelled {
+    let cancelled = Cancelled::default();
+    let (kit_of_hook, seen) = (kit.clone(), Arc::clone(&cancelled));
+    let past_the_end = Arc::clone(&target.past_the_end);
+    let body = move |event: RoomEvent, _: RoomContext| {
+        let (kit, seen, past_the_end) = (
+            kit_of_hook.clone(),
+            Arc::clone(&seen),
+            Arc::clone(&past_the_end),
+        );
+        async move {
+            let hello = matches!(&event.content, EventContent::Text(text) if text.body == "hello");
+            if hello {
+                let handle = deferred_saying(&kit, "side").await;
+                past_the_end.notified().await;
+                let start = Instant::now();
+                let cancel = handle.cancel(with_timeout(Duration::from_secs(1))).await;
+                let reason = match cancel {
+                    Ok(result) => Some(result.cancellation_reason),
+                    Err(RoomKitError::Timeout) => None,
+                    Err(error) => panic!("{error:?}"),
+                };
+                *seen.lock().unwrap() = Some((reason, start.elapsed()));
+            }
+            Ok::<_, crate::HookError>(HookResult::allow(AllowOptions::default()))
+        }
+    };
+    let options = HookOptions {
+        name: "adopts".to_owned(),
+        needs_lock: false,
+        ..Default::default()
+    };
+    kit.hook(HookTrigger::BeforeBroadcast, body, options)
+        .unwrap();
+    cancelled
+}
+
+// Python: tests/test_turns_cleanup.py::test_an_adopted_call_s_handle_waits_for_the_end_of_a_stream_it_never_read
+// A deferred call an off-lock hook's body makes is adopted beside the event
+// with a cascade of its own (core/mixins/inbound.py _defer_inbound_delivery):
+// cut by its handle while its target flushes past one stream, the other never
+// read, Python's cancel closes that stream and waits for its end; its
+// executor deaf to the close, cancel(timeout=1) raises TimeoutError at 1 s;
+// its executor ending the turn, cancel returns at once (RMK-1442).
+#[tokio::test(start_paused = true)]
+async fn an_adopted_call_s_handle_waits_for_the_end_of_a_stream_it_never_read() {
+    let mut seen = Vec::new();
+    for stuck in [true, false] {
+        let target = ReadingOn::flushing(Duration::from_millis(100));
+        let kit = two_answers(&target).await;
+        if stuck {
+            stuck_executor(&kit);
+        }
+        let cancelled = adopting(&kit, &target);
+        let said = tokio::time::timeout(Duration::from_secs(5), says(&kit, "hello")).await;
+        said.unwrap().unwrap();
+        kit.close().await.unwrap();
+        let (reason, elapsed) = cancelled.lock().unwrap().take().expect("cancelled");
+        seen.push((reason, elapsed));
+    }
+    let [(stuck, stuck_at), (ends, ends_at)] = seen.try_into().unwrap();
+    assert_eq!(
+        (stuck, ends),
+        (None, Some(Some("caller_cancelled".to_owned())))
+    );
+    assert!(at(stuck_at, Duration::from_secs(1)), "{stuck_at:?}");
+    assert!(at(ends_at, Duration::ZERO), "{ends_at:?}");
 }
 
 /// Makes `kit`'s turns run on an executor stuck in a blocking call: it reads
