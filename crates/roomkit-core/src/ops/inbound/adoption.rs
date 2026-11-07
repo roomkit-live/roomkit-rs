@@ -96,6 +96,12 @@ pub(super) struct Adoptions {
     /// The entries committed whose answer waits for the commits of the
     /// events their hooks injected (`Machine::answer_owed`).
     pending: Vec<Pending>,
+    /// Each entry nested in the section of an adopted entry's pass, and the
+    /// entry beside the operation's work whose answer waits for what its
+    /// hooks inject: that section's entry, or the one that entry is owed
+    /// to, as Python's nested call queues them on that section (RFC §9.4,
+    /// §9.5.1 Reentrance).
+    owners: Vec<(EntryId, EntryId)>,
 }
 
 /// An adopted entry committed, whose answer waits for the commits of the
@@ -213,6 +219,35 @@ impl Adoptions {
     /// Whether the answer of `entry` waits for what its hooks injected.
     pub(super) fn is_pending(&self, entry: EntryId) -> bool {
         self.pending.iter().any(|pending| pending.entry.id == entry)
+    }
+
+    /// The entry beside the operation's work that what the hooks of a call
+    /// nested in the section of `entry`'s pass inject is owed to: `entry`
+    /// itself when it stands beside, else the one it is owed to.
+    fn owing(&self, entry: EntryId) -> Option<EntryId> {
+        if let Some(owner) = self.owner_of(entry) {
+            return Some(owner);
+        }
+        self.running
+            .iter()
+            .any(|run| run.entry.id == entry && run.entry.nested.is_none())
+            .then_some(entry)
+    }
+
+    fn owner_of(&self, entry: EntryId) -> Option<EntryId> {
+        self.owners
+            .iter()
+            .find(|(nested, _)| *nested == entry)
+            .map(|(_, owner)| *owner)
+    }
+
+    /// The entry `entry`'s injected events are owed to, when `entry` is
+    /// nested in the section of one still to be answered.
+    fn owed_to(&self, entry: EntryId) -> Option<EntryId> {
+        let owner = self.owner_of(entry)?;
+        let unanswered =
+            self.running.iter().any(|run| run.entry.id == owner) || self.is_pending(owner);
+        unanswered.then_some(owner)
     }
 
     /// Notes `error`, the failed release of a pass the answer of `entry`
@@ -508,6 +543,14 @@ impl Machine {
         }
         let nested = nested.then(|| room_id.clone());
         let id = self.adopted.next_id();
+        // Nested in an adopted entry's own section, its origin works within
+        // that entry's bound.
+        if let Bound::Adopted(section, _) = io.bound_of(origin)
+            && nested.is_some()
+            && let Some(owner) = self.adopted.owing(section)
+        {
+            self.adopted.owners.push((id, owner));
+        }
         let adopted = Adopted {
             id,
             room_id: entry.room_id().clone(),
@@ -817,10 +860,14 @@ impl Machine {
     /// The entry's message step 5 held (RFC §10.1 step 5): the challenge a
     /// hook put to its sender is queued as an injected event of the entry's
     /// cascade, which runs ahead of the call's own passes, and its caller
-    /// answered with the refusal, nothing of the message stored.
+    /// answered with the refusal, nothing of the message stored. An entry
+    /// beside the operation's work answers once the challenge committed and
+    /// carries its failed release, as Python's held call commits it before
+    /// it returns (RFC §13.5, §9.5.1 Reentrance).
     fn hold_entry(&mut self, cx: &mut Cx<'_>, adopted: &Adopted, held: Held, event: &RoomEvent) {
         let challenge: Vec<InjectedEvent> = held.challenge.into_iter().map(|c| *c).collect();
-        for job in self.injected(cx, challenge, event, Lineage::Entry(adopted.id), None) {
+        let owed = adopted.nested.is_none().then_some(adopted.id);
+        for job in self.injected(cx, challenge, event, Lineage::Entry(adopted.id), owed) {
             self.cascade.queue(job);
         }
         let refused = InboundResult {
@@ -829,6 +876,14 @@ impl Machine {
             refused_before_the_lock: true,
             ..InboundResult::default()
         };
+        if self.cascade.owes(adopted.id) {
+            self.adopted.pending.push(Pending {
+                entry: adopted.clone(),
+                result: refused,
+                delivers: false,
+            });
+            return self.answer_owed(cx);
+        }
         self.settle_entry(cx, adopted, Ok(refused));
     }
 
@@ -840,7 +895,9 @@ impl Machine {
     /// failed release, as Python's adopted call commits them before it
     /// returns (RFC §9.4, §9.5.1 Reentrance, HITL b779fc14); one nested
     /// under a lock answers at its commit, what it injected committed after
-    /// the section it is nested in, as Python's.
+    /// the section it is nested in, as Python's, and owed to the entry
+    /// whose section that is: that entry answers once they are committed
+    /// too.
     fn on_adopted_pass(&mut self, cx: &mut Cx<'_>, adopted: &Adopted, mut report: PassReport) {
         let mut result = entry_result(&report.result);
         result.error = report.release_error.take();
@@ -849,7 +906,8 @@ impl Machine {
             report.result,
             PassResult::Delivered { .. } | PassResult::Blocked { .. } | PassResult::Stored { .. }
         );
-        if adopted.nested.is_none() && committed && !report.injected_events.is_empty() {
+        let waits = !report.injected_events.is_empty() || self.cascade.owes(adopted.id);
+        if adopted.nested.is_none() && committed && waits {
             self.adopted.pending.push(Pending {
                 entry: adopted.clone(),
                 result,
@@ -889,11 +947,17 @@ impl Machine {
     }
 
     /// The adopted entry whose answer waits for the commits of what the
-    /// hooks of the pass from `origin` inject: the entry itself, or the
-    /// entry an injected event's pass is owed to, while it waits.
+    /// hooks of the pass from `origin` inject: the entry itself, the entry
+    /// whose section an entry nested in, or the entry an injected event's
+    /// pass is owed to, while it waits.
     pub(super) fn owed_by(&self, origin: &PassOrigin) -> Option<EntryId> {
         let entry = match origin {
-            PassOrigin::Adopted(entry) => Some(*entry),
+            PassOrigin::Adopted(entry) => {
+                if let Some(owner) = self.adopted.owed_to(*entry) {
+                    return Some(owner);
+                }
+                Some(*entry)
+            }
             PassOrigin::Injected { owed, .. } => *owed,
             PassOrigin::Trigger | PassOrigin::Response { .. } => None,
         };
