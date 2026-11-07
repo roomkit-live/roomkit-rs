@@ -212,9 +212,13 @@ impl Default for EntryCleanup {
 }
 
 impl EntryCleanup {
-    /// Closes `unread`, the streams the entry's cut left unread, one after
-    /// the other: told before it starts, over however the closing ends.
-    pub(super) fn close(self: Arc<Self>, unread: Vec<KeptStream>) -> impl Future<Output = ()> {
+    /// The closing of `unread`, the streams the entry's cut left unread, one
+    /// after the other: the streams read as closing from now, closed however
+    /// that closing ends.
+    pub(super) fn closes_unread(
+        self: Arc<Self>,
+        unread: Vec<KeptStream>,
+    ) -> impl Future<Output = ()> {
         self.closed.send_replace(false);
         let closing = EntryClosing(self);
         async move {

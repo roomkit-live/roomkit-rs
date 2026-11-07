@@ -480,6 +480,11 @@ type Cancelled = Arc<Mutex<Option<(Option<Option<String>>, Duration)>>>;
 /// into the room, adopted beside the event, then cancels its handle within
 /// 1 s once `target` read one stream to its end.
 fn adopting(kit: &RoomKit, target: &ReadingOn) -> Cancelled {
+    adopting_within(kit, target, Duration::from_secs(1))
+}
+
+/// [`adopting`], the handle cancelled within `bound`.
+fn adopting_within(kit: &RoomKit, target: &ReadingOn, bound: Duration) -> Cancelled {
     let cancelled = Cancelled::default();
     let (kit_of_hook, seen) = (kit.clone(), Arc::clone(&cancelled));
     let past_the_end = Arc::clone(&target.past_the_end);
@@ -495,7 +500,7 @@ fn adopting(kit: &RoomKit, target: &ReadingOn) -> Cancelled {
                 let handle = deferred_saying(&kit, "side").await;
                 past_the_end.notified().await;
                 let start = Instant::now();
-                let cancel = handle.cancel(with_timeout(Duration::from_secs(1))).await;
+                let cancel = handle.cancel(with_timeout(bound)).await;
                 let reason = match cancel {
                     Ok(result) => Some(result.cancellation_reason),
                     Err(RoomKitError::Timeout) => None,
@@ -546,6 +551,40 @@ async fn an_adopted_call_s_handle_waits_for_the_end_of_a_stream_it_never_read() 
     );
     assert!(at(stuck_at, Duration::from_secs(1)), "{stuck_at:?}");
     assert!(at(ends_at, Duration::ZERO), "{ends_at:?}");
+}
+
+// RFC §10.1, §10.6.8 (RMK-1442 review): the turn of the stream an adopted
+// call's cut left unread is over for its owner without its executor's end
+// during the closing (its executor deaf and silent), the cleanup incomplete:
+// its handle's cancel reads Timeout well within its bound, as a deferred call's.
+#[tokio::test(start_paused = true)]
+async fn an_adopted_call_whose_unread_turn_s_end_is_owed_times_out() {
+    let target = ReadingOn::flushing(Duration::from_millis(100));
+    let kit = two_answers(&target).await;
+    stuck_and_silent(&kit);
+    let bound = Duration::from_secs(60);
+    let cancelled = adopting_within(&kit, &target, bound);
+    let said = tokio::time::timeout(Duration::from_secs(100), says(&kit, "hello")).await;
+    said.unwrap().unwrap();
+    kit.close().await.unwrap();
+    let (reason, elapsed) = cancelled.lock().unwrap().take().expect("cancelled");
+    assert_eq!(reason, None, "Timeout");
+    assert!(elapsed < bound, "{elapsed:?}");
+}
+
+/// Makes `kit`'s turns run on an executor stuck in a blocking call, which
+/// sends no heartbeat either: its owner takes it for lost.
+fn stuck_and_silent(kit: &RoomKit) {
+    kit.inner.turns.set_fault(Arc::new(|carried, raw: &str| {
+        let stuck = [of_type("cancel"), of_type("close")];
+        let control = carried == Carried::Control && stuck.iter().any(|marks| raw.contains(marks));
+        let silent = carried == Carried::Frame && raw.contains(of_type("heartbeat"));
+        if control || silent {
+            UNSENT
+        } else {
+            Fate::default()
+        }
+    }));
 }
 
 /// Makes `kit`'s turns run on an executor stuck in a blocking call: it reads

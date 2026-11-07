@@ -939,14 +939,15 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     /// kit's, which the entry's handle waits for, as Python's adopted call's
     /// own cascade cleanup (RFC §10.1 "Explicit delivery cancellation").
     fn close_unread_of(&mut self, entry: EntryId) {
+        // Adopted with its cancel, an entry the cut reaches has its cleanup.
         let Some(cleanup) = self.entry_cleanups.get(&entry).map(Arc::clone) else {
-            return self.close_unread_alone();
+            return;
         };
         let unread = std::mem::take(&mut self.unread);
         if unread.is_empty() {
             return;
         }
-        let closing = cleanup.close(unread);
+        let closing = cleanup.closes_unread(unread);
         // Refused, the closing is dropped, and with it what the handle waits
         // for.
         drop(self.inner.tasks.spawn_alone(Kind::Turn, closing));
