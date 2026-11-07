@@ -592,7 +592,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             if let Some(outcome) = self.answered.take()
                 && let Some(caller) = self.caller.as_deref_mut()
             {
-                caller.answer_now(outcome);
+                caller.answer_now(outcome, self.inner.tasks.is_closing());
             }
             let effects = match step.next {
                 Next::Ready(output) => {

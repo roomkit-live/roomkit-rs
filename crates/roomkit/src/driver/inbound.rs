@@ -852,15 +852,22 @@ impl Caller {
 
     /// Answers the caller now with `outcome`, the call's own work over, the
     /// run going on for the entries the call adopted (RFC §9.5.1
-    /// Reentrance, §13.6); a caller answered already reads nothing more.
-    pub(super) fn answer_now(&mut self, outcome: Result<InboundResult, InboundError>) {
+    /// Reentrance, §13.6), as the kit's close leaves it, once it started,
+    /// `closing`, as at the run's end (RFC §12.10.4); a caller answered
+    /// already reads nothing more.
+    pub(super) fn answer_now(
+        &mut self,
+        outcome: Result<InboundResult, InboundError>,
+        closing: bool,
+    ) {
         // The call returned: its key names no delivery any more, as
         // Python's name is released once its call returned.
         drop(self.named.take());
         let Some(answer) = self.answer.take() else {
             return;
         };
-        if answer.send(Ok(outcome)).is_err() {
+        let output = closed_at_its_end(Ok(outcome), closing);
+        if answer.send(output).is_err() {
             tracing::debug!(
                 target: "roomkit::driver",
                 "the caller of a call stopped waiting; its adopted entries go on"
