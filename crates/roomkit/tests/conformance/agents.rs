@@ -890,6 +890,7 @@ fn turn_config(spec: &Value, run: &Arc<Run>) -> Result<AiChannelTurnConfig, Stri
                 description: tool["description"].as_str().unwrap_or_default().to_owned(),
                 parameters: tool.get("parameters").cloned().unwrap_or_else(|| json!({})),
                 tags: Vec::new(),
+                changes_state: false,
             })
             .collect()
     });
@@ -936,6 +937,7 @@ fn tools(spec: &Value, run: &Arc<Run>) -> Tools {
                     .filter_map(Value::as_str)
                     .map(str::to_owned)
                     .collect(),
+                changes_state: tool["changes_state"] == true,
                 ..AiTool::new(
                     tool["name"].as_str().unwrap_or_default(),
                     tool["description"].as_str().unwrap_or_default(),

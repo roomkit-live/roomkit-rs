@@ -37,7 +37,7 @@ pub(crate) fn repeated_call(name: &str, repeats: u32) -> String {
         "You already called '{name}' with these EXACT arguments {repeats} time(s) this turn \u{2014} repeating it cannot yield anything new."
     ));
     let hint = quoted(
-        "STOP repeating this call. Use the results you already have, try genuinely different arguments, or answer the user now with what you know.",
+        "STOP repeating this call. Use the results you already have, or try genuinely different arguments.",
     );
     format!("{{\"error\": {error}, \"hint\": {hint}}}")
 }

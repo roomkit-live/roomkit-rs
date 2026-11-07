@@ -50,7 +50,8 @@ use crate::texts::error_envelope;
 use crate::tool_search::TurnSearch;
 
 /// A tool as the model is told of it (RFC §6.7): Python's `AITool(*, name,
-/// description, parameters={}, tags=[])`, its parameters a JSON Schema object.
+/// description, parameters={}, tags=[], changes_state=False)`, its
+/// parameters a JSON Schema object.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AiTool {
     /// The tool's name, one per channel (RFC §21.1 "One tool per name").
@@ -62,6 +63,11 @@ pub struct AiTool {
     /// Keywords `find_tools` searches beside its name and description (RFC
     /// §6.4), the bridge to a tool written in another language.
     pub tags: Vec<String>,
+    /// A call it answers may change what later calls read (a file edited,
+    /// a row written): the turn's repeat counts start again from it, so a
+    /// test rerun after an edit is no loop (RFC §6.4, the anti-loop guard).
+    /// False by default.
+    pub changes_state: bool,
 }
 
 impl AiTool {
@@ -94,6 +100,7 @@ impl AiTool {
             description: description.into(),
             parameters: Value::Object(serde_json::Map::new()),
             tags: Vec::new(),
+            changes_state: false,
         })
     }
 
@@ -120,6 +127,7 @@ impl AiTool {
             description: description.to_owned(),
             parameters,
             tags: Vec::new(),
+            changes_state: false,
         }
     }
 }

@@ -15,6 +15,7 @@ fn tool(name: &str, description: &str, tags: &[&str]) -> AiTool {
         description: description.to_owned(),
         parameters: json!({}),
         tags: tags.iter().map(|tag| (*tag).to_owned()).collect(),
+        changes_state: false,
     }
 }
 

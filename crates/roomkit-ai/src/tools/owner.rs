@@ -83,6 +83,7 @@ pub(crate) fn with_owner_tools(
                     .cloned()
                     .unwrap_or_else(|| serde_json::json!({ "type": "object" })),
                 tags: Vec::new(),
+                changes_state: false,
             })
         })
         .collect();

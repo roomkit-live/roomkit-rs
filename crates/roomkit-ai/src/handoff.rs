@@ -48,6 +48,7 @@ fn tool_of(definition: &Value) -> AiTool {
         description: text("description"),
         parameters: definition["parameters"].clone(),
         tags: Vec::new(),
+        changes_state: false,
     }
 }
 

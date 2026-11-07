@@ -46,7 +46,10 @@ impl<P: AiProvider> Loop<P> {
                     .turn_span
                     .as_ref()
                     .map(|turn| turn.start_call(&call.name, &call.id));
-                (self.guarded(call).await, Some(asked))
+                // The arguments the guard counts it on, which its hooks may
+                // rewrite once it ran.
+                let ran_with = call.arguments.clone();
+                (self.guarded(call).await, Some((asked, ran_with)))
             }
             Gated::Refused(refused) => (self.refused_again(called, refused), None),
         };
@@ -74,10 +77,11 @@ impl<P: AiProvider> Loop<P> {
         let shown = self.model_copy(called, &ended.call, &result, served);
         let reported = ended.ended(outcome, result.clone().into_value());
         log_failure(&reported);
-        let result = if let Some(asked) = asked {
+        let result = if let Some((asked, ran_with)) = asked {
             self.search
                 .settle(&reported.call.id, &reported.call.name, outcome);
             self.remember(&reported.call.name, &asked, outcome, &result);
+            self.forget_repeats_on_change(&reported.call.name, &ran_with, outcome);
             self.with_repeat_note(&reported.call.name, shown, answer.as_deref())
         } else {
             shown
@@ -138,6 +142,19 @@ impl<P: AiProvider> Loop<P> {
     fn repeat_refusal(&self, name: &str, arguments: &Metadata) -> Option<String> {
         let pure = TOOL_SEARCH_INFRA_TOOL_NAMES.contains(&name) && self.toolbox.is_reserved(name);
         self.repeat_guard.refusal(name, arguments, pure)
+    }
+
+    /// Starts the turn's repeat counts again once a call to `name` that ran
+    /// with `ran_with` was served, when its tool changes state (RFC §6.4).
+    /// Python's `_forget_repeats_on_change`.
+    fn forget_repeats_on_change(&self, name: &str, ran_with: &Metadata, outcome: ToolCallOutcome) {
+        let changes_state = self
+            .toolbox
+            .find(name)
+            .is_some_and(|(tool, _)| tool.changes_state);
+        if outcome == ToolCallOutcome::Served && changes_state {
+            self.repeat_guard.forget_all_but(name, ran_with);
+        }
     }
 
     /// `result`, what the model reads of a call past its gate, noted when its

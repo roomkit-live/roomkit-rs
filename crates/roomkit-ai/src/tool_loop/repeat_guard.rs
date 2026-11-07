@@ -10,6 +10,10 @@
 //! A model that varies its arguments never trips that, and is told nothing
 //! changes by a note on the third identical answer. The note never blocks: six
 //! deletions each answering `{"success": true}` are six correct operations.
+//!
+//! A served call of a tool that changes state (`AiTool::changes_state`)
+//! starts both counts again, its own call's count kept: a test rerun after
+//! each edit is no loop.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -78,6 +82,24 @@ impl RepeatGuard {
         Some(texts::repeated_call(name, count - 1))
     }
 
+    /// Starts the turn's counts again, on both axes, once a call to `name`
+    /// with `arguments` of a tool that changes state was served: what the
+    /// calls before it read may read otherwise now (a test rerun after an
+    /// edit). That call keeps its own count, so the same change made again
+    /// and again is still a loop. Python's `_forget_repeats_on_change`.
+    pub(super) fn forget_all_but(&self, name: &str, arguments: &Metadata) {
+        let key = (name.to_owned(), sorted_json(arguments));
+        {
+            let mut counts = lock(&self.calls);
+            let own = counts.remove(&key);
+            counts.clear();
+            if let Some(own) = own {
+                counts.insert(key, own);
+            }
+        }
+        lock(&self.results).clear();
+    }
+
     /// Whether the guard pulled the ripcord: the next generation is the
     /// turn's last.
     pub(super) fn force_stopped(&self) -> bool {
@@ -115,7 +137,7 @@ impl RepeatGuard {
         format!(
             "{result}\n\n[identical result: '{name}' has now returned exactly this {count} times \
 this turn, for different arguments. Varying the arguments is not finding anything new \u{2014} \
-this answer is settled. Use it and move on, or answer with what you have.]"
+this answer is settled. Use it and move on.]"
         )
     }
 }
@@ -227,6 +249,28 @@ mod tests {
         assert_eq!(
             guard.refusal("t", &one, false),
             Some(texts::repeated_call("t", 2))
+        );
+    }
+
+    // Python: tests/test_tool_repeat_guard.py::test_a_rerun_after_a_change_runs_only_when_the_tool_changes_state
+    // and ::test_a_change_made_again_and_again_is_still_refused
+    #[test]
+    fn a_change_starts_the_counts_again_but_its_own() {
+        let guard = RepeatGuard::default();
+        let run = arguments(&json!({"value": "same"}));
+        let edit = arguments(&json!({"value": "fix"}));
+        assert_eq!(guard.refusal("run_tests", &run, false), None);
+        assert_eq!(guard.refusal("run_tests", &run, false), None);
+        guard.noted("boards", "same".to_owned(), None);
+        guard.noted("boards", "same".to_owned(), None);
+        assert_eq!(guard.refusal("edit", &edit, false), None);
+        assert_eq!(guard.refusal("edit", &edit, false), None);
+        guard.forget_all_but("edit", &edit);
+        assert_eq!(guard.refusal("run_tests", &run, false), None);
+        assert_eq!(guard.noted("boards", "same".to_owned(), None), "same");
+        assert_eq!(
+            guard.refusal("edit", &edit, false),
+            Some(texts::repeated_call("edit", 2))
         );
     }
 
