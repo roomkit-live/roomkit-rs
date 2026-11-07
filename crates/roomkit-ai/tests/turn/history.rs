@@ -287,13 +287,13 @@ fn calling_each(ids: &[String]) -> ScriptedRound {
 }
 
 /// RFC §6.4: a turn of 30 calls in one round leaves the next turn its
-/// question, its last 8 calls and its answer, as the reference
-/// implementation's history reads them: the room's latest 50 messages and
-/// the agent's latest 60 tool rows, read apart (review probe `py_window.out`,
-/// `heavy`). The room's latest 50 events of every kind held the answer
-/// alone.
+/// question, every call and its answer, as the reference implementation's
+/// history reads them: the room's latest 50 messages and every row of the
+/// agent's calls since the first of them, read apart (review probe
+/// `py_window.out`, `heavy`; RMK-1370). The room's latest 50 events of every
+/// kind held the answer alone.
 #[tokio::test]
-async fn a_turn_of_thirty_calls_leaves_its_question_and_last_calls_to_the_next() {
+async fn a_turn_of_thirty_calls_leaves_its_question_and_every_call_to_the_next() {
     let ids: Vec<String> = (0..30).map(|n| format!("c{n}")).collect();
     let model = ScriptedProvider::new([
         calling_each(&ids),
@@ -308,7 +308,7 @@ async fn a_turn_of_thirty_calls_leaves_its_question_and_last_calls_to_the_next()
     room.kit.close().await.unwrap();
     let requests = model.requests();
     let mut second = vec!["user first question".to_owned()];
-    second.extend(round_of(&ids[22..]));
+    second.extend(round_of(&ids));
     second.extend(["assistant Answer one.", "user second question"].map(str::to_owned));
     assert_eq!(shape(&requests[2]), second);
     let mut third = second;
@@ -317,11 +317,11 @@ async fn a_turn_of_thirty_calls_leaves_its_question_and_last_calls_to_the_next()
 }
 
 /// RFC §6.4: twelve turns of two calls each leave the thirteenth every
-/// message, the room's 25, and the last 8 calls, at their place (review
-/// probe `py_window.out`, `many`). The room's latest 50 events of every kind
-/// opened on the fourth answer.
+/// message, the room's 25, and every call, at their place, as each turn
+/// sent it (review probe `py_window.out`, `many`; RMK-1370). The room's
+/// latest 50 events of every kind opened on the fourth answer.
 #[tokio::test]
-async fn twelve_turns_of_two_calls_leave_every_message_and_the_last_calls() {
+async fn twelve_turns_of_two_calls_leave_every_message_and_every_call() {
     let pair = |n: usize| vec![format!("t{n}a"), format!("t{n}b")];
     let mut script = Vec::new();
     for n in 0..12 {
@@ -338,9 +338,7 @@ async fn twelve_turns_of_two_calls_leave_every_message_and_the_last_calls() {
     let mut expected = Vec::new();
     for n in 0..12 {
         expected.push(format!("user question {n}"));
-        if n >= 8 {
-            expected.extend(round_of(&pair(n)));
-        }
+        expected.extend(round_of(&pair(n)));
         expected.push(format!("assistant Answer {n}."));
     }
     expected.push("user question 12".to_owned());

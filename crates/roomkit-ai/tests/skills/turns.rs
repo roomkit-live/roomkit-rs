@@ -169,7 +169,10 @@ async fn an_activation_answers_the_body_and_the_next_turn_carries_it() {
     let results = tool_results(&model);
     assert_eq!(results[1], [body()]);
     assert_eq!(results[2], [body(), ALREADY_ACTIVE.to_owned()]);
-    assert_eq!(results[4], [ALREADY_ACTIVE.to_owned()]);
+    // The first turn's two activations replayed as it sent them (RMK-1370).
+    let replayed = [body(), ALREADY_ACTIVE.to_owned()];
+    assert_eq!(results[4][..2], replayed);
+    assert_eq!(results[4][2..], [ALREADY_ACTIVE.to_owned()]);
     let prompts = prompts(&model);
     let active = "# Active skill instructions (binding rules)\n\n## Skill: doc-helper\n\
                   ## Instructions\nRead references/guide.md first.";
@@ -350,7 +353,9 @@ async fn an_activation_withheld_by_a_hook_is_not_recorded() {
     room.says("Activate").await;
     room.says("Next").await;
     assert!(!prompts(&model)[2].contains("# Active skill instructions"));
-    assert_eq!(tool_results(&model)[3], [body()]);
+    // The withheld activation replayed as its turn sent it (RMK-1370).
+    let withheld = r#"{"error": "withheld by the host"}"#.to_owned();
+    assert_eq!(tool_results(&model)[3], [withheld, body()]);
     let outcomes: Vec<_> = room.ends().await.iter().map(|row| row.outcome).collect();
     assert_eq!(
         outcomes,
@@ -385,7 +390,8 @@ async fn a_replaced_agent_reads_the_room_s_activations_again() {
         "# Active skill instructions (binding rules)\n\n## Skill: doc-helper\n## Instructions\n\
          Read references/guide.md first."
     ));
-    assert_eq!(tool_results(&after)[1], [ALREADY_ACTIVE.to_owned()]);
+    // The stored activation replayed as its turn sent it (RMK-1370).
+    assert_eq!(tool_results(&after)[1], [body(), ALREADY_ACTIVE.to_owned()]);
 }
 
 /// RFC §24.4: an activation is one the agent's served call made; a row
@@ -452,7 +458,9 @@ async fn a_room_keeps_four_active_skills_the_least_recently_used_retired() {
             .iter()
             .all(|name| prompt.contains(&format!("## Skill: {name}\n")))
     );
-    assert_eq!(tool_results(&model)[7], [body()]);
+    // The first turn's five activations replayed before it (RMK-1370).
+    assert_eq!(tool_results(&model)[7].last(), Some(&body()));
+    assert_eq!(tool_results(&model)[7].len(), 6);
 }
 
 /// RFC §10.1.1 rule 7: an instruction that stands alone reads none of the

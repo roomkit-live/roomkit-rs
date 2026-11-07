@@ -70,7 +70,7 @@ fn served(index: u64, id: &str, result: &str) -> [RoomEvent; 2] {
 
 fn rounds(rows: &[RoomEvent]) -> Vec<ToolRound> {
     let agent = ChannelId::new(AGENT).unwrap();
-    tool_rounds(rows, &agent, &|tool| tool != "activate_skill")
+    tool_rounds(rows, &agent)
 }
 
 /// Each round's call ids.
@@ -123,11 +123,13 @@ fn a_round_replays_the_arguments_the_model_wrote() {
     assert_eq!(round.messages[1].tool_call_id.as_deref(), Some("c1"));
 }
 
-/// Served, failed or blocked, or an end stored without an outcome; never a
-/// refusal, a call nothing served or one cancelled, nor a call to a tool
-/// that is no work of the agent's.
+// Python: tests/test_channels/test_tool_history.py::test_every_call_the_turn_ended_is_replayed_but_a_cancelled_one
+/// Whatever its outcome or tool: the model read each of them in its turn, a
+/// refusal, a call nothing served and a tool of the channel's own included
+/// (RMK-1370). Not a call cancelled before it answered, whose result no
+/// model read.
 #[test]
-fn only_the_answers_a_tool_gave_are_replayed() {
+fn every_call_the_turn_ended_is_replayed_but_a_cancelled_one() {
     let mut rows = Vec::new();
     for (index, (id, outcome)) in [
         ("c1", Some(ToolCallOutcome::Served)),
@@ -158,7 +160,18 @@ fn only_the_answers_a_tool_gave_are_replayed() {
         "activate_skill",
         "t1",
     ));
-    assert_eq!(results(&rounds(&rows)), ["c1", "c2", "c3", "c7"]);
+    let replayed = rounds(&rows);
+    assert_eq!(
+        ids(&replayed).concat(),
+        ["c1", "c2", "c3", "c4", "c5", "c7", "c8"]
+    );
+    let errors: Vec<bool> = replayed
+        .iter()
+        .flat_map(|round| &round.messages)
+        .filter(|message| message.role == Role::Tool)
+        .map(|message| message.is_error)
+        .collect();
+    assert_eq!(errors, [false, true, false, false, false, false, false]);
 }
 
 #[test]
@@ -167,9 +180,10 @@ fn a_call_with_no_end_row_is_not_replayed() {
     assert_eq!(results(&rounds(&[start(1, "c1"), started, ended])), ["ok"]);
 }
 
+// Python: tests/test_channels/test_tool_history.py::test_calls_started_together_are_one_round_and_turns_their_own
 /// Calls started together are one round; an end pairs with the start of
-/// the same turn, and an id a provider reused from an earlier turn is
-/// replayed under one of its own.
+/// the same turn, and each call is replayed under the id the model gave
+/// it, as the turn sent it: an id a later turn reused too (RMK-1370).
 #[test]
 fn calls_started_together_are_one_round_and_turns_their_own() {
     let [third, third_end] = served(5, "c3", "c");
@@ -183,7 +197,9 @@ fn calls_started_together_are_one_round_and_turns_their_own() {
     ];
     rows.extend(served(7, "c1", "d").map(|row| in_turn(row, "t2", "t2")));
     let rounds = rounds(&rows);
-    assert_eq!(ids(&rounds), [vec!["c1", "c2"], vec!["c3"], vec!["c1_7"]]);
+    assert_eq!(ids(&rounds), [vec!["c1", "c2"], vec!["c3"], vec!["c1"]]);
+    let turns: Vec<Option<&str>> = rounds.iter().map(|round| round.turn.as_deref()).collect();
+    assert_eq!(turns, [Some("t1"), Some("t1"), Some("t2")]);
     assert_eq!(
         rounds.iter().map(|round| round.index).collect::<Vec<_>>(),
         [1, 5, 7]
@@ -225,7 +241,7 @@ fn a_round_s_results_pair_to_its_calls_first_in_first_out() {
         asked(&rounds),
         [
             ("c1".to_owned(), Some(json!("first"))),
-            ("c1_2".to_owned(), Some(json!("second")))
+            ("c1".to_owned(), Some(json!("second")))
         ]
     );
     assert_eq!(results(&rounds), ["a", "b"]);
@@ -288,65 +304,23 @@ fn another_turn_among_a_round_s_starts_leaves_its_results_paired() {
         asked(&rounds),
         [
             ("c1".to_owned(), Some(json!("first"))),
-            ("c9".to_owned(), Some(json!("theirs")))
+            ("c9".to_owned(), Some(json!("theirs"))),
+            ("c1".to_owned(), Some(json!("second")))
         ]
     );
-    assert_eq!(results(&rounds), ["fine", "zed"]);
+    assert_eq!(results(&rounds), ["fine", "zed", "refused"]);
 }
 
-/// The last 8 calls are replayed, the 3 most recent with their result
-/// whole, the older ones as a preview that says the rest is not shown: the
-/// reference implementation's bounds, written as numbers.
+// Python: tests/test_channels/test_tool_history.py::test_every_result_is_replayed_whole_however_many_calls_follow
+/// No window from turn to turn: what a later turn reads of a round does not
+/// change as calls come after it (RMK-1370). The characters are Unicode's.
 #[test]
-fn the_last_calls_are_replayed_the_most_recent_whole() {
-    let long = "x".repeat(200);
-    let rows: Vec<RoomEvent> = (0..10)
+fn every_result_is_replayed_whole_however_many_calls_follow() {
+    let long = "é".repeat(7000);
+    let rows: Vec<RoomEvent> = (0..12)
         .flat_map(|n| served(2 * n + 1, &format!("c{n}"), &long))
         .collect();
-    let replayed = rounds(&rows);
-    assert_eq!(
-        ids(&replayed).concat(),
-        ["c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9"]
-    );
-    let results = results(&replayed);
-    let (older, recent) = results.split_at(5);
-    assert_eq!(recent, vec![long; 3]);
-    let preview = format!(
-        "{}… [the rest is not shown here: call the tool again for it]",
-        "x".repeat(120)
-    );
-    assert!(older.iter().all(|result| *result == preview), "{older:?}");
-}
-
-/// An older result's preview reads on one line, its spacing collapsed as
-/// the reference implementation's `" ".join(text.split())` collapses it.
-#[test]
-fn a_preview_reads_its_result_on_one_line() {
-    let mut rows: Vec<RoomEvent> = served(1, "c0", "Order 42:\n  shipped\tMonday\u{1f}").into();
-    for n in 1..=3 {
-        rows.extend(served(2 * n + 1, &format!("c{n}"), "ok"));
-    }
-    assert_eq!(results(&rounds(&rows))[0], "Order 42: shipped Monday");
-}
-
-/// A recent result over 6,000 characters is cut there, saying how long it
-/// is; one of 6,000 is whole. The characters are Unicode's, not bytes.
-#[test]
-fn a_long_result_is_cut_at_the_kept_size_and_says_so() {
-    let result = "é".repeat(6500);
-    let [shown] = results(&rounds(&served(1, "c1", &result)))
-        .try_into()
-        .unwrap();
-    assert_eq!(
-        shown,
-        format!(
-            "{}\n[first 6000 of 6500 characters; the rest is not shown here: call the tool \
-             again for it]",
-            "é".repeat(6000)
-        )
-    );
-    let exact = "é".repeat(6000);
-    assert_eq!(results(&rounds(&served(1, "c1", &exact))), [exact]);
+    assert_eq!(results(&rounds(&rows)), vec![long; 12]);
 }
 
 /// Two turns overlap, the model reusing its id: each end pairs with the
@@ -369,7 +343,7 @@ fn overlapping_turns_pair_each_end_with_the_start_of_its_own_turn() {
         let replayed = rounds(&rows);
         assert_eq!(
             ids(&replayed),
-            [vec!["c1"], vec!["c1_2"]],
+            [vec!["c1"], vec!["c1"]],
             "{first}, {second}"
         );
         assert_eq!(results(&replayed), ["A's", "B's"], "{first}, {second}");

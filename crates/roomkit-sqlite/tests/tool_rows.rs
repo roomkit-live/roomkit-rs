@@ -128,7 +128,7 @@ async fn overlapping_turns_read_back_from_the_file_pair_by_their_correlation_id(
     );
     let mut context = RoomContext::new(Room::new(room_id()));
     context.recent_events.clone_from(&timeline);
-    let read = conversation(&id("assistant"), &timeline[5], &context, 50, |_| true);
+    let read = conversation(&id("assistant"), &timeline[5], &context, 50);
     let call = |id: &str| {
         let call =
             roomkit::model::ToolCall::new(id, "lookup_order", roomkit::model::Metadata::new());
@@ -140,8 +140,8 @@ async fn overlapping_turns_read_back_from_the_file_pair_by_their_correlation_id(
             Message::new(Role::User, "Order 42?"),
             call("c1"),
             Message::tool_result("c1", "A's"),
-            call("c1_2"),
-            Message::tool_result("c1_2", "B's"),
+            call("c1"),
+            Message::tool_result("c1", "B's"),
             Message::new(Role::User, "And then?"),
         ]
     );
@@ -241,9 +241,9 @@ fn lines(request: &AiContext) -> Vec<String> {
 /// Two turns, each calling `lookup_order` under the id `c1`, on a kit whose
 /// store is a file; the kit restarted on the file, a third turn reads both
 /// rounds at their place, each turn's rows sharing their own correlation
-/// id, the second call replayed under an id of its own (`c1_7`), as the
-/// Python implementation's history replays the same rows (probe
-/// `py_reads_py_rows.out`, room `kit`).
+/// id, each call replayed under the id the model gave it, as its turn sent
+/// it, as the Python implementation's history replays the same rows (probe
+/// `py_reads_py_rows.out`, room `kit`; RMK-1370).
 #[tokio::test]
 async fn a_restarted_kit_replays_the_rounds_its_file_holds() {
     let file = TempFile::new("tool-rows-restart");
@@ -281,8 +281,8 @@ async fn a_restarted_kit_replays_the_rounds_its_file_holds() {
             r#"result c1 {"order": "1", "status": "shipped"}"#,
             "Assistant One.",
             "User second",
-            "calls c1_7",
-            r#"result c1_7 {"order": "2", "status": "shipped"}"#,
+            "calls c1",
+            r#"result c1 {"order": "2", "status": "shipped"}"#,
             "Assistant Two.",
             "User third",
         ]

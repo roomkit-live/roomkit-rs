@@ -1,32 +1,38 @@
 //! The history an intelligence channel's turn reads (RFC §6.4): the room's
-//! latest messages and the channel's own latest tool-call rows, read from
-//! the store as the turn starts, as the Python implementation's AI channel
-//! reads them (its context's `get_conversation`, its `tool_rows`).
+//! latest messages and the channel's own tool-call rows, read from the
+//! store as the turn starts, as the Python implementation's AI channel
+//! reads them (its context's `get_conversation`, its `tool_rows` and its
+//! `build_tool_history_loader`).
 //!
 //! The context the pipeline hands every reader holds the room's latest
 //! events of every kind, as many as the room's window (the largest its
 //! channels declare, at least 50 while a hook is registered), which hooks
 //! and transports keep. A turn reads its conversation instead: as many of
 //! the latest messages, and the event the turn is about besides, as
-//! Python's context holds it, a blocked one included as the store keeps it,
-//! and the channel's latest 60 rows of calls, a start
-//! and an end for each of its 30 latest calls, so that a turn of many calls
-//! leaves its question in the next turn's history and its rounds after it
-//! (RFC §6.4 "The tools of earlier turns"). The two are merged in timeline
-//! order and handed as the channel may know them ([`visible_events`]). The
-//! history then crosses to the turn's executor whole, so a turn run apart
-//! reads the same rows.
+//! Python's context holds it, a blocked one included as the store keeps it;
+//! every tool-call row of the channel's from the room's message before the
+//! first of them on, read page by page, since a later turn replays every
+//! round its history holds as the turn sent it (RFC §6.4 "The tools of
+//! earlier turns", RMK-1370); and the channel's latest 60 rows of calls, a
+//! start and an end for each of its 30 latest calls, which its tool memory
+//! reads. They are merged in timeline order and handed as the channel may
+//! know them ([`visible_events`]). The history then crosses to the turn's
+//! executor whole, so a turn run apart reads the same rows.
 
-use roomkit_core::model::{ChannelBinding, EventType, RoomContext, RoomEvent};
+use roomkit_core::model::{ChannelBinding, EventType, RoomContext, RoomEvent, RoomId};
 use roomkit_core::rules::visible_events;
 
 use crate::discussion_turn::discussion_turn;
 use crate::store::{ConversationStore, EventFilter, ListEventsOptions, StoreError};
 
-/// How many of the channel's latest tool-call rows a turn reads: a start
-/// and an end for each of the 30 calls the Python implementation reads
-/// (`TOOL_MEMORY_CALLS`).
+/// How many of the channel's latest tool-call rows a turn reads for its tool
+/// memory: a start and an end for each of the 30 calls the Python
+/// implementation reads (`TOOL_MEMORY_CALLS`).
 const TOOL_ROWS: u64 = 60;
+
+/// How many of the channel's own rows a turn's history reads from the store
+/// at a time (Python's `_HISTORY_ROWS_PAGE`).
+const HISTORY_ROWS_PAGE: u64 = 500;
 
 /// `context`, the one the pipeline hands `binding`'s channel for its turn
 /// on `event`, with its history read from `store`: the room's latest
@@ -126,7 +132,8 @@ pub(crate) async fn turn_context_as_asked<S: ConversationStore>(
 /// The room's latest messages up to `event`, or up to `read_through`, the
 /// newest the pipeline had read when it handed the turn, when that is later,
 /// `event` among them when it is no message, then `binding`'s channel's
-/// latest tool-call rows, merged in timeline order. The Python
+/// own rows its history replays and its latest tool-call rows, merged in
+/// timeline order. The Python
 /// implementation's turn reads its trigger as the newest event of its
 /// context (`provisional`); an instruction, never stored, is not there. A
 /// regeneration's turn reads the room as the regeneration found it, the
@@ -144,11 +151,7 @@ async fn read<S: ConversationStore>(
         include_blocked: true,
         ..EventFilter::default()
     };
-    let rows = EventFilter {
-        event_types: Some(vec![EventType::ToolCallStart, EventType::ToolCallEnd]),
-        source_channel_id: Some(binding.channel_id.clone()),
-        ..EventFilter::default()
-    };
+    let rows = tool_rows(binding);
     let mut history = store
         .list_events(
             &event.room_id,
@@ -158,6 +161,15 @@ async fn read<S: ConversationStore>(
     if !matches!(event.r#type, EventType::Message | EventType::Instruction) {
         history.push(stored(store, event).await);
     }
+    let first = history
+        .iter()
+        .map(|known| known.index)
+        .chain(answered_index(event))
+        .min();
+    let replayed = match first {
+        Some(first) => replayed_rows(store, binding, &event.room_id, first).await?,
+        None => Vec::new(),
+    };
     let latest_rows = ListEventsOptions {
         limit: TOOL_ROWS,
         event_filter: Some(rows),
@@ -165,8 +177,85 @@ async fn read<S: ConversationStore>(
         ..ListEventsOptions::default()
     };
     history.extend(store.list_events(&event.room_id, latest_rows).await?);
+    history.extend(replayed);
     history.sort_by_key(|event| event.index);
+    history.dedup_by(|later, earlier| later.id == earlier.id);
     Ok(history)
+}
+
+/// `binding`'s channel's own tool-call rows.
+fn tool_rows(binding: &ChannelBinding) -> EventFilter {
+    EventFilter {
+        event_types: Some(vec![EventType::ToolCallStart, EventType::ToolCallEnd]),
+        source_channel_id: Some(binding.channel_id.clone()),
+        ..EventFilter::default()
+    }
+}
+
+/// The index a discussion's turn on `event` answers, which its history's
+/// rounds read after (RFC §19.7.5): one less for an instruction, which,
+/// never stored, holds the index of what followed it; none for any other
+/// turn, or an event the store never numbered. Python's `_answered_index`.
+fn answered_index(event: &RoomEvent) -> Option<u64> {
+    if !discussion_turn(event) || event.index == 0 {
+        return None;
+    }
+    Some(if event.r#type == EventType::Instruction {
+        event.index - 1
+    } else {
+        event.index
+    })
+}
+
+/// Every row of `binding`'s channel's own that a turn's history replays,
+/// from the room's message before `first`, the history's first event, on:
+/// the rounds its history holds, read page by page. Python's
+/// `build_tool_history_loader`.
+async fn replayed_rows<S: ConversationStore>(
+    store: &S,
+    binding: &ChannelBinding,
+    room_id: &RoomId,
+    first: u64,
+) -> Result<Vec<RoomEvent>, StoreError> {
+    let mut after = message_before(store, room_id, first).await?;
+    let mut rows = Vec::new();
+    loop {
+        let page = ListEventsOptions {
+            limit: HISTORY_ROWS_PAGE,
+            event_filter: Some(tool_rows(binding)),
+            after_index: after,
+            ..ListEventsOptions::default()
+        };
+        let page = store.list_events(room_id, page).await?;
+        let full = u64::try_from(page.len()).is_ok_and(|read| read >= HISTORY_ROWS_PAGE);
+        after = page.last().map(|last| last.index).or(after);
+        rows.extend(page);
+        if !full {
+            return Ok(rows);
+        }
+    }
+}
+
+/// The index of the room's last message before `index`, a blocked one
+/// included; none when there is none. Python's `read_message_before`.
+async fn message_before<S: ConversationStore>(
+    store: &S,
+    room_id: &RoomId,
+    index: u64,
+) -> Result<Option<u64>, StoreError> {
+    let messages = EventFilter {
+        event_types: Some(vec![EventType::Message]),
+        include_blocked: true,
+        ..EventFilter::default()
+    };
+    let before = ListEventsOptions {
+        limit: 1,
+        event_filter: Some(messages),
+        before_index: Some(index),
+        ..ListEventsOptions::default()
+    };
+    let before = store.list_events(room_id, before).await?;
+    Ok(before.last().map(|message| message.index))
 }
 
 /// `event` as the store keeps it, which a turn's history reads: a target
@@ -308,11 +397,12 @@ mod tests {
     /// The room's latest 50 messages before the turn's own event, and the
     /// event, as Python's context holds them, two
     /// blocked ones among them, which take their place in the window and
-    /// reach no reader; and the agent's latest 60 tool rows, another
-    /// channel's left out, whatever came after: 55 messages, then 70 rows
-    /// of the agent's and 5 of another's, then a message after the trigger.
+    /// reach no reader; and every tool row of the agent's since the message
+    /// before them, another channel's left out, whatever came after: 55
+    /// messages, then 70 rows of the agent's and 5 of another's, then a
+    /// message after the trigger.
     #[tokio::test]
-    async fn a_turn_reads_its_latest_messages_and_its_latest_tool_rows() {
+    async fn a_turn_reads_its_latest_messages_and_every_row_of_its_calls() {
         let mut events: Vec<RoomEvent> = (0..55).map(|index| event(index, None)).collect();
         for blocked in &mut events[52..54] {
             blocked.status = EventStatus::Blocked;
@@ -325,8 +415,30 @@ mod tests {
         let (indexes, messages) = read_by(&store, &trigger).await;
         let mut expected: Vec<u64> = (4..52).collect();
         expected.push(54);
-        expected.extend(65..125);
+        expected.extend(55..125);
         assert_eq!((indexes, messages), (expected, 49));
+    }
+
+    // Python: turns/_wiring.py build_tool_history_loader, _wiring_env.py
+    // read_message_before: the agent's rows from the room's message before
+    // the history's first on, every one, page by page (RMK-1370), and its
+    // latest 60 for its tool memory; an older row neither reads is left out.
+    #[tokio::test]
+    async fn a_turn_reads_its_rows_from_the_message_before_its_history() {
+        let mut events = vec![
+            event(0, None),
+            event(1, Some("agent")),
+            event(2, None),
+            event(3, Some("agent")),
+        ];
+        events.extend((4..55).map(|index| event(index, None)));
+        events.extend((55..616).map(|index| event(index, Some("agent"))));
+        let trigger = events[54].clone();
+        let store = store(events).await;
+        let (indexes, messages) = read_by(&store, &trigger).await;
+        let mut expected = vec![3];
+        expected.extend(4..616);
+        assert_eq!((indexes, messages), (expected, 51));
     }
 
     /// A stored trigger that is no message, a delete here, is the history's

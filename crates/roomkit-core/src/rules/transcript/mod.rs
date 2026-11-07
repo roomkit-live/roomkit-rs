@@ -24,10 +24,11 @@
 //! - The channel's earlier rounds of tool calls are replayed at their
 //!   place, after the input of the turn that made them and before its
 //!   answer (RFC §6.4 "The tools of earlier turns"): the assistant's
-//!   message making the calls, then a tool message per result, as the turn
-//!   itself sent them, read from the channel's stored rows. A round older
-//!   than the history's first message is left out, so that the history
-//!   never opens on the assistant's calls.
+//!   message making the calls, the text the model wrote with them first,
+//!   then a tool message per result, as the turn itself sent them, read
+//!   from the channel's stored rows. A round older than the history's first
+//!   message is left out, so that the history never opens on the
+//!   assistant's calls.
 //!
 //! - What a turn's memory adds beside its history (RFC §20.2,
 //!   [`TurnMemory`]): the notes it retrieved for the turn alone, after the
@@ -233,25 +234,24 @@ impl Message {
 /// takes the channel's reading.
 ///
 /// The rounds replayed are read from the channel's own tool rows among the
-/// context's events (RFC §6.4 "The tools of earlier turns"): each call's
-/// arguments as the model wrote them (its start row's) and the result it
-/// read (its end row's), for the calls a tool answered (served, failed or
-/// blocked) to a tool `replayed` says is work the agent did, never a
-/// housekeeping tool of its own. The last 8 such calls are replayed, the 3
-/// most recent with their result whole up to 6,000 characters, the older
-/// ones a preview. A round at or after `event`'s place, or before the
-/// history's first message, is left out; an instruction that stands alone
-/// replays none.
+/// context's events (RFC §6.4 "The tools of earlier turns"), each as its
+/// turn sent it: every call the turn ended, whatever its tool or its
+/// outcome, but one cancelled before it answered, under the id the model
+/// gave it, its arguments as the model wrote them (its start row's) and the
+/// result it read whole (its end row's). A round right after a message of
+/// its own turn, the text the model wrote with its calls, reads with it as
+/// the one message the turn sent. A round at or after `event`'s place, or
+/// before the history's first message, is left out; an instruction that
+/// stands alone replays none.
 pub fn conversation(
     channel_id: &ChannelId,
     event: &RoomEvent,
     context: &RoomContext,
     history: usize,
-    replayed: impl Fn(&str) -> bool,
 ) -> Vec<Message> {
     let memory = TurnMemory::default();
     let read = |said: &RoomEvent| TurnContent::Text(text_of(&said.content));
-    conversation_with_memory(channel_id, event, context, history, replayed, &memory, read)
+    conversation_with_memory(channel_id, event, context, history, &memory, read)
 }
 
 /// The metadata key, on an event or a message a memory builds, naming what
@@ -295,7 +295,6 @@ pub fn conversation_with_memory(
     event: &RoomEvent,
     context: &RoomContext,
     history: usize,
-    replayed: impl Fn(&str) -> bool,
     memory: &TurnMemory,
     read: impl Fn(&RoomEvent) -> TurnContent,
 ) -> Vec<Message> {
@@ -310,7 +309,7 @@ pub fn conversation_with_memory(
         if is_standalone(event) || (turns.is_empty() && (!in_place || input.content.is_blank())) {
             Vec::new()
         } else {
-            tool_rounds(&context.recent_events, channel_id, &replayed)
+            tool_rounds(&context.recent_events, channel_id)
         };
     if in_place {
         turns.push(input);
@@ -354,8 +353,10 @@ pub fn conversation_with_memory(
 
 /// A turn of the conversation before it is rendered: its role, what its
 /// event says, who said it, whether it is the application's instruction,
-/// its event's place in the timeline, and the rounds of tool calls read
-/// after it.
+/// its event's place in the timeline, the turn of the channel's own that
+/// wrote it (its `correlation_id`), the rounds of tool calls read after it,
+/// and whether the first of them is the round the turn's text was sent
+/// with.
 #[derive(Clone, Debug)]
 struct Turn {
     role: Role,
@@ -363,7 +364,9 @@ struct Turn {
     speaker: Option<Speaker>,
     instruction: bool,
     index: u64,
+    written_in: Option<String>,
     rounds: Vec<ToolRound>,
+    said_with_round: bool,
 }
 
 impl Turn {
@@ -381,7 +384,9 @@ impl Turn {
             speaker: if own { None } else { speaker(event, authors) },
             instruction: false,
             index: event.index,
+            written_in: own.then(|| event.correlation_id.clone()).flatten(),
             rounds: Vec::new(),
+            said_with_round: false,
         }
     }
 
@@ -407,8 +412,21 @@ impl Turn {
             },
             instruction,
             index: event.index,
+            written_in: None,
             rounds: Vec::new(),
+            said_with_round: false,
         }
+    }
+
+    /// Whether `round`, read right after this turn, is the round its text
+    /// was sent with: the channel's own text of the round's turn (Python's
+    /// `_spoken_with`).
+    fn speaks_with(&self, round: &ToolRound) -> bool {
+        self.rounds.is_empty()
+            && self.role == Role::Assistant
+            && matches!(self.content, TurnContent::Text(_))
+            && self.written_in.is_some()
+            && self.written_in == round.turn
     }
 
     /// Whether a copy of a mark may run from this turn into the next one:
@@ -467,7 +485,8 @@ fn rounds_before(event: &RoomEvent) -> Option<u64> {
 
 /// `rounds`, each read after the last of `turns`, oldest first, that came
 /// before it: none older than the first turn, so that the history never
-/// opens on the assistant's calls, nor at or after `before`.
+/// opens on the assistant's calls, nor at or after `before`. A round read
+/// right after the text the model wrote with its calls is sent with it.
 fn place(turns: &mut [Turn], rounds: Vec<ToolRound>, before: Option<u64>) {
     for round in rounds {
         if before.is_some_and(|before| round.index >= before) {
@@ -479,6 +498,7 @@ fn place(turns: &mut [Turn], rounds: Vec<ToolRound>, before: Option<u64>) {
             turn.index < round.index || (turn.instruction && turn.index == round.index)
         };
         if let Some(turn) = turns.iter_mut().rev().find(before_it) {
+            turn.said_with_round = turn.said_with_round || turn.speaks_with(&round);
             turn.rounds.push(round);
         }
     }
@@ -583,12 +603,8 @@ fn joined_notes(blocks: &[String]) -> Option<String> {
 /// turns"): its assistant's message making the calls, then a tool message
 /// per result, as [`conversation`] replays them, every round its rows hold,
 /// wherever the history it is placed in starts.
-pub fn replayed_rounds(
-    events: &[RoomEvent],
-    channel_id: &ChannelId,
-    replayed: impl Fn(&str) -> bool,
-) -> Vec<Vec<Message>> {
-    tool_rounds(events, channel_id, &replayed)
+pub fn replayed_rounds(events: &[RoomEvent], channel_id: &ChannelId) -> Vec<Vec<Message>> {
+    tool_rounds(events, channel_id)
         .into_iter()
         .map(|round| round.messages)
         .collect()
@@ -626,7 +642,9 @@ impl Notes<'_> {
 
 /// The conversation's messages: each turn in its role, a participant's
 /// turn labelled when the conversation labels them, the instruction marked
-/// as the application's, the rounds read after a turn following it, then
+/// as the application's, the rounds read after a turn following it, the
+/// first of them in the turn's own message when the turn's text was sent
+/// with it, then
 /// the turn's `notes` after the last message when it is a user's, the
 /// input or not, else as a user message of their own (Python's
 /// `with_turn_notes`): some chat formats refuse two user messages in a row.
@@ -642,8 +660,15 @@ fn rendered(turns: Vec<Turn>, notes: &Notes<'_>) -> Vec<Message> {
             }
             (_, content) => content,
         };
-        messages.push(Message::of_content(turn.role, content));
-        messages.extend(turn.rounds.into_iter().flat_map(|round| round.messages));
+        let mut rounds = turn.rounds.into_iter().flat_map(|round| round.messages);
+        match (turn.said_with_round, content) {
+            (true, TurnContent::Text(text)) => {
+                // The text, then the calls: the one message its turn sent.
+                messages.extend(rounds.next().map(|calls| Message { text, ..calls }));
+            }
+            (_, content) => messages.push(Message::of_content(turn.role, content)),
+        }
+        messages.extend(rounds);
     }
     if let Some(notes) = joined_notes(&notes.blocks()) {
         match messages.pop() {

@@ -166,7 +166,6 @@ impl Timeline {
             event,
             &self.context,
             history,
-            |_| true,
         )
     }
 }
@@ -242,6 +241,52 @@ fn the_history_replays_an_earlier_round_at_its_place() {
             user("Thanks")
         ]
     );
+}
+
+// Python: tests/test_channels/test_tool_history.py::test_a_round_s_text_replays_with_its_calls_in_one_message
+/// The text the model wrote with a round's calls, stored as a message of its
+/// turn before the round's rows, reads with them as the one assistant
+/// message the turn sent (RMK-1370); a message of another turn, or one the
+/// round does not follow right after, reads apart.
+#[test]
+fn a_round_s_text_replays_with_its_calls_in_one_message() {
+    for (turn, merged) in [("turn_evt_1", true), ("turn_other", false)] {
+        let mut room = Timeline::new();
+        let question = room.says("sms", "+15550001", Some("Alice"), "Where is order 42?");
+        let mut said = room.event(EventType::Message, AGENT, None, None, "Let me check.");
+        said.correlation_id = Some(turn.to_owned());
+        room.commit(said);
+        let order = json!({ "order": "42" });
+        let call = ("call_1", "lookup_order", order.clone(), "shipped");
+        room.round(&question, std::slice::from_ref(&call));
+        room.round(
+            &question,
+            &[("call_2", "lookup_order", order.clone(), "again")],
+        );
+        room.answers("Order 42 shipped.");
+        let event = room.says("sms", "+15550001", Some("Alice"), "Thanks");
+        let made = calls(&[("call_1", "lookup_order", order.clone())]);
+        let opening = if merged {
+            vec![Message {
+                text: "Let me check.".to_owned(),
+                ..made
+            }]
+        } else {
+            vec![assistant("Let me check."), made]
+        };
+        let expected: Vec<Message> = [user("Where is order 42?")]
+            .into_iter()
+            .chain(opening)
+            .chain([
+                Message::tool_result("call_1", "shipped"),
+                calls(&[("call_2", "lookup_order", order.clone())]),
+                Message::tool_result("call_2", "again"),
+                assistant("Order 42 shipped."),
+                user("Thanks"),
+            ])
+            .collect();
+        assert_eq!(room.read(&event, 50), expected, "{turn}");
+    }
 }
 
 /// RFC §6.4: a round older than the history's first message is left out
@@ -612,7 +657,6 @@ fn read_with(room: &Timeline, event: &RoomEvent, memory: &super::TurnMemory) -> 
         event,
         &room.context,
         usize::MAX,
-        |_| true,
         memory,
         |said| super::TurnContent::Text(crate::rules::transcoding::text_of(&said.content)),
     )

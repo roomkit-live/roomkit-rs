@@ -9,18 +9,19 @@
 //! recall riding the participant's message instead reads as something the
 //! participant asked, and models answer it.
 //!
-//! A round replays what the model was given: the arguments it wrote (the
-//! start row's, never a `BEFORE_TOOL_USE` rewrite, which may hold the very
-//! value a hook kept from it) and the result it read (the end row's, an
-//! `ON_TOOL_CALL` rewrite included). The calls replayed are the answers a
-//! tool gave, served, failed or withheld by a hook; never a refusal, a call
-//! nothing served or one cancelled, nor a call to a tool the caller says
-//! is no work of the agent's (its skills' tools). Bounded as the reference
-//! implementation bounds them: the last 8 calls, the 3 most recent with
-//! their result whole up to 6,000 characters, the older ones a preview.
+//! A round replays what the model was given, as it was given, so that a
+//! later turn's request extends the one before it and a provider's prompt
+//! cache keeps it (RMK-1370): the arguments it wrote (the start row's, never
+//! a `BEFORE_TOOL_USE` rewrite, which may hold the very value a hook kept
+//! from it) and the result it read (the end row's, an `ON_TOOL_CALL` rewrite
+//! included), whole, under the id the model gave it. Every call the turn
+//! ended is replayed, whatever its tool or its outcome, but a call cancelled
+//! before it answered, whose result no model read. Nothing shortens a round
+//! from turn to turn: a compaction does, when a provider refuses the context
+//! as too long (RFC §6.4 "A turn compacted").
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 
 use serde_json::Value;
 
@@ -31,24 +32,6 @@ use crate::model::{
 };
 use crate::rules::edits::is_deleted;
 
-/// The calls a turn's history replays, the channel's most recent.
-const REPLAYED_CALLS: usize = 8;
-
-/// The most recent replayed calls whose result is replayed whole, up to
-/// [`KEPT_CHARS`]; an older one is replayed as a preview.
-const WHOLE_RESULTS: usize = 3;
-
-/// How much of a recent result is replayed whole, in characters: the
-/// reference implementation's 6,000, which its eviction may lower; nothing
-/// is evicted here (RFC §21.5 is not built).
-const KEPT_CHARS: usize = 6000;
-
-/// How much of an older result its preview shows, in characters.
-const PREVIEW_CHARS: usize = 120;
-
-/// What a cut result says of the rest.
-const NOT_SHOWN: &str = "the rest is not shown here: call the tool again for it";
-
 /// What a part of a stored result other than text reads as.
 const NON_TEXT_PART: &str = "[non-text part]";
 
@@ -57,6 +40,8 @@ const NON_TEXT_PART: &str = "[non-text part]";
 pub(super) struct ToolRound {
     /// The timeline index of its first replayed call's start row.
     pub(super) index: u64,
+    /// The turn it belongs to: its rows' `correlation_id`.
+    pub(super) turn: Option<String>,
     /// The assistant's message making its calls, then a tool message per
     /// result, in call order.
     pub(super) messages: Vec<Message>,
@@ -66,51 +51,21 @@ pub(super) struct ToolRound {
 /// paired.
 struct Call<'a> {
     index: u64,
+    turn: Option<&'a str>,
     start: &'a ToolCallContent,
     end: Option<&'a ToolCallContent>,
 }
 
 /// The rounds of `channel_id`'s earlier tool calls that `events`, a room's
 /// timeline oldest first, hold, as its history replays them: its own rows
-/// only (written by it, outbound, none deleted), `replayed` saying whether
-/// a call to a tool is work the agent did.
-pub(super) fn tool_rounds(
-    events: &[RoomEvent],
-    channel_id: &ChannelId,
-    replayed: &dyn Fn(&str) -> bool,
-) -> Vec<ToolRound> {
-    let rounds = rounds(own_rows(events, channel_id));
-    // Each call kept, by its round and its place in it.
-    let kept: Vec<((usize, usize), &Call<'_>)> = rounds
+/// only (written by it, outbound, none deleted), each call its turn ended as
+/// it was sent, but one cancelled before it answered.
+pub(super) fn tool_rounds(events: &[RoomEvent], channel_id: &ChannelId) -> Vec<ToolRound> {
+    rounds(own_rows(events, channel_id))
         .iter()
-        .enumerate()
-        .flat_map(|(round, calls)| {
-            let placed = calls.iter().enumerate();
-            placed.map(move |(position, call)| ((round, position), call))
-        })
-        .filter(|(_, call)| is_kept(call, replayed))
-        .collect();
-    let kept = kept
-        .get(kept.len().saturating_sub(REPLAYED_CALLS)..)
-        .unwrap_or_default();
-    let whole_from = kept.len().saturating_sub(WHOLE_RESULTS);
-    let ids = unique_ids(kept.iter().map(|(_, call)| *call));
-    let chosen: Chosen<'_> = kept
-        .iter()
-        .zip(&ids)
-        .enumerate()
-        .map(|(at, ((place, _), id))| (*place, (id.as_str(), at >= whole_from)))
-        .collect();
-    rounds
-        .iter()
-        .enumerate()
-        .filter_map(|(round, calls)| replayed_round(round, calls, &chosen))
+        .filter_map(|calls| replayed_round(calls))
         .collect()
 }
-
-/// The calls replayed, by their round and their place in it: each one's id
-/// and whether its result is replayed whole.
-type Chosen<'a> = BTreeMap<(usize, usize), (&'a str, bool)>;
 
 /// `channel_id`'s tool rows among `events`, with their content: rows it
 /// wrote (outbound; one that entered the room inbound under its id is no
@@ -223,6 +178,7 @@ fn rounds<'a>(
                 waiting.hold(key, round, calls.len());
                 calls.push(Call {
                     index: event.index,
+                    turn,
                     start: row,
                     end: None,
                 });
@@ -245,82 +201,52 @@ fn rounds<'a>(
     rounds
 }
 
-/// Whether `call` is replayed: it ended, with an answer the tool gave
-/// (served, failed, blocked; an end stored without an outcome ended served
-/// or failed), and its tool is work the agent did.
-fn is_kept(call: &Call<'_>, replayed: &dyn Fn(&str) -> bool) -> bool {
-    let Some(end) = call.end else {
-        return false;
-    };
-    let answered = match end.outcome {
-        None
-        | Some(ToolCallOutcome::Served | ToolCallOutcome::Failed | ToolCallOutcome::Blocked) => {
-            true
-        }
-        Some(ToolCallOutcome::Refused | ToolCallOutcome::Unserved | ToolCallOutcome::Cancelled) => {
-            false
-        }
-    };
-    answered && replayed(&call.start.tool_name)
+/// Whether `call` ended with a result the model read: not one cancelled
+/// before it answered, whose turn was cut or stopped first. An end stored
+/// without an outcome ended served or failed.
+fn answered(call: &Call<'_>) -> bool {
+    call.end
+        .is_some_and(|end| end.outcome != Some(ToolCallOutcome::Cancelled))
 }
 
-/// Each of `calls`' ids, one per call: a provider may reuse an id from one
-/// turn to the next, and a chat API pairs a result with its call by id. A
-/// call with no id, or another's, takes its own with its start's index.
-fn unique_ids<'a>(calls: impl Iterator<Item = &'a Call<'a>>) -> Vec<String> {
-    let mut seen: BTreeSet<String> = BTreeSet::new();
-    calls
-        .map(|call| {
-            let given = call.start.tool_id.as_str();
-            let id = if given.is_empty() || seen.contains(given) {
-                let stem = if given.is_empty() { "call" } else { given };
-                format!("{stem}_{}", call.index)
-            } else {
-                given.to_owned()
-            };
-            seen.insert(id.clone());
-            id
-        })
-        .collect()
-}
-
-/// The round numbered `round`, `calls`, as it reads: the `chosen` of its
-/// calls alone, each with its id, its result whole or not; none when none
-/// is chosen.
-fn replayed_round(round: usize, calls: &[Call<'_>], chosen: &Chosen<'_>) -> Option<ToolRound> {
-    let shown: Vec<(&Call<'_>, &str, bool)> = calls
-        .iter()
-        .enumerate()
-        .filter_map(|(position, call)| {
-            let (id, whole) = chosen.get(&(round, position))?;
-            Some((call, *id, *whole))
-        })
-        .collect();
-    let index = shown.first()?.0.index;
+/// `calls`, one round's, as it reads: the calls its turn ended and the model
+/// read the result of, each under the id the model gave it, as the turn sent
+/// it; none when none is.
+fn replayed_round(calls: &[Call<'_>]) -> Option<ToolRound> {
+    let shown: Vec<&Call<'_>> = calls.iter().filter(|call| answered(call)).collect();
+    let first = shown.first()?;
     let made = shown
         .iter()
-        .map(|(call, id, _)| {
+        .map(|call| {
             // The arguments the model wrote: the start row's, with its intent
             // beside them, which the loop writes back among them (RFC §6.4).
             let arguments = call.start.arguments.clone();
-            let mut made = ToolCall::new(*id, call.start.tool_name.clone(), arguments);
+            let mut made = ToolCall::new(
+                call.start.tool_id.clone(),
+                call.start.tool_name.clone(),
+                arguments,
+            );
             made.intent.clone_from(&call.start.intent);
             made
         })
         .collect();
     let mut messages = vec![Message::assistant_calls("", made)];
-    messages.extend(shown.iter().map(|(call, id, whole)| {
+    messages.extend(shown.iter().map(|call| {
         let result = call
             .end
             .map_or(Cow::Borrowed(""), |end| result_text(&end.result));
-        let mut message = Message::tool_result(*id, shown_result(&result, *whole));
+        let mut message = Message::tool_result(call.start.tool_id.clone(), result);
         // A failed call reads as one, as its round read it (RFC §6.4).
         message.is_error = call
             .end
             .is_some_and(|end| end.status == ToolCallStatus::Failed);
         message
     }));
-    Some(ToolRound { index, messages })
+    Some(ToolRound {
+        index: first.index,
+        turn: first.turn.map(str::to_owned),
+        messages,
+    })
 }
 
 /// A stored result's text, borrowed when the row holds it as text: a list
@@ -345,48 +271,8 @@ fn result_text(result: &Value) -> Cow<'_, str> {
     }
 }
 
-/// What a replayed result reads as: whole up to [`KEPT_CHARS`] for one of
-/// the most recent, cut there saying so and how long it is; an older one's
-/// preview.
-fn shown_result(text: &str, whole: bool) -> String {
-    if !whole {
-        return preview(text);
-    }
-    let Some((cut, _)) = text.char_indices().nth(KEPT_CHARS) else {
-        return text.to_owned();
-    };
-    let (kept, rest) = text.split_at(cut);
-    let length = KEPT_CHARS + rest.chars().count();
-    format!("{kept}\n[first {KEPT_CHARS} of {length} characters; {NOT_SHOWN}]")
-}
-
-/// An older result's preview, read no further than it shows: its words on
-/// one line, one space between two (the reference implementation's
-/// `" ".join(text.split())`), cut at [`PREVIEW_CHARS`] saying so.
-fn preview(text: &str) -> String {
-    let mut flat = String::new();
-    let mut taken = 0;
-    let mut spaced = false;
-    for c in text.chars() {
-        if is_python_space(c) {
-            spaced = !flat.is_empty();
-            continue;
-        }
-        for c in spaced.then_some(' ').into_iter().chain([c]) {
-            if taken == PREVIEW_CHARS {
-                return format!("{flat}… [{NOT_SHOWN}]");
-            }
-            flat.push(c);
-            taken += 1;
-        }
-        spaced = false;
-    }
-    flat
-}
-
-/// Whether `c` separates words as the reference implementation's preview
-/// splits them (Python's `str.split()`): Unicode's white space, and the
-/// four information separators.
+/// Whether `c` separates words as Python's `str.split()` splits them:
+/// Unicode's white space, and the four information separators.
 pub(super) fn is_python_space(c: char) -> bool {
     c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c)
 }

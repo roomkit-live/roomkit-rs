@@ -944,8 +944,8 @@ impl<P: AiProvider> AiChannel<P> {
     ) -> Result<(Arc<Toolbox>, Arc<TurnSearch>), AiError> {
         let memory = &self.media.tool_usage;
         if in_kit {
-            let rows = context
-                .recent_events
+            let rows = self
+                .tool_memory_rows(context)
                 .iter()
                 .filter(|past| self.is_own_tool_row(past));
             let used = used_tools(rows).filter(|name| self.toolbox.in_tool_memory(name));
@@ -997,7 +997,7 @@ impl<P: AiProvider> AiChannel<P> {
                 let turn = SkillTurn {
                     room: &context.room.id,
                     agent: &self.channel_id,
-                    history: &context.recent_events,
+                    history: self.tool_memory_rows(context),
                     stands_alone,
                 };
                 skills.system_prompt(prompt.as_deref(), turn)
@@ -1152,9 +1152,7 @@ impl<P: AiProvider> AiChannel<P> {
             .filter(|past| self.is_own_tool_row(past))
             .cloned()
             .collect();
-        replayed_rounds(&rows, &self.channel_id, |name| {
-            self.toolbox.in_tool_memory(name)
-        })
+        replayed_rounds(&rows, &self.channel_id)
     }
 
     /// The images this channel's tool calls in `room` returned that ride
@@ -1199,6 +1197,23 @@ impl<P: AiProvider> AiChannel<P> {
         let refused = self.media.refused.of(room);
         let limit = self.media.max_author_images;
         author_images(&events, room, resolver, limit, &refused).await
+    }
+
+    /// `context`'s events from the channel's 60th latest tool-call row on,
+    /// a start and an end for each of its 30 latest calls, which its tool
+    /// memory and its skills' activations are rebuilt from, whole when it
+    /// holds fewer: Python's usage loader reads those (`TOOL_MEMORY_CALLS`),
+    /// where the turn's history reads every round since its first message.
+    fn tool_memory_rows<'a>(&self, context: &'a RoomContext) -> &'a [RoomEvent] {
+        let events = &context.recent_events;
+        let from = events
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(_, past)| self.is_own_tool_row(past))
+            .nth(TOOL_MEMORY_ROWS - 1)
+            .map_or(0, |(at, _)| at);
+        events.get(from..).unwrap_or_default()
     }
 
     /// Whether `event` is one of the channel's tool-call rows.
@@ -1319,6 +1334,11 @@ fn instructions_of(servers: &[(String, Option<String>)]) -> Result<ServerInstruc
     }
     Ok(instructions)
 }
+
+/// How many of the channel's latest tool-call rows its tool memory is
+/// rebuilt from: a start and an end for each of the 30 calls Python's usage
+/// loader reads (`TOOL_MEMORY_CALLS`).
+const TOOL_MEMORY_ROWS: usize = 60;
 
 /// The default memory: a window of the room's `max_events` latest events.
 fn sliding_window(max_events: usize) -> Arc<dyn MemoryProvider> {
@@ -1476,7 +1496,6 @@ impl<P: AiProvider> AiChannel<P> {
             read,
             history,
             usize::MAX,
-            |name| self.toolbox.in_tool_memory(name),
             memory,
             |said| reader.read(said),
         )
