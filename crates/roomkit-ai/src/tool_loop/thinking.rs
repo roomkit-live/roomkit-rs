@@ -217,6 +217,16 @@ impl ThinkingWindow {
         observers.publish(EphemeralEventType::ThinkingEnd, &block, self.round);
     }
 
+    /// Closes the window of a try that showed reasoning alone before it
+    /// failed and leaves its reasoning out of the round: its observers have
+    /// read it, the round reports only the reasoning of the try that answers
+    /// (RFC §6.4, Python's `_drop_reasoning`).
+    pub(super) fn drop_reasoning(&mut self) {
+        self.end();
+        self.chunks.clear();
+        self.published = 0;
+    }
+
     /// The round's reasoning, every block's.
     pub(super) fn text(&self) -> String {
         self.chunks.concat()

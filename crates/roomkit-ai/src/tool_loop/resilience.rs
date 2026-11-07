@@ -128,6 +128,9 @@ impl<P: AiProvider> Loop<P> {
                 Ok(generation) => return Ok(generation),
                 Err(failure) => failure,
             };
+            if !failure.streamed {
+                window.thinking.drop_reasoning();
+            }
             received |= failure.received;
             let failure = Failed {
                 received,
@@ -189,8 +192,11 @@ async fn fall_back(
     tracing::warn!(target: "roomkit::ai", provider = fallback.dyn_name(), "trying the fallback provider");
     let stream = fallback.dyn_generate_structured_stream(context);
     let held = context.response_schema.is_some();
-    match Generation::read(stream, reading, held).await {
+    let (steering, out, prefix, window, limits) = reading;
+    let read = Generation::read(stream, (steering, out, prefix, &mut *window, limits), held).await;
+    match read {
         Err(failure) if !failure.streamed => {
+            window.thinking.drop_reasoning();
             tracing::error!(target: "roomkit::ai", error = %failure.error, "the fallback provider failed too");
             Err(Failed {
                 error: primary.error.with_source(failure.error),

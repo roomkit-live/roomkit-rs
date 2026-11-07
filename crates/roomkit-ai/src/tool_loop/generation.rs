@@ -76,8 +76,9 @@ impl Called {
 pub(super) struct Failed {
     pub(super) error: ProviderError,
     /// The read passed on an event before the failure: never read again by
-    /// a retry, a replay or the fallback. Text a response schema held is
-    /// none (Python's `emitted`, counted after `hold_until_checked`).
+    /// a retry, a replay or the fallback. Reasoning is none, nor is text a
+    /// response schema held (Python's `emitted`, counted after
+    /// `hold_until_checked`).
     pub(super) streamed: bool,
     /// The provider handed an event before the failure, held text included:
     /// it took the request (Python's `received`, RFC §6.4).
@@ -164,7 +165,12 @@ impl Generation {
                 }
             };
             received = true;
-            streamed = streamed || !(held && matches!(event, StreamEvent::TextDelta(_)));
+            // Reasoning is no part of the answer the room holds, nor is text
+            // a response schema holds: a failure after either is tried again
+            // (RFC §6.4).
+            streamed = streamed
+                || !(matches!(event, StreamEvent::ThinkingDelta(_))
+                    || held && matches!(event, StreamEvent::TextDelta(_)));
             let read = (&mut transcript, &mut replayed, &mut delivered);
             match event {
                 StreamEvent::TextDelta(delta) if held => holding.push(delta.text),
