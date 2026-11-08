@@ -240,7 +240,7 @@ const MEMORY: &[&str] = &[
     "summarizer",
     "retrieval",
 ];
-const MEMORY_MESSAGE: &[&str] = &["role", "text"];
+const MEMORY_MESSAGE: &[&str] = &["role", "text", "parts"];
 const MEMORY_COMPACTION: &[&str] = &["messages", "keep", "fails"];
 const BUDGET_AWARE: &[&str] = &[
     "max_context_tokens",

@@ -18,7 +18,7 @@ use roomkit_ai::memory::{
     SummarizingMemory, SummarizingMemoryOptions,
 };
 use roomkit_ai::testing::ScriptedProvider;
-use roomkit_ai::{AiMessage, AiRole};
+use roomkit_ai::{AiContentPart, AiMessage, AiMessageContent, AiRole, AiTextPart};
 use serde_json::{Value, json};
 
 use crate::agents::{message_records, write_record};
@@ -351,6 +351,18 @@ fn message(spec: &Value) -> Result<AiMessage, String> {
         Some("assistant") => AiRole::Assistant,
         other => return Err(format!("memory message role: {other:?}")),
     };
+    // A message held as text parts, in order, or as a text.
+    if let Some(parts) = spec["parts"].as_array() {
+        let parts = parts
+            .iter()
+            .map(|part| {
+                part.as_str()
+                    .map(|text| AiContentPart::Text(AiTextPart::new(text)))
+            })
+            .collect::<Option<Vec<_>>>()
+            .ok_or("memory message parts: not texts")?;
+        return Ok(AiMessage::new(role, AiMessageContent::Parts(parts)));
+    }
     Ok(AiMessage::new(
         role,
         spec["text"].as_str().unwrap_or_default(),
