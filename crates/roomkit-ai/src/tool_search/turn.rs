@@ -112,6 +112,24 @@ impl TurnSearch {
         self.collapsed(reachable)
     }
 
+    /// Lists `tool`, which this round declares beyond the toolset (the
+    /// re-read of stored results), among what the search reads this round:
+    /// `list_tools` names it, as Python's catalogue, the turn's
+    /// `offered_tools`, does.
+    pub(crate) fn offer(&self, tool: AiTool) {
+        if !self.active {
+            return;
+        }
+        let mut window = self.window();
+        if !window
+            .catalogue
+            .iter()
+            .any(|listed| listed.name == tool.name)
+        {
+            window.catalogue.push(tool);
+        }
+    }
+
     /// `tools` as a round would declare them, nothing read from them.
     pub(crate) fn collapsed(&self, tools: Vec<AiTool>) -> Vec<AiTool> {
         if !self.active {

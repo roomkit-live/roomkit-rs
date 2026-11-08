@@ -102,6 +102,10 @@ impl ToolSearch {
         let active = self.hides(&toolbox.deferrable(), window);
         let mut never = toolbox.never_hidden();
         never.extend(TOOL_SEARCH_INFRA_TOOL_NAMES.map(str::to_owned));
+        // The re-read of stored results, the agent's own: listed once a round
+        // declares it, never named by `find_tools` (Python's
+        // `ToolTraits(deferrable=False)` of `read_stored_result`).
+        never.extend(toolbox.reread().map(|tool| tool.name.clone()));
         let mut sticky = HashSet::new();
         if active {
             let names = toolbox.names();

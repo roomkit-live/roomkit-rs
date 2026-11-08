@@ -25,6 +25,7 @@ use crate::loop_events::{
     response_transcript,
 };
 use crate::provider::{AiContext, AiMessage, AiProvider, AiToolCall, AiToolResultPart};
+use crate::tool_eviction::REREAD_TOOL;
 use crate::tools::AiTool;
 
 /// What `BEFORE_AI_GENERATION`'s hooks and `AFTER_TOOL_ROUND`'s left of the
@@ -259,6 +260,12 @@ impl<P: AiProvider> Loop<P> {
     /// what the turn reports (RFC §6.4).
     pub(super) fn round_tools(&self, spent: &mut Spent) -> Vec<AiTool> {
         let round = self.with_reread(self.search.round_declaration(self.declared()));
+        // What Tool Search lists is the turn's offer: the toolset, then the
+        // re-read of stored results once the round declares it (Python's
+        // `offered_tools`).
+        if let Some(reread) = round.iter().find(|tool| tool.name == REREAD_TOOL) {
+            self.search.offer(reread.clone());
+        }
         spent.declare(round.iter().map(|tool| {
             let origin = self.search.origin(&tool.name);
             DeclaredTool::from_tool(tool, FromToolOptions { origin })
