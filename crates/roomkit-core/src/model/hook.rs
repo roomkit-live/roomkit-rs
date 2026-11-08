@@ -156,8 +156,9 @@ impl<P> HookResult<P> {
 
     /// What the Python implementation's validator raises for this result:
     /// a `modify` without its event, a `block` without its reason. Outside
-    /// the public API: the hook chain reads such a result as a hook that
-    /// raised.
+    /// the public API: deserialization refuses either; a hook returning a
+    /// `modify` without its event follows the unusable-result policy of
+    /// RFC §9.3 instead of being read as a constructor failure.
     ///
     /// # Errors
     ///

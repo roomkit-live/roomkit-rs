@@ -221,20 +221,27 @@ impl<P> HookChain<P> {
         }
     }
 
-    /// A result the Python implementation's validator refuses, a `modify`
-    /// without its event or a `block` without its reason, built by struct
-    /// literal, is read as the hook raising the `ValueError` Python's hook
-    /// would have raised building it: none of its side effects is kept.
+    /// A returned `modify` without a payload is unusable, even though a
+    /// constructor would refuse it. Keep its effects but not its injections
+    /// (RFC §9.3); other model refusals retain the constructor-error policy.
     fn apply_result(&mut self, hook: &HookSpec, result: HookResult<P>, keep: impl FnOnce(P) -> P) {
-        if result.check().is_err() {
+        let missing_payload = result.action == HookAction::Modify && result.event.is_none();
+        if !missing_payload && result.check().is_err() {
             let error = ErrorRecord::new("ValueError", python_validator_message(result.action));
             self.apply_problem(hook, HookProblem::Raised(error));
             return;
         }
-        self.injected_events.extend(result.injected_events);
         self.tasks.extend(result.tasks);
         self.observations.extend(result.observations);
         self.metadata.extend(result.metadata);
+        if missing_payload {
+            self.apply_problem(
+                hook,
+                HookProblem::Invalid("a modify with no payload".to_owned()),
+            );
+            return;
+        }
+        self.injected_events.extend(result.injected_events);
         match (result.action, result.event) {
             (HookAction::Modify, Some(payload)) => self.payload = keep(payload),
             (HookAction::Block, _) => self.block = Some((hook.name.clone(), result.reason)),
@@ -439,11 +446,9 @@ mod tests {
         );
     }
 
-    /// A result Python's validator refuses, built by struct literal, reads
-    /// as the hook raising Python's `ValueError`: a block without a reason
-    /// and a modify without its event allow, their side effects dropped.
+    /// A block without a reason retains the constructor-error policy.
     #[test]
-    fn a_result_python_refuses_reads_as_a_raised_hook() {
+    fn a_block_without_a_reason_reads_as_a_raised_hook() {
         let task = Task::at(
             TaskId::new("task_1").unwrap(),
             RoomId::new("room_1").unwrap(),
@@ -458,10 +463,6 @@ mod tests {
                 ..HookResult::new(HookAction::Block)
             }),
         );
-        chain.apply(
-            &hook("no_event"),
-            HookOutcome::Returned(HookResult::new(HookAction::Modify)),
-        );
         let verdict = chain.finish();
         assert_eq!(
             (
@@ -474,28 +475,56 @@ mod tests {
                 ChainDecision::Allowed,
                 "original".to_owned(),
                 Vec::new(),
-                vec![
-                    HookIncident {
-                        hook: "no_reason".to_owned(),
-                        problem: HookProblem::Raised(ErrorRecord::new(
-                            "ValueError",
-                            "action='block' requires 'reason' to be set"
-                        )),
-                        blocked: false,
-                        timeout: DEFAULT_HOOK_TIMEOUT,
-                    },
-                    HookIncident {
-                        hook: "no_event".to_owned(),
-                        problem: HookProblem::Raised(ErrorRecord::new(
-                            "ValueError",
-                            "action='modify' requires 'event' to be set"
-                        )),
-                        blocked: false,
-                        timeout: DEFAULT_HOOK_TIMEOUT,
-                    },
-                ]
+                vec![HookIncident {
+                    hook: "no_reason".to_owned(),
+                    problem: HookProblem::Raised(ErrorRecord::new(
+                        "ValueError",
+                        "action='block' requires 'reason' to be set"
+                    )),
+                    blocked: false,
+                    timeout: DEFAULT_HOOK_TIMEOUT,
+                },]
             )
         );
+    }
+
+    // Python: tests/test_hook_rules.py::TestAnUnusableResult, and
+    // core/hooks.py::run_sync_hooks keeps the returned result's metadata.
+    #[test]
+    fn a_modify_without_a_payload_keeps_effects_under_both_policies() {
+        for registration in [hook("empty"), fail_closed("empty")] {
+            let mut chain = chain();
+            let mut metadata = Metadata::new();
+            metadata.insert("seen".to_owned(), true.into());
+            chain.apply(
+                &registration,
+                HookOutcome::Returned(HookResult {
+                    tasks: vec![task("task_1")],
+                    injected_events: vec![injected()],
+                    metadata: metadata.clone(),
+                    ..HookResult::new(HookAction::Modify)
+                }),
+            );
+            let verdict = chain.finish();
+            assert_eq!(verdict.payload, "original");
+            assert_eq!(verdict.tasks, [task("task_1")]);
+            assert_eq!(verdict.injected_events, []);
+            assert_eq!(verdict.metadata, metadata);
+            let expected = if registration.fail_closed {
+                ChainDecision::Blocked {
+                    by: "empty".to_owned(),
+                    reason: Some("hook_invalid_result:empty".to_owned()),
+                }
+            } else {
+                ChainDecision::Allowed
+            };
+            assert_eq!(verdict.decision, expected);
+            assert_eq!(verdict.incidents.len(), 1);
+            assert!(matches!(
+                verdict.incidents[0].problem,
+                HookProblem::Invalid(_)
+            ));
+        }
     }
 
     #[test]
