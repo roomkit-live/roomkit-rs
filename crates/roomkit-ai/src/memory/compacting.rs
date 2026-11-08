@@ -9,14 +9,14 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use roomkit::ChannelError;
-use roomkit::model::{ChannelId, RoomContext, RoomEvent, RoomId};
+use roomkit::model::{ChannelId, Metadata, RoomContext, RoomEvent, RoomId};
 use tokio::time::Instant;
 
 use super::footprint::{history_event_costs, turn_history_budget};
 use super::summary::{
     SUMMARIZER_PROMPT, SUMMARY_FAILED, SummaryLines, summary_message, unavailable,
 };
-use super::{IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions};
+use super::{CompactOptions, IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions};
 use crate::provider::{AiContext, AiMessage, AiProvider, AiRole};
 
 /// How many summaries the cache keeps, the least recently used dropped.
@@ -279,6 +279,18 @@ impl<P: AiProvider> MemoryProvider for CompactingMemory<P> {
             };
             Ok(self.compacted(room_id, inner, budget, lines).await)
         })
+    }
+
+    /// Hands the compaction between two tool rounds to the inner memory.
+    fn compact<'a>(
+        &'a self,
+        room_id: &'a RoomId,
+        history: &'a [AiMessage],
+        usage: &'a Metadata,
+        options: CompactOptions,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Vec<AiMessage>>, ChannelError>> + Send + 'a>>
+    {
+        self.inner.compact(room_id, history, usage, options)
     }
 
     fn ingest<'a>(

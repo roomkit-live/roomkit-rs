@@ -26,6 +26,7 @@
 //! a generation at its next event, and the round's calls announced but not
 //! yet run.
 
+mod between_rounds;
 mod calls;
 mod compaction;
 mod footprint;
@@ -67,7 +68,7 @@ pub(crate) use self::thinking::ThinkingPublication;
 use self::thinking::ThinkingWindow;
 use crate::author_images::refuses_content;
 use crate::loop_events::DeclaredTool;
-use crate::memory::after_memory;
+use crate::memory::{MemoryProvider, after_memory};
 use crate::provider::{
     AiContentPart, AiContext, AiMessage, AiProvider, AiToolResultPart, ProviderError,
     ProviderErrorOptions, ResponseSchemaError, ai_messages, ai_messages_with,
@@ -197,6 +198,9 @@ pub(crate) struct Loop<P> {
     /// The messages the memory built (a summary), read before the
     /// conversation at every round (RFC §20.2).
     pub(crate) remembered: Vec<AiMessage>,
+    /// The channel's memory, which compacts the turn's history between two
+    /// of its tool rounds (RFC §20.1).
+    pub(crate) memory: Arc<dyn MemoryProvider>,
     /// The channel's running loops, which this one joins as it starts
     /// (RFC §21.3).
     pub(crate) loops: Arc<Loops>,
@@ -381,13 +385,14 @@ impl<P: AiProvider> Loop<P> {
             }
             self.said
                 .extend(generation.said().map(|said| (messages.len(), said)));
+            let usage = generation.done.usage.clone();
             let (read, ran) = self.round_of_calls(generation, &steering, &out).await;
             self.media.keep_results(messages.len(), &ran.results);
             messages.extend(read);
             // A round counts once its calls ran (Python's `_run_announced_calls`).
             self.count_calls(&mut spent, ran.calls.len());
             tool_rounds += u32::from(!ran.calls.is_empty());
-            messages.extend(self.after_tool_round(round, ran).await);
+            self.between_rounds(round, ran, &mut messages, &usage).await;
             if steering.read(&mut messages, &mut system_prompt) {
                 let ending = (&limits, &steering, &out);
                 return self

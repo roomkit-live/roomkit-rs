@@ -7,12 +7,12 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use roomkit::ChannelError;
-use roomkit::model::{RoomContext, RoomEvent, RoomId};
+use roomkit::model::{Metadata, RoomContext, RoomEvent, RoomId};
 
 use super::footprint::{history_event_costs, turn_history_budget};
 use super::token_estimator::{EstimateEventTokensOptions, estimate_event_tokens};
-use super::{IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions};
-use crate::provider::{ProviderError, ProviderErrorOptions};
+use super::{CompactOptions, IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions};
+use crate::provider::{AiMessage, ProviderError, ProviderErrorOptions};
 
 /// What [`BudgetAwareMemory::new`] takes beside its inner memory and its
 /// window: Python's `safety_margin_ratio=0.15, min_events=3,
@@ -166,6 +166,18 @@ impl MemoryProvider for BudgetAwareMemory {
             let events = self.trimmed(inner.events, budget);
             Ok(MemoryResult { events, ..inner })
         })
+    }
+
+    /// Hands the compaction between two tool rounds to the inner memory.
+    fn compact<'a>(
+        &'a self,
+        room_id: &'a RoomId,
+        history: &'a [AiMessage],
+        usage: &'a Metadata,
+        options: CompactOptions,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Vec<AiMessage>>, ChannelError>> + Send + 'a>>
+    {
+        self.inner.compact(room_id, history, usage, options)
     }
 
     fn ingest<'a>(

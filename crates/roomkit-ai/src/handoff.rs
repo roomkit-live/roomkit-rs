@@ -7,7 +7,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, LazyLock};
 
-use roomkit::model::{RoomContext, RoomEvent, RoomId};
+use roomkit::model::{Metadata, RoomContext, RoomEvent, RoomId};
 use roomkit::orchestration::{
     HandoffHandler, StrategyAgent, get_conversation_state, handoff_tool_definition,
 };
@@ -16,7 +16,7 @@ use roomkit::{ChannelError, RoomKitError};
 use roomkit_core::rules::transcript::{RUNTIME_RECORD, fence, identifier, without_mark_copies};
 use serde_json::{Value, json};
 
-use crate::memory::{IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions};
+use crate::memory::{CompactOptions, IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions};
 use crate::provider::{AiMessage, AiRole};
 use crate::tools::AiTool;
 
@@ -185,6 +185,18 @@ impl MemoryProvider for HandoffMemoryProvider {
             }
             Ok(result)
         })
+    }
+
+    /// Hands the compaction between two tool rounds to the inner memory.
+    fn compact<'a>(
+        &'a self,
+        room_id: &'a RoomId,
+        history: &'a [AiMessage],
+        usage: &'a Metadata,
+        options: CompactOptions,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Vec<AiMessage>>, ChannelError>> + Send + 'a>>
+    {
+        self.inner.compact(room_id, history, usage, options)
     }
 
     fn ingest<'a>(

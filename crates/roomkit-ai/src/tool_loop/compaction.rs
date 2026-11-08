@@ -149,7 +149,7 @@ fn past_results(messages: &[AiMessage], mut index: usize) -> usize {
 /// preview in its place, and whether one was (Python's
 /// `with_results_stored`): a message none of whose results changes is kept
 /// as it is.
-fn with_results_stored(
+pub(super) fn with_results_stored(
     messages: &[AiMessage],
     eviction: &ToolEviction,
     room: &str,

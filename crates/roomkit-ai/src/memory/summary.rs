@@ -15,7 +15,8 @@ use roomkit_core::rules::transcript::{
 use serde_json::Value;
 
 use super::token_estimator::extract_event_text;
-use crate::provider::{AiMessage, AiMessageContent, AiRole};
+use crate::provider::{AiContentPart, AiMessage, AiMessageContent, AiRole};
+use crate::skills::dumps;
 
 /// Characters of one event the summarizer reads.
 const EVENT_TEXT_LIMIT: usize = 2000;
@@ -149,6 +150,47 @@ impl SummaryLines<'_> {
                 format!("[{role}]: {text}")
             }
         }
+    }
+}
+
+/// The lines a summarizer reads for `messages`, a turn's history as the
+/// model read it (RFC §6.4): each text quoted on one line after its role, a
+/// call after the tool it names, its arguments quoted as Python's
+/// `json.dumps` writes them, a result after its tool's name, an image
+/// named; a blank text and reasoning left out. Python's `message_lines`.
+pub(super) fn message_lines(messages: &[AiMessage]) -> Vec<String> {
+    let mut lines = Vec::new();
+    for message in messages {
+        let role = message.role.as_str();
+        match &message.content {
+            AiMessageContent::Text(text) => lines.extend(text_line(role, text)),
+            AiMessageContent::Parts(parts) => {
+                lines.extend(parts.iter().filter_map(|part| part_line(role, part)));
+            }
+        }
+    }
+    lines
+}
+
+fn text_line(role: &str, text: &str) -> Option<String> {
+    (!text.trim().is_empty()).then(|| format!("[{role}]: {}", quoted(text, EVENT_TEXT_LIMIT)))
+}
+
+fn part_line(role: &str, part: &AiContentPart) -> Option<String> {
+    match part {
+        AiContentPart::Text(text) => text_line(role, &text.text),
+        AiContentPart::Image(_) => Some(format!("[{role}]: [image]")),
+        AiContentPart::ToolCall(call) => {
+            let arguments = dumps(&Value::Object(call.arguments.clone()));
+            let arguments = quoted(&arguments, EVENT_TEXT_LIMIT);
+            Some(format!("[{role}] calls {}: {arguments}", call.name))
+        }
+        AiContentPart::ToolResult(result) => Some(format!(
+            "[tool] {}: {}",
+            result.name,
+            quoted(&result.as_text(), EVENT_TEXT_LIMIT)
+        )),
+        AiContentPart::Thinking(_) => None,
     }
 }
 

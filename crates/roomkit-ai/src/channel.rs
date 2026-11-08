@@ -1566,6 +1566,7 @@ impl<P: AiProvider> AiChannel<P> {
             intents: self.tool_call_intents,
             intents_required: self.tool_call_intents_required,
             remembered: Vec::new(),
+            memory: Arc::clone(&self.memory),
             loops: Arc::clone(&self.loops),
             adopted: Adopted::default(),
             sent_images: None,

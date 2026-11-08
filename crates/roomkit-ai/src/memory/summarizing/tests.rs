@@ -3,10 +3,14 @@
 
 use pretty_assertions::assert_eq;
 use roomkit::model::MediaContent;
+use serde_json::Value;
 
 use super::*;
 use crate::memory::testing::{Summarizer, context, event, long_events, room, said};
 use crate::memory::{MockMemoryProvider, MockMemoryProviderOptions};
+use crate::provider::{
+    AiContentPart, AiMessageContent, AiTextPart, AiToolCallPart, AiToolResultPart,
+};
 
 fn of(events: Vec<RoomEvent>) -> Arc<MockMemoryProvider> {
     Arc::new(MockMemoryProvider::new(MockMemoryProviderOptions {
@@ -380,4 +384,205 @@ async fn it_carries_the_inner_notes_and_pays_for_them() {
         + estimate_notes_tokens(&result.notes);
     assert_eq!(result.notes, notes);
     assert!(carried <= 40_000);
+}
+
+/// `count` turns, a user's then the assistant's, each 106 tokens at 400
+/// characters.
+fn turns(count: usize) -> Vec<AiMessage> {
+    (0..count)
+        .map(|n| {
+            let role = if n % 2 == 0 {
+                AiRole::User
+            } else {
+                AiRole::Assistant
+            };
+            AiMessage::new(role, format!("t{n}{}", "w".repeat(398)))
+        })
+        .collect()
+}
+
+/// A summarizing memory of a 1,000-token window compacting past 80 % of
+/// it, the summary's 100 tokens paid for, 2 messages kept at least.
+fn compacting(summarizer: &Summarizer, min_events: usize) -> SummarizingMemory<Summarizer> {
+    let options = SummarizingMemoryOptions {
+        tier2_ratio: 0.80,
+        summary_max_tokens: 100,
+        min_events,
+        ..SummarizingMemoryOptions::default()
+    };
+    memory(of(Vec::new()), summarizer, 1000, options)
+}
+
+fn usage(counters: &[(&str, i64)]) -> Metadata {
+    counters
+        .iter()
+        .map(|(name, count)| ((*name).to_owned(), Value::from(*count)))
+        .collect()
+}
+
+async fn compact(
+    memory: &SummarizingMemory<Summarizer>,
+    history: &[AiMessage],
+    usage: Metadata,
+) -> Option<Vec<AiMessage>> {
+    let options = CompactOptions::default();
+    memory
+        .compact(&room(), history, &usage, options)
+        .await
+        .unwrap()
+}
+
+// Python: TestCompactBetweenRounds::test_a_round_under_the_threshold_compacts_nothing,
+// test_a_round_that_reported_no_usage_compacts_nothing and
+// test_every_counter_of_the_round_counts
+#[tokio::test]
+async fn a_round_compacts_only_past_the_threshold_every_counter_counted() {
+    let summarizer = Summarizer::answering(&["Summary."]);
+    let memory = compacting(&summarizer, 2);
+    let history = turns(8);
+    let under = usage(&[("input_tokens", 790), ("output_tokens", 10)]);
+    assert_eq!(compact(&memory, &history, under).await, None);
+    assert_eq!(compact(&memory, &history, Metadata::new()).await, None);
+    let cached = usage(&[
+        ("input_tokens", 100),
+        ("cache_read_input_tokens", 700),
+        ("output_tokens", 10),
+    ]);
+    assert!(compact(&memory, &history, cached).await.is_some());
+}
+
+// Python: TestCompactBetweenRounds::test_past_the_threshold_the_older_messages_are_summarized
+#[tokio::test]
+async fn past_the_threshold_the_older_messages_are_summarized() {
+    // 810 measured pass the threshold of 800 by 10: with the summary's 100,
+    // the history gives back 110 of its 848, so the latest six turns, 636
+    // tokens, stay whole and the first two are summarized.
+    let summarizer = Summarizer::answering(&["Summary."]);
+    let history = turns(8);
+    let usage = usage(&[("input_tokens", 800), ("output_tokens", 10)]);
+    let compacted = compact(&compacting(&summarizer, 2), &history, usage)
+        .await
+        .unwrap();
+    assert!(is_summary(&compacted[0]));
+    assert!(compacted[0].content.text().contains("Summary."));
+    assert_eq!(compacted[1..], history[2..]);
+    let lines = format!(
+        "[user]: “{}”\n[assistant]: “{}”",
+        history[0].content.text(),
+        history[1].content.text()
+    );
+    assert!(summarizer.prompts()[0].ends_with(&lines));
+}
+
+// Python: TestCompactBetweenRounds::test_min_events_are_kept_however_far_past
+#[tokio::test]
+async fn min_events_are_kept_however_far_past() {
+    let summarizer = Summarizer::answering(&["Summary."]);
+    let history = turns(8);
+    let usage = usage(&[("input_tokens", 5000)]);
+    let compacted = compact(&compacting(&summarizer, 2), &history, usage)
+        .await
+        .unwrap();
+    assert_eq!(compacted[1..], history[6..]);
+}
+
+fn call_and_result(text: Option<&str>, result: &str) -> [AiMessage; 2] {
+    let mut parts: Vec<AiContentPart> = text
+        .map(|text| AiContentPart::Text(AiTextPart::new(text)))
+        .into_iter()
+        .collect();
+    let mut call = AiToolCallPart::new("c1", "lookup");
+    call.arguments.insert("q".to_owned(), Value::from("x"));
+    parts.push(AiContentPart::ToolCall(call));
+    let answered = AiToolResultPart::new("c1", "lookup", result);
+    [
+        AiMessage::new(AiRole::Assistant, AiMessageContent::Parts(parts)),
+        AiMessage::new(
+            AiRole::Tool,
+            AiMessageContent::Parts(vec![AiContentPart::ToolResult(answered)]),
+        ),
+    ]
+}
+
+// Python: TestCompactBetweenRounds::test_a_kept_result_keeps_its_call
+#[tokio::test]
+async fn a_kept_result_keeps_its_call() {
+    let summarizer = Summarizer::answering(&["Summary."]);
+    let pair = call_and_result(None, "found");
+    let mut history = turns(6);
+    history.extend(pair.clone());
+    let usage = usage(&[("input_tokens", 5000)]);
+    let compacted = compact(&compacting(&summarizer, 1), &history, usage)
+        .await
+        .unwrap();
+    assert_eq!(compacted[1..], pair);
+}
+
+// Python: TestCompactBetweenRounds::test_calls_and_results_are_read_by_the_summarizer
+#[tokio::test]
+async fn calls_and_results_are_read_by_the_summarizer() {
+    let summarizer = Summarizer::answering(&["Summary."]);
+    let mut history = call_and_result(Some("Looking."), "found it").to_vec();
+    history.extend(turns(4));
+    let usage = usage(&[("input_tokens", 5000)]);
+    compact(&compacting(&summarizer, 1), &history, usage).await;
+    let prompt = &summarizer.prompts()[0];
+    assert!(prompt.contains("[assistant]: “Looking.”\n[assistant] calls lookup: “{'q': 'x'}”"));
+    assert!(prompt.contains("\n[tool] lookup: “found it”\n"));
+}
+
+// Python: TestCompactBetweenRounds::test_a_prior_summary_is_carried_into_the_new_one
+#[tokio::test]
+async fn a_prior_summary_is_carried_into_the_compaction() {
+    let summarizer = Summarizer::answering(&["Summary."]);
+    let mut history = vec![summary_message("Prior context.")];
+    history.extend(turns(8));
+    let usage = usage(&[("input_tokens", 5000)]);
+    let compacted = compact(&compacting(&summarizer, 2), &history, usage)
+        .await
+        .unwrap();
+    assert_eq!(compacted.iter().filter(|m| is_summary(m)).count(), 1);
+    let prompt = &summarizer.prompts()[0];
+    assert!(prompt.contains("Prior context."));
+    assert!(!prompt.contains("[user]: “[Conversation summary"));
+}
+
+// Python: TestCompactBetweenRounds::test_the_wrapped_memory_is_not_asked
+#[tokio::test]
+async fn the_wrapped_memory_is_not_asked_to_compact() {
+    struct Refuses;
+    impl MemoryProvider for Refuses {
+        fn retrieve<'a>(
+            &'a self,
+            _room_id: &'a RoomId,
+            _current_event: &'a RoomEvent,
+            _context: &'a RoomContext,
+            _options: RetrieveOptions,
+        ) -> Pin<Box<dyn Future<Output = Result<MemoryResult, ChannelError>> + Send + 'a>> {
+            Box::pin(std::future::ready(Ok(MemoryResult::default())))
+        }
+
+        fn compact<'a>(
+            &'a self,
+            _room_id: &'a RoomId,
+            _history: &'a [AiMessage],
+            _usage: &'a Metadata,
+            _options: CompactOptions,
+        ) -> Pin<Box<dyn Future<Output = Result<Option<Vec<AiMessage>>, ChannelError>> + Send + 'a>>
+        {
+            Box::pin(std::future::ready(Err("asked".into())))
+        }
+    }
+    let summarizer = Summarizer::answering(&["Summary."]);
+    let memory = SummarizingMemory::new(
+        Arc::new(Refuses),
+        summarizer,
+        1000,
+        SummarizingMemoryOptions::default(),
+    );
+    let usage = usage(&[("input_tokens", 10)]);
+    let compacted = memory
+        .compact(&room(), &turns(8), &usage, CompactOptions::default())
+        .await;
+    assert!(matches!(compacted, Ok(None)));
 }

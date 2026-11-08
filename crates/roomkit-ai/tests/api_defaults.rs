@@ -8,7 +8,7 @@ use roomkit_ai::DiscoverOptions;
 use roomkit_ai::MockAiProviderOptions;
 use roomkit_ai::knowledge::{IndexOptions, MockKnowledgeSourceOptions, SearchOptions};
 use roomkit_ai::memory::{
-    BudgetAwareMemoryOptions, CompactingMemoryOptions, EstimateEventTokensOptions,
+    BudgetAwareMemoryOptions, CompactOptions, CompactingMemoryOptions, EstimateEventTokensOptions,
     HistoryBudgetOptions, IngestOptions, MockMemoryProviderOptions, RetrievalMemoryOptions,
     RetrieveOptions, SlidingWindowMemoryOptions, SummarizingMemoryOptions,
 };
@@ -188,6 +188,8 @@ fn memory_options_defaults_as_python() {
     assert!(RetrieveOptions::default().channel_id.is_none());
     // roomkit.MemoryProvider.ingest(channel_id) = None
     assert!(IngestOptions::default().channel_id.is_none());
+    // roomkit.MemoryProvider.compact(channel_id) = None
+    assert!(CompactOptions::default().channel_id.is_none());
     let budget = BudgetAwareMemoryOptions::default();
     // roomkit.memory.BudgetAwareMemory.__init__(safety_margin_ratio) = 0.15
     assert!((budget.safety_margin_ratio - 0.15).abs() < f64::EPSILON);

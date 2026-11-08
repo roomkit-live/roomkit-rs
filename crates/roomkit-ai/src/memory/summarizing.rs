@@ -10,17 +10,18 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use roomkit::ChannelError;
-use roomkit::model::{EventContent, RoomContext, RoomEvent, RoomId, TextContent};
+use roomkit::model::{EventContent, Metadata, RoomContext, RoomEvent, RoomId, TextContent};
 use tokio::time::Instant;
 
 use super::footprint::{history_event_costs, turn_history_budget};
 use super::summary::{
-    SUMMARIZER_PROMPT, SUMMARY_FAILED, SummaryLines, is_summary, prior_summary, summary_message,
-    unavailable,
+    SUMMARIZER_PROMPT, SUMMARY_FAILED, SummaryLines, is_summary, message_lines, prior_summary,
+    summary_message, unavailable,
 };
 use super::token_estimator::{estimate_message_tokens, estimate_notes_tokens};
-use super::{IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions};
+use super::{CompactOptions, IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions};
 use crate::provider::{AiContext, AiMessage, AiProvider, AiRole};
+use crate::turn_budget::TurnBudget;
 
 /// How many summaries the cache keeps.
 const MAX_CACHE_ENTRIES: usize = 200;
@@ -208,8 +209,9 @@ impl<P: AiProvider> SummarizingMemory<P> {
         let kept = trimmed.split_off(keep_from);
         lines.kept.clone_from(&kept);
         let prior = prior_summary(&inner.messages);
+        let texts = lines.lines(&trimmed);
         let summary = self
-            .summary(room_id, &trimmed, prior.as_deref(), &lines)
+            .summary(room_id, &texts, prior.as_deref(), trimmed.len())
             .await;
         let mut messages: Vec<AiMessage> = inner
             .messages
@@ -230,16 +232,69 @@ impl<P: AiProvider> SummarizingMemory<P> {
         }
     }
 
-    /// The summary of `events`, from the cache when the same lines were
-    /// summarized within its time to live.
+    /// Tier 2 between two tool rounds, on the size the round's generation
+    /// measured (RFC §20.3): Python's `compact`. Past `tier2_ratio` of
+    /// `max_context_tokens`, what `usage` counts (the round's request and
+    /// its reply), the older messages of `history` are summarized, a prior
+    /// summary among them carried into the new one, and the latest kept
+    /// whole: those that fit what the history must give back to come under
+    /// the threshold, the summary's `summary_max_tokens` paid for,
+    /// `min_events` of them at least, a call's results never kept without
+    /// their call. Tier 1 does not run between rounds; a generation that
+    /// reported no usage compacts nothing.
+    async fn compacted(
+        &self,
+        room_id: &RoomId,
+        history: &[AiMessage],
+        usage: &Metadata,
+    ) -> Option<Vec<AiMessage>> {
+        let measured = i64::try_from(TurnBudget::tokens_of(usage)).unwrap_or(i64::MAX);
+        let threshold = to_i64(share(self.max_context_tokens, self.options.tier2_ratio));
+        if measured <= threshold || history.len() <= self.options.min_events {
+            return None;
+        }
+        let costs: Vec<i64> = history
+            .iter()
+            .map(|message| to_i64(estimate_message_tokens(message)))
+            .collect();
+        let kept_budget = costs.iter().sum::<i64>()
+            - (measured - threshold)
+            - i64::from(self.options.summary_max_tokens);
+        let keep_from = with_its_call(
+            history,
+            kept_within(&costs, kept_budget, self.options.min_events),
+        );
+        if keep_from == 0 {
+            return None;
+        }
+        let (summarized, kept) = history.split_at(keep_from);
+        let prior = prior_summary(summarized);
+        let read: Vec<AiMessage> = summarized
+            .iter()
+            .filter(|message| !is_summary(message))
+            .cloned()
+            .collect();
+        let texts = message_lines(&read);
+        let summary = self
+            .summary(room_id, &texts, prior.as_deref(), summarized.len())
+            .await;
+        Some(
+            std::iter::once(summary_message(&summary))
+                .chain(kept.iter().cloned())
+                .collect(),
+        )
+    }
+
+    /// The summary of `count` turns the summarizer reads as `texts`, from
+    /// the cache when the same lines were summarized within its time to
+    /// live.
     async fn summary(
         &self,
         room_id: &RoomId,
-        events: &[RoomEvent],
+        texts: &[String],
         prior: Option<&str>,
-        lines: &SummaryLines<'_>,
+        count: usize,
     ) -> String {
-        let texts = lines.lines(events);
         let key = std::iter::once(room_id.as_str().to_owned())
             .chain(texts.iter().cloned())
             .collect::<Vec<_>>()
@@ -274,7 +329,7 @@ impl<P: AiProvider> SummarizingMemory<P> {
             },
             Err(error) => {
                 tracing::warn!(target: "roomkit::memory", %error, "failed to generate a summary");
-                unavailable(events.len())
+                unavailable(count)
             }
         };
         self.cache_lock().push((key, now, summary.clone()));
@@ -301,6 +356,36 @@ impl<P: AiProvider> SummarizingMemory<P> {
     fn cache_lock(&self) -> std::sync::MutexGuard<'_, Vec<(String, Instant, String)>> {
         self.cache.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// Where the kept items start: the latest whose `costs` fit `budget`,
+/// `min_kept` of them at least; 0 when they all fit. Unlike tier 2 in
+/// `retrieve`, no budget is enforced after it, so the item that passes the
+/// budget is not kept.
+fn kept_within(costs: &[i64], budget: i64, min_kept: usize) -> usize {
+    let mut running = 0;
+    let mut start = costs.len();
+    for at in (0..costs.len()).rev() {
+        running += costs.get(at).copied().unwrap_or(0);
+        if running > budget && costs.len() - at > min_kept {
+            break;
+        }
+        start = at;
+    }
+    start
+}
+
+/// `index`, moved back past the tool results there to the call they
+/// answer, which the kept messages then start with.
+fn with_its_call(history: &[AiMessage], mut index: usize) -> usize {
+    while index > 0
+        && history
+            .get(index)
+            .is_some_and(|message| message.role == AiRole::Tool)
+    {
+        index -= 1;
+    }
+    index
 }
 
 /// `result` with its oldest events dropped until it fits `budget`, one at
@@ -378,6 +463,18 @@ impl<P: AiProvider> MemoryProvider for SummarizingMemory<P> {
             };
             Ok(self.reduced(room_id, inner, budget, lines).await)
         })
+    }
+
+    /// Tier 2 on the round's measured size; the inner memory is not asked.
+    fn compact<'a>(
+        &'a self,
+        room_id: &'a RoomId,
+        history: &'a [AiMessage],
+        usage: &'a Metadata,
+        _options: CompactOptions,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Vec<AiMessage>>, ChannelError>> + Send + 'a>>
+    {
+        Box::pin(async move { Ok(self.compacted(room_id, history, usage).await) })
     }
 
     fn ingest<'a>(

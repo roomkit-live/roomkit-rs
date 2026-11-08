@@ -12,8 +12,9 @@ use roomkit::model::{EventContent, Metadata, RoomContext, RoomEvent, RoomId};
 use roomkit_core::rules::transcript::fence;
 use serde_json::Value;
 
-use super::{IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions};
+use super::{CompactOptions, IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions};
 use crate::knowledge::{IndexOptions, KnowledgeResult, KnowledgeSource, SearchOptions};
+use crate::provider::AiMessage;
 use crate::stream::join_all;
 
 /// What [`RetrievalMemory::new`] takes beside its sources and its inner
@@ -191,6 +192,18 @@ impl MemoryProvider for RetrievalMemory {
 
     /// Hands `event` to the inner memory, then indexes its words in every
     /// source, a failing one logged.
+    /// Hands the compaction between two tool rounds to the inner memory.
+    fn compact<'a>(
+        &'a self,
+        room_id: &'a RoomId,
+        history: &'a [AiMessage],
+        usage: &'a Metadata,
+        options: CompactOptions,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Vec<AiMessage>>, ChannelError>> + Send + 'a>>
+    {
+        self.inner.compact(room_id, history, usage, options)
+    }
+
     fn ingest<'a>(
         &'a self,
         room_id: &'a RoomId,
