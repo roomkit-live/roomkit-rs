@@ -494,7 +494,7 @@ impl<S: ConversationStore> RoomKit<S> {
         if !self.leave_discussion(room_id, held) {
             return false;
         }
-        self.drop_discussion_record(room_id);
+        self.drop_discussion_record(room_id, held);
         held.leave().await;
         true
     }

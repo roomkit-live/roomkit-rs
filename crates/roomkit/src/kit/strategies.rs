@@ -414,13 +414,20 @@ impl<S: ConversationStore> RoomKit<S> {
             .is_some_and(|installed| installed.installing)
     }
 
-    /// Drops the record of `room_id`'s strategy when it is a discussion,
-    /// which another process uninstalled (RFC §19.7.5 rule 16).
-    pub(super) fn drop_discussion_record(&self, room_id: &RoomId) {
+    /// Drops the record of `room_id`'s strategy when it is the discussion
+    /// `held` runs, which another process uninstalled (RFC §19.7.5 rule
+    /// 16): an install of another strategy claiming the room meanwhile
+    /// keeps its claim. Python's `_drop_record(room_id,
+    /// discussion.strategy)`.
+    pub(super) fn drop_discussion_record(
+        &self,
+        room_id: &RoomId,
+        held: &Arc<dyn super::discussions::DiscussionSeam>,
+    ) {
         let mut rooms = self.inner.room_strategies.rooms();
         if rooms
             .get(room_id)
-            .is_some_and(|installed| is_discussion(installed.strategy.as_ref()))
+            .is_some_and(|installed| held.runs(strategy_address(installed.strategy.as_ref())))
         {
             rooms.remove(room_id);
         }
