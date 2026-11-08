@@ -1,7 +1,7 @@
 //! The AI channel (RFC §6.4, Appendix A.9): Python's `AIChannel`, an
 //! intelligence channel whose turn runs the tool loop over a provider.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::future::{self, Future};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -239,6 +239,9 @@ pub struct AiChannelOptions {
     pub tool_call_intents: bool,
     /// Whether that sentence is required in the schemas shown to the model.
     pub tool_call_intents_required: bool,
+    /// The tools that ask for that sentence; the others are shown as they
+    /// are. `None` asks every tool. Python's `tool_call_intents_only`.
+    pub tool_call_intents_only: Option<Vec<String>>,
     /// What resolves the room's image references on every turn (RFC §6.4).
     pub image_resolver: Option<Arc<dyn ImageResolver>>,
     /// Whether the channel's turns in a room run one after the other, each
@@ -285,6 +288,22 @@ pub struct AiChannelOptions {
     pub tool_search_threshold_tokens: Option<u64>,
 }
 
+/// What an agent asks its model to write with its calls (RFC §6.4).
+#[derive(Clone, Debug)]
+struct Intents {
+    on: bool,
+    required: bool,
+    /// The tools that ask for one; `None` asks every tool.
+    only: Option<HashSet<String>>,
+}
+
+impl Intents {
+    fn of(on: bool, required: bool, only: Option<Vec<String>>) -> Self {
+        let only = only.map(|names| names.into_iter().collect());
+        Self { on, required, only }
+    }
+}
+
 impl Default for AiChannelOptions {
     fn default() -> Self {
         Self {
@@ -325,6 +344,7 @@ impl Default for AiChannelOptions {
             server_instructions: Vec::new(),
             tool_call_intents: false,
             tool_call_intents_required: false,
+            tool_call_intents_only: None,
             image_resolver: None,
             serialize_room_turns: false,
             steer_room_turns: false,
@@ -431,8 +451,7 @@ pub struct AiChannel<P> {
     /// How its turns read their authors' media (RFC §6.4).
     media: MediaReading,
     skills: Option<Arc<SkillTools>>,
-    tool_call_intents: bool,
-    tool_call_intents_required: bool,
+    intents: Intents,
     /// The turns' running loops, which steering reaches (RFC §21.3).
     loops: Arc<Loops>,
     /// How it takes a room's turns (RFC §6.4).
@@ -552,8 +571,7 @@ impl<P> Clone for AiChannel<P> {
             memory: Arc::clone(&self.memory),
             media: self.media.clone(),
             skills: self.skills.clone(),
-            tool_call_intents: self.tool_call_intents,
-            tool_call_intents_required: self.tool_call_intents_required,
+            intents: self.intents.clone(),
             loops: Arc::clone(&self.loops),
             room_turns: self.room_turns,
             human_input: self.human_input.clone(),
@@ -624,8 +642,9 @@ impl<P: AiProvider> AiChannel<P> {
             skills_in_prompt,
             tool_policy,
             server_instructions,
-            tool_call_intents,
-            tool_call_intents_required,
+            tool_call_intents: intents,
+            tool_call_intents_required: required,
+            tool_call_intents_only: only,
             image_resolver,
             serialize_room_turns,
             steer_room_turns,
@@ -683,8 +702,7 @@ impl<P: AiProvider> AiChannel<P> {
             memory: memory.unwrap_or_else(|| sliding_window(max_context_events)),
             media: MediaReading::new(image_resolver, max_author_images, describe_empty_event),
             skills: surface.skills,
-            tool_call_intents,
-            tool_call_intents_required,
+            intents: Intents::of(intents, required, only),
             loops: Arc::default(),
             room_turns: RoomTurns::of(serialize_room_turns, steer_room_turns),
             human_input: surface.human_input,
@@ -1563,8 +1581,9 @@ impl<P: AiProvider> AiChannel<P> {
             response_schema: settings.response_schema.clone(),
             turn: turn.clone(),
             context: tools,
-            intents: self.tool_call_intents,
-            intents_required: self.tool_call_intents_required,
+            intents: self.intents.on,
+            intents_required: self.intents.required,
+            intents_only: self.intents.only.clone(),
             remembered: Vec::new(),
             memory: Arc::clone(&self.memory),
             loops: Arc::clone(&self.loops),
@@ -1862,7 +1881,7 @@ impl<P> fmt::Debug for AiChannel<P> {
             .field("turn_budget_tokens", &self.turn_budget_tokens)
             .field("turn_budget_usd", &self.turn_budget_usd)
             .field("skills", &self.skills.is_some())
-            .field("tool_call_intents", &self.tool_call_intents)
+            .field("tool_call_intents", &self.intents.on)
             .finish_non_exhaustive()
     }
 }

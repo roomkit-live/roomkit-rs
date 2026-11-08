@@ -40,7 +40,7 @@ mod spans;
 mod text_window;
 mod thinking;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -198,6 +198,8 @@ pub(crate) struct Loop<P> {
     pub(crate) intents: bool,
     /// Whether enabled intents are required in the model-facing schemas.
     pub(crate) intents_required: bool,
+    /// The tools that ask for an intent; `None` asks every tool.
+    pub(crate) intents_only: Option<HashSet<String>>,
     /// The messages the memory built (a summary), read before the
     /// conversation at every round (RFC §20.2).
     pub(crate) remembered: Vec<AiMessage>,

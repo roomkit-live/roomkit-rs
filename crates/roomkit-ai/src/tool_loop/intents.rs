@@ -16,9 +16,9 @@ use crate::tools::AiTool;
 
 impl<P> Loop<P> {
     /// `declared` as the requests show it: each tool's schema with the
-    /// reserved intent property, one that cannot take it as it is. The
-    /// toolbox keeps the tools' own schemas, which calls are checked
-    /// against.
+    /// reserved intent property, one that cannot take it as it is, or one
+    /// the agent's list does not name. The toolbox keeps the tools' own
+    /// schemas, which calls are checked against.
     pub(super) fn shown_tools(&self, declared: Vec<AiTool>) -> Vec<AiTool> {
         if !self.intents {
             return declared;
@@ -26,6 +26,13 @@ impl<P> Loop<P> {
         declared
             .into_iter()
             .map(|mut tool| {
+                if self
+                    .intents_only
+                    .as_ref()
+                    .is_some_and(|only| !only.contains(&tool.name))
+                {
+                    return tool;
+                }
                 if let Some(shown) =
                     presented_parameters_with_requirement(&tool.parameters, self.intents_required)
                 {

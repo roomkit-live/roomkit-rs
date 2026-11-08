@@ -114,6 +114,50 @@ async fn off_nothing_is_taken_from_a_call() {
     );
 }
 
+// Python: tests/test_channels/test_tool_call_intents.py::test_only_the_tools_named_ask_for_an_intent
+/// Only the tools named are shown the property; a call to another that
+/// carries it anyway runs, its intent taken out before its closed schema
+/// reads it.
+#[tokio::test]
+async fn only_the_tools_named_ask_for_an_intent() {
+    let call = json!({ "command": "ls", "_roomkit_intent": INTENT });
+    let model = ScriptedProvider::new([calling(&call), ScriptedRound::answering("Done.")]);
+    let received = Arc::default();
+    let room = Room::equipped(model.clone(), shell(&received, closed()), |options| {
+        AiChannelOptions {
+            tool_call_intents: true,
+            tool_call_intents_required: true,
+            tool_call_intents_only: Some(vec!["another".to_owned()]),
+            ..options
+        }
+    })
+    .await;
+    room.says("Files?").await;
+    assert_eq!(model.requests()[0].tools[0].parameters, closed());
+    assert_eq!(*received.lock().unwrap(), [json!({ "command": "ls" })]);
+    assert_eq!(
+        intents(&room).await,
+        [Some(INTENT.to_owned()), Some(INTENT.to_owned())]
+    );
+
+    // The tool named is shown the property.
+    let model = ScriptedProvider::new([ScriptedRound::answering("Done.")]);
+    let room = Room::equipped(model.clone(), shell(&Arc::default(), closed()), |options| {
+        AiChannelOptions {
+            tool_call_intents: true,
+            tool_call_intents_only: Some(vec!["shell".to_owned()]),
+            ..options
+        }
+    })
+    .await;
+    room.says("Files?").await;
+    let shown = &model.requests()[0].tools[0].parameters;
+    assert!(
+        shown["properties"].get("_roomkit_intent").is_some(),
+        "{shown}"
+    );
+}
+
 /// On, the tool receives its own arguments, a closed schema included; the
 /// intent rides the hooks' event and both rows, and the next request reads
 /// the call with its intent among its arguments.
