@@ -1,11 +1,12 @@
 //! The turns of one room's discussion, one at a time (RFC §19.7.5 rules 6, 7,
-//! 9, 11, 15): Python's `orchestration/strategies/discussion/_driver.py`, as
-//! far as lot 8c. The driver looks at the stored queue when woken, and at
-//! least once a second; a turn is the rerun of the event it answers, planned
-//! for one agent under the room's lock by the core, which asks the discussion
-//! for it ([`DiscussionRoom::planned_turn`]), and run in the room's lane.
-//! While it runs, the driver reads the stored queue once a second: what
-//! another process stored cuts it, and the lease is renewed (rule 16).
+//! 9, 11, 15, 16): Python's `orchestration/strategies/discussion/_driver.py`
+//! but for the posts of task results (rule 19). The driver looks at the
+//! stored queue when woken, and at least once a second; a turn is the rerun
+//! of the event it answers, planned for one agent under the room's lock by
+//! the core, which asks the discussion for it
+//! ([`DiscussionRoom::planned_turn`]), and run in the room's lane. While it
+//! runs, the driver reads the stored queue once a second: what another
+//! process stored cuts it, and the lease is renewed (rule 16).
 
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -275,28 +276,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             // Routed by the configuration the room stores from then on.
             self.follow(stored);
         }
-        let cut = {
-            let mut live = self.state();
-            live.queue = state.clone();
-            let Some(turn) = live.turn.as_mut() else {
-                return Ok(());
-            };
-            let reason = self.cut_reason(turn, &state, uninstalled);
-            turn.listening = state.listening.contains(&turn.entry.agent);
-            let cut = reason.filter(|_| !turn.cut).map(|reason| {
-                turn.cut = true;
-                (turn.entry.agent.clone(), reason)
-            });
-            if cut
-                .as_ref()
-                .is_some_and(|(_, reason)| *reason == UNINSTALLED)
-            {
-                // Gone for every process: its end is recorded nowhere
-                // (rule 1).
-                live.forgotten = true;
-            }
-            cut
-        };
+        let cut = self.decide_cut(&state, uninstalled);
         if let Some((agent, reason)) = cut {
             self.cut(kit, &agent, reason).await?;
         }
@@ -307,6 +287,34 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             .await?;
         }
         Ok(())
+    }
+
+    /// What the stored queue, just read as `state`, makes of the running
+    /// turn: kept as the queue read, the turn's agent listening as read,
+    /// and the agent to cut and why, once. A turn whose discussion another
+    /// process uninstalled is gone for every process: its end is recorded
+    /// nowhere (rule 1).
+    fn decide_cut(
+        &self,
+        state: &SpeakQueueState,
+        uninstalled: bool,
+    ) -> Option<(ChannelId, &'static str)> {
+        let mut live = self.state();
+        live.queue = state.clone();
+        let turn = live.turn.as_mut()?;
+        let reason = self.cut_reason(turn, state, uninstalled);
+        turn.listening = state.listening.contains(&turn.entry.agent);
+        let cut = reason.filter(|_| !turn.cut).map(|reason| {
+            turn.cut = true;
+            (turn.entry.agent.clone(), reason)
+        });
+        if cut
+            .as_ref()
+            .is_some_and(|(_, reason)| *reason == UNINSTALLED)
+        {
+            live.forgotten = true;
+        }
+        cut
     }
 
     /// Why the stored queue, just read as `state`, cuts `turn`, if it does:

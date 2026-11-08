@@ -29,6 +29,8 @@ use roomkit::{
     RoomKitOptions, RoomLockManager, RoomStrategyIsCurrentOptions, RoomStrategyOptions,
     SpeakQueueOptions, UninstallStrategyOptions,
 };
+use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
+use roomkit_ai::{AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, ProviderError};
 use roomkit_core::ops::SystemEnvironment;
 use roomkit_core::rules::transcoding::text_of;
 
@@ -743,4 +745,241 @@ async fn an_uninstall_elsewhere_is_taken_at_once_even_under_the_lock_mid_turn() 
     }
     assert_eq!(cluster.answers().await, Vec::<String>::new());
     cluster.close().await;
+}
+
+/// Says what its script says, logging `+name` as it generates, `-name` as
+/// it answers, and `xname` when its generation is dropped before. The cluster's first investigator turn waits for `ends`
+/// (five seconds at most) and, as a provider that does not stream, meets a
+/// `Cancel` only once it answered: Python's `_Held`.
+struct Held {
+    who: String,
+    log: Arc<Mutex<Vec<String>>>,
+    ends: tokio::sync::watch::Receiver<bool>,
+    script: ScriptedProvider,
+}
+
+impl AiProvider for Held {
+    fn model_name(&self) -> &'static str {
+        "held"
+    }
+
+    async fn generate(&self, context: &AiContext) -> Result<AiResponse, ProviderError> {
+        let first = {
+            let mut log = self.log.lock().unwrap();
+            let first = !log.contains(&format!("+{}", self.who));
+            log.push(format!("+{}", self.who));
+            first
+        };
+        let mut cut = Cut {
+            who: self.who.clone(),
+            log: Arc::clone(&self.log),
+            answered: false,
+        };
+        if first && self.who == "investigator" {
+            let mut ends = self.ends.clone();
+            let ended = ends.wait_for(|ended| *ended);
+            drop(tokio::time::timeout(Duration::from_secs(5), ended).await);
+        }
+        cut.answered = true;
+        self.log.lock().unwrap().push(format!("-{}", self.who));
+        self.script.generate(context).await
+    }
+}
+
+/// Processes whose agents are AI channels on [`Held`] providers:
+/// investigator asks `@sre` in every answer. Python's `_Holding` and
+/// `_handing_over`.
+struct Holding {
+    cluster: Cluster,
+    first_turn_ends: tokio::sync::watch::Sender<bool>,
+}
+
+impl Holding {
+    fn new() -> Self {
+        Self {
+            cluster: Cluster::paused(),
+            first_turn_ends: tokio::sync::watch::channel(false).0,
+        }
+    }
+
+    /// A process holding `ops` and investigator and sre.
+    fn kit(&mut self) -> RoomKit {
+        let options = RoomKitOptions {
+            store: Arc::clone(&self.cluster.store),
+            lock_manager: Some(Arc::clone(&self.cluster.locks)),
+            ..RoomKitOptions::default()
+        };
+        let clock = self.cluster.clock.clone().unwrap();
+        let kit = kit_with_environment(options, clock);
+        kit.register_channel(RecordingTransport::new(
+            id("ops"),
+            ChannelType::SMS,
+            RecordingTransportOptions::default(),
+        ))
+        .unwrap();
+        for agent in KEPT {
+            let body = if agent == "investigator" {
+                "@sre please check".to_owned()
+            } else {
+                format!("{agent} here")
+            };
+            let rounds = (0..5).map(|_| ScriptedRound::answering(body.clone()));
+            let provider = Held {
+                who: agent.to_owned(),
+                log: Arc::clone(&self.cluster.log),
+                ends: self.first_turn_ends.subscribe(),
+                script: ScriptedProvider::new(rounds),
+            };
+            let channel = AiChannel::new(id(agent), provider, AiChannelOptions::default()).unwrap();
+            kit.register_channel(channel).unwrap();
+        }
+        self.cluster.kits.push(kit.clone());
+        kit
+    }
+
+    /// A process that creates `r1`, binds `ops` and installs the discussion
+    /// of investigator and sre.
+    async fn created(&mut self) -> RoomKit {
+        let kit = self.kit();
+        let created = CreateRoomOptions {
+            room_id: Some(room()),
+            ..Default::default()
+        };
+        kit.create_room(created).await.unwrap();
+        kit.attach_channel(&room(), &id("ops"), AttachChannelOptions::default())
+            .await
+            .unwrap();
+        let options = InstallStrategyOptions::default();
+        kit.install_strategy(&room(), Cluster::discussion_of(&KEPT), options)
+            .await
+            .unwrap();
+        kit
+    }
+
+    /// A gives investigator's long turn; B uninstalls, and A's watch reads
+    /// it, which cuts the turn: Python's `_cut_by_an_uninstall_elsewhere`.
+    async fn cut_by_an_uninstall_elsewhere(&self, a: &RoomKit, b: &RoomKit) {
+        say(a, "@investigator take your time").await;
+        self.cluster.logged("+investigator").await;
+        let uninstalled = b
+            .uninstall_strategy(&room(), UninstallStrategyOptions::default())
+            .await
+            .unwrap();
+        assert!(uninstalled);
+        // The watch reads the room once a second: past two of its reads.
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+    }
+
+    /// Until `kit` no longer holds the discussion, each process's drivers
+    /// roused.
+    async fn left(&self, kit: &RoomKit) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while kit
+                .room_strategy(&room(), RoomStrategyOptions::default())
+                .is_some()
+            {
+                for each in &self.cluster.kits {
+                    idle(each).await;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    /// investigator's turn ends recorded: the `@sre` it says gives sre a
+    /// turn. Python's `_sre_answers_investigator`.
+    async fn sre_answers_investigator(&self, kit: &RoomKit) {
+        let mark = self.cluster.log.lock().unwrap().len();
+        say(kit, "@investigator go on").await;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let answered = self
+                    .cluster
+                    .log
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .skip(mark)
+                    .any(|line| line == "+sre");
+                if answered {
+                    break;
+                }
+                for each in &self.cluster.kits {
+                    idle(each).await;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+}
+
+/// That the investigator's turn the watch cut answered nothing, through
+/// the `Cancel` its loop met once its provider answered: only the later
+/// turn's answer is stored.
+async fn assert_one_investigator_answer(holding: &Holding) {
+    for kit in &holding.cluster.kits {
+        idle(kit).await;
+    }
+    let answers = holding.cluster.answers().await;
+    let investigator = answers.iter().filter(|agent| *agent == "investigator");
+    assert_eq!(investigator.count(), 1, "{answers:?}");
+}
+
+// Python: tests/orchestration/test_discussion_reinstall.py::test_a_process_that_saw_an_uninstall_leaves_the_discussion_installed_again
+#[tokio::test(start_paused = true)]
+async fn a_process_that_saw_an_uninstall_leaves_the_discussion_installed_again() {
+    for host_asks in [false, true] {
+        let mut holding = Holding::new();
+        let a = holding.created().await;
+        let b = holding.kit();
+        holding.cut_by_an_uninstall_elsewhere(&a, &b).await;
+        // Before A looks again.
+        let options = InstallStrategyOptions::default();
+        b.install_strategy(&room(), Cluster::discussion_of(&KEPT), options)
+            .await
+            .unwrap();
+
+        if host_asks {
+            let options = RoomStrategyIsCurrentOptions::default();
+            let kind = TypeId::of::<Discussion>();
+            let current = a.room_strategy_is_current(&room(), kind, options).await;
+            assert!(!current.unwrap(), "host_asks");
+        }
+        holding.first_turn_ends.send_replace(true);
+
+        holding.left(&a).await;
+        // Past A's cut turn.
+        holding.cluster.turn_over("investigator").await;
+        holding.sre_answers_investigator(&b).await;
+        assert_one_investigator_answer(&holding).await;
+        holding.cluster.close().await;
+    }
+}
+
+// Python: tests/orchestration/test_discussion_reinstall.py::test_installing_again_over_a_discussion_seen_uninstalled_starts_it_afresh
+#[tokio::test(start_paused = true)]
+async fn installing_again_over_a_discussion_seen_uninstalled_starts_it_afresh() {
+    let mut holding = Holding::new();
+    let a = holding.created().await;
+    let b = holding.kit();
+    holding.cut_by_an_uninstall_elsewhere(&a, &b).await;
+    // A's host still wants the discussion: it installs before A looks again.
+    let options = InstallStrategyOptions::default();
+    a.install_strategy(&room(), Cluster::discussion_of(&KEPT), options)
+        .await
+        .unwrap();
+
+    let options = RoomStrategyIsCurrentOptions::default();
+    let kind = TypeId::of::<Discussion>();
+    let current = a.room_strategy_is_current(&room(), kind, options).await;
+    assert!(current.unwrap());
+    holding.first_turn_ends.send_replace(true);
+    holding.cluster.turn_over("investigator").await;
+    holding.sre_answers_investigator(&a).await;
+    assert_one_investigator_answer(&holding).await;
+    holding.cluster.close().await;
 }

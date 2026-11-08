@@ -461,7 +461,11 @@ impl<S: ConversationStore> RoomKit<S> {
         let Some(held) = self.inner.discussions.get(&room.id) else {
             return Ok(false);
         };
-        let Some(stored) = DiscussionConfig::stored(&room.metadata) else {
+        // Gone when the room stores none, or once this process read it
+        // uninstalled, one installed again since included (Python's
+        // `_uninstalled`).
+        let stored = DiscussionConfig::stored(&room.metadata).filter(|_| !held.forgotten());
+        let Some(stored) = stored else {
             // An install of this process under way has not stored its
             // configuration yet: it is not current, and stays.
             if same_seam(seen.as_ref(), Some(&held)) && !self.installing_strategy(&room.id) {
