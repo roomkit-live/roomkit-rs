@@ -16,9 +16,9 @@ use crate::ops::{Cx, Environment, KitConfig};
 
 /// A room's timers replaced, its last activity kept when they name none.
 #[derive(Clone, Debug)]
-pub(crate) struct TimersChange(RoomTimers);
+pub(crate) struct RoomTimersChange(RoomTimers);
 
-impl SectionChange for TimersChange {
+impl SectionChange for RoomTimersChange {
     type Done = Box<RoomContext>;
     type Refusal = LifecycleError;
 
@@ -137,7 +137,7 @@ fn write(context: &mut RoomContext, updates: RoomUpdates) -> StoreRequest {
 /// section on, or its next timer check. Its output is the room as stored.
 #[derive(Debug)]
 pub struct SetRoomTimers {
-    change: LockedChange<TimersChange>,
+    change: LockedChange<RoomTimersChange>,
 }
 
 impl SetRoomTimers {
@@ -152,7 +152,7 @@ impl SetRoomTimers {
         organization_id: Option<String>,
     ) -> Self {
         Self {
-            change: LockedChange::new(config, room_id, organization_id, TimersChange(timers)),
+            change: LockedChange::new(config, room_id, organization_id, RoomTimersChange(timers)),
         }
     }
 }

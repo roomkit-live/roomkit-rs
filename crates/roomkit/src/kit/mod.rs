@@ -619,12 +619,18 @@ impl<S: ConversationStore> RoomKit<S> {
     /// namespace its event keeps (RFC §22.1).
     pub(crate) async fn run_message(
         &self,
-        message: InboundMessage,
+        mut message: InboundMessage,
         options: ProcessInboundOptions,
         publication: Option<String>,
     ) -> Result<InboundResult, RoomKitError> {
-        // A message past its channel's inbound rate is refused before
-        // anything is read, written or traced, as Python's.
+        // A content a struct literal built past its model's check is refused
+        // before anything is read, as Python's model refuses it when built,
+        // and one kept is written as its constructor writes it.
+        message.content.check()?;
+        // A message past its channel's inbound rate is refused then, before
+        // anything else is read, written or traced (Python checks it once a
+        // call from a room's own work drew on that room's budget, which the
+        // core charges here after it).
         if let Some(limit) = &self.inner.inbound_limit
             && !limit.acquire(&message.channel_id)
         {
@@ -662,10 +668,6 @@ impl<S: ConversationStore> RoomKit<S> {
         options: ProcessInboundOptions,
         publication: Option<String>,
     ) -> Result<InboundResult, RoomKitError> {
-        // A content a struct literal built past its model's check is refused
-        // before anything is read, as Python's model refuses it when built,
-        // and one kept is written as its constructor writes it.
-        message.content.check()?;
         let answers = self.inner.answer(&mut message).map(|mut answers| {
             answers.publication = publication;
             answers

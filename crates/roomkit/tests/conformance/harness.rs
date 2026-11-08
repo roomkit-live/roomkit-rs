@@ -94,7 +94,9 @@ fn kit_options<S>(
         options.process_timeout = Duration::from_millis(timeout);
     }
     if let Some(limit) = kit.get("inbound_rate_limit") {
-        options.inbound_rate_limit = serde_json::from_value(limit.clone()).ok();
+        // A limit the model refuses is a broken fixture, as Python's runner
+        // raises on it.
+        options.inbound_rate_limit = Some(serde_json::from_value(limit.clone()).unwrap());
     }
     options
 }
