@@ -23,12 +23,12 @@ use roomkit_ai::tasks::{
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
     Agent, AgentOptions, AiChannel, AiChannelOptions, AiChannelTurnConfig, AiContentPart,
-    AiContext, AiImagePart, AiMessageContent, AiProvider, AiResponse, AiRole, AiTextPart,
-    AiThinkingPart, AiTool, AiToolCall, HumanInputToolHandler, HumanInputToolHandlerOptions,
-    ModelInfo, ModelPricing, ProviderError, ProviderStream, StreamDone, StreamEvent,
-    StreamTextDelta, StreamThinkingDelta, Tool, ToolContext, ToolEntry, ToolError, ToolHandler,
-    ToolPolicy, ToolResult, ToolResultPart, Tools, check_schema_answer, checked_stream,
-    schema_for_generate,
+    AiContext, AiImagePart, AiMessage, AiMessageContent, AiProvider, AiResponse, AiRole,
+    AiTextPart, AiThinkingPart, AiTool, AiToolCall, HumanInputToolHandler,
+    HumanInputToolHandlerOptions, ModelInfo, ModelPricing, ProviderError, ProviderStream,
+    StreamDone, StreamEvent, StreamTextDelta, StreamThinkingDelta, Tool, ToolContext, ToolEntry,
+    ToolError, ToolHandler, ToolPolicy, ToolResult, ToolResultPart, Tools, check_schema_answer,
+    checked_stream, schema_for_generate,
 };
 use serde_json::{Value, json};
 
@@ -1104,8 +1104,12 @@ pub(crate) async fn requests_on_the_wire(
 
 /// The messages `request` carries, as `models` reads them.
 pub(crate) fn messages(request: &AiContext) -> Vec<Value> {
-    request
-        .messages
+    message_records(&request.messages)
+}
+
+/// `messages` as `models` reads a request's ([`messages`]).
+pub(crate) fn message_records(messages: &[AiMessage]) -> Vec<Value> {
+    messages
         .iter()
         .map(|message| {
             json!({

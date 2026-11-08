@@ -387,6 +387,21 @@ impl Run {
             .push(serde_json::to_value(event).unwrap_or_default());
     }
 
+    /// One compaction between two tool rounds a scripted memory of
+    /// `channel_id` was asked in `room_id`: `{history, usage}`.
+    pub(crate) fn record_compacted(&self, room_id: &RoomId, channel_id: &ChannelId, item: Value) {
+        if !self.recording.load(Ordering::SeqCst) {
+            return;
+        }
+        lock(&self.observed)
+            .compacted
+            .entry(room_id.to_string())
+            .or_default()
+            .entry(channel_id.to_string())
+            .or_default()
+            .push(item);
+    }
+
     /// One room callback a scripted channel was called with (RFC §6.1),
     /// also named in the hooks' order as `<channel_id>.<call>`.
     pub(crate) fn record_room_callback(

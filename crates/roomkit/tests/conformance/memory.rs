@@ -3,34 +3,39 @@
 //! `max_events` events as a sliding window reads them, with the messages,
 //! notes and speakers the scenario gives, wrapped in the memories it names.
 
+use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use roomkit::ChannelError;
-use roomkit::model::{ChannelId, RoomContext, RoomEvent, RoomId};
+use roomkit::model::{ChannelId, Metadata, RoomContext, RoomEvent, RoomId};
 use roomkit_ai::knowledge::{KnowledgeResult, KnowledgeSource, SearchOptions};
 use roomkit_ai::memory::{
-    BudgetAwareMemory, BudgetAwareMemoryOptions, CompactingMemory, CompactingMemoryOptions,
-    IngestOptions, MemoryProvider, MemoryResult, RetrievalMemory, RetrievalMemoryOptions,
-    RetrieveOptions, SlidingWindowMemory, SlidingWindowMemoryOptions, SummarizingMemory,
-    SummarizingMemoryOptions,
+    BudgetAwareMemory, BudgetAwareMemoryOptions, CompactOptions, CompactingMemory,
+    CompactingMemoryOptions, IngestOptions, MemoryProvider, MemoryResult, RetrievalMemory,
+    RetrievalMemoryOptions, RetrieveOptions, SlidingWindowMemory, SlidingWindowMemoryOptions,
+    SummarizingMemory, SummarizingMemoryOptions,
 };
 use roomkit_ai::testing::ScriptedProvider;
 use roomkit_ai::{AiMessage, AiRole};
-use serde_json::Value;
+use serde_json::{Value, json};
 
-use crate::agents::write_record;
+use crate::agents::{message_records, write_record};
 use crate::run::Run;
 
 /// The room's latest events, as `SlidingWindowMemory` reads them, and
 /// what the scenario says the memory built, retrieved and names; each
 /// event it is handed is recorded as the agent's (`expect.ingested`).
+/// Each compaction between two tool rounds answers the scenario's next
+/// `compacts` item, and is recorded (`expect.compacted`).
 struct Scripted {
     window: SlidingWindowMemory,
     messages: Vec<AiMessage>,
     notes: Vec<String>,
     speakers: Vec<String>,
+    /// What the next compactions answer, the next first.
+    compacts: Mutex<VecDeque<Value>>,
     /// What each read writes on the turn's record.
     spec: Value,
     /// The agent whose memory it is, and the run recording what it is handed.
@@ -65,6 +70,30 @@ impl MemoryProvider for Scripted {
         })
     }
 
+    fn compact<'a>(
+        &'a self,
+        room_id: &'a RoomId,
+        history: &'a [AiMessage],
+        usage: &'a Metadata,
+        _options: CompactOptions,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Vec<AiMessage>>, ChannelError>> + Send + 'a>>
+    {
+        if let Some(run) = self.run.upgrade() {
+            let item = json!({
+                "history": message_records(history),
+                "usage": Value::Object(usage.clone()),
+            });
+            run.record_compacted(room_id, &self.owner, item);
+        }
+        let answer = self
+            .compacts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .pop_front()
+            .unwrap_or(Value::Null);
+        Box::pin(std::future::ready(compaction(&answer, history)))
+    }
+
     fn ingest<'a>(
         &'a self,
         room_id: &'a RoomId,
@@ -76,6 +105,38 @@ impl MemoryProvider for Scripted {
         }
         Box::pin(std::future::ready(Ok(())))
     }
+}
+
+/// What a scripted memory answers a compaction of `history` (README,
+/// "Scripted agents", `compacts`): nothing for `null`, its `messages` then
+/// the history's last `keep`, or its `fails`.
+fn compaction(
+    answer: &Value,
+    history: &[AiMessage],
+) -> Result<Option<Vec<AiMessage>>, ChannelError> {
+    if answer.is_null() {
+        return Ok(None);
+    }
+    if let Some(fails) = answer["fails"].as_str() {
+        return Err(fails.into());
+    }
+    let mut compacted = answer["messages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(message)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(ChannelError::from)?;
+    let keep = answer["keep"]
+        .as_u64()
+        .and_then(|keep| usize::try_from(keep).ok())
+        .unwrap_or(0);
+    compacted.extend_from_slice(
+        history
+            .get(history.len().saturating_sub(keep)..)
+            .unwrap_or_default(),
+    );
+    Ok(Some(compacted))
 }
 
 /// The memory `spec` describes, its wrappers from the innermost;
@@ -104,6 +165,14 @@ pub(crate) fn scripted_memory(
         messages,
         notes: texts(&spec["notes"]),
         speakers: texts(&spec["speakers"]),
+        compacts: Mutex::new(
+            spec["compacts"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .cloned()
+                .collect(),
+        ),
         spec: spec.clone(),
         owner,
         run: Arc::downgrade(run),

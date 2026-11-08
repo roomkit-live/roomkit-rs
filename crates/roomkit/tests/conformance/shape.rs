@@ -232,6 +232,7 @@ const MEMORY: &[&str] = &[
     "messages",
     "notes",
     "speakers",
+    "compacts",
     "writes_record",
     "budget_aware",
     "compacting",
@@ -240,6 +241,7 @@ const MEMORY: &[&str] = &[
     "retrieval",
 ];
 const MEMORY_MESSAGE: &[&str] = &["role", "text"];
+const MEMORY_COMPACTION: &[&str] = &["messages", "keep", "fails"];
 const BUDGET_AWARE: &[&str] = &[
     "max_context_tokens",
     "safety_margin_ratio",
@@ -353,6 +355,7 @@ const EXPECT: &[&str] = &[
     "contexts",
     "turns",
     "ingested",
+    "compacted",
     "dispatch_turns",
     "observations",
     "thinking_events",
@@ -776,6 +779,18 @@ fn memory(memory: &Value, path: &str, found: &mut Vec<String>) {
             &format!("{path}.messages[{index}]"),
             found,
         );
+    }
+    for (index, answer) in items(&memory["compacts"]) {
+        let at = format!("{path}.compacts[{index}]");
+        optional(answer, MEMORY_COMPACTION, &at, found);
+        for (message_at, message) in items(&answer["messages"]) {
+            members(
+                message,
+                MEMORY_MESSAGE,
+                &format!("{at}.messages[{message_at}]"),
+                found,
+            );
+        }
     }
     optional(
         &memory["budget_aware"],
