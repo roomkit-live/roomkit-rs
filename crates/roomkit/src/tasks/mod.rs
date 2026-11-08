@@ -489,6 +489,14 @@ impl Tasks {
             .await;
     }
 
+    /// Reads both trackers while neither can change. Callers take the kit's
+    /// tracker first, then its status bus's distinct tracker, in that order.
+    pub(crate) fn is_idle_with(&self, other: &Self) -> bool {
+        let state = self.state();
+        let other = other.state();
+        state.running.is_empty() && other.running.is_empty()
+    }
+
     /// Waits until no tracked task or call the close does not spare runs,
     /// and `also` holds, read again whenever a task ends, a unit is spared,
     /// or `also_changed` is told.
@@ -575,6 +583,7 @@ impl Tasks {
     }
 
     /// How many tracked tasks run, including work driven elsewhere.
+    #[cfg(test)]
     pub(crate) fn running(&self) -> usize {
         self.state().running.len()
     }

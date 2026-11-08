@@ -350,8 +350,15 @@ impl StatusBus {
     }
 
     /// Whether a callback has scheduled another publication since the wait.
+    #[cfg(test)]
     pub(crate) fn is_idle(&self) -> bool {
         self.pending.running() == 0
+    }
+
+    /// Checks the kit and bus together, so a handoff between them cannot
+    /// look idle merely because each was empty at a different instant.
+    pub(crate) fn is_idle_with(&self, tasks: &Tasks) -> bool {
+        tasks.is_idle_with(&self.pending)
     }
 
     /// Hands every entry posted from now on to `callback`.

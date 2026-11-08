@@ -60,8 +60,9 @@ pub async fn idle<S>(kit: &RoomKit<S>) {
         kit.inner.tasks.idle().await;
         kit.inner.status_bus.idle().await;
         // A status callback can start a kit task, which can post again.
-        // Both sets must be idle in the same pass.
-        if kit.inner.tasks.running() != 0 || !kit.inner.status_bus.is_idle() {
+        // Read both sets under their locks: a handoff between them must
+        // not look like two empty sets seen at different instants.
+        if !kit.inner.status_bus.is_idle_with(&kit.inner.tasks) {
             continue;
         }
         // A discussion's driver is no task of the kit's: at rest it looks at

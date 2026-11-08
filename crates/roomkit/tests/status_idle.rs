@@ -1,6 +1,6 @@
 //! A conformance idle waits for the status publications it reads afterwards
 //! (RMK-1548). `StatusBus::post` and the kit's close stay non-blocking with
-//! respect to the bus's own publication, as Python's status_bus.py.
+//! respect to the bus's own publication, as Python's `status_bus.py`.
 
 use std::future::{Future, poll_fn};
 use std::pin::Pin;
@@ -73,7 +73,7 @@ async fn bounded<T>(future: impl Future<Output = T>) -> T {
 )]
 async fn kit() -> (RoomKit, Arc<Held>) {
     let held = Arc::new(Held::default());
-    let backend: Arc<dyn StatusBackend> = held.clone();
+    let backend = Arc::clone(&held);
     let kit = RoomKit::new(RoomKitOptions {
         status_bus: Some(StatusBus::new(StatusBusOptions {
             backend: Some(backend),
@@ -145,7 +145,7 @@ async fn idle_waits_for_a_post_made_by_a_subscriber() {
         }
         Box::pin(async {})
     });
-    kit.status_bus().subscribe(callback.clone()).await;
+    kit.status_bus().subscribe(Arc::clone(&callback)).await;
     kit.status_bus()
         .post("worker", "first", StatusLevel::Info, PostOptions::default());
     bounded(held.entered.notified()).await;
@@ -170,19 +170,33 @@ async fn idle_waits_for_a_post_made_by_a_subscriber() {
 }
 
 #[tokio::test]
-async fn idle_waits_for_the_work_a_status_hook_starts() {
+async fn idle_waits_for_the_work_and_posts_a_status_hook_starts() {
     use roomkit::{CreateRoomOptions, HookExecution, HookOptions, HookTrigger};
 
     let (kit, held) = kit().await;
     let room = kit.create_room(CreateRoomOptions::default()).await.unwrap();
     let entered = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
-    let (entering, releasing) = (entered.clone(), release.clone());
+    let (entering, releasing) = (Arc::clone(&entered), Arc::clone(&release));
+    let posting = kit.status_bus().clone();
     kit.hook(
         HookTrigger::OnStatusPosted,
-        move |_: StatusEntry, _| {
-            let (entered, release) = (entering.clone(), releasing.clone());
+        move |entry: StatusEntry, _| {
+            let (entered, release) = (Arc::clone(&entering), Arc::clone(&releasing));
+            let posting = posting.clone();
             async move {
+                if entry.action == "first" {
+                    posting.post(
+                        "worker",
+                        "done",
+                        StatusLevel::Completed,
+                        PostOptions {
+                            metadata: Some(entry.metadata),
+                            ..PostOptions::default()
+                        },
+                    );
+                    return;
+                }
                 entered.notify_one();
                 release.notified().await;
             }
@@ -197,7 +211,7 @@ async fn idle_waits_for_the_work_a_status_hook_starts() {
     metadata.insert("room_id".to_owned(), room.id.to_string().into());
     kit.status_bus().post(
         "worker",
-        "done",
+        "first",
         StatusLevel::Completed,
         PostOptions {
             metadata: Some(metadata),
@@ -207,6 +221,9 @@ async fn idle_waits_for_the_work_a_status_hook_starts() {
     bounded(held.entered.notified()).await;
     let idle = roomkit::testing::idle(&kit);
     tokio::pin!(idle);
+    still_pending(idle.as_mut()).await;
+    held.release.notify_one();
+    bounded(held.entered.notified()).await;
     still_pending(idle.as_mut()).await;
     held.release.notify_one();
     bounded(entered.notified()).await;
@@ -228,12 +245,7 @@ async fn a_bus_publication_does_not_become_work_the_kit_s_close_waits_for() {
     bounded(held.entered.notified()).await;
     bounded(kit.close()).await.unwrap();
     assert!(held.closed.load(Ordering::SeqCst));
-    assert!(
-        kit.status_bus()
-            .recent(RecentOptions::default())
-            .await
-            .is_empty()
-    );
+    assert_eq!(kit.status_bus().recent(RecentOptions::default()).await, []);
     held.release.notify_one();
     bounded(roomkit::testing::idle(&kit)).await;
     assert_eq!(
