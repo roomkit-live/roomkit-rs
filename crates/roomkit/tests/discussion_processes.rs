@@ -748,9 +748,10 @@ async fn an_uninstall_elsewhere_is_taken_at_once_even_under_the_lock_mid_turn() 
 }
 
 /// Says what its script says, logging `+name` as it generates, `-name` as
-/// it answers, and `xname` when its generation is dropped before. The cluster's first investigator turn waits for `ends`
-/// (five seconds at most) and, as a provider that does not stream, meets a
-/// `Cancel` only once it answered: Python's `_Held`.
+/// it answers, and `xname` when its generation is dropped before. The
+/// cluster's first investigator turn waits for `ends` (five seconds at
+/// most) and, as a provider that does not stream, meets a `Cancel` only
+/// once it answered: Python's `_Held`.
 struct Held {
     who: String,
     log: Arc<Mutex<Vec<String>>>,
@@ -917,9 +918,11 @@ impl Holding {
     }
 }
 
-/// That the investigator's turn the watch cut answered nothing, through
-/// the `Cancel` its loop met once its provider answered: only the later
-/// turn's answer is stored.
+/// That the investigator's turn the watch cut answered nothing: through
+/// the `Cancel` its loop met once its provider answered, when its process
+/// left the discussion at its driver's look, or its generation dropped,
+/// when its host's call left it first. Only the later turn's answer is
+/// stored.
 async fn assert_one_investigator_answer(holding: &Holding) {
     for kit in &holding.cluster.kits {
         idle(kit).await;
