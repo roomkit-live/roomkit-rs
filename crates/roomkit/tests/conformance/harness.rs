@@ -199,7 +199,7 @@ pub(crate) async fn run(scenario: &Value) -> Vec<String> {
         }
         run.add_process(id, kit);
     }
-    if scenario["expect"].get("thinking_events").is_some() {
+    if records_ephemerals(scenario) {
         for room in setup["rooms"].as_array().into_iter().flatten() {
             let room = room["id"].as_str().unwrap_or_default();
             if let Err(problem) = subscribe_thinking(&run, room).await {
@@ -218,7 +218,7 @@ pub(crate) async fn run(scenario: &Value) -> Vec<String> {
         step_outcomes.extend(run_step(&run, step, &format!("steps[{position}]")).await);
     }
     run.idle().await;
-    if scenario["expect"].get("thinking_events").is_some() {
+    if records_ephemerals(scenario) {
         // The realtime backend's own tasks hand what it was published.
         for _ in 0..20 {
             tokio::task::yield_now().await;
@@ -402,24 +402,42 @@ async fn wait_for_lock(run: &Arc<Run>, room_id: &str, waiters: usize) -> bool {
 }
 
 /// Records the room's thinking events, for a scenario that expects them.
+/// Whether the scenario expects what a room's subscribers read of a turn's
+/// reasoning or of its tool calls (README: `thinking_events`, `tool_events`).
+fn records_ephemerals(scenario: &Value) -> bool {
+    ["thinking_events", "tool_events"]
+        .iter()
+        .any(|kind| scenario["expect"].get(kind).is_some())
+}
+
 async fn subscribe_thinking(run: &Arc<Run>, room: &str) -> Result<(), String> {
     let id = RoomId::new(room).map_err(|e| e.to_string())?;
     let (recorder, room) = (Arc::downgrade(run), room.to_owned());
     let record = move |event: EphemeralEvent| {
         let (recorder, room) = (Weak::clone(&recorder), room.clone());
         async move {
+            let tool = matches!(
+                event.r#type,
+                EphemeralEventType::ToolCallStart
+                    | EphemeralEventType::ToolCallEnd
+                    | EphemeralEventType::ToolCallDelta
+            );
             let thinking = matches!(
                 event.r#type,
                 EphemeralEventType::ThinkingStart
                     | EphemeralEventType::ThinkingDelta
                     | EphemeralEventType::ThinkingEnd
             );
-            let Some(run) = recorder.upgrade().filter(|_| thinking) else {
+            let Some(run) = recorder.upgrade().filter(|_| thinking || tool) else {
                 return;
             };
             let mut read = event.data;
             read.insert("type".to_owned(), json!(event.r#type));
-            run.record_thinking_event(&room, Value::Object(read));
+            if tool {
+                run.record_tool_event(&room, Value::Object(read));
+            } else {
+                run.record_thinking_event(&room, Value::Object(read));
+            }
         }
     };
     let options = SubscribeRoomOptions::default();
