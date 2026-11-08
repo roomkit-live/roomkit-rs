@@ -270,7 +270,14 @@ pub(crate) fn end_row(end: ToolEnd) -> ToolCallContent {
     };
     row.outcome = Some(end.outcome);
     row.error = (!served).then(|| end.result.as_text());
-    row.result = end.result.into_row_value();
+    let (result, structured) = end.result.into_row_payload(end.structured_content);
+    row.result = result;
     row.duration_ms = u64::try_from(end.duration.as_millis()).ok();
+    row.structured_content = structured.and_then(|copy| {
+        let Value::Object(fields) = copy else {
+            return None;
+        };
+        Some(fields)
+    });
     row
 }

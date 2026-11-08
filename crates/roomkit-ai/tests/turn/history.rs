@@ -238,6 +238,58 @@ async fn a_hook_s_rewrite_is_what_is_replayed() {
     );
 }
 
+/// RFC §9.3: the structured copy an `ON_TOOL_CALL` hook leaves is on the
+/// call's end row, where a surface renders it; the model reads the result.
+#[tokio::test]
+async fn a_hook_s_structured_copy_is_on_the_end_row() {
+    let model = ScriptedProvider::new([
+        ScriptedRound::calling("", [("c1", "lookup_order", r#"{"order": "1"}"#)]),
+        ScriptedRound::answering("One."),
+    ]);
+    let room = Room::new(model.clone(), served()).await;
+    room.kit
+        .hook(
+            HookTrigger::OnToolCall,
+            |_event: ToolCallEvent, _context| async {
+                let mut rewritten = HookResult::allow(AllowOptions::default());
+                rewritten
+                    .metadata
+                    .insert("result".to_owned(), json!("for the model"));
+                rewritten.metadata.insert(
+                    "structured_content".to_owned(),
+                    json!({"data": {"order": 1}}),
+                );
+                Ok(rewritten)
+            },
+            HookOptions {
+                name: "copy".to_owned(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    room.says("first").await;
+    let timeline = room.timeline().await;
+    room.kit.close().await.unwrap();
+    let end = timeline
+        .iter()
+        .find_map(|event| match (&event.r#type, &event.content) {
+            (EventType::ToolCallEnd, EventContent::ToolCall(row)) => Some(row.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(end.result, json!("for the model"));
+    assert_eq!(
+        end.structured_content,
+        json!({"data": {"order": 1}}).as_object().cloned()
+    );
+    let read = model.requests()[1]
+        .messages
+        .iter()
+        .find(|message| message.role == AiRole::Tool)
+        .map(AiMessage::text);
+    assert_eq!(read.as_deref(), Some("for the model"));
+}
+
 /// Each message of `request`, on one line: its role and text, the ids it
 /// calls, or the call its result answers.
 fn shape(request: &AiContext) -> Vec<String> {

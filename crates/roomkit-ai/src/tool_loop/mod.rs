@@ -120,6 +120,9 @@ pub(crate) struct ToolEnd {
     pub(crate) result: ToolResult,
     /// How long it took, its gate included.
     pub(crate) duration: Duration,
+    /// The structured copy a surface renders of its result, which the model
+    /// never reads: what the kit's hooks left of it (RFC §9.3).
+    pub(crate) structured_content: Option<Value>,
 }
 
 /// The items of a turn's loop, or the provider's error that ended it.
@@ -831,6 +834,7 @@ impl<P: AiProvider> Loop<P> {
             outcome: ToolCallOutcome::Cancelled,
             result: ToolResult::Text("cancelled".to_owned()),
             duration: Duration::ZERO,
+            structured_content: None,
         }
     }
 }

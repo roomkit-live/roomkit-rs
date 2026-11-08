@@ -136,11 +136,25 @@ impl ToolResult {
     /// kept while the payloads kept so far, its own included, stay within
     /// 512 KiB, else a note naming its kind, type and size, a later, smaller
     /// one still kept. Python's `tool_event_result`.
+    #[cfg(test)]
     pub(crate) fn into_row_value(self) -> Value {
+        self.into_row_value_within(&mut Budget::default())
+    }
+
+    /// The result and its structured copy as a `TOOL_CALL_END` row keeps
+    /// them, under one budget. The copy is read first: it is written for
+    /// surfaces, where a note in place of an image breaks its schema. Python's
+    /// `tool_event_payload`.
+    pub(crate) fn into_row_payload(self, structured: Option<Value>) -> (Value, Option<Value>) {
         let mut budget = Budget::default();
+        let structured = structured.map(|copy| row_bound::json(copy, &mut budget));
+        (self.into_row_value_within(&mut budget), structured)
+    }
+
+    fn into_row_value_within(self, budget: &mut Budget) -> Value {
         match self {
-            Self::Text(text) => Value::String(row_bound::text(text, &mut budget)),
-            Self::Json(value) => row_bound::json(value, &mut budget),
+            Self::Text(text) => Value::String(row_bound::text(text, budget)),
+            Self::Json(value) => row_bound::json(value, budget),
             Self::Parts(parts) => {
                 let kept = parts
                     .into_iter()
@@ -363,6 +377,20 @@ mod tests {
                 true,
                 json!("[image image/png, 225 KB, not kept in the event]"),
             )
+        );
+    }
+
+    // Python: tests/test_tool_event_result.py::test_the_structured_copy_is_served_first_from_one_budget
+    #[test]
+    fn the_structured_copy_is_served_first_from_one_budget() {
+        let block =
+            json!({"type": "image", "data": "A".repeat(300 * 1024), "mimeType": "image/png"});
+        let (row, copy) = ToolResult::Json(json!([block.clone()]))
+            .into_row_payload(Some(json!({"images": [block.clone()]})));
+        assert_eq!(copy.unwrap()["images"][0], block);
+        assert_eq!(
+            row[0]["text"],
+            "[image image/png, 225 KB, not kept in the event]"
         );
     }
 

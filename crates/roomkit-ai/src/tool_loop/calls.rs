@@ -91,6 +91,7 @@ impl<P: AiProvider> Loop<P> {
             call: reported.call.clone(),
             result,
             duration: started.elapsed(),
+            structured_content: reported.structured_content.clone(),
         };
         self.tell(called, nth, &reported, &end);
         end
