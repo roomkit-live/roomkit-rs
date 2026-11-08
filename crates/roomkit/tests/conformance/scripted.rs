@@ -13,7 +13,7 @@ use roomkit::model::{
     RoomId,
 };
 use roomkit::{
-    Channel, ChannelError, DeliveryStream, HookError, SessionStartedEvent, StreamItem,
+    Channel, ChannelError, DeliveryStream, HookError, HookFuture, SessionStartedEvent, StreamItem,
     default_inbound_event,
 };
 use roomkit_core::ops::ChannelConfig;
@@ -21,7 +21,9 @@ use serde_json::{Value, json};
 use tokio::sync::watch;
 
 use crate::run::{Run, Scope};
-use crate::templates::{complete_event, complete_observation, complete_task, hook_result};
+use crate::templates::{
+    complete_event, complete_observation, complete_task, hook_result, invalid_hook_result,
+};
 
 /// How long a step waits for a call to reach a gate before the scenario fails.
 pub(crate) const GATE_BOUND: Duration = Duration::from_secs(5);
@@ -736,13 +738,13 @@ pub(crate) fn status_hook_handler(
 pub(crate) fn hook_handler(
     spec: &Value,
     run: &Arc<Run>,
-) -> impl Fn(
-    RoomEvent,
-    RoomContext,
-) -> std::pin::Pin<Box<dyn Future<Output = Result<HookResult, HookError>> + Send>>
-+ Send
-+ Sync
-+ 'static {
+) -> impl Fn(RoomEvent, RoomContext) -> HookFuture + Send + Sync + 'static {
+    // Invalid fixture data fails before the callback can turn it into a hook error.
+    for reaction in spec["reactions"].as_array().into_iter().flatten() {
+        if let Some(invalid) = reaction.get("invalid_result") {
+            invalid_hook_result(invalid, "fixture").unwrap();
+        }
+    }
     let reactions = Arc::new(Reactions::new(spec.get("reactions")));
     let name = spec["name"].as_str().unwrap_or_default().to_owned();
     let trigger = spec["trigger"].as_str().unwrap_or_default().to_owned();
@@ -752,19 +754,26 @@ pub(crate) fn hook_handler(
         let (name, trigger, run) = (name.clone(), trigger.clone(), Weak::clone(&run));
         Box::pin(async move {
             let Some(run) = run.upgrade() else {
-                return Ok(HookResult::allow(AllowOptions::default()));
+                return Ok(Some(HookResult::allow(AllowOptions::default())));
             };
             let room_id = context.room.id.to_string();
             run.record_hook(&name, &trigger, &room_id, Some(&payload));
             let Some(reaction) = reactions.pick(&event_subject(&payload, &room_id)) else {
-                return Ok(HookResult::allow(AllowOptions::default()));
+                return Ok(Some(HookResult::allow(AllowOptions::default())));
             };
             let scope = Scope::with_event(&room_id, payload.id.as_ref());
             let hooked = (payload.clone(), context);
             HOOKED
                 .scope(hooked, perform(&run, &reaction, &scope))
                 .await?;
-            Ok(hook_result(reaction.get("result"), &payload, &room_id)?)
+            if let Some(invalid) = reaction.get("invalid_result") {
+                return Ok(invalid_hook_result(invalid, &room_id)?);
+            }
+            Ok(Some(hook_result(
+                reaction.get("result"),
+                &payload,
+                &room_id,
+            )?))
         })
     }
 }

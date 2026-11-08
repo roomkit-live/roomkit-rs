@@ -91,7 +91,16 @@ pub(crate) async fn process_kit(
 
 /// Scenario id → the rule this implementation breaks (roomkit-specs
 /// `conformance/README.md`, "Known failures").
-pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[];
+pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[
+    (
+        "hooks/a-hook-modifying-without-a-payload-fails-open",
+        "§9.3: an unchecked MODIFY loses its tasks and observations (RMK-1591)",
+    ),
+    (
+        "hooks/a-hook-modifying-without-a-payload-fails-closed",
+        "§9.3: an unchecked MODIFY loses effects and reports hook_error (RMK-1591)",
+    ),
+];
 
 /// A scenario that has not finished by then fails instead of hanging the
 /// suite.

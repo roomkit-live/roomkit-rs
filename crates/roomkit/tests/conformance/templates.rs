@@ -4,7 +4,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use roomkit::model::hook::AllowOptions;
-use roomkit::model::{HookResult, RoomEvent, Timestamp};
+use roomkit::model::{HookAction, HookResult, RoomEvent, Timestamp};
 use serde_json::{Map, Value, json};
 
 /// The instant a scenario's record is written at, at millisecond precision.
@@ -87,6 +87,38 @@ pub(crate) fn hook_result(
         merge(&mut patched, &patch);
         data.insert("event".to_owned(), patched);
     }
+    complete_hook_effects(&mut data, room_id);
+    serde_json::from_value(Value::Object(data))
+}
+
+/// Complete side effects before intentionally making a MODIFY unusable.
+pub(crate) fn invalid_hook_result(
+    spec: &Value,
+    room_id: &str,
+) -> Result<Option<HookResult>, serde_json::Error> {
+    for member in ["tasks", "observations", "injected_events"] {
+        if let Some(value) = spec.get(member) {
+            assert!(value.is_array(), "invalid_result.{member} must be an array");
+        }
+    }
+    if spec["kind"] == "no_result" {
+        return Ok(None);
+    }
+    assert_eq!(
+        spec["kind"], "missing_payload",
+        "unknown invalid hook result"
+    );
+    let mut data = spec.as_object().unwrap().clone();
+    data.shift_remove("kind");
+    data.insert("action".to_owned(), json!("allow"));
+    complete_hook_effects(&mut data, room_id);
+    let mut result: HookResult = serde_json::from_value(Value::Object(data))?;
+    result.action = HookAction::Modify;
+    result.event = None;
+    Ok(Some(result))
+}
+
+fn complete_hook_effects(data: &mut Map<String, Value>, room_id: &str) {
     let injected: Vec<Value> = data
         .get("injected_events")
         .and_then(Value::as_array)
@@ -116,5 +148,23 @@ pub(crate) fn hook_result(
         .map(|o| complete_observation(o, room_id, "system"))
         .collect();
     data.insert("observations".to_owned(), Value::Array(observations));
-    serde_json::from_value(Value::Object(data))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn malformed_effects_fail_outside_the_hook_error_boundary() {
+        for member in ["tasks", "observations", "injected_events"] {
+            let invalid = json!({"kind": "missing_payload", member: [{}]});
+            assert!(invalid_hook_result(&invalid, "fixture").is_err());
+            for value in [json!({}), json!(""), json!(5)] {
+                let invalid = json!({"kind": "missing_payload", member: value});
+                assert!(
+                    std::panic::catch_unwind(|| invalid_hook_result(&invalid, "fixture")).is_err()
+                );
+            }
+        }
+    }
 }

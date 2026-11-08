@@ -307,6 +307,7 @@ const REACTION: &[&str] = &[
     "respond",
     "output",
     "result",
+    "invalid_result",
     "stop_after",
     "stop_after_rows",
     "hold_after",
@@ -856,7 +857,15 @@ fn room_hook(hook: &Value, path: &str, found: &mut Vec<String>) {
 fn hook_of(hook: &Value, known: &[&str], path: &str, found: &mut Vec<String>) {
     members(hook, known, path, found);
     for (index, reaction) in items(&hook["reactions"]) {
-        self::reaction(reaction, &format!("{path}.reactions[{index}]"), found);
+        let permitted = hook["trigger"] == "before_broadcast"
+            && hook.get("execution").is_none_or(|mode| mode == "sync")
+            && hook.get("router").is_none();
+        reaction_with_return(
+            reaction,
+            &format!("{path}.reactions[{index}]"),
+            found,
+            permitted,
+        );
     }
     if let Some(router) = hook.get("router") {
         self::router(router, &format!("{path}.router"), found);
@@ -880,6 +889,13 @@ fn router(router: &Value, path: &str, found: &mut Vec<String>) {
 }
 
 fn reaction(reaction: &Value, path: &str, found: &mut Vec<String>) {
+    reaction_with_return(reaction, path, found, false);
+}
+
+fn reaction_with_return(reaction: &Value, path: &str, found: &mut Vec<String>, permitted: bool) {
+    if let Some(invalid) = reaction.get("invalid_result") {
+        invalid_return(reaction, invalid, path, found, permitted);
+    }
     members(reaction, REACTION, path, found);
     optional(&reaction["when"], WHEN, &format!("{path}.when"), found);
     optional(
@@ -1006,6 +1022,94 @@ fn scripted_model(model: &Value, path: &str, found: &mut Vec<String>) {
                 &format!("{round_path}.calls[{position}]"),
                 found,
             );
+        }
+    }
+}
+
+/// A deliberate bad return is not a malformed or silently ignored fixture.
+fn invalid_return(
+    reaction: &Value,
+    value: &Value,
+    path: &str,
+    found: &mut Vec<String>,
+    permitted: bool,
+) {
+    let at = format!("{path}.invalid_result");
+    members(
+        value,
+        &["kind", "tasks", "observations", "injected_events"],
+        &at,
+        found,
+    );
+    if !permitted || reaction.get("result").is_some() || reaction.get("fail").is_some() {
+        found.push(format!(
+            "{at}: requires a SYNC BEFORE_BROADCAST hook without result or fail"
+        ));
+    }
+    if !matches!(
+        value["kind"].as_str(),
+        Some("no_result" | "missing_payload")
+    ) {
+        found.push(format!("{at}: unknown or missing kind"));
+    }
+    if value["kind"] == "no_result" && value.as_object().is_none_or(|object| object.len() != 1) {
+        found.push(format!("{at}: no_result cannot carry side effects"));
+    }
+    for member in ["tasks", "observations", "injected_events"] {
+        if value.get(member).is_some_and(|value| !value.is_array()) {
+            found.push(format!("{at}.{member}: not an array"));
+        }
+    }
+    for (index, item) in items(&value["injected_events"]) {
+        members(
+            item,
+            INJECTED,
+            &format!("{at}.injected_events[{index}]"),
+            found,
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn scenario(reaction: &Value) -> Value {
+        json!({"setup": {"hooks": [{"name": "check", "trigger": "before_broadcast", "reactions": [reaction]}]}})
+    }
+
+    #[test]
+    fn malformed_invalid_returns_are_not_silently_accepted() {
+        for reaction in [
+            json!({"invalid_result": {"kind": "typo"}}),
+            json!({"invalid_result": {"kind": "no_result", "tasks": []}}),
+            json!({"invalid_result": {"kind": "missing_payload", "task": []}}),
+            json!({"invalid_result": {"kind": "no_result"}, "result": {"action": "allow"}}),
+            json!({"invalid_result": {"kind": "no_result"}, "fail": "error"}),
+        ] {
+            assert_ne!(unknown_members(&scenario(&reaction)), Vec::<String>::new());
+        }
+        for member in ["tasks", "observations", "injected_events"] {
+            for value in [json!({}), json!(""), json!(5)] {
+                let reaction =
+                    json!({"invalid_result": {"kind": "missing_payload", member: value}});
+                assert_ne!(unknown_members(&scenario(&reaction)), Vec::<String>::new());
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_returns_on_unhandled_callbacks_are_refused() {
+        let reaction = json!({"invalid_result": {"kind": "no_result"}});
+        let mut after = scenario(&reaction);
+        after["setup"]["hooks"][0]["trigger"] = json!("after_broadcast");
+        let mut observer = scenario(&reaction);
+        observer["setup"]["hooks"][0]["execution"] = json!("async");
+        let channel =
+            json!({"setup": {"channels": [{"id": "sms", "type": "sms", "deliver": [reaction]}]}});
+        for invalid in [after, observer, channel] {
+            assert_ne!(unknown_members(&invalid), Vec::<String>::new());
         }
     }
 }

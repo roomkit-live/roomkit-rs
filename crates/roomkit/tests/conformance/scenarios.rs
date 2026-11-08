@@ -63,10 +63,16 @@ pub(crate) fn every_scenario_gives_what_the_rfc_says(
     let mut paths = Vec::new();
     scenarios(&root, &mut paths);
     assert!(!paths.is_empty(), "no scenario under {}", root.display());
+    let filter = std::env::var("ROOMKIT_CONFORMANCE_FILTER").ok();
+    let mut selected = 0;
     let mut report = Vec::new();
     let mut failing = Vec::new();
     for path in &paths {
         let id = scenario_id(&root, path);
+        if filter.as_ref().is_some_and(|needle| !id.contains(needle)) {
+            continue;
+        }
+        selected += 1;
         let scenario: Value =
             serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         assert_eq!(
@@ -112,8 +118,9 @@ pub(crate) fn every_scenario_gives_what_the_rfc_says(
     }
     println!(
         "{pass}: {} scenarios, {} failing: {failing:?}",
-        paths.len(),
+        selected,
         failing.len()
     );
+    assert!(selected > 0, "no scenario matches {filter:?}");
     assert!(report.is_empty(), "\n{}", report.join("\n"));
 }

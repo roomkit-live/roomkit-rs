@@ -90,6 +90,14 @@ use crate::support::TempSchema;
 /// depend on the machine's speed and may pass.
 pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[
     (
+        "hooks/a-hook-modifying-without-a-payload-fails-open",
+        "§9.3: an unchecked MODIFY loses its tasks and observations (RMK-1591)",
+    ),
+    (
+        "hooks/a-hook-modifying-without-a-payload-fails-closed",
+        "§9.3: an unchecked MODIFY loses effects and reports hook_error (RMK-1591)",
+    ),
+    (
         "orchestration/a-team-worker-past-its-task-timeout-is-read-as-timed-out-beside-the-others",
         "timing: the worker that answers has 50 ms, which a debug build's round trips to a server \
          pass, and is cut with the one that must be (RMK-1334)",

@@ -30,6 +30,23 @@ pub type HookError = Box<dyn Error + Send + Sync>;
 /// it raised. `None` gives no result: a SYNC hook's chain reads it as an
 /// unusable result, which lets the payload through unless the hook or its
 /// trigger fails closed (RFC §9.3).
+///
+/// The callback's payload type is also its replacement type. A room event's
+/// hook cannot hand the chain a string in place of an event (RFC §9.3):
+///
+/// ```compile_fail,E0277
+/// use roomkit::{HookOptions, HookTrigger, RoomKit, RoomKitOptions};
+/// use roomkit::model::{HookResult, RoomEvent};
+/// use roomkit::model::hook::ModifyOptions;
+/// let kit = RoomKit::new(RoomKitOptions::default());
+/// kit.hook(
+///     HookTrigger::BeforeBroadcast,
+///     |_event: RoomEvent, _context| async {
+///         HookResult::modify("not an event".to_owned(), ModifyOptions::default())
+///     },
+///     HookOptions::default(),
+/// );
+/// ```
 pub type HookReturn<P = RoomEvent> = Result<Option<HookResult<P>>, HookError>;
 
 /// The future [`HookHandler::call`] returns: boxed and sendable, it gives
