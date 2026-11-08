@@ -88,6 +88,11 @@ impl Running {
 }
 
 impl Loops {
+    /// How many loops are running: registered, their handle not dropped.
+    pub(crate) fn running(&self) -> usize {
+        lock(&self.running).len()
+    }
+
     /// A loop starting now in `room_id` for the turn `turn_id`: reachable
     /// until it reads its queue for the last time, registered until the
     /// handle drops.

@@ -1703,6 +1703,14 @@ impl<P: AiProvider> Channel for AiChannel<P> {
         Some(self.provider.name().to_owned())
     }
 
+    /// How many turns it is running right now, each counted from its first
+    /// round to its end, its stream dropped included: the tool loops that
+    /// joined its steering registry, as Python's `active_turns` counts them.
+    /// A caller retiring the channel waits for zero before closing it.
+    fn active_turns(&self) -> usize {
+        self.loops.running()
+    }
+
     /// The events a turn reads: Python's `recent_events_window`, its
     /// memory's.
     fn recent_events_window(&self) -> usize {

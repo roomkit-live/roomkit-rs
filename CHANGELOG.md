@@ -6,6 +6,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `AiChannel::active_turns` counts the turns the channel runs, each from its first round to its end, a cut or a failure included, as Python's (RMK-1462): it answered 0, the trait's default, so a caller that waited for zero before closing a channel closed it under a turn still running.
 - A `SKILL.md` that declares the Agent Skills format's `allowed-tools` (hyphenated, unlike the gating `allowed_tools`) loads, the key kept in `extra_metadata` as written, as Python's (RFC §24.2, RMK-1579): it was refused, and a strict `discover` failed the whole directory.
 - The skills' preamble ends with Python's note, "Note: Script execution is not available in this environment.", where it said the skill loader does not execute scripts and asked the model to use the host's tools (RFC §24.3, RMK-1389).
 - Under Tool Search, `list_tools` lists `read_stored_result` once a round declares it, as Python's (RFC §21.1, RMK-1485); `find_tools` never names it, as it never names the agent's own tools.
