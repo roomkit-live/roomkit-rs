@@ -57,6 +57,11 @@ const CUT_WAIT: Duration = Duration::from_secs(5);
 pub(super) struct GivenTurn {
     pub(super) entry: Entry,
     pub(super) mark: Value,
+    /// Its agent only listens, as last read: a person named it (rule 12),
+    /// and only setting the state while the turn runs cuts it.
+    pub(super) listening: bool,
+    /// What another process stored cut it already.
+    pub(super) cut: bool,
 }
 
 /// What this process holds of the room's discussion.
@@ -553,7 +558,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
     /// Cuts `agent`'s running turn, as a `Cancel` does; a turn given but not
     /// started yet has no loop a `Cancel` reaches, and its delivery is
     /// cancelled.
-    async fn cut(
+    pub(super) async fn cut(
         &self,
         kit: &RoomKit<S>,
         agent: &ChannelId,

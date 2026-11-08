@@ -4,7 +4,10 @@
 //! least once a second; a turn is the rerun of the event it answers, planned
 //! for one agent under the room's lock by the core, which asks the discussion
 //! for it ([`DiscussionRoom::planned_turn`]), and run in the room's lane.
+//! While it runs, the driver reads the stored queue once a second: what
+//! another process stored cuts it, and the lease is renewed (rule 16).
 
+use std::convert::Infallible;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -22,7 +25,9 @@ use super::SpeakQueueChange;
 use super::notes::{AgentLine, TurnKind, TurnNotes, turn_notes};
 use super::queue::{Entry, SpeakQueueState};
 use super::room::{Change, DiscussionRoom, GivenTurn, read_queue};
+use crate::InboundResult;
 use crate::context::Section;
+use crate::delivery_keys::NamedGuard;
 use crate::discussion_turn::{issue_mark, retire_mark};
 use crate::driver;
 use crate::error::RoomKitError;
@@ -33,6 +38,9 @@ use crate::unwind;
 
 /// How often the driver reads the stored queue again (rule 16).
 const POLL: Duration = Duration::from_secs(1);
+
+/// Why a turn is cut once another process uninstalled the discussion.
+const UNINSTALLED: &str = "discussion_uninstalled";
 
 /// The longest a failure holds the next look back.
 const RETRY_MAX: Duration = Duration::from_secs(30);
@@ -140,9 +148,12 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             live.queue = peek.clone();
             live.seen_version
         };
-        let Some(stored) = DiscussionConfig::stored(&metadata) else {
-            // Another process uninstalled the discussion: this process leaves
-            // it, writing nothing back (rule 16).
+        let stored = DiscussionConfig::stored(&metadata);
+        let forgotten = self.state().forgotten;
+        let Some(stored) = stored.filter(|_| !forgotten) else {
+            // Another process uninstalled the discussion, whether or not one
+            // was installed again since: this process leaves it, writing
+            // nothing back (rule 16).
             let this = std::ptr::from_ref(self).cast::<()>() as usize;
             let left = kit.leave_uninstalled_here(&self.room_id, this).await;
             return Ok(if left { Looked::Gone } else { Looked::Nothing });
@@ -180,7 +191,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         let ran = {
             // Over however the run ends, a stop's abort included.
             let _over = TurnOver(self);
-            kit.run_discussion_turn(&self.room_id, named).await
+            self.run_watched(&kit, named).await
         };
         let (given, deciding) = {
             let mut live = self.state();
@@ -214,6 +225,109 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         retire_mark(&given.mark);
         self.ended(&kit, &given.entry, responses).await;
         Ok(Looked::Ran)
+    }
+
+    // -- Running it --
+
+    /// Runs the look's turn, watching the stored queue while it runs
+    /// (Python's `_run` and its `_watch`): the watch ends with the run.
+    async fn run_watched(
+        &self,
+        kit: &RoomKit<S>,
+        named: NamedGuard,
+    ) -> Result<InboundResult, RoomKitError> {
+        let running = kit.run_discussion_turn(&self.room_id, named);
+        tokio::select! {
+            ran = running => ran,
+            never = self.watch(kit) => match never {},
+        }
+    }
+
+    /// While a turn this process gave runs: what another process stored
+    /// cuts it (the discussion uninstalled, its agent set to listen or
+    /// removed), and the lease is renewed before it expires (rule 16).
+    async fn watch(&self, kit: &RoomKit<S>) -> Infallible {
+        loop {
+            tokio::time::sleep(POLL).await;
+            if let Err(error) = self.watch_once(kit).await {
+                tracing::warn!(
+                    target: "roomkit::orchestration::discussion",
+                    room_id = %self.room_id,
+                    %error,
+                    "watching a discussion's turn failed"
+                );
+            }
+        }
+    }
+
+    /// One look of the watch at the stored queue.
+    async fn watch_once(&self, kit: &RoomKit<S>) -> Result<(), RoomKitError> {
+        // Planned under the room's lock first: no turn, nothing to watch.
+        if self.state().turn.is_none() {
+            return Ok(());
+        }
+        let room = kit.store().get_room(&self.room_id).await?;
+        let metadata = room.map(|room| room.metadata).unwrap_or_default();
+        let state = read_queue(&metadata);
+        let stored = DiscussionConfig::stored(&metadata);
+        let uninstalled = stored.is_none();
+        if let Some(stored) = stored {
+            // Routed by the configuration the room stores from then on.
+            self.follow(stored);
+        }
+        let cut = {
+            let mut live = self.state();
+            live.queue = state.clone();
+            let Some(turn) = live.turn.as_mut() else {
+                return Ok(());
+            };
+            let reason = self.cut_reason(turn, &state, uninstalled);
+            turn.listening = state.listening.contains(&turn.entry.agent);
+            let cut = reason.filter(|_| !turn.cut).map(|reason| {
+                turn.cut = true;
+                (turn.entry.agent.clone(), reason)
+            });
+            if cut
+                .as_ref()
+                .is_some_and(|(_, reason)| *reason == UNINSTALLED)
+            {
+                // Gone for every process: its end is recorded nowhere
+                // (rule 1).
+                live.forgotten = true;
+            }
+            cut
+        };
+        if let Some((agent, reason)) = cut {
+            self.cut(kit, &agent, reason).await?;
+        }
+        if state.renew_due(&self.me, now(kit)) {
+            self.editing(kit, |state, _| {
+                state.take_lease(&self.me, now(kit));
+            })
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Why the stored queue, just read as `state`, cuts `turn`, if it does:
+    /// Python's `_cut_reason`.
+    fn cut_reason(
+        &self,
+        turn: &GivenTurn,
+        state: &SpeakQueueState,
+        uninstalled: bool,
+    ) -> Option<&'static str> {
+        let agent = &turn.entry.agent;
+        if uninstalled {
+            return Some(UNINSTALLED);
+        }
+        if state.listening.contains(agent) && !turn.listening {
+            return Some("listen_only");
+        }
+        if !self.config().agents.contains(agent) {
+            return Some("agent_removed");
+        }
+        None
     }
 
     /// What `done` answers; a failure reads as not done.
@@ -428,11 +542,14 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             // One read with the set: a stop either sees this turn to cut, or
             // this sees the stop and gives none.
             let mut live = self.state();
+            let listening = state.listening.contains(&entry.agent);
             if !live.closed && state.take(&entry) {
                 live.turn_rows.clear();
                 live.turn = Some(GivenTurn {
                     entry: entry.clone(),
                     mark: mark.clone(),
+                    listening,
+                    cut: false,
                 });
             } else {
                 drop(live);
@@ -882,6 +999,8 @@ mod tests {
         TextContent,
     };
 
+    use roomkit_core::ops::SequentialEnvironment;
+
     use super::*;
     use crate::kit::{CreateRoomOptions, RoomKitOptions};
     use crate::orchestration::strategies::discussion::queue::Ask;
@@ -1076,5 +1195,115 @@ mod tests {
         let stored = kit.store().get_room(&room_id).await.unwrap().unwrap();
         let queue = read_queue(&stored.metadata);
         assert!(queue.over && queue.entries.is_empty());
+    }
+    // Python: tests/orchestration/test_discussion_processes.py::test_a_process_that_stopped_hands_the_room_over_once_its_lease_expires:
+    // a process that stopped holding the lease, without giving it back,
+    // keeps the turns from another process until the lease expires; then
+    // the other takes it and gives the next turn (rule 16).
+    #[tokio::test]
+    async fn a_process_that_stopped_hands_the_room_over_once_its_lease_expires() {
+        let room_id = RoomId::new("r1").unwrap();
+        let ops = ChannelId::new("ops").unwrap();
+        let store = Arc::new(crate::InMemoryStore::default());
+        let start = Timestamp::from_unix_millis(1_800_000_000_000).unwrap();
+        let clock = Arc::new(SequentialEnvironment::new(start));
+        let kit_of = || {
+            let options = RoomKitOptions {
+                store: Arc::clone(&store),
+                ..RoomKitOptions::default()
+            };
+            let clock: Arc<SequentialEnvironment> = Arc::clone(&clock);
+            let environment: Arc<dyn roomkit_core::ops::Environment + Send + Sync> = clock;
+            RoomKit::with_environment(options, environment)
+        };
+        let (a_kit, b_kit) = (kit_of(), kit_of());
+        let options = CreateRoomOptions {
+            room_id: Some(room_id.clone()),
+            ..Default::default()
+        };
+        let created = a_kit.create_room(options).await.unwrap();
+        let mut context = RoomContext::new(created);
+        let mut asks = Vec::new();
+        for (index, agent) in ["a", "b"].into_iter().enumerate() {
+            let agent = ChannelId::new(agent).unwrap();
+            let mut asked = RoomEvent::new(
+                room_id.clone(),
+                EventSource::new(ops.clone(), ChannelType::SMS),
+                TextContent::new(format!("@{agent} hello")),
+            );
+            asked.index = u64::try_from(index).unwrap() + 1;
+            let asked = a_kit
+                .store()
+                .commit_event(&room_id, asked, CommitEventOptions::default())
+                .await
+                .unwrap();
+            context.bindings.push(ChannelBinding::at(
+                agent.clone(),
+                room_id.clone(),
+                ChannelType::AI,
+                ChannelCategory::Intelligence,
+                ChannelDirection::Bidirectional,
+                Timestamp::UNIX_EPOCH,
+            ));
+            asks.push((agent, asked));
+        }
+        context.bindings.push(ChannelBinding::at(
+            ops.clone(),
+            room_id.clone(),
+            ChannelType::SMS,
+            ChannelCategory::Transport,
+            ChannelDirection::Bidirectional,
+            Timestamp::UNIX_EPOCH,
+        ));
+        let install = || super::super::room::Install {
+            config: serde_json::from_value(serde_json::json!({
+                "agents": ["a", "b"], "max_depth": 5
+            }))
+            .unwrap(),
+            done: None,
+            dispatch: None,
+            owner: 0,
+        };
+        let a = DiscussionRoom::new(&a_kit, room_id.clone(), None, install());
+        a.load().await.unwrap();
+        let b = DiscussionRoom::new(&b_kit, room_id.clone(), None, install());
+        b.load().await.unwrap();
+        a.editing(&a_kit, |state, _| {
+            for (agent, asked) in &asks {
+                let ask = Ask {
+                    event_id: asked.id.to_string(),
+                    depth: 0,
+                    asker: "ops".to_owned(),
+                    index: asked.index,
+                    person: true,
+                    named: true,
+                };
+                state.ask(agent, ask, true, None);
+            }
+        })
+        .await
+        .unwrap();
+
+        // A gives a's turn, then stops without giving the lease back.
+        a.state().done = Some(false);
+        let given = a.planned_turn(context.clone()).await.unwrap();
+        assert_eq!(
+            given.turn.map(|turn| turn.agent.to_string()),
+            Some("a".to_owned())
+        );
+
+        // B gives no turn while A's lease runs.
+        b.state().done = Some(false);
+        let refused = b.planned_turn(context.clone()).await.unwrap();
+        assert!(refused.turn.is_none());
+
+        // Once it expired, B takes it and gives the next turn.
+        clock.advance(Duration::from_secs(16));
+        b.state().done = Some(false);
+        let handed = b.planned_turn(context).await.unwrap();
+        assert_eq!(
+            handed.turn.map(|turn| turn.agent.to_string()),
+            Some("b".to_owned())
+        );
     }
 }
