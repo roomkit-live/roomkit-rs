@@ -122,6 +122,9 @@ pub(crate) async fn checked_call(
     if spec.get("kit").is_some() {
         run.kit_of(spec)?;
     }
+    if let Some(error) = visibility_input_error(spec) {
+        return Ok((Err(error), None));
+    }
     call(run, spec).await
 }
 
@@ -130,9 +133,6 @@ pub(crate) async fn call(
     run: &std::sync::Arc<Run>,
     spec: &Value,
 ) -> Result<(Called, Option<String>), Unreadable> {
-    if let Some(error) = visibility_input_error(spec) {
-        return Ok((Err(error), None));
-    }
     let name = spec["call"].as_str().unwrap_or_default();
     let event_of = |value: &Value| value.get("id").and_then(Value::as_str).map(str::to_owned);
     Ok(match name {
