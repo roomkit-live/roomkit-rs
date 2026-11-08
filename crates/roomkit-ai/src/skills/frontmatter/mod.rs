@@ -39,8 +39,10 @@ pub(crate) const FRONTMATTER_MAX: usize = 64 * 1024;
 const FLOW_DEPTH_MAX: usize = 64;
 
 /// The keys that gate or require tools (RFC §24.2), which no skill of this
-/// implementation may declare.
-const GATING_KEYS: [&str; 3] = ["allowed_tools", "allowed-tools", "requires"];
+/// implementation may declare. The Agent Skills format's `allowed-tools`,
+/// hyphenated, is none of them: a key like any other, kept as written, as
+/// Python's `GATING_KEYS`.
+const GATING_KEYS: [&str; 2] = ["allowed_tools", "requires"];
 
 /// The fields the registry reads, in the order of [`Fields`].
 const FIELDS: [&str; 4] = ["name", "description", "license", "compatibility"];

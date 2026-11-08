@@ -6,6 +6,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A `SKILL.md` that declares the Agent Skills format's `allowed-tools` (hyphenated, unlike the gating `allowed_tools`) loads, the key kept in `extra_metadata` as written, as Python's (RFC §24.2, RMK-1579): it was refused, and a strict `discover` failed the whole directory.
 - The skills' preamble ends with Python's note, "Note: Script execution is not available in this environment.", where it said the skill loader does not execute scripts and asked the model to use the host's tools (RFC §24.3, RMK-1389).
 - Under Tool Search, `list_tools` lists `read_stored_result` once a round declares it, as Python's (RFC §21.1, RMK-1485); `find_tools` never names it, as it never names the agent's own tools.
 - A summarizing or compacting memory's summarizer reads a person whose name reads like a label of an agent's own turns (`You`, `assistant`) with `(a participant)` after the name, as Python's and as a worker's brief (RFC §6.4, §20.3, RMK-1435).

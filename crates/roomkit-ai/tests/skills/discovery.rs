@@ -491,10 +491,37 @@ fn a_copy_limits_availability_without_rereading_or_mutating_the_source() {
     );
 }
 
+/// A key of the Agent Skills format that RoomKit does not read, Claude
+/// Code's `allowed-tools` (hyphenated, unlike the `allowed_tools` that
+/// gates), loads the skill and is kept as written (RFC §24.2).
+// Python: tests/test_skills.py::TestParseSkillMetadata::test_an_agent_skills_key_is_kept_as_extra_metadata
 #[test]
-fn foreign_permission_and_invocation_policies_are_not_silently_ignored() {
+fn an_agent_skills_key_is_kept_as_extra_metadata() {
+    let root = TempDir::new();
+    root.skill_with(
+        "skills",
+        "agent-skill",
+        &skill_md(
+            "agent-skill",
+            "Has a foreign key",
+            "allowed-tools: Bash(git:*) Read\n",
+        ),
+    );
+    let mut registry = SkillRegistry::new();
+    let found = registry
+        .discover(&[root.path().join("skills")], DiscoverOptions::default())
+        .unwrap();
+    assert_eq!(found, 1);
+    let metadata = registry.get_metadata("agent-skill").unwrap();
+    assert_eq!(
+        serde_json::Value::Object(metadata.extra_metadata.clone()),
+        json!({"allowed-tools": "Bash(git:*) Read"})
+    );
+}
+
+#[test]
+fn foreign_invocation_policies_are_not_silently_ignored() {
     for field in [
-        "allowed-tools",
         "disable-model-invocation",
         "user-invocable",
         "context",
