@@ -26,7 +26,7 @@ use crate::driver;
 use crate::error::RoomKitError;
 use crate::orchestration::SpeakQueue;
 use crate::orchestration::strategies::discussion::room::{
-    DiscussionRoom, NAMES, SILENT, binding_refusal,
+    DiscussionRoom, Install, NAMES, SILENT, binding_refusal,
 };
 use crate::store::ConversationStore;
 
@@ -93,11 +93,38 @@ pub(crate) trait DiscussionSeam: Send + Sync + 'static {
         false
     }
 
-    /// The configuration it routes by when it only follows the discussion
-    /// another process installed, `None` when it gives turns (rule 16).
-    fn follows(&self) -> Option<&DiscussionConfig> {
-        None
+    /// Whether the host installed a discussion in this process: one that
+    /// only follows the discussion another process installed did not (rule
+    /// 16).
+    fn installed(&self) -> bool {
+        true
     }
+
+    /// Whether the discussion the host installed here is the strategy at
+    /// `owner`, an address (Python's `strategy is`).
+    fn runs(&self, _owner: usize) -> bool {
+        false
+    }
+
+    /// Whether this process read it uninstalled, by another process: it
+    /// gives no turn again (rule 16).
+    fn forgotten(&self) -> bool {
+        false
+    }
+
+    /// Routes and queues by `stored`, the configuration the room stores
+    /// now, which another process's install may have replaced (rule 16).
+    fn follow(&self, _stored: DiscussionConfig) {}
+
+    /// Takes the place of the discussion it routes by with `install`, the
+    /// queue kept but for the agents `install` lets go (rule 1).
+    fn take_over(&self, _install: Install) -> BoxFuture<'_, Result<(), RoomKitError>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+
+    /// Gives the turns from this process: its driver started once, a room it
+    /// only followed until now included.
+    fn drive(&self) {}
 
     /// Stores `agents`, which an install attached to the room, with the
     /// stored configuration (RFC §19.7).
@@ -233,17 +260,11 @@ impl DiscussionSeams {
         self.rooms().insert(room_id, seam);
     }
 
-    /// `seam` runs the discussion of `room_id` from now on, unless `held`,
-    /// the one this process ran when it read the room, was replaced
-    /// meanwhile; whether it does.
-    fn hold_in_place_of(
-        &self,
-        room_id: RoomId,
-        held: Option<&Arc<dyn DiscussionSeam>>,
-        seam: Arc<dyn DiscussionSeam>,
-    ) -> bool {
+    /// `seam` runs the discussion of `room_id` from now on, unless one runs
+    /// there already or this process is uninstalling it; whether it does.
+    fn hold_if_none(&self, room_id: RoomId, seam: Arc<dyn DiscussionSeam>) -> bool {
         let mut rooms = self.rooms();
-        if !same_seam(rooms.get(&room_id), held) || self.leaving().contains(&room_id) {
+        if rooms.contains_key(&room_id) || self.leaving().contains(&room_id) {
             return false;
         }
         rooms.insert(room_id, seam);
@@ -305,24 +326,20 @@ fn same_seam(
 impl<S: ConversationStore> RoomKit<S> {
     /// Joins, follows or leaves the discussion `room` stores (RFC §19.7.5
     /// rule 16): a room another process gave a discussion is followed here,
-    /// by the configuration it stores now, and one whose discussion is gone
-    /// is left when this process only followed it. Run for every context the
-    /// pipeline builds, before a `process_inbound` naming its room, and by
-    /// the strategy calls: Python's `_follow_discussion`, which every context
-    /// the kit builds runs.
+    /// one whose discussion another process replaced is routed by the new
+    /// configuration, an installed one included, and one whose discussion is
+    /// gone is left when this process only followed it. Run for every
+    /// context the pipeline builds, before a `process_inbound` naming its
+    /// room, and by the strategy calls: Python's `_follow_discussion`, which
+    /// every context the kit builds runs.
     pub(crate) fn follow_discussion(&self, room: &Room) {
         let config = DiscussionConfig::stored(&room.metadata);
         let held = self.inner.discussions.get(&room.id);
-        let followed = held.as_ref().and_then(|seam| seam.follows().cloned());
-        match (config, followed) {
-            (Some(config), _) if held.is_none() => self.join_stored(room, None, config),
-            (Some(config), Some(followed)) if followed != config => {
-                self.join_stored(room, held.as_ref(), config);
-            }
-            (None, Some(_)) => {
-                if let Some(held) = held {
-                    self.leave_discussion(&room.id, &held);
-                }
+        match (config, held) {
+            (Some(config), None) => self.join_stored(room, config),
+            (Some(config), Some(held)) => held.follow(config),
+            (None, Some(held)) if !held.installed() => {
+                self.leave_discussion(&room.id, &held);
             }
             _ => {}
         }
@@ -330,14 +347,15 @@ impl<S: ConversationStore> RoomKit<S> {
 
     /// Reads `room_id` and follows the discussion it stores now, when this
     /// process only follows one there: a host call routes by the
-    /// configuration another process's install may have replaced (rule 16,
-    /// Python's `editing`, which follows the stored configuration).
+    /// configuration another process's install may have replaced, and a
+    /// discussion another process uninstalled is left (rule 16, Python's
+    /// `editing`, which follows the stored configuration).
     async fn follow_stored(&self, room_id: &RoomId) {
         let follows = self
             .inner
             .discussions
             .get(room_id)
-            .is_some_and(|seam| seam.follows().is_some());
+            .is_some_and(|seam| !seam.installed());
         if !follows {
             return;
         }
@@ -358,24 +376,15 @@ impl<S: ConversationStore> RoomKit<S> {
         }
     }
 
-    /// Follows the discussion `room` stores, `config`, another process's,
-    /// in place of `held`: this process routes and queues by it (rule 16).
-    /// Python's `_join_stored`.
-    fn join_stored(
-        &self,
-        room: &Room,
-        held: Option<&Arc<dyn DiscussionSeam>>,
-        config: DiscussionConfig,
-    ) {
+    /// Follows the discussion `room` stores, `config`, another process's:
+    /// this process routes and queues by it (rule 16). Python's
+    /// `_join_stored`.
+    fn join_stored(&self, room: &Room, config: DiscussionConfig) {
         let room_id = room.id.clone();
         let organization_id = room.organization_id.clone();
         let follower = DiscussionRoom::following(self, room_id.clone(), organization_id, config);
         let seam: Arc<dyn DiscussionSeam> = Arc::<DiscussionRoom<S>>::clone(&follower);
-        if !self
-            .inner
-            .discussions
-            .hold_in_place_of(room_id.clone(), held, seam)
-        {
+        if !self.inner.discussions.hold_if_none(room_id.clone(), seam) {
             return;
         }
         for hook in follower.hooks() {
@@ -568,12 +577,114 @@ impl<S: ConversationStore> RoomKit<S> {
             .ok_or_else(|| RoomKitError::Value(format!("Room {room_id} holds no discussion")))
     }
 
+    /// Gives `room` to the discussion `install` configures, or puts it in
+    /// place of the discussion the room holds, here or stored by another
+    /// process (RFC §19.7.5 rules 1 and 16): Python's `_install_discussion`.
+    pub(crate) async fn install_discussion(
+        &self,
+        room: Room,
+        install: Install,
+    ) -> Result<(), RoomKitError> {
+        self.follow_discussion(&room);
+        let mut held = self.inner.discussions.get(&room.id);
+        if let Some(seam) = held.clone()
+            && seam.installed()
+            && (seam.forgotten() || DiscussionConfig::stored(&room.metadata).is_none())
+        {
+            // Gone since this process installed it: left here, never reused.
+            // The install takes the place of the discussion the room stores
+            // now, another process's, else starts afresh.
+            self.leave_uninstalled(&room.id, &seam).await;
+            held = None;
+            if let Some(config) = DiscussionConfig::stored(&room.metadata) {
+                self.join_stored(&room, config);
+                held = self.inner.discussions.get(&room.id);
+            }
+        }
+        match held {
+            Some(held) => self.replace_discussion(&room.id, &held, install).await,
+            None => self.start_discussion(room, install).await,
+        }
+    }
+
+    /// Gives `room`, which holds no discussion here, to the one `install`
+    /// configures: held before its configuration is stored, its agents
+    /// bound, its queue read, its hooks and turns started. Python's
+    /// `_start_discussion`.
+    async fn start_discussion(&self, room: Room, install: Install) -> Result<(), RoomKitError> {
+        let room_id = room.id;
+        self.check_discussion_room(&room_id, &install.config, &[])
+            .await?;
+        let agents = install.config.agents.clone();
+        let running = DiscussionRoom::new(self, room_id.clone(), room.organization_id, install);
+        // Before the configuration is stored: from then on a message is told
+        // to it, and to nobody without it.
+        self.inner
+            .discussions
+            .hold(room_id.clone(), Arc::<DiscussionRoom<S>>::clone(&running));
+        let started = async {
+            self.bind_discussion_agents(&room_id, &agents).await?;
+            running.load().await?;
+            for hook in running.hooks() {
+                self.hook_engine().replace_room_hook(&room_id, hook)?;
+            }
+            Ok::<(), RoomKitError>(())
+        }
+        .await;
+        if let Err(error) = started {
+            self.inner.discussions.release(&room_id);
+            return Err(error);
+        }
+        running.start();
+        Ok(())
+    }
+
+    /// Puts the configuration `install` gives in place of the one `held`
+    /// routes by, keeping the queue (rule 1): the agents that leave and an
+    /// install attached detached, the new ones bound, this process giving
+    /// the turns. Python's `_replace_discussion`.
+    async fn replace_discussion(
+        &self,
+        room_id: &RoomId,
+        held: &Arc<dyn DiscussionSeam>,
+        install: Install,
+    ) -> Result<(), RoomKitError> {
+        let room = self.store().get_room(room_id).await?;
+        let stored = room.and_then(|room| DiscussionConfig::stored(&room.metadata));
+        let leaving: Vec<ChannelId> = stored
+            .map(|stored| {
+                held.follow(stored.clone());
+                stored
+                    .attached
+                    .into_iter()
+                    .filter(|agent| !install.config.agents.contains(agent))
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.check_discussion_room(room_id, &install.config, &leaving)
+            .await?;
+        let stayed = self.detach_agents(room_id, &leaving).await;
+        if !stayed.is_empty() {
+            let stayed: Vec<&str> = stayed.iter().map(ChannelId::as_str).collect();
+            return Err(RoomKitError::Runtime(format!(
+                "Room {room_id} still binds {stayed:?}, which left its discussion"
+            )));
+        }
+        let agents = install.config.agents.clone();
+        held.take_over(install).await?;
+        self.bind_discussion_agents(room_id, &agents).await?;
+        held.drive();
+        Ok(())
+    }
+
     /// Refuses what the room binds that a discussion of `config` cannot share
-    /// it with (rule 1): Python's `_discussion_refusal`.
+    /// it with (rule 1), but for the agents `leaving` the room with the
+    /// discussion it replaces: Python's `_discussion_refusal`.
     pub(crate) async fn check_discussion_room(
         &self,
         room_id: &RoomId,
         config: &DiscussionConfig,
+        leaving: &[ChannelId],
     ) -> Result<(), RoomKitError> {
         let refused = |refusal: String| {
             RoomKitError::Value(format!(
@@ -581,6 +692,9 @@ impl<S: ConversationStore> RoomKit<S> {
             ))
         };
         for binding in self.store().list_bindings(room_id).await? {
+            if leaving.contains(&binding.channel_id) {
+                continue;
+            }
             let channel = self.inner.channel(&binding.channel_id);
             let refusal = binding_refusal(
                 &config.agents,

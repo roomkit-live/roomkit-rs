@@ -47,7 +47,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         let candidates: Vec<ChannelId> = pending
             .candidates
             .iter()
-            .filter(|agent| self.config.agents.contains(agent) && !listening.contains(agent))
+            .filter(|agent| self.config().agents.contains(agent) && !listening.contains(agent))
             .cloned()
             .collect();
         let (report, agents) = match self.decision(kit, &pending, &candidates).await {
@@ -152,7 +152,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             reason: FALLBACK.to_owned(),
             judgments: BTreeMap::new(),
         };
-        let Some((policy, bound)) = self.dispatch.clone() else {
+        let Some((policy, bound)) = self.dispatch_policy() else {
             tracing::warn!(
                 target: "roomkit::orchestration::discussion",
                 room_id = %self.room_id,
@@ -230,12 +230,13 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         let said: Vec<&RoomEvent> = recent.iter().chain(std::iter::once(event)).collect();
         let labels = turn_labels(said.iter().copied(), context);
         let mut speakers = BTreeMap::new();
+        let config = self.config();
         for (said, label) in said.iter().zip(labels) {
             let author = &said.source.channel_id;
             // A person named like one of an agent's own labels reads as a
             // participant, as the transcript of Python's turn_labels has it.
-            let label = if self.config.agents.contains(author) {
-                Some(self.config.label(author))
+            let label = if config.agents.contains(author) {
+                Some(config.label(author))
             } else {
                 label.filter(|label| !label.is_empty()).map(labelled)
             };
@@ -268,7 +269,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             name: identity.name,
             role: identity.role,
             description: identity.description,
-            handle: Some(self.config.handle(agent).to_owned()),
+            handle: Some(self.config().handle(agent).to_owned()),
         }
     }
 

@@ -114,6 +114,18 @@ struct Installed<S> {
     added: Added,
     /// The record claims the room while the install runs.
     installing: bool,
+    /// The install takes the place of the discussion the room holds (RFC
+    /// §19.7.5 rule 1), and this is the record of that discussion's
+    /// strategy, when this process recorded one.
+    replacing: Option<Replaced<S>>,
+}
+
+/// The record of a discussion's strategy another install takes the place
+/// of, which the room's record joins once it has.
+struct Replaced<S> {
+    strategy: Option<Arc<dyn Orchestration<S>>>,
+    organization_id: Option<String>,
+    added: Added,
 }
 
 /// What an install added for a room: what an uninstall takes back.
@@ -135,6 +147,39 @@ struct Snapshot {
     runners: BTreeSet<ChannelId>,
     bindings: BTreeSet<ChannelId>,
     keys: BTreeSet<String>,
+}
+
+impl Added {
+    /// What both installs set up, this one's taking the place of `held`'s,
+    /// but agents the room no longer binds: Python's `_joined`.
+    fn joined(held: &Self, added: Self, bound: &BTreeSet<ChannelId>) -> Self {
+        let union = |a: &[String], b: Vec<String>| -> Vec<String> {
+            a.iter()
+                .cloned()
+                .chain(b)
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect()
+        };
+        let mut tools: BTreeSet<(ChannelId, String)> = held.tools.iter().cloned().collect();
+        tools.extend(added.tools);
+        let mut runners: BTreeSet<ChannelId> = held.runners.iter().cloned().collect();
+        runners.extend(added.runners);
+        let attached: BTreeSet<ChannelId> = held
+            .attached
+            .iter()
+            .cloned()
+            .chain(added.attached)
+            .filter(|agent| bound.contains(agent))
+            .collect();
+        Self {
+            hooks: union(&held.hooks, added.hooks),
+            tools: tools.into_iter().collect(),
+            runners: runners.into_iter().collect(),
+            attached: attached.into_iter().collect(),
+            keys: union(&held.keys, added.keys),
+        }
+    }
 }
 
 impl Snapshot {
@@ -407,7 +452,7 @@ impl<S: ConversationStore> RoomKit<S> {
             Ok(section) => Arc::new(section),
             Err(error) => {
                 guard.armed = false;
-                self.drop_record(room_id, &strategy);
+                self.drop_claim(room_id, &strategy);
                 return Err(error);
             }
         };
@@ -416,7 +461,7 @@ impl<S: ConversationStore> RoomKit<S> {
             Ok(before) => before,
             Err(error) => {
                 guard.armed = false;
-                self.drop_record(room_id, &strategy);
+                self.drop_claim(room_id, &strategy);
                 return Err(error);
             }
         };
@@ -438,8 +483,7 @@ impl<S: ConversationStore> RoomKit<S> {
     ) -> Result<(), RoomKitError> {
         // A discussion taking another's place binds its new agents itself,
         // once it holds the room (RFC §19.7.5 rule 1).
-        let replacing =
-            is_discussion(strategy.as_ref()) && self.inner.discussions.get(room_id).is_some();
+        let replacing = self.replacing(room_id, strategy);
         let attached = if replacing {
             Ok(())
         } else {
@@ -449,25 +493,61 @@ impl<S: ConversationStore> RoomKit<S> {
             Ok(()) => strategy.install(self, room_id).await,
             Err(error) => Err(error),
         };
-        let (added, unread) = self.added_since(room_id, before).await;
+        let (added, bound, unread) = self.added_and_bound_since(room_id, before).await;
         match (installed, unread) {
             (Err(error), unread) => {
-                self.undo_install(room_id, strategy, added, unread.is_none())
+                self.undo_install(room_id, strategy, added, bound, unread.is_none())
                     .await;
                 Err(error)
             }
             (Ok(()), Some(error)) => {
                 // What the read missed stays the strategy's: the room stays
                 // claimed, for uninstall_strategy to take back.
+                let added = self.joined_record(room_id, strategy, added, bound.as_ref());
                 self.record(room_id, strategy, added);
                 Err(error)
             }
             (Ok(()), None) => {
                 let attached = added.attached.clone();
+                let added = self.joined_record(room_id, strategy, added, bound.as_ref());
                 self.record(room_id, strategy, added);
                 self.hold_attached(room_id, strategy.as_ref(), attached)
                     .await
             }
+        }
+    }
+
+    /// Whether the install of `strategy` claiming `room_id` takes the place
+    /// of the discussion the room holds (RFC §19.7.5 rule 1).
+    fn replacing(&self, room_id: &RoomId, strategy: &Arc<dyn Orchestration<S>>) -> bool {
+        self.inner
+            .room_strategies
+            .rooms()
+            .get(room_id)
+            .is_some_and(|installed| {
+                Arc::ptr_eq(&installed.strategy, strategy) && installed.replacing.is_some()
+            })
+    }
+
+    /// What the record of `strategy` in `room_id` holds once its install
+    /// added `added`: joined with the record of the discussion's strategy it
+    /// took the place of, but the agents the room no longer binds, `bound`.
+    fn joined_record(
+        &self,
+        room_id: &RoomId,
+        strategy: &Arc<dyn Orchestration<S>>,
+        added: Added,
+        bound: Option<&BTreeSet<ChannelId>>,
+    ) -> Added {
+        let rooms = self.inner.room_strategies.rooms();
+        let held = rooms
+            .get(room_id)
+            .filter(|installed| Arc::ptr_eq(&installed.strategy, strategy))
+            .and_then(|installed| installed.replacing.as_ref())
+            .filter(|replaced| replaced.strategy.is_some());
+        match (held, bound) {
+            (Some(held), Some(bound)) => Added::joined(&held.added, added, bound),
+            _ => added,
         }
     }
 
@@ -485,7 +565,7 @@ impl<S: ConversationStore> RoomKit<S> {
             return Ok(());
         }
         match self.inner.discussions.get(room_id) {
-            Some(seam) if seam.follows().is_none() => seam.hold_attached(attached).await,
+            Some(seam) if seam.installed() => seam.hold_attached(attached).await,
             _ => Ok(()),
         }
     }
@@ -517,15 +597,16 @@ impl<S: ConversationStore> RoomKit<S> {
         }
     }
 
-    /// What an install added to `room_id` since `before`; with the read's
-    /// error when the room could not be read, its room hooks alone then.
-    async fn added_since(
+    /// What an install added to `room_id` since `before`, and the channels
+    /// the room binds now; with the read's error when the room could not be
+    /// read, its room hooks alone then, and no channels.
+    async fn added_and_bound_since(
         &self,
         room_id: &RoomId,
         before: &Snapshot,
-    ) -> (Added, Option<RoomKitError>) {
+    ) -> (Added, Option<BTreeSet<ChannelId>>, Option<RoomKitError>) {
         match self.snapshot(room_id).await {
-            Ok(after) => (before.added(&after), None),
+            Ok(after) => (before.added(&after), Some(after.bindings), None),
             Err(error) => {
                 tracing::error!(
                     target: "roomkit::orchestration",
@@ -545,7 +626,7 @@ impl<S: ConversationStore> RoomKit<S> {
                     runners: runners.difference(&before.runners).cloned().collect(),
                     ..Added::default()
                 };
-                (added, Some(error))
+                (added, None, Some(error))
             }
         }
     }
@@ -559,11 +640,11 @@ impl<S: ConversationStore> RoomKit<S> {
         before: Option<Snapshot>,
     ) {
         let Some(before) = before else {
-            self.drop_record(room_id, strategy);
+            self.drop_claim(room_id, strategy);
             return;
         };
-        let (added, unread) = self.added_since(room_id, &before).await;
-        self.undo_install(room_id, strategy, added, unread.is_none())
+        let (added, bound, unread) = self.added_and_bound_since(room_id, &before).await;
+        self.undo_install(room_id, strategy, added, bound, unread.is_none())
             .await;
     }
 
@@ -605,13 +686,37 @@ impl<S: ConversationStore> RoomKit<S> {
         organization_id: Option<String>,
     ) -> Result<(), RoomKitError> {
         let mut rooms = self.inner.room_strategies.rooms();
-        check_claim(&rooms, room_id, strategy)?;
-        self.check_discussion_claim(&rooms, room_id, strategy.as_ref())?;
-        if rooms.contains_key(room_id) {
+        // A discussion takes the place of the discussion the room holds here,
+        // installed or followed (RFC §19.7.5 rule 1).
+        let replacing =
+            is_discussion(strategy.as_ref()) && self.inner.discussions.get(room_id).is_some();
+        if !replacing {
+            check_claim(&rooms, room_id, strategy)?;
+            self.check_discussion_claim(&rooms, room_id, strategy.as_ref())?;
+            if rooms.contains_key(room_id) {
+                return Err(RoomKitError::Value(format!(
+                    "Room {room_id} holds this strategy already"
+                )));
+            }
+        } else if rooms
+            .get(room_id)
+            .is_some_and(|installed| installed.installing)
+        {
             return Err(RoomKitError::Value(format!(
-                "Room {room_id} holds this strategy already"
+                "Room {room_id} holds a discussion another install is replacing"
             )));
         }
+        let replacing = replacing.then(|| {
+            let held = rooms.remove(room_id);
+            Replaced {
+                organization_id: held.as_ref().and_then(|held| held.organization_id.clone()),
+                added: held
+                    .as_ref()
+                    .map(|held| held.added.clone())
+                    .unwrap_or_default(),
+                strategy: held.map(|held| held.strategy),
+            }
+        });
         rooms.insert(
             room_id.clone(),
             Installed {
@@ -619,6 +724,7 @@ impl<S: ConversationStore> RoomKit<S> {
                 organization_id,
                 added: Added::default(),
                 installing: true,
+                replacing,
             },
         );
         Ok(())
@@ -740,8 +846,13 @@ impl<S: ConversationStore> RoomKit<S> {
         room_id: &RoomId,
         strategy: &Arc<dyn Orchestration<S>>,
         added: Added,
+        bound: Option<BTreeSet<ChannelId>>,
         complete: bool,
     ) {
+        if self.replacing(room_id, strategy) {
+            self.settle_replacement(room_id, strategy, added, bound.as_ref());
+            return;
+        }
         self.update_record(room_id, strategy, |record| *record = added);
         let added = self.recorded_added(room_id, strategy);
         match self.take_back(room_id, added, strategy).await {
@@ -757,6 +868,68 @@ impl<S: ConversationStore> RoomKit<S> {
                 self.settle(room_id, strategy);
             }
         }
+    }
+
+    /// Drops the claim of an install of `strategy` that changed nothing in
+    /// `room_id`: the record of the discussion's strategy it was to take the
+    /// place of is the room's again.
+    fn drop_claim(&self, room_id: &RoomId, strategy: &Arc<dyn Orchestration<S>>) {
+        if self.replacing(room_id, strategy) {
+            self.settle_replacement(room_id, strategy, Added::default(), None);
+        } else {
+            self.drop_record(room_id, strategy);
+        }
+    }
+
+    /// Records what a failed replacement leaves `room_id` holding (RFC
+    /// §19.7.5 rule 1): `strategy` once the discussion runs it, installing
+    /// it again finishing the install; else the record of the strategy it
+    /// was to replace, while the discussion still runs that one; else none.
+    /// Python's `_settle_replacement`.
+    fn settle_replacement(
+        &self,
+        room_id: &RoomId,
+        strategy: &Arc<dyn Orchestration<S>>,
+        added: Added,
+        bound: Option<&BTreeSet<ChannelId>>,
+    ) {
+        let seam = self.inner.discussions.get(room_id);
+        let runs = |strategy: &Arc<dyn Orchestration<S>>| {
+            seam.as_ref()
+                .is_some_and(|seam| seam.runs(strategy_address(strategy.as_ref())))
+        };
+        if runs(strategy) {
+            let added = self.joined_record(room_id, strategy, added, bound);
+            self.record(room_id, strategy, added);
+            return;
+        }
+        let mut rooms = self.inner.room_strategies.rooms();
+        let Some(installed) = rooms
+            .get_mut(room_id)
+            .filter(|installed| Arc::ptr_eq(&installed.strategy, strategy))
+        else {
+            return;
+        };
+        match installed.replacing.take() {
+            Some(Replaced {
+                strategy: Some(held),
+                organization_id,
+                added,
+            }) if runs(&held) => {
+                *installed = Installed {
+                    strategy: held,
+                    organization_id,
+                    added,
+                    installing: false,
+                    replacing: None,
+                };
+            }
+            _ => {
+                rooms.remove(room_id);
+            }
+        }
+        drop(rooms);
+        self.inner.room_strategies.installs_ended.notify_waiters();
     }
 
     /// Removes what `added` holds for `room_id`: everything it can, the
@@ -859,6 +1032,7 @@ impl<S: ConversationStore> RoomKit<S> {
         {
             installed.added = added;
             installed.installing = false;
+            installed.replacing = None;
         }
         drop(rooms);
         self.inner.room_strategies.installs_ended.notify_waiters();

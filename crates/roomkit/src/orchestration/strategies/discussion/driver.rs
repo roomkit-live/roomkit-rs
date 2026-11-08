@@ -78,6 +78,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
     /// Starts giving the turns, on a task of its own: it inherits no lease on
     /// the room's lock its installer holds.
     pub(crate) fn start(self: &Arc<Self>) {
+        self.driven.store(true, Ordering::SeqCst);
         let room = Arc::clone(self);
         let task = tokio::spawn(room.drive());
         *self
@@ -139,14 +140,19 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             live.queue = peek.clone();
             live.seen_version
         };
-        let time = now(&kit);
-        if DiscussionConfig::stored(&metadata).is_none() {
+        let Some(stored) = DiscussionConfig::stored(&metadata) else {
             // Another process uninstalled the discussion: this process leaves
             // it, writing nothing back (rule 16).
             let this = std::ptr::from_ref(self).cast::<()>() as usize;
             let left = kit.leave_uninstalled_here(&self.room_id, this).await;
             return Ok(if left { Looked::Gone } else { Looked::Nothing });
+        };
+        // Routed by the configuration the room stores from then on.
+        self.follow(stored);
+        if !self.gives_turns_of(&kit, &peek).await? {
+            return Ok(Looked::Nothing);
         }
+        let time = now(&kit);
         if peek.over || peek.held_elsewhere(&self.me, time) {
             return Ok(Looked::Nothing);
         }
@@ -212,7 +218,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
 
     /// What `done` answers; a failure reads as not done.
     async fn ask_done(&self) -> bool {
-        let Some(done) = &self.done else {
+        let Some(done) = self.done_fn() else {
             return false;
         };
         let asked = done(self.room_id.clone());
@@ -244,9 +250,14 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         let room = kit.store().get_room(&self.room_id).await?;
         let metadata = room.map(|room| room.metadata).unwrap_or_default();
         // Uninstalled or stopped since the peek: no turn.
-        if DiscussionConfig::stored(&metadata).is_none() || self.state().closed {
+        let Some(stored) = DiscussionConfig::stored(&metadata) else {
+            return Ok(NextTurn::default());
+        };
+        if self.state().closed {
             return Ok(NextTurn::default());
         }
+        // Routed by the configuration the room stores (Python's `editing`).
+        self.follow(stored);
         let before = read_queue(&metadata);
         let mut state = before.clone();
         if !state.take_lease(&self.me, now(&kit)) {
@@ -338,7 +349,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             return Ok(next);
         }
         loop {
-            let pick = state.next_turn(self.config.max_depth);
+            let pick = state.next_turn(self.config().max_depth);
             for entry in &pick.stopped {
                 next.stopped.extend(self.stopped(kit, entry).await?);
             }
@@ -442,7 +453,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             agent: entry.agent,
             answered: Box::new(answered),
             mark,
-            max_depth: self.config.max_depth,
+            max_depth: self.config().max_depth,
         }))
     }
 
@@ -458,7 +469,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
     }
 
     fn max_turns_given(&self, state: &SpeakQueueState) -> bool {
-        self.config
+        self.config()
             .max_turns
             .is_some_and(|max_turns| state.turns_given >= max_turns)
     }
@@ -499,7 +510,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         Ok(event.map(|answered| StoppedTurn {
             agent: entry.agent.clone(),
             answered: Box::new(answered),
-            max_depth: self.config.max_depth,
+            max_depth: self.config().max_depth,
         }))
     }
 
@@ -510,8 +521,8 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         answered: &RoomEvent,
         context: &RoomContext,
     ) -> String {
-        let others: Vec<AgentLine> = self
-            .config
+        let config = self.config();
+        let others: Vec<AgentLine> = config
             .agents
             .iter()
             .filter(|agent| **agent != entry.agent)
@@ -532,12 +543,12 @@ impl<S: ConversationStore> DiscussionRoom<S> {
                     quoted(asker, LABEL)
                 } else {
                     ChannelId::new(asker)
-                        .map_or_else(|_| format!("@{asker}"), |agent| self.config.label(&agent))
+                        .map_or_else(|_| format!("@{asker}"), |agent| config.label(&agent))
                 }
             })
             .collect();
-        let author = if self.config.agents.contains(&answered.source.channel_id) {
-            self.config.label(&answered.source.channel_id)
+        let author = if config.agents.contains(&answered.source.channel_id) {
+            config.label(&answered.source.channel_id)
         } else {
             quoted(&person_label(answered, context), LABEL)
         };
@@ -546,15 +557,15 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             quoted(&text_of(&answered.content), QUOTE)
         );
         turn_notes(
-            self.config.handle(&entry.agent),
+            config.handle(&entry.agent),
             &others,
             &self.people(context),
             TurnNotes {
                 kind,
                 answering: &answering,
                 askers: &askers,
-                silent_token: &self.config.silent_token,
-                rules: self.config.rules.as_deref(),
+                silent_token: &config.silent_token,
+                rules: config.rules.as_deref(),
             },
         )
     }
@@ -566,7 +577,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             .and_then(|channel| channel.declaration().identity)
             .unwrap_or_default();
         AgentLine {
-            handle: self.config.handle(agent).to_owned(),
+            handle: self.config().handle(agent).to_owned(),
             name: identity.name,
             role: identity.role,
             description: identity.description,
@@ -746,8 +757,29 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         let Some(kit) = self.kit.upgrade() else {
             return;
         };
-        let changes = self
-            .editing(&kit, |state, _| {
+        if let Err(error) = self.give_up(&kit, false).await {
+            tracing::error!(
+                target: "roomkit::orchestration::discussion",
+                room_id = %self.room_id,
+                %error,
+                "the speak queue was not stored"
+            );
+        }
+    }
+
+    /// Gives no turn from this process: the lease released, the instruction
+    /// turns only this process could give told dropped; the rest of the
+    /// queue stays (rule 16). Python's `give_up`. `unless_it_drives`: not
+    /// when, read under the room's lock, the room stores this process's
+    /// install again (one it made meanwhile).
+    async fn give_up(&self, kit: &RoomKit<S>, unless_it_drives: bool) -> Result<(), RoomKitError> {
+        let (mine, state) = self
+            .editing(kit, |state, _| {
+                // An install of this process took the room back meanwhile,
+                // under its lock: it gives the turns again.
+                if unless_it_drives && self.gives_turns() {
+                    return (Vec::new(), state.clone());
+                }
                 state.release_lease(&self.me);
                 let mine: Vec<Entry> = state
                     .entries
@@ -756,26 +788,35 @@ impl<S: ConversationStore> DiscussionRoom<S> {
                     .cloned()
                     .collect();
                 state.entries.retain(|entry| !mine.contains(entry));
-                mine
+                (mine, state.clone())
             })
-            .await;
-        match changes {
-            Ok(mine) => {
-                for entry in mine {
-                    self.fire(
-                        SpeakQueueChange::InstructionDropped,
-                        vec![entry.agent],
-                        entry.instruction,
-                    );
-                }
-            }
-            Err(error) => tracing::error!(
-                target: "roomkit::orchestration::discussion",
-                room_id = %self.room_id,
-                %error,
-                "the speak queue was not stored"
-            ),
+            .await?;
+        let mut changes = Vec::new();
+        self.drop_instructions(&mine, &state, &mut changes);
+        self.fire_all(changes);
+        Ok(())
+    }
+
+    /// Whether this process gives the turns of the discussion the room
+    /// stores, `peek` its queue as just read: one whose host installed
+    /// another gives up the lease and the turns only it could give, queued
+    /// before (rule 16). Python's `_gives_turns`.
+    async fn gives_turns_of(
+        &self,
+        kit: &RoomKit<S>,
+        peek: &SpeakQueueState,
+    ) -> Result<bool, RoomKitError> {
+        if self.gives_turns() {
+            return Ok(true);
         }
+        let held = peek
+            .entries
+            .iter()
+            .any(|entry| entry.holder.as_deref() == Some(self.me.as_str()));
+        if held || peek.holds(&self.me, now(kit)) {
+            self.give_up(kit, true).await?;
+        }
+        Ok(false)
     }
 
     /// Leaves the discussion, for every process (rule 1): the turns stopped,
@@ -875,7 +916,13 @@ mod tests {
             "agents": ["a"], "max_depth": 5
         }))
         .unwrap();
-        let room = DiscussionRoom::new(&kit, room_id.clone(), None, config, None, None);
+        let install = super::super::room::Install {
+            config,
+            done: None,
+            dispatch: None,
+            owner: 0,
+        };
+        let room = DiscussionRoom::new(&kit, room_id.clone(), None, install);
         room.load().await.unwrap();
         room.editing(&kit, |state, _| {
             let ask = Ask {
@@ -939,7 +986,13 @@ mod tests {
             "agents": ["a"], "max_depth": 5, "dispatch": true
         }))
         .unwrap();
-        let room = DiscussionRoom::new(&kit, room_id.clone(), None, config, None, None);
+        let install = super::super::room::Install {
+            config,
+            done: None,
+            dispatch: None,
+            owner: 0,
+        };
+        let room = DiscussionRoom::new(&kit, room_id.clone(), None, install);
         room.load().await.unwrap();
         room.editing(&kit, |state, _| {
             let pending = super::super::queue::Pending {
@@ -989,7 +1042,13 @@ mod tests {
             "agents": ["a"], "max_depth": 5, "dispatch": true
         }))
         .unwrap();
-        let room = DiscussionRoom::new(&kit, room_id.clone(), None, config, None, None);
+        let install = super::super::room::Install {
+            config,
+            done: None,
+            dispatch: None,
+            owner: 0,
+        };
+        let room = DiscussionRoom::new(&kit, room_id.clone(), None, install);
         room.load().await.unwrap();
         room.editing(&kit, |state, _| {
             let ask = Ask {

@@ -85,22 +85,37 @@ pub(super) struct Live {
 /// One change of the queue, told once the store holds it.
 pub(super) type Change = (SpeakQueueChange, Vec<ChannelId>, Option<String>);
 
+/// What a host installs in this process: the configuration it gives turns
+/// by, its strategy's `done` and dispatch policy (its bound with it), and
+/// the address of the strategy object, which tells one install from
+/// another (Python's `strategy is`).
+pub(crate) struct Install {
+    pub(crate) config: DiscussionConfig,
+    pub(crate) done: Option<DoneFn>,
+    pub(crate) dispatch: Option<(Arc<dyn DispatchPolicy>, Duration)>,
+    pub(crate) owner: usize,
+}
+
 /// The discussion a room holds, as this process takes part in it.
 pub(crate) struct DiscussionRoom<S> {
     pub(super) kit: WeakRoomKit<S>,
+    /// Itself, for the driver an install over a followed discussion starts.
+    this: Weak<Self>,
     pub(super) room_id: RoomId,
     pub(super) organization_id: Option<String>,
     /// Who this process is, as the lease names it (rule 16).
     pub(super) me: String,
-    pub(super) config: DiscussionConfig,
-    /// It only follows the discussion another process installed: it
-    /// queues and routes by the stored configuration, and gives no turn
+    /// The configuration it routes and queues by: the one the room stores,
+    /// as last read, which another process's install may have replaced
     /// (rule 16).
-    pub(super) following: bool,
-    pub(super) silent: SilentToken,
-    pub(super) done: Option<DoneFn>,
-    /// The dispatch policy the host gave, and its bound (rule 18).
-    pub(super) dispatch: Option<(Arc<dyn DispatchPolicy>, Duration)>,
+    routed: Mutex<Arc<DiscussionConfig>>,
+    /// What the host installed in this process, if it installed one: a
+    /// process that only follows the discussion another process installed
+    /// has none, and gives no turn (rule 16).
+    own: Mutex<Option<Arc<Install>>>,
+    /// A driver was started: it gives the turns while this process's
+    /// install is the one the room stores.
+    pub(super) driven: AtomicBool,
     pub(super) live: Mutex<Live>,
     pub(super) wake: Notify,
     /// A wake not read yet.
@@ -131,17 +146,15 @@ enum Announcement {
 }
 
 impl<S: ConversationStore> DiscussionRoom<S> {
-    /// The discussion the host installs in this process, configured by
-    /// `config`, `done` and `dispatch` (its policy and bound) the host's.
+    /// The discussion the host installs in this process, `install`.
     pub(crate) fn new(
         kit: &RoomKit<S>,
         room_id: RoomId,
         organization_id: Option<String>,
-        config: DiscussionConfig,
-        done: Option<DoneFn>,
-        dispatch: Option<(Arc<dyn DispatchPolicy>, Duration)>,
+        install: Install,
     ) -> Arc<Self> {
-        Self::of(kit, room_id, organization_id, config, done, dispatch, false)
+        let config = install.config.clone();
+        Self::of(kit, room_id, organization_id, config, Some(install))
     }
 
     /// The discussion another process installed, `config` as the room
@@ -153,7 +166,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         organization_id: Option<String>,
         config: DiscussionConfig,
     ) -> Arc<Self> {
-        Self::of(kit, room_id, organization_id, config, None, None, true)
+        Self::of(kit, room_id, organization_id, config, None)
     }
 
     fn of(
@@ -161,20 +174,17 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         room_id: RoomId,
         organization_id: Option<String>,
         config: DiscussionConfig,
-        done: Option<DoneFn>,
-        dispatch: Option<(Arc<dyn DispatchPolicy>, Duration)>,
-        following: bool,
+        install: Option<Install>,
     ) -> Arc<Self> {
-        Arc::new(Self {
+        Arc::new_cyclic(|this| Self {
             kit: kit.downgrade(),
+            this: Weak::clone(this),
             room_id,
             organization_id,
             me: kit.inner.discussions.me(),
-            silent: SilentToken::new(config.silent_token.clone()),
-            config,
-            following,
-            done,
-            dispatch,
+            routed: Mutex::new(Arc::new(config)),
+            own: Mutex::new(install.map(Arc::new)),
+            driven: AtomicBool::new(false),
             live: Mutex::new(Live::default()),
             wake: Notify::new(),
             woken: AtomicBool::new(false),
@@ -184,6 +194,54 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             turn_over: Notify::new(),
             announcing: Arc::default(),
         })
+    }
+
+    /// The configuration it routes and queues by, as last read.
+    pub(super) fn config(&self) -> Arc<DiscussionConfig> {
+        Arc::clone(&self.routed.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    /// What the host installed in this process, if it installed one.
+    fn own(&self) -> Option<Arc<Install>> {
+        self.own
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// The silence token of the configuration it routes by (rule 13).
+    pub(super) fn silent(&self) -> SilentToken {
+        SilentToken::new(self.config().silent_token.clone())
+    }
+
+    /// The `done` of the strategy the host installed here.
+    pub(super) fn done_fn(&self) -> Option<DoneFn> {
+        self.own().and_then(|own| own.done.clone())
+    }
+
+    /// The dispatch policy of the strategy the host installed here, and its
+    /// bound (rule 18).
+    pub(super) fn dispatch_policy(&self) -> Option<(Arc<dyn DispatchPolicy>, Duration)> {
+        self.own().and_then(|own| own.dispatch.clone())
+    }
+
+    /// Routes and queues by `stored`, the configuration the room stores now,
+    /// which another process may have replaced (rule 16). Python's
+    /// `follow`.
+    pub(super) fn follow(&self, stored: DiscussionConfig) {
+        let mut routed = self.routed.lock().unwrap_or_else(PoisonError::into_inner);
+        if **routed != stored {
+            *routed = Arc::new(stored);
+        }
+    }
+
+    /// Whether this process may give the turns: its host installed the
+    /// discussion it routes by, the one the room stores as last read (rule
+    /// 16). Python's `drives`.
+    pub(super) fn gives_turns(&self) -> bool {
+        let config = self.config();
+        self.own()
+            .is_some_and(|own| own.config.same_as(Some(&config)))
     }
 
     pub(super) fn state(&self) -> MutexGuard<'_, Live> {
@@ -202,6 +260,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
     /// turn comes.
     pub(crate) async fn load(&self) -> Result<(), RoomKitError> {
         let kit = self.kit()?;
+        let config = self.config();
         // Taking the place of the discussion the room stores, it keeps the
         // queue and the agents its installs attached, but for the agents it
         // lets go (rule 1, Python's `take_over`).
@@ -211,7 +270,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             let gone: Vec<ChannelId> = stored
                 .agents
                 .into_iter()
-                .filter(|agent| !self.config.agents.contains(agent))
+                .filter(|agent| !config.agents.contains(agent))
                 .collect();
             let attached = stored
                 .attached
@@ -222,7 +281,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         });
         let storing = DiscussionConfig {
             attached,
-            ..self.config.clone()
+            ..(*config).clone()
         };
         let config = serde_json::to_value(&storing)
             .map_err(|error| RoomKitError::Value(error.to_string()))?;
@@ -244,6 +303,63 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             .await?;
         let mut changes = Vec::new();
         self.drop_instructions(&legacy, &state, &mut changes);
+        self.drop_instructions(&dropped, &state, &mut changes);
+        if ended {
+            changes.push((SpeakQueueChange::Waiting, Vec::new(), None));
+        }
+        self.fire_all(changes);
+        Ok(())
+    }
+
+    /// Takes the place of the discussion this process routes by with
+    /// `install`, keeping the stored queue but for the agents `install` no
+    /// longer holds (rule 1); the agents installs attached stay recorded,
+    /// but for those. From then on this process may give the turns.
+    /// Python's `take_over`.
+    async fn take_over_install(&self, install: Install) -> Result<(), RoomKitError> {
+        let kit = self.kit()?;
+        let section = Section::enter(&kit.inner.locks, &self.room_id).await?;
+        let taking = async {
+            let room = kit.store().get_room(&self.room_id).await?;
+            let stored = room.and_then(|room| DiscussionConfig::stored(&room.metadata));
+            let (gone, attached) = stored.map_or_else(Default::default, |stored| {
+                let gone: Vec<ChannelId> = stored
+                    .agents
+                    .into_iter()
+                    .filter(|agent| !install.config.agents.contains(agent))
+                    .collect();
+                let attached = stored
+                    .attached
+                    .into_iter()
+                    .filter(|agent| !gone.contains(agent))
+                    .collect();
+                (gone, attached)
+            });
+            let config = DiscussionConfig {
+                attached,
+                ..install.config.clone()
+            };
+            let value = serde_json::to_value(&config)
+                .map_err(|error| RoomKitError::Value(error.to_string()))?;
+            let patch = Metadata::from_iter([(CONFIG_KEY.to_owned(), value)]);
+            kit.store()
+                .patch_room_metadata(&self.room_id, patch, PatchRoomMetadataOptions::default())
+                .await?;
+            let (dropped, ended, state) = self
+                .edit(&kit, |state, _| {
+                    let dropped = state.drop_agents(&gone);
+                    // The wait may have been for an agent that left.
+                    let ended = state.end_wait_for_nobody();
+                    (dropped, ended, state.clone())
+                })
+                .await?;
+            *self.own.lock().unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(install));
+            self.follow(config);
+            Ok::<_, RoomKitError>((dropped, ended, state))
+        };
+        let (dropped, ended, state) = section.scope(taking).await?;
+        drop(section);
+        let mut changes = Vec::new();
         self.drop_instructions(&dropped, &state, &mut changes);
         if ended {
             changes.push((SpeakQueueChange::Waiting, Vec::new(), None));
@@ -305,7 +421,8 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         let roomkit_core::model::EventContent::Text(text) = &event.content else {
             return false;
         };
-        self.config.agents.contains(&event.source.channel_id) && self.silent.is_silent(&text.body)
+        self.config().agents.contains(&event.source.channel_id)
+            && self.silent().is_silent(&text.body)
     }
 
     /// The address of `event` once its names are read, when they add to it.
@@ -315,14 +432,12 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             return None;
         }
         let speaker = &event.source.channel_id;
+        let config = self.config();
         let names = read_names(
             &words,
-            &self.config.by_handle(),
+            &config.by_handle(),
             &self.people(context),
-            self.config
-                .agents
-                .contains(speaker)
-                .then_some(speaker.as_str()),
+            config.agents.contains(speaker).then_some(speaker.as_str()),
         );
         let mut address = event.addressed_to.clone().unwrap_or_default();
         let before = address.len();
@@ -338,10 +453,11 @@ impl<S: ConversationStore> DiscussionRoom<S> {
     }
 
     fn handles(&self) -> Vec<String> {
-        self.config
+        let config = self.config();
+        config
             .agents
             .iter()
-            .map(|agent| self.config.handle(agent).to_owned())
+            .map(|agent| config.handle(agent).to_owned())
             .collect()
     }
 
@@ -350,7 +466,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
     }
 
     fn people_index(&self, context: &RoomContext) -> PeopleIndex {
-        people_index(context, &self.handles(), self.config.people.as_deref())
+        people_index(context, &self.handles(), self.config().people.as_deref())
     }
 
     /// Changes the stored queue, the room's lock held by the caller: read,
@@ -364,7 +480,10 @@ impl<S: ConversationStore> DiscussionRoom<S> {
     ) -> Result<R, RoomKitError> {
         let room = kit.store().get_room(&self.room_id).await?;
         let metadata = room.map(|room| room.metadata).unwrap_or_default();
-        let stored = DiscussionConfig::stored(&metadata).is_some();
+        // Routed by the configuration the room stores (rule 16).
+        let stored = DiscussionConfig::stored(&metadata)
+            .map(|config| self.follow(config))
+            .is_some();
         let before = read_queue(&metadata);
         let mut state = before.clone();
         let result = {
@@ -409,7 +528,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
                 let agents: Vec<ChannelId> = channel_ids
                     .into_iter()
                     .filter(|agent| {
-                        self.config.agents.contains(agent) && !state.listening.contains(agent)
+                        self.config().agents.contains(agent) && !state.listening.contains(agent)
                     })
                     .collect();
                 state.listening.extend(agents.iter().cloned());
@@ -543,7 +662,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
                 return Ok(());
             }
         }
-        if !self.config.agents.contains(&speaker) && is_person(&event, &context) {
+        if !self.config().agents.contains(&speaker) && is_person(&event, &context) {
             self.route_person(&event, &context, &reach).await?;
             // A person's message ends a wait even when it asks for no one.
             self.rouse();
@@ -564,7 +683,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         reach: &[ChannelId],
     ) -> Result<(), RoomKitError> {
         let kit = self.kit()?;
-        for agent in &self.config.agents {
+        for agent in &self.config().agents {
             if *agent == event.source.channel_id || !reach.contains(agent) {
                 continue;
             }
@@ -597,8 +716,9 @@ impl<S: ConversationStore> DiscussionRoom<S> {
                 if takes_nothing(state, live) {
                     return Vec::new();
                 }
+                let config = self.config();
                 let mut changes: Vec<Change> = Vec::new();
-                let dispatched = self.config.dispatch && unaddressed;
+                let dispatched = config.dispatch && unaddressed;
                 let asks: Vec<ChannelId> = match &event.addressed_to {
                     None if dispatched => {
                         if let Some((agents, event_id)) =
@@ -611,7 +731,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
                     }
                     Some(address) => address
                         .iter()
-                        .filter(|agent| self.config.agents.contains(agent))
+                        .filter(|agent| config.agents.contains(agent))
                         .cloned()
                         .collect(),
                     None if unaddressed => {
@@ -640,7 +760,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
                     state.ask(agent, ask, true, None);
                 }
                 // Routed first, then what was asked of them is answered.
-                let answered = self.config.addressed_only.then_some(agents.as_slice());
+                let answered = config.addressed_only.then_some(agents.as_slice());
                 state.clear_asked(Some(&who), answered);
                 let was_waiting = state.person_wrote();
                 if !agents.is_empty() {
@@ -710,26 +830,23 @@ impl<S: ConversationStore> DiscussionRoom<S> {
     /// A message with no address and no name, which `addressed_only` does
     /// not keep from every agent (rule 8).
     fn unaddressed(&self, event: &RoomEvent, context: &RoomContext) -> bool {
-        if event.addressed_to.is_some() || self.config.addressed_only {
+        let config = self.config();
+        if event.addressed_to.is_some() || config.addressed_only {
             return false;
         }
         let Some(words) = content_words(&event.content).filter(|words| !words.is_empty()) else {
             return true;
         };
-        let names = read_names(
-            &words,
-            &self.config.by_handle(),
-            &self.people(context),
-            None,
-        );
+        let names = read_names(&words, &config.by_handle(), &self.people(context), None);
         names.people.is_empty()
     }
 
     pub(super) fn everyone(&self) -> Vec<ChannelId> {
-        self.config
+        let config = self.config();
+        config
             .everyone
             .clone()
-            .unwrap_or_else(|| self.config.agents.clone())
+            .unwrap_or_else(|| config.agents.clone())
     }
 
     /// An event from an agent outside its turn, or from any other sender:
@@ -746,7 +863,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             .iter()
             .flatten()
             .filter(|agent| {
-                self.config.agents.contains(agent) && *agent != asker && reach.contains(agent)
+                self.config().agents.contains(agent) && *agent != asker && reach.contains(agent)
             })
             .cloned()
             .collect();
@@ -787,13 +904,14 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             .addressed_to
             .iter()
             .flatten()
-            .filter(|agent| self.config.agents.contains(agent))
+            .filter(|agent| self.config().agents.contains(agent))
             .cloned()
             .collect();
         let id = event.id.to_string();
         // This process keeps the instruction's text; one that gives no turn
+        // (it only follows the discussion, or its host installed another)
         // tells it dropped.
-        if self.following {
+        if !self.gives_turns() {
             self.fire(SpeakQueueChange::InstructionDropped, agents, Some(id));
             return Ok(());
         }
@@ -842,12 +960,13 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         {
             return Vec::new();
         }
+        let config = self.config();
         let asked: Vec<ChannelId> = event
             .addressed_to
             .iter()
             .flatten()
             .filter(|other| {
-                self.config.agents.contains(other) && *other != agent && sees(other, event, context)
+                config.agents.contains(other) && *other != agent && sees(other, event, context)
             })
             .cloned()
             .collect();
@@ -864,7 +983,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         }
         if let Some(words) = content_words(&event.content).filter(|words| !words.is_empty()) {
             let index = self.people_index(context);
-            let names = read_names(&words, &self.config.by_handle(), &names_of(&index), None);
+            let names = read_names(&words, &config.by_handle(), &names_of(&index), None);
             for name in names.people {
                 if let Some(label) = one_person(&index, &name) {
                     state.record_asked(agent, label);
@@ -1003,7 +1122,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         channel_type: &ChannelType,
     ) -> Option<String> {
         binding_refusal(
-            &self.config.agents,
+            &self.config().agents,
             channel_id,
             category,
             Some(channel_type),
@@ -1085,10 +1204,10 @@ impl<S: ConversationStore> DiscussionSeam for DiscussionRoom<S> {
     }
 
     fn silence_for(&self, channel_id: &ChannelId) -> Option<SilentToken> {
-        self.config
+        self.config()
             .agents
             .contains(channel_id)
-            .then(|| self.silent.clone())
+            .then(|| self.silent().clone())
     }
 
     fn in_scope(&self, organization_id: Option<&str>) -> bool {
@@ -1105,7 +1224,7 @@ impl<S: ConversationStore> DiscussionSeam for DiscussionRoom<S> {
 
     fn settled(&self) -> bool {
         // A process that only follows has no driver to settle.
-        self.following
+        !self.driven.load(Ordering::SeqCst)
             || self.settled.load(Ordering::SeqCst)
             || self.stopping.load(Ordering::SeqCst)
     }
@@ -1115,11 +1234,36 @@ impl<S: ConversationStore> DiscussionSeam for DiscussionRoom<S> {
     }
 
     fn drives(&self, stored: &DiscussionConfig) -> bool {
-        !self.following && self.config.same_as(Some(stored))
+        self.own()
+            .is_some_and(|own| own.config.same_as(Some(stored)))
     }
 
-    fn follows(&self) -> Option<&DiscussionConfig> {
-        self.following.then_some(&self.config)
+    fn installed(&self) -> bool {
+        self.own().is_some()
+    }
+
+    fn runs(&self, owner: usize) -> bool {
+        self.own().is_some_and(|own| own.owner == owner)
+    }
+
+    fn forgotten(&self) -> bool {
+        self.state().forgotten
+    }
+
+    fn follow(&self, stored: DiscussionConfig) {
+        DiscussionRoom::follow(self, stored);
+    }
+
+    fn take_over(&self, install: Install) -> BoxFuture<'_, Result<(), RoomKitError>> {
+        Box::pin(self.take_over_install(install))
+    }
+
+    fn drive(&self) {
+        if self.driven.load(Ordering::SeqCst) {
+            self.rouse();
+        } else if let Some(this) = self.this.upgrade() {
+            this.start();
+        }
     }
 
     fn hold_attached(&self, agents: Vec<ChannelId>) -> BoxFuture<'_, Result<(), RoomKitError>> {

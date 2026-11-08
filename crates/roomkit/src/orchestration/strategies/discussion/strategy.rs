@@ -19,7 +19,7 @@ use crate::store::ConversationStore;
 
 use super::config::config_of;
 use super::dispatch::DispatchPolicy;
-use super::room::{DiscussionRoom, NAMES, SILENT};
+use super::room::{Install, NAMES, SILENT};
 
 /// `done(room_id)`: whether the discussion is over. Python's `DoneFn`, sync
 /// or async; here always a future.
@@ -301,42 +301,16 @@ impl Discussion {
             *self.read_handles() = Some(named);
         }
         let room = kit.get_room(room_id, GetRoomOptions::default()).await?;
-        let config = config_of(self, kit.inner.config().max_chain_depth);
-        kit.check_discussion_room(room_id, &config).await?;
-        let organization_id = room.organization_id;
-        let running = DiscussionRoom::new(
-            kit,
-            room_id.clone(),
-            organization_id,
-            config,
-            self.done.clone(),
-            self.dispatch
+        let install = Install {
+            config: config_of(self, kit.inner.config().max_chain_depth),
+            done: self.done.clone(),
+            dispatch: self
+                .dispatch
                 .clone()
                 .map(|policy| (policy, self.dispatch_timeout)),
-        );
-        // Before the configuration is stored: from then on a message is told
-        // to it, and to nobody without it.
-        kit.inner
-            .discussions
-            .hold(room_id.clone(), Arc::<DiscussionRoom<S>>::clone(&running));
-        let started = async {
-            // Bound once it holds the room: one it takes the place of would
-            // refuse an agent of its own it does not hold (rule 1).
-            kit.bind_discussion_agents(room_id, &running.config.agents)
-                .await?;
-            running.load().await?;
-            for hook in running.hooks() {
-                kit.hook_engine().replace_room_hook(room_id, hook)?;
-            }
-            Ok::<(), RoomKitError>(())
-        }
-        .await;
-        if let Err(error) = started {
-            kit.inner.discussions.release(room_id);
-            return Err(error);
-        }
-        running.start();
-        Ok(())
+            owner,
+        };
+        kit.install_discussion(room, install).await
     }
 
     /// Each agent's name, an id's from the channel the kit holds under it.
