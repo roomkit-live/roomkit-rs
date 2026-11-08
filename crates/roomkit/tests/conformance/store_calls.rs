@@ -1,4 +1,6 @@
-//! The store's calls a scenario names, made on the kit's store, and the
+//! The store's calls a scenario names, made on the store of the kit the
+//! run reads through (its own while open, else a process still open, as
+//! the store outlives the process that closed), and the
 //! kit's calls on a room's read markers: a call
 //! `store.<operation>` is the operation of the store's own interface (RFC
 //! §14.1; roomkit-specs `conformance/README.md`, "Calls on the store"), its
@@ -190,7 +192,8 @@ pub(crate) async fn call(
     name: &str,
     spec: &Value,
 ) -> Result<(Called, Option<String>), Unreadable> {
-    let store = run.kit().store();
+    let reader = run.reader();
+    let store = reader.store();
     Ok(match name {
         "store.add_event" => stored_event(run, name, store.add_event(event(spec, "event")?).await),
         "store.update_event" => {
@@ -227,7 +230,8 @@ pub(crate) async fn call(
 
 /// The store calls whose result names no event to label.
 async fn read_or_write(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Called, Unreadable> {
-    let store = run.kit().store();
+    let reader = run.reader();
+    let store = reader.store();
     let room_id = || field::<RoomId>(spec, "room_id");
     let channel_id = || field::<ChannelId>(spec, "channel_id");
     Ok(match name {
@@ -267,7 +271,8 @@ async fn read_or_write(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Calle
 
 /// The store's lookups and timeline reads.
 async fn lookup(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Called, Unreadable> {
-    let store = run.kit().store();
+    let reader = run.reader();
+    let store = reader.store();
     Ok(match name {
         "store.find_latest_room" => {
             let participant: ParticipantId = field(spec, "participant_id")?;
@@ -315,7 +320,8 @@ async fn events_and_markers(
     name: &str,
     spec: &Value,
 ) -> Result<Called, Unreadable> {
-    let store = run.kit().store();
+    let reader = run.reader();
+    let store = reader.store();
     let (room, channel) = (
         || field::<RoomId>(spec, "room_id"),
         || field::<ChannelId>(spec, "channel_id"),
@@ -351,7 +357,8 @@ async fn events_and_markers(
 
 /// The store's event and room writes, and its tasks.
 async fn writes_and_tasks(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Called, Unreadable> {
-    let store = run.kit().store();
+    let reader = run.reader();
+    let store = reader.store();
     let room = || field::<RoomId>(spec, "room_id");
     Ok(match name {
         "store.get_event" => {
@@ -402,7 +409,8 @@ async fn writes_and_tasks(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Ca
 /// The store's verifications and their requests (RFC §11.7, §14.1): a
 /// record taken as written, with its model's defaults.
 async fn verifications(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Called, Unreadable> {
-    let store = run.kit().store();
+    let reader = run.reader();
+    let store = reader.store();
     let request = || -> Result<VerificationRequest, Unreadable> { field(spec, "request") };
     Ok(match name {
         "store.put_verification" => {
