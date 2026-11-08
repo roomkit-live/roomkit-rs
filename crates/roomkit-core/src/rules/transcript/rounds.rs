@@ -16,7 +16,9 @@
 //! from it) and the result it read (the end row's, an `ON_TOOL_CALL` rewrite
 //! included), whole, under the id the model gave it. Every call the turn
 //! ended is replayed, whatever its tool or its outcome, but a call cancelled
-//! before it answered, whose result no model read. Nothing shortens a round
+//! before it answered, whose result no model read, and a refused call under
+//! a name vendors do not take, which only a call the model invented carries
+//! and which would fail every later request. Nothing shortens a round
 //! from turn to turn: a compaction does, when a provider refuses the context
 //! as too long (RFC §6.4 "A turn compacted").
 
@@ -59,7 +61,8 @@ struct Call<'a> {
 /// The rounds of `channel_id`'s earlier tool calls that `events`, a room's
 /// timeline oldest first, hold, as its history replays them: its own rows
 /// only (written by it, outbound, none deleted), each call its turn ended as
-/// it was sent, but one cancelled before it answered.
+/// it was sent, but one cancelled before it answered and one refused under
+/// a name vendors do not take.
 pub(super) fn tool_rounds(events: &[RoomEvent], channel_id: &ChannelId) -> Vec<ToolRound> {
     rounds(own_rows(events, channel_id))
         .iter()
@@ -203,12 +206,30 @@ fn rounds<'a>(
     rounds
 }
 
-/// Whether `call` ended with a result the model read: not one cancelled
-/// before it answered, whose turn was cut or stopped first. An end stored
-/// without an outcome ended served or failed.
+/// Whether a request's earlier calls may name `name`: what `OpenAI` and
+/// Anthropic take, `[A-Za-z0-9_-]{1,128}`.
+fn vendors_take(name: &str) -> bool {
+    (1..=128).contains(&name.len())
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+}
+
+/// Whether `call` goes back in a later request: it ended with a result the
+/// model read, not cancelled before it answered, whose turn was cut or
+/// stopped first, and not refused under a name vendors do not take. Only a
+/// call the model invented carries such a name (a declared tool's is checked
+/// before the request), and sent back it would make every later request of
+/// the room a 400. An end stored without an outcome counts as refused here.
 fn answered(call: &Call<'_>) -> bool {
-    call.end
-        .is_some_and(|end| end.outcome != Some(ToolCallOutcome::Cancelled))
+    let Some(end) = call.end else {
+        return false;
+    };
+    match end.outcome {
+        Some(ToolCallOutcome::Cancelled) => false,
+        None | Some(ToolCallOutcome::Refused) => vendors_take(&call.start.tool_name),
+        Some(_) => true,
+    }
 }
 
 /// `calls`, one round's, as it reads: the calls its turn ended and the model

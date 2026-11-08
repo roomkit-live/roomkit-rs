@@ -242,7 +242,8 @@ impl Message {
 /// The rounds replayed are read from the channel's own tool rows among the
 /// context's events (RFC §6.4 "The tools of earlier turns"), each as its
 /// turn sent it: every call the turn ended, whatever its tool or its
-/// outcome, but one cancelled before it answered, under the id the model
+/// outcome, but one cancelled before it answered and one refused under a
+/// name vendors do not take, under the id the model
 /// gave it, its arguments as the model wrote them (its start row's) and the
 /// result it read whole (its end row's). A round right after a message of
 /// its own turn, the text the model wrote with its calls, reads with it as
