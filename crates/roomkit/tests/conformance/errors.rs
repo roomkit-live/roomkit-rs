@@ -3,10 +3,32 @@
 //! after the table of `docs/rfc-gaps.md` G-085.
 
 use roomkit::RoomKitError;
+use roomkit::model::{ModelError, Visibility};
 use serde_json::{Value, json};
 
 pub(crate) fn named(name: &str) -> Value {
     json!({ "name": name })
+}
+
+/// Public inputs build a strict `Visibility` before calling the kit. A
+/// refusal by that model constructor is the suite's `invalid_argument`,
+/// just as an invalid channel id is refused before registration. Stored
+/// events and hook payloads use their own, lenient event deserialization.
+pub(crate) fn visibility_input_error(spec: &Value) -> Option<Value> {
+    let (input, fields): (&Value, &[&str]) = match spec["call"].as_str() {
+        Some("process_inbound") => (&spec["message"], &["visibility", "response_visibility"]),
+        Some("send_event") => (spec, &["visibility", "response_visibility"]),
+        Some("attach_channel" | "set_visibility") => (spec, &["visibility"]),
+        _ => return None,
+    };
+    fields.iter().find_map(|field| {
+        let value = input.get(*field)?.as_str()?;
+        matches!(
+            value.parse::<Visibility>(),
+            Err(ModelError::InvalidVisibility { .. })
+        )
+        .then(|| named("invalid_argument"))
+    })
 }
 
 /// The suite's name of `error`; `None` for an error it has no name for, a
@@ -46,4 +68,45 @@ pub(crate) fn error_of(error: &RoomKitError) -> Option<Value> {
         }
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::visibility_input_error;
+    use serde_json::json;
+
+    #[test]
+    fn a_visibility_constructor_refusal_is_a_named_public_input_error() {
+        for call in [
+            "attach_channel",
+            "set_visibility",
+            "process_inbound",
+            "send_event",
+        ] {
+            let input = json!({ "visibility": "a,,b" });
+            let mut spec = input.clone();
+            spec["call"] = json!(call);
+            spec["message"] = input;
+            assert_eq!(
+                visibility_input_error(&spec),
+                Some(json!({ "name": "invalid_argument" }))
+            );
+        }
+    }
+
+    #[test]
+    fn unrelated_shape_errors_and_accepted_values_are_not_named_refusals() {
+        for value in [
+            json!(42),
+            json!(null),
+            json!("all"),
+            json!("internal"),
+            json!(" a,a "),
+        ] {
+            let spec = json!({ "call": "send_event", "visibility": value });
+            assert_eq!(visibility_input_error(&spec), None);
+        }
+        let stored = json!({ "call": "commit_event", "event": { "visibility": "" } });
+        assert_eq!(visibility_input_error(&stored), None);
+    }
 }

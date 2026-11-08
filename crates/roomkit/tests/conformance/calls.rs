@@ -32,7 +32,7 @@ use serde_json::{Value, json};
 
 use crate::agents;
 use crate::ai_hooks::turn_hook_handler;
-use crate::errors::{error_of, named};
+use crate::errors::{error_of, named, visibility_input_error};
 use crate::run::Run;
 use crate::scripted::{ScriptedChannel, hook_handler, session_hook_handler, status_hook_handler};
 use crate::task_calls::payload_hook_handler;
@@ -130,6 +130,9 @@ pub(crate) async fn call(
     run: &std::sync::Arc<Run>,
     spec: &Value,
 ) -> Result<(Called, Option<String>), Unreadable> {
+    if let Some(error) = visibility_input_error(spec) {
+        return Ok((Err(error), None));
+    }
     let name = spec["call"].as_str().unwrap_or_default();
     let event_of = |value: &Value| value.get("id").and_then(Value::as_str).map(str::to_owned);
     Ok(match name {
