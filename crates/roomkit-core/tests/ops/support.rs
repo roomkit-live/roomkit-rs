@@ -1135,8 +1135,8 @@ impl Sim {
             Request::Store(StoreRequest::DeleteEvent { event_id, .. }) => {
                 format!("delete event {event_id}")
             }
-            Request::Store(StoreRequest::WriteChangeTarget { target, .. }) => {
-                format!("write change target {}", target.id)
+            Request::Store(StoreRequest::WriteUnstored { room_id, .. }) => {
+                format!("write unstored {room_id}")
             }
             Request::Store(StoreRequest::ResolveIdentity {
                 channel_type,
@@ -1488,8 +1488,8 @@ impl Sim {
             Request::Store(StoreRequest::DeleteEvent { event_id, .. }) => {
                 (format!("delete event {event_id}"), store_down())
             }
-            Request::Store(StoreRequest::WriteChangeTarget { target, .. }) => {
-                (format!("write change target {}", target.id), store_down())
+            Request::Store(StoreRequest::WriteUnstored { room_id, .. }) => {
+                (format!("write unstored {room_id}"), store_down())
             }
             // A read of the room made holding no lock on it, as a direct
             // call's once its lock is released.
@@ -1831,33 +1831,50 @@ impl Sim {
             | StoreRequest::UpdateParticipant { participant } => {
                 self.write_participant(*participant)
             }
-            StoreRequest::WriteChangeTarget { target, .. } => self.write_change_target(&target),
+            StoreRequest::WriteUnstored {
+                room_id,
+                target,
+                author_register,
+            } => self.write_unstored(&room_id, target.as_deref(), author_register),
             StoreRequest::ResolveIdentity { .. }
             | StoreRequest::GetEvent { .. }
             | StoreRequest::UpdateEvent { .. } => panic!("not a room's store request"),
         }
     }
 
-    /// Writes `target` over the stored event of its id, its delivery
-    /// results kept, with no row of the change and the room's counters
-    /// unmoved: a change the kit's persistence policy keeps out.
-    fn write_change_target(&mut self, target: &RoomEvent) -> Outcome {
+    /// Writes what an event the kit's persistence policy keeps out
+    /// changes, with no row of it and the room's counters unmoved: `target`
+    /// over the stored event of its id, its delivery results kept, then the
+    /// room's register of authors.
+    fn write_unstored(
+        &mut self,
+        room_id: &RoomId,
+        target: Option<&RoomEvent>,
+        author_register: Option<Metadata>,
+    ) -> Outcome {
         assert!(
-            self.state(self.current).locks.contains(&target.room_id),
-            "a change's target was written outside the room lock"
+            self.state(self.current).locks.contains(room_id),
+            "an unstored event's change was written outside the room lock"
         );
-        let Some(stored) = self
-            .timeline
-            .iter_mut()
-            .find(|stored| stored.id == target.id)
-        else {
-            return Outcome::Failed(ErrorRecord::new("EventNotFound", "the target is gone"));
-        };
-        let delivery_results = mem::take(&mut stored.delivery_results);
-        stored.clone_from(target);
-        stored.delivery_results = delivery_results;
-        self.trace
-            .push(format!("write change target {}", target.id));
+        if let Some(target) = target {
+            let Some(stored) = self
+                .timeline
+                .iter_mut()
+                .find(|stored| stored.id == target.id)
+            else {
+                return Outcome::Failed(ErrorRecord::new("EventNotFound", "the target is gone"));
+            };
+            let delivery_results = mem::take(&mut stored.delivery_results);
+            stored.clone_from(target);
+            stored.delivery_results = delivery_results;
+        }
+        if let Some(register) = author_register {
+            self.update_room(RoomUpdates {
+                private_state: [("author_register".to_owned(), Some(register))].into(),
+                ..RoomUpdates::default()
+            });
+        }
+        self.trace.push(format!("write unstored {room_id}"));
         Outcome::Store(StoreOutcome::Stored)
     }
 
@@ -2102,7 +2119,7 @@ fn store_room(request: &StoreRequest) -> &RoomId {
         | StoreRequest::ListEvents { room_id }
         | StoreRequest::ListEventsPage { room_id, .. }
         | StoreRequest::RecordDeliveryResults { room_id, .. }
-        | StoreRequest::WriteChangeTarget { room_id, .. } => room_id,
+        | StoreRequest::WriteUnstored { room_id, .. } => room_id,
         StoreRequest::Commit { event, .. } => &event.room_id,
         StoreRequest::CreateRoom { room } => &room.id,
         StoreRequest::StoreBinding { binding } => &binding.room_id,

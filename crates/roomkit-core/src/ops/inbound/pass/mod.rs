@@ -404,9 +404,9 @@ enum State {
         effect: EffectId,
         result: PassResult,
     },
-    /// The target of a change the kit's persistence policy keeps out of the
-    /// timeline is written alone (RFC §14.3).
-    WritingTarget {
+    /// What an event the kit's persistence policy keeps out of the timeline
+    /// changes is written (RFC §14.3).
+    WritingUnstored {
         effect: EffectId,
         result: PassResult,
     },
@@ -446,7 +446,7 @@ impl State {
             | Self::RereadingTarget { effect, .. }
             | Self::ReadingTimeline { effect, .. }
             | Self::Committing { effect, .. }
-            | Self::WritingTarget { effect, .. }
+            | Self::WritingUnstored { effect, .. }
             | Self::Placing { effect, .. }
             | Self::TellingDiscussion { effect, .. }
             | Self::Releasing { effect, .. } => Some(*effect),
@@ -620,7 +620,7 @@ impl CommitPass {
             } => self.on_target_reread(cx, *payload, context, outcome),
             State::ReadingTimeline { pending, .. } => self.on_timeline(cx, *pending, outcome),
             State::Committing { result, .. } => self.on_committed(cx, result, outcome),
-            State::WritingTarget { result, .. } => self.on_target_written(cx, result, outcome),
+            State::WritingUnstored { result, .. } => self.on_unstored_written(cx, result, outcome),
             State::Placing { result, .. } => self.on_placed(cx, result, outcome),
             State::TellingDiscussion { result, .. } => self.on_told(cx, result, outcome),
             State::Releasing { result, .. } => {
@@ -703,7 +703,7 @@ impl CommitPass {
             | State::Participating { .. }
             | State::ReadingTimeline { .. }
             | State::Committing { .. }
-            | State::WritingTarget { .. }
+            | State::WritingUnstored { .. }
             | State::Placing { .. }
             | State::TellingDiscussion { .. }
             | State::Releasing { .. }

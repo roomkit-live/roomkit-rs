@@ -459,13 +459,13 @@ impl CommitPass {
     /// Waits for the commit to be durable, the trigger's marked as the one
     /// that decides the call (`Effect::decides`); an instruction, which
     /// writes nothing, goes on at once (RFC §10.1.1 rule 5), and so does an
-    /// event the kit's persistence policy keeps out, once the target it
-    /// changes is written (RFC §14.3).
+    /// event the kit's persistence policy keeps out, once what it changes is
+    /// written (RFC §14.3).
     fn committing(&mut self, cx: &mut Cx<'_>, committing: Committing) -> State {
         let effect = match committing.write {
             None => return self.place(cx, committing.result),
-            Some(Write::Target(effect)) => {
-                return State::WritingTarget {
+            Some(Write::Unstored(effect)) => {
+                return State::WritingUnstored {
                     effect,
                     result: committing.result,
                 };
@@ -508,9 +508,9 @@ impl CommitPass {
         }
     }
 
-    /// The target of a change the kit's persistence policy keeps out is
-    /// written: the change takes its place, as a committed one does.
-    pub(super) fn on_target_written(
+    /// What an event the kit's persistence policy keeps out changes is
+    /// written: the event takes its place, as a committed one does.
+    pub(super) fn on_unstored_written(
         &mut self,
         cx: &mut Cx<'_>,
         result: PassResult,

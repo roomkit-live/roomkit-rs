@@ -170,6 +170,13 @@ impl Machine {
         if let Some(reason) = kept {
             result.reason = Some(reason.to_owned());
         }
+        // A row the kit's persistence policy keeps out is no row the store
+        // holds: its reader hands it to no one, and the turn's record never
+        // lands on it (RFC §14.3, Python's `_hand_to_target`).
+        if matches!(&report.result, PassResult::Delivered { event, .. } if !cx.config.persists(event.r#type))
+        {
+            result.event = None;
+        }
         cx.io.settle(note.entry, Ok(result));
         let origin = PassOrigin::Response {
             answers_within: None,

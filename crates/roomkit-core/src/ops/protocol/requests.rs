@@ -447,17 +447,23 @@ pub enum StoreRequest {
         /// How many it holds at most.
         limit: u64,
     },
-    /// Write `target` whole, the target of an edit or a delete the kit's
-    /// persistence policy keeps out of the timeline, with no row of the
-    /// change and the room's counters unmoved; a delete's target written
-    /// deleted marks its edits deleted with it (RFC §10.3, §14.3, Python's
-    /// `write_change_target`). Answer [`StoreOutcome::Stored`], or
-    /// [`Outcome::Failed`] when the room holds no such event.
-    WriteChangeTarget {
+    /// Write what an event the kit's persistence policy keeps out of the
+    /// timeline changes, with no row of it and the room's counters unmoved
+    /// (RFC §14.3): the `target` of an edit or a delete whole, a delete's
+    /// target written deleted marking its edits deleted with it (RFC §10.3,
+    /// Python's `write_change_target`), then the room's register of authors
+    /// as the event's author record left it (RFC §10.1 step 12, Python's
+    /// `set_private_state` under `author_register`). Answer
+    /// [`StoreOutcome::Stored`], or [`Outcome::Failed`] when the room holds
+    /// no such target.
+    WriteUnstored {
         /// The room.
         room_id: RoomId,
-        /// The target, as the change leaves it.
-        target: Box<RoomEvent>,
+        /// An accepted edit's or delete's target, as the change leaves it.
+        target: Option<Box<RoomEvent>>,
+        /// The room's register of authors, when the event's record changed
+        /// it.
+        author_register: Option<Metadata>,
     },
 }
 

@@ -6,8 +6,9 @@
 //! decides it, blocked or delivered, with no commit, so it consumes no index
 //! and moves no counter, and a paused room stays paused until an event is
 //! committed (gap G-065). Nor is an event of a type the kit's persistence
-//! policy keeps out (RFC §14.3): it is delivered, but for an edit's or a
-//! delete's target, written alone, nothing of it is stored.
+//! policy keeps out (RFC §14.3): it is delivered, and nothing of it is
+//! stored but an edit's or a delete's target, written alone, and the room's
+//! register of authors its author record extends.
 
 use super::pass::{Changed, PassResult};
 use crate::model::{
@@ -21,7 +22,8 @@ use crate::rules::permissions::{self, DeliveryPlan};
 
 /// A commit asked for, and what the pass did once it is durable; no write
 /// for an instruction, which the pass decides without writing, nor for an
-/// event the kit's persistence policy keeps out that changes nothing.
+/// event the kit's persistence policy keeps out that changes nothing it
+/// stores.
 pub(super) struct Committing {
     pub(super) write: Option<Write>,
     pub(super) result: PassResult,
@@ -31,9 +33,10 @@ pub(super) struct Committing {
 pub(super) enum Write {
     /// The event's commit, answered with the event as stored.
     Commit(EffectId),
-    /// An edit's or a delete's target alone, the change kept out of the
-    /// timeline by the kit's persistence policy (RFC §14.3).
-    Target(EffectId),
+    /// What an event the kit's persistence policy keeps out of the timeline
+    /// changes: an edit's or a delete's target, the room's register of
+    /// authors (RFC §14.3).
+    Unstored(EffectId),
 }
 
 /// Commits `event` delivered, the room's activity (RFC §10.1 step 12): the
@@ -73,7 +76,7 @@ pub(super) fn delivered(
         };
     }
     if policy_aware && !cx.config.persists(event.r#type) {
-        return unstored(cx, event, plan, context, written);
+        return unstored(cx, event, plan, context, written, register);
     }
     let now = cx.env.now();
     resume(&mut context, now);
@@ -116,21 +119,27 @@ pub(super) fn delivered(
 /// `_commit_to_lane`). An accepted edit or delete writes its target alone
 /// (`written`, Python's `_write_unstored_change`), which its mutation
 /// trigger then reads in the room as it stands, the change its newest
-/// event.
+/// event; the event's author record extends the room's register of
+/// authors (`register`) all the same, so that a later source never takes
+/// the rank a reader saw it hold (RFC §10.1 step 12).
 fn unstored(
     cx: &mut Cx<'_>,
     event: RoomEvent,
     plan: DeliveryPlan,
     mut context: Box<RoomContext>,
     written: Option<RoomEvent>,
+    register: Option<Metadata>,
 ) -> Committing {
-    let write = written.as_ref().map(|changed| {
+    if let Some(changed) = &written {
         rewrite_target(&mut context, changed);
-        let request = StoreRequest::WriteChangeTarget {
+    }
+    let write = (written.is_some() || register.is_some()).then(|| {
+        let request = StoreRequest::WriteUnstored {
             room_id: event.room_id.clone(),
-            target: Box::new(changed.clone()),
+            target: written.clone().map(Box::new),
+            author_register: register,
         };
-        Write::Target(cx.io.issue_locked(request, event.room_id.clone()))
+        Write::Unstored(cx.io.issue_locked(request, event.room_id.clone()))
     });
     join_newest(&mut context.recent_events, &event);
     let changed = written.map(|target| {

@@ -117,10 +117,18 @@ pub(super) async fn store<S: ConversationStore>(store: &S, request: StoreRequest
         StoreRequest::UpdateEvent { event_id, updates } => update_event(store, &event_id, updates)
             .await
             .map(|()| StoreOutcome::Stored),
-        StoreRequest::WriteChangeTarget { room_id, target } => store
-            .write_change_target(&room_id, *target)
-            .await
-            .map(|()| StoreOutcome::Stored),
+        StoreRequest::WriteUnstored {
+            room_id,
+            target,
+            author_register,
+        } => write_unstored(
+            store,
+            &room_id,
+            target.map(|target| *target),
+            author_register,
+        )
+        .await
+        .map(|()| StoreOutcome::Stored),
         StoreRequest::DeleteEvent {
             room_id,
             event_id,
@@ -333,6 +341,27 @@ async fn key_held<S: ConversationStore>(
     Ok(event.map_or(StoreOutcome::KeySeen, |event| {
         StoreOutcome::Idempotent(Some(Box::new(event)))
     }))
+}
+
+/// Writes what an event the kit's persistence policy keeps out changes
+/// (RFC §14.3), as the Python implementation writes it: the target of an
+/// edit or a delete alone (`write_change_target`), then the room's register
+/// of authors the event's record extended.
+async fn write_unstored<S: ConversationStore>(
+    store: &S,
+    room_id: &RoomId,
+    target: Option<RoomEvent>,
+    author_register: Option<Metadata>,
+) -> Result<(), StoreError> {
+    if let Some(target) = target {
+        store.write_change_target(room_id, target).await?;
+    }
+    if let Some(register) = author_register {
+        store
+            .set_private_state(room_id, AUTHOR_REGISTER, Some(register))
+            .await?;
+    }
+    Ok(())
 }
 
 /// Commits `event` (RFC §10.1 step 12): the room's register of authors its
