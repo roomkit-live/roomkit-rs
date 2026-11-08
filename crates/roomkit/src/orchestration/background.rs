@@ -51,7 +51,7 @@ pub(crate) struct BackgroundRun<T> {
     /// when it failed (never the error's message, RFC §9.3).
     pub(crate) told: Told<T>,
     /// The terminal entry of work that returned, once handed back.
-    pub(crate) ended: fn(&T) -> (StatusLevel, &'static str),
+    pub(crate) ended: fn(&T) -> (StatusLevel, String),
     /// Posts the run's terminal entry on the status bus.
     pub(crate) post: PostEntry,
     /// Frees the room, told whether the work returned: the model's turn on
@@ -166,7 +166,7 @@ where
         (Some(_), Some(missed)) => ending.post(StatusLevel::Failed, &missed),
         (Some(outcome), None) => {
             let (level, detail) = ended(&outcome);
-            ending.post(level, detail);
+            ending.post(level, &detail);
         }
     }
 }
@@ -261,7 +261,7 @@ mod tests {
                 Ok(())
             }),
             told: Box::new(|_| String::new()),
-            ended: |()| (StatusLevel::Completed, "completed"),
+            ended: |()| (StatusLevel::Completed, "completed".to_owned()),
             post: Box::new(move |level, detail| post.note(format!("{level:?} {detail}"))),
             release: Box::new(move |returned| release.note(format!("released {returned}"))),
         }

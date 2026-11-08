@@ -262,11 +262,11 @@ fn worker_told(worker_id: &ChannelId, outcome: Option<&WorkerOutcome>) -> String
 
 /// A background worker's terminal entry, once handed back: completed or
 /// failed, as its task ended (Python's `_worker_ended`).
-fn worker_ended(outcome: &WorkerOutcome) -> (StatusLevel, &'static str) {
+fn worker_ended(outcome: &WorkerOutcome) -> (StatusLevel, String) {
     if outcome.completed {
-        (StatusLevel::Completed, "completed")
+        (StatusLevel::Completed, "completed".to_owned())
     } else {
-        (StatusLevel::Failed, "not completed")
+        (StatusLevel::Failed, "not completed".to_owned())
     }
 }
 

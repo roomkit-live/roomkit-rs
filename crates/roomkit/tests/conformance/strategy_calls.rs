@@ -60,6 +60,7 @@ pub(crate) const SUPERVISOR: &[&str] = &[
     "refine_instruction",
     "delegation_message",
     "wait_for_result",
+    "async_delivery",
 ];
 pub(crate) const STRATEGY_STEP: &[&str] = &["gate", "do", "refuse"];
 pub(crate) const STRATEGY_UNINSTALL: &[&str] = &["gate", "do"];
@@ -225,6 +226,8 @@ fn supervisor(spec: &Value) -> Result<Strategy, Unreadable> {
             .unwrap_or(defaults.max_revisions),
         auto_delegate: crate::calls::optional::<bool>(spec, "auto_delegate")?
             .unwrap_or(defaults.auto_delegate),
+        async_delivery: crate::calls::optional::<bool>(spec, "async_delivery")?
+            .unwrap_or(defaults.async_delivery),
         refine_task: crate::calls::optional::<bool>(spec, "refine_task")?
             .unwrap_or(defaults.refine_task),
         refine_instruction: crate::calls::optional::<String>(spec, "refine_instruction")?,

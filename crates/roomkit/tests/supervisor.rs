@@ -483,3 +483,49 @@ async fn a_live_worker_the_kit_holds_is_not_registered_again() {
     assert_eq!(held, ["researcher", "sup"]);
     kit.close().await.unwrap();
 }
+
+/// The names of `r1`'s room hooks once a supervisor of `options`, given
+/// live agents, is installed there.
+async fn room_hooks_with(options: SupervisorOptions) -> Vec<String> {
+    let lead = agent("boss", "Coordinator", model(vec![]));
+    let worker = agent("w1", "Analyst", model(vec![]));
+    let team: Arc<dyn Orchestration> = Arc::new(
+        Supervisor::new(
+            StrategyAgent::channel(lead),
+            vec![StrategyAgent::channel(worker)],
+            options,
+        )
+        .unwrap(),
+    );
+    let kit = kit_with_room(Some(team)).await;
+    let names = kit
+        .hook_engine()
+        .room_hook_names(&RoomId::new("r1").unwrap());
+    kit.close().await.unwrap();
+    names
+}
+
+// Python: tests/test_supervisor.py::TestSupervisorInstall::test_router_hook_installed_in_strategy_tool_async_delivery
+#[tokio::test]
+async fn router_hook_installed_in_strategy_tool_async_delivery() {
+    let names = room_hooks_with(SupervisorOptions {
+        strategy: Some(WorkerStrategy::Sequential),
+        async_delivery: true,
+        ..SupervisorOptions::default()
+    })
+    .await;
+    assert!(names.contains(&"supervisor_router_r1".to_owned()));
+}
+
+// Python: tests/test_supervisor.py::TestSupervisorInstall::test_no_router_hook_in_voice_auto_delegate_async_delivery
+#[tokio::test]
+async fn no_router_hook_in_voice_auto_delegate_async_delivery() {
+    let names = room_hooks_with(SupervisorOptions {
+        strategy: Some(WorkerStrategy::Sequential),
+        auto_delegate: true,
+        async_delivery: true,
+        ..SupervisorOptions::default()
+    })
+    .await;
+    assert!(!names.contains(&"supervisor_router_r1".to_owned()));
+}

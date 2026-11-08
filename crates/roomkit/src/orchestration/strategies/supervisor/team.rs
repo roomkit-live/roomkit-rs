@@ -1,26 +1,40 @@
 //! The supervisor's `delegate_workers` tool (RFC §19.7.3): one call runs
 //! the whole team for the room of the call, supervised step by step when
 //! sequential, all at once when parallel, and answers with what the
-//! supervisor reviews. Python's
-//! `orchestration/strategies/supervisor/_inject_strategy.py` and
-//! `execution.py`'s `_run_parallel`.
+//! supervisor reviews; with `async_delivery`, it answers at once and runs
+//! the team in the background, the workers' results handed back to the
+//! supervisor once they ended. Python's
+//! `orchestration/strategies/supervisor/_inject_strategy.py`,
+//! `delegate.py`'s `_async_run_and_deliver` and `execution.py`'s
+//! `_run_parallel`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
-use roomkit_core::model::{Metadata, RoomId};
+use roomkit_core::model::{ChannelId, Metadata, RoomId};
 use serde_json::{Value, json};
 use tokio::time::Instant;
 
-use super::results::{WorkerResult, format_supervisor_review, worker_roles_csv};
+use super::auto::run_workers;
+use super::results::{
+    Presented, WorkerResult, format_supervisor_review, format_worker_results, worker_roles_csv,
+    workers_text,
+};
 use super::supervised::run_supervised_sequential;
 use super::{Team, WorkerStrategy};
+use crate::context::ExecutionContext;
 use crate::error::RoomKitError;
 use crate::kit::RoomKit;
+use crate::orchestration::StatusLevel;
+use crate::orchestration::background::{
+    BackgroundRun, background_failure_text, start_background_run,
+};
 use crate::orchestration::gather::gather_or_cut;
+use crate::orchestration::lifecycle::post_agent_lifecycle;
 use crate::orchestration::worker_run::{WorkerStatus, completed_or_failed, run_worker};
 use crate::store::ConversationStore;
+use crate::tasks::handback::bounded;
 use crate::tasks::json::dumps_object;
 use crate::turn::{OwnerCall, OwnerToolAnswer};
 use crate::turns::served::OwnerToolEntry;
@@ -31,6 +45,13 @@ pub(super) const TEAM_TOOL: &str = "delegate_workers";
 /// How long a room's answer is served again to a repeated call: Python's
 /// `_StrategyToolServer._DEDUP_WINDOW`.
 const DEDUP_WINDOW: Duration = Duration::from_secs(30);
+
+/// The agent a background team's run posts its terminal entry as.
+const ORCHESTRATION: &str = "orchestration";
+
+/// The tool a supervisor follows its background team with, when it was
+/// given it (RFC §23.4): Python's `TASK_STATUS_TOOL`.
+const TASK_STATUS_TOOL: &str = "task_status";
 
 /// A delegated child room's segment: the supervised flow runs the
 /// supervisor there to frame and judge, where it must answer rather than
@@ -69,12 +90,15 @@ fn definition(team: &Team, strategy: WorkerStrategy) -> Value {
 pub(super) fn entry<S: ConversationStore>(
     team: Arc<Team>,
     strategy: WorkerStrategy,
+    async_delivery: bool,
 ) -> OwnerToolEntry<S> {
     let server = Arc::new(TeamServer {
         team,
         strategy,
+        async_delivery,
         rooms: Mutex::default(),
         answers: Mutex::default(),
+        running: Mutex::default(),
     });
     let definition = definition(&server.team, strategy);
     OwnerToolEntry {
@@ -93,17 +117,22 @@ pub(super) fn entry<S: ConversationStore>(
 struct TeamServer {
     team: Arc<Team>,
     strategy: WorkerStrategy,
+    /// Whether a call answers at once and runs the team in the background.
+    async_delivery: bool,
     /// One lock per room, held while its team runs: another room's call
     /// does not wait on it. A lock lives while a call holds it.
     rooms: Mutex<HashMap<RoomId, Weak<tokio::sync::Mutex<()>>>>,
     /// Each room's last answer, and when it was given.
     answers: Mutex<HashMap<RoomId, (String, Instant)>>,
+    /// The rooms whose team runs in the background, until it ended
+    /// (Python's `_running`).
+    running: Mutex<HashSet<RoomId>>,
 }
 
 impl TeamServer {
     /// Answers one `delegate_workers` call made in the room of `call`.
     async fn serve<S: ConversationStore>(
-        &self,
+        self: &Arc<Self>,
         kit: &RoomKit<S>,
         call: OwnerCall,
     ) -> OwnerToolAnswer {
@@ -120,6 +149,15 @@ impl TeamServer {
         let _running = lock.lock().await;
         if let Some(answer) = self.fresh_answer(&room_id) {
             return OwnerToolAnswer::Served(Value::String(answer));
+        }
+        if self.async_delivery {
+            return match self.dispatch(kit, &room_id, task, &call.channel_id) {
+                Ok(answer) => OwnerToolAnswer::Served(Value::String(answer)),
+                Err(error) => OwnerToolAnswer::Failed {
+                    kind: error.class_name(),
+                    message: error.to_string(),
+                },
+            };
         }
         match self.run(kit, &room_id, task).await {
             Ok(review) => {
@@ -163,6 +201,110 @@ impl TeamServer {
         Ok(format_supervisor_review(task, &results, &team.workers))
     }
 
+    /// Starts the team for `room_id` in the background and answers at once
+    /// (Python's `_StrategyToolServer._dispatch`): the supervisor's tool
+    /// loop does not wait for its workers. A room whose team still runs
+    /// answers `already_running` and starts nothing. `caller` is the agent
+    /// whose call it is, pointed at `task_status` when it was given it.
+    ///
+    /// # Errors
+    ///
+    /// [`RoomKitError::KitClosed`] once the kit's close began: nothing
+    /// starts, and the room is not left busy.
+    fn dispatch<S: ConversationStore>(
+        self: &Arc<Self>,
+        kit: &RoomKit<S>,
+        room_id: &RoomId,
+        task: &str,
+        caller: &ChannelId,
+    ) -> Result<String, RoomKitError> {
+        let follows = kit.inner.owner_tools.serves(caller, TASK_STATUS_TOOL);
+        if !self.running().insert(room_id.clone()) {
+            return Ok(already_running(follows));
+        }
+        // Read in the call: the outcome continues its turn's chain (RFC
+        // §23.3).
+        let chain_depth = ExecutionContext::current().turn_depth().unwrap_or(0);
+        let run = self.background_run(kit, room_id, task);
+        if let Err(error) = start_background_run(kit, run, chain_depth) {
+            self.running().remove(room_id);
+            return Err(error);
+        }
+        let answer = dispatched(&self.team, follows);
+        self.remember(room_id, &answer);
+        Ok(answer)
+    }
+
+    /// The team's background run in `room_id` on `task`: its workers run as
+    /// a call waiting for them runs them, the room freed and its answer
+    /// forgotten before the results are handed back to the supervisor, so
+    /// that a dispatch in answer to them starts anew (Python's
+    /// `_async_run_and_deliver`, `_start_team`'s `_clear`).
+    fn background_run<S: ConversationStore>(
+        self: &Arc<Self>,
+        kit: &RoomKit<S>,
+        room_id: &RoomId,
+        task: &str,
+    ) -> BackgroundRun<Vec<Presented>> {
+        let workers: Vec<Value> = self
+            .team
+            .workers
+            .iter()
+            .map(|worker| json!(worker.channel_id.as_str()))
+            .collect();
+        let metadata = Metadata::from_iter([
+            ("room_id".to_owned(), json!(room_id.as_str())),
+            ("strategy".to_owned(), json!(self.strategy.as_str())),
+            ("workers".to_owned(), Value::Array(workers)),
+        ]);
+        let poster = kit.downgrade();
+        let post = move |level: StatusLevel, detail: &str| {
+            let Some(kit) = poster.upgrade() else {
+                return;
+            };
+            let orchestration = ChannelId::new(ORCHESTRATION).unwrap_or_else(|_| unreachable!());
+            post_agent_lifecycle(
+                &kit,
+                &orchestration,
+                level,
+                "pipeline",
+                detail,
+                metadata.clone(),
+            );
+        };
+        let (worker_kit, room, team) = (kit.clone(), room_id.clone(), Arc::clone(&self.team));
+        let (strategy, task) = (self.strategy, task.to_owned());
+        let work =
+            Box::pin(async move { run_workers(&worker_kit, &room, &team, strategy, &task).await });
+        let (server, room) = (Arc::clone(self), room_id.clone());
+        BackgroundRun {
+            room_id: room_id.clone(),
+            notify: self.team.supervisor.channel_id.clone(),
+            work,
+            told: Box::new(outcome_text),
+            ended: pipeline_ended,
+            post: Box::new(post),
+            release: Box::new(move |_returned| {
+                server.running().remove(&room);
+                server.forget(&room);
+            }),
+        }
+    }
+
+    fn running(&self) -> std::sync::MutexGuard<'_, HashSet<RoomId>> {
+        self.running.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Forgets `room_id`'s answer: the room's background run ended, and a
+    /// dispatch after it starts a new run rather than reading the answer
+    /// that promised its results.
+    fn forget(&self, room_id: &RoomId) {
+        self.answers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(room_id);
+    }
+
     /// The lock of `room_id`'s runs, made when no call holds it.
     fn room_lock(&self, room_id: &RoomId) -> Arc<tokio::sync::Mutex<()>> {
         let mut rooms = self.rooms.lock().unwrap_or_else(PoisonError::into_inner);
@@ -190,6 +332,109 @@ impl TeamServer {
         answers.insert(room_id.clone(), (answer.to_owned(), now));
         answers.retain(|_, (_, given)| now.duration_since(*given) < DEDUP_WINDOW);
     }
+}
+
+/// `Use task_status to <what>. ` for a supervisor given `task_status`,
+/// nothing otherwise: an agent is never pointed at a tool it was not given
+/// (RFC §23.4, Python's `_follow_hint`).
+fn follow_hint(follows: bool, what: &str) -> String {
+    if follows {
+        format!("Use {TASK_STATUS_TOOL} to {what}. ")
+    } else {
+        String::new()
+    }
+}
+
+/// What a dispatch answers once the team runs in the background (Python's
+/// `_dispatch`).
+fn dispatched(team: &Team, follows: bool) -> String {
+    let workers: Vec<Value> = team
+        .workers
+        .iter()
+        .map(|worker| json!(worker.channel_id.as_str()))
+        .collect();
+    let message = format!(
+        "Workers are running in the background. {}Their combined results will be handed to you \
+         when they are done.",
+        follow_hint(follows, "follow progress")
+    );
+    dumps_object(
+        [
+            ("status", &json!("dispatched")),
+            ("workers", &Value::Array(workers)),
+            ("message", &json!(message)),
+        ],
+        true,
+    )
+}
+
+/// What a dispatch answers while the room's team still runs (Python's
+/// `_dispatch`).
+fn already_running(follows: bool) -> String {
+    let message = format!(
+        "Workers are already running for this room. Do NOT call this tool again. {}",
+        follow_hint(follows, "see progress")
+    );
+    dumps_object(
+        [
+            ("status", &json!("already_running")),
+            ("message", &json!(message.trim())),
+        ],
+        true,
+    )
+}
+
+/// Why a background team's work did not complete, or `None` when it did:
+/// a supervised step the supervisor left unvalidated, or no worker's task
+/// completed (Python's `_why_failed`).
+fn why_failed(results: &[Presented]) -> Option<&'static str> {
+    if results.iter().any(|result| result.approved == Some(false)) {
+        return Some("a step was not validated");
+    }
+    if !results.iter().any(|result| result.completed) {
+        return Some("no worker completed");
+    }
+    None
+}
+
+/// A background team's terminal entry, once handed back: failed when its
+/// work did not complete (Python's `_pipeline_ended`).
+#[expect(
+    clippy::ptr_arg,
+    reason = "a background run's `ended` reads the work's own output, a `Vec`"
+)]
+fn pipeline_ended(results: &Vec<Presented>) -> (StatusLevel, String) {
+    if let Some(why) = why_failed(results) {
+        return (StatusLevel::Failed, why.to_owned());
+    }
+    let done = results.iter().filter(|result| result.completed).count();
+    (
+        StatusLevel::Completed,
+        format!("{done} worker(s) completed"),
+    )
+}
+
+/// What the supervisor reads of its background team: each worker's output
+/// bounded, under a header that says whether the work completed; for a
+/// run that failed (`None`), that the work could not be completed, without
+/// the failure's message (Python's `_outcome_text`).
+fn outcome_text(results: Option<&Vec<Presented>>) -> String {
+    let Some(results) = results else {
+        return background_failure_text("workers");
+    };
+    let each_bounded: Vec<Presented> = results
+        .iter()
+        .map(|result| Presented {
+            output: bounded(&result.output),
+            ..result.clone()
+        })
+        .collect();
+    let header = if why_failed(results).is_none() {
+        "[Your background workers completed. Share their results with the user.]"
+    } else {
+        "[Your background workers could not complete the work. Tell the user what failed.]"
+    };
+    workers_text(header, &format_worker_results(&each_bounded))
 }
 
 /// What `delegate_workers` answers inside a delegated step's room: Python's
@@ -271,7 +516,7 @@ mod tests {
     // Python: tests/orchestration/test_supervisor_strategy.py::TestSubTaskRecursionGuard::test_delegate_workers_refuses_inside_subtask_room
     #[tokio::test]
     async fn the_team_tool_refuses_a_call_from_a_delegated_step_s_room() {
-        let server = TeamServer {
+        let server = Arc::new(TeamServer {
             team: Arc::new(Team {
                 supervisor: held_agent("sup"),
                 workers: vec![held_agent("w1")],
@@ -280,9 +525,11 @@ mod tests {
                 max_revisions: 3,
             }),
             strategy: WorkerStrategy::Parallel,
+            async_delivery: false,
             rooms: std::sync::Mutex::default(),
             answers: std::sync::Mutex::default(),
-        };
+            running: std::sync::Mutex::default(),
+        });
         let call = OwnerCall {
             room_id: RoomId::new("r1::task-abc").unwrap_or_else(|error| panic!("{error}")),
             channel_id: ChannelId::new("sup").unwrap_or_else(|error| panic!("{error}")),

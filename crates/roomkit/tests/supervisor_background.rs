@@ -15,6 +15,7 @@ use std::time::Duration;
 use roomkit::model::{
     ChannelId, ChannelType, InboundMessage, Metadata, RoomContext, RoomEvent, RoomId, TextContent,
 };
+use roomkit::orchestration::strategies::supervisor::WorkerStrategy;
 use roomkit::orchestration::{RecentOptions, StatusLevel, StrategyAgent, SupervisorOptions};
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions, idle};
 use roomkit::{
@@ -416,4 +417,85 @@ async fn a_close_from_the_turn_that_started_a_run_cuts_it() {
 async fn a_close_from_the_hand_back_s_own_turn_reads_cancelled() {
     let entries = closed_by(ClosingBoss::new(2)).await;
     assert_eq!(entries, [(StatusLevel::Failed, "cancelled".to_owned())]);
+}
+
+/// A supervisor's model whose first generation calls `delegate_workers`
+/// with "Do it.", every later one answering "ok", never a verdict: Python's
+/// `MockAIProvider(responses=["ok"])` behind a call the test makes.
+#[derive(Clone, Default)]
+struct DispatchesOnce {
+    called: Arc<AtomicUsize>,
+}
+
+impl AiProvider for DispatchesOnce {
+    fn model_name(&self) -> &'static str {
+        "dispatches-once"
+    }
+
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "the trait's method, answered at once"
+    )]
+    async fn generate<'a>(&'a self, _context: &'a AiContext) -> Result<AiResponse, ProviderError> {
+        if self.called.fetch_add(1, Ordering::SeqCst) == 0 {
+            return Ok(calls("c1", "delegate_workers", "Do it."));
+        }
+        Ok(says("ok"))
+    }
+}
+
+/// The agents a sequential team's run delegates to, in order, its
+/// supervisor's team tool answering at once and running the team in the
+/// background with `async_delivery`, else within its turn: Python's
+/// `_team_delegations`.
+async fn team_delegations(async_delivery: bool) -> Vec<String> {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    let sms = RecordingTransport::new(
+        id("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(sms).unwrap();
+    let boss = Agent::new(
+        id("boss"),
+        DispatchesOnce::default(),
+        AgentOptions::default(),
+    )
+    .unwrap();
+    let workers = ["w1", "w2"].map(|name| {
+        let answers = model(vec![says(name), says(name), says(name), says(name)]);
+        StrategyAgent::channel(Agent::new(id(name), answers, AgentOptions::default()).unwrap())
+    });
+    let options = SupervisorOptions {
+        strategy: Some(WorkerStrategy::Sequential),
+        async_delivery,
+        ..SupervisorOptions::default()
+    };
+    let team = Supervisor::new(StrategyAgent::channel(boss), workers.to_vec(), options).unwrap();
+    let created = CreateRoomOptions {
+        room_id: Some(room()),
+        orchestration: Some(Some(Arc::new(team))),
+        ..CreateRoomOptions::default()
+    };
+    kit.create_room(created).await.unwrap();
+    kit.attach_channel(&room(), &id("sms"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    let delegated = record(&kit, HookTrigger::OnTaskDelegated, "agent_id");
+
+    ask(&kit, "Do it.").await;
+    // A background run ends with its terminal entry, posted once handed
+    // back: it delegates nothing after it.
+    idle(&kit).await;
+    kit.close().await.unwrap();
+    delegated.lock().unwrap().clone()
+}
+
+// Python: tests/orchestration/test_supervisor_text_background.py::test_a_sequential_team_is_supervised_in_the_background_as_in_its_turn[team-tool-background]
+#[tokio::test]
+async fn a_sequential_team_is_supervised_in_the_background_as_in_its_turn() {
+    let in_turn = team_delegations(false).await;
+    assert_eq!(in_turn.first().map(String::as_str), Some("boss"));
+    let in_background = team_delegations(true).await;
+    assert_eq!(in_background, in_turn);
 }

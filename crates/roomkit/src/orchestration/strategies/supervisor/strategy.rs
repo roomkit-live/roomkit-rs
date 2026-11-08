@@ -23,11 +23,12 @@ use crate::{HookExecution, HookTrigger};
 
 /// What [`Supervisor::new`] takes beside its agents: Python's
 /// `Supervisor(supervisor, workers, *, strategy=None, auto_delegate=False,
-/// refine_task=True, refine_instruction=None,
+/// async_delivery=False, refine_task=True, refine_instruction=None,
 /// delegation_message="I'm dispatching my team to work on this.",
 /// wait_for_result=True, share_channels=None, task_timeout=120.0,
-/// max_revisions=3)`, but `async_delivery`.
+/// max_revisions=3)`.
 #[derive(Clone, Debug)]
+#[expect(clippy::struct_excessive_bools, reason = "Python's keyword arguments")]
 pub struct SupervisorOptions {
     /// How the team runs: [`WorkerStrategy::Sequential`], the supervisor
     /// framing and judging each step, or [`WorkerStrategy::Parallel`], all
@@ -51,6 +52,15 @@ pub struct SupervisorOptions {
     /// the team, then the supervisor answers from their results. It needs
     /// a `strategy`.
     pub auto_delegate: bool,
+    /// Whether a `delegate_workers` call answers at once, `dispatched`, and
+    /// runs the team in the background: `false` by default. The room is
+    /// freed once the team ended, then the workers' results are handed back
+    /// to the supervisor, an instruction addressed to it, and the run posts
+    /// one terminal entry as `orchestration`; a call while the room's team
+    /// still runs answers `already_running`. With `auto_delegate`, the team
+    /// would serve a realtime voice session, which this implementation does
+    /// not have: the supervisor is then not attached and nothing delegates.
+    pub async_delivery: bool,
     /// With `auto_delegate`, whether a first pass of the supervisor's own
     /// turn turns the message into the team's task: `true` by default; else
     /// the team is handed the message's text.
@@ -78,6 +88,7 @@ impl Default for SupervisorOptions {
             task_timeout: Duration::from_secs(120),
             max_revisions: 3,
             auto_delegate: false,
+            async_delivery: false,
             refine_task: true,
             refine_instruction: None,
             delegation_message: Some("I'm dispatching my team to work on this.".to_owned()),
@@ -183,6 +194,14 @@ impl Supervisor {
         self.named.get(1..).unwrap_or_default()
     }
 
+    /// Whether the supervisor answers the room: always, but in voice
+    /// auto-delegation (`auto_delegate` with `async_delivery`), where a
+    /// realtime voice channel handles the room's conversation (Python's
+    /// `supervisor_in_room`).
+    fn supervisor_in_room(&self) -> bool {
+        !(self.options.auto_delegate && self.options.async_delivery)
+    }
+
     /// Wires the supervisor in `room_id`: its router, its workers
     /// registered, its delegation tools, the initial state saved.
     async fn install_in<S: ConversationStore>(
@@ -198,9 +217,19 @@ impl Supervisor {
             .map(|agent| held(kit, agent))
             .collect::<Result<Vec<HeldAgent>, _>>()?;
         let supervisor = agents.remove(0);
-        install_router(kit, room_id, &supervisor.channel_id)?;
-        // The workers are the kit's, never attached to the room.
-        kit.register_strategy_agents(self.workers())?;
+        // In voice auto-delegation the voice channel answers the room, and
+        // the supervisor is not attached: no router asks for it.
+        if self.supervisor_in_room() {
+            install_router(kit, room_id, &supervisor.channel_id)?;
+            // The workers are the kit's, never attached to the room.
+            kit.register_strategy_agents(self.workers())?;
+        } else {
+            // The supervised flow delegates to the supervisor to frame and
+            // validate each step: it is registered after the workers.
+            let mut agents = self.workers().to_vec();
+            agents.extend(self.named.first().cloned());
+            kit.register_strategy_agents(&agents)?;
+        }
         let team = Arc::new(Team {
             supervisor: supervisor.clone(),
             workers: agents,
@@ -209,6 +238,14 @@ impl Supervisor {
             max_revisions: self.options.max_revisions,
         });
         match self.options.strategy {
+            Some(_) if self.options.auto_delegate && self.options.async_delivery => {
+                // Python's tool for a realtime voice session, set up on every
+                // realtime voice channel of the kit: none here.
+                tracing::warn!(
+                    target: "roomkit::orchestration",
+                    "async_delivery=True but no RealtimeVoiceChannel found"
+                );
+            }
             Some(strategy) if self.options.auto_delegate => {
                 // Kept by the room's owner, never on the shared supervisor
                 // (RFC §10.6.1): it answers as itself in every other room.
@@ -223,7 +260,7 @@ impl Supervisor {
                     .take(room_id, &supervisor.channel_id, turns, owner)?;
             }
             Some(strategy) => {
-                let entries = vec![team::entry(team, strategy)];
+                let entries = vec![team::entry(team, strategy, self.options.async_delivery)];
                 kit.register_room_tools(&supervisor.channel_id, room_id, entries, owner)?;
             }
             None => {
@@ -263,8 +300,12 @@ fn install_router<S: ConversationStore>(
 }
 
 impl<S: ConversationStore> Orchestration<S> for Supervisor {
-    /// The supervisor: it handles the room's conversation.
+    /// The supervisor: it handles the room's conversation; none in voice
+    /// auto-delegation, where a realtime voice channel does.
     fn agents(&self) -> Vec<StrategyAgent> {
+        if !self.supervisor_in_room() {
+            return Vec::new();
+        }
         self.named.first().cloned().into_iter().collect()
     }
 

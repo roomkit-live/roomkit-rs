@@ -234,7 +234,7 @@ async fn run_step<S: ConversationStore>(
     let worker = of.worker;
     let mut task = first_task.to_owned();
     let mut revisions = 0;
-    let (rendered, verdict) = loop {
+    let (rendered, verdict, completed) = loop {
         let handed = Handed::Structured(None);
         let posted = Some(status.clone());
         let (output, ok) = delegate_and_wait(
@@ -249,15 +249,15 @@ async fn run_step<S: ConversationStore>(
         .await?;
         let rendered = render_result(&output);
         if !ok {
-            break (rendered, None);
+            break (rendered, None, false);
         }
         let verdict = supervisor_review(kit, room_id, team, goal, of, &rendered).await?;
         if verdict.approved {
-            break (rendered, Some(verdict));
+            break (rendered, Some(verdict), true);
         }
         revisions += 1;
         if revisions >= team.max_revisions {
-            break (rendered, None);
+            break (rendered, None, true);
         }
         task = compose_rework(&task, &rendered, &verdict.feedback);
     };
@@ -265,6 +265,7 @@ async fn run_step<S: ConversationStore>(
         role: worker_label(worker).to_owned(),
         output: rendered,
         approved: verdict.is_some(),
+        completed,
     };
     let verdict = verdict.unwrap_or(Verdict {
         approved: false,

@@ -123,6 +123,39 @@ mod tests {
         assert_eq!(ids, ["sup"]);
     }
 
+    /// The agents of a supervisor of `options` over one worker.
+    fn agents_of(options: SupervisorOptions) -> Vec<String> {
+        let team = Supervisor::new(id("boss"), vec![id("w1").into()], options)
+            .unwrap_or_else(|error| panic!("{error}"));
+        Orchestration::<InMemoryStore>::agents(&team)
+            .iter()
+            .map(|agent| agent.channel_id().to_string())
+            .collect()
+    }
+
+    // Python: tests/test_supervisor.py::TestSupervisorConstructor::test_agents_keeps_supervisor_in_strategy_tool_async_delivery
+    #[test]
+    fn agents_keeps_supervisor_in_strategy_tool_async_delivery() {
+        let options = SupervisorOptions {
+            strategy: Some(WorkerStrategy::Sequential),
+            async_delivery: true,
+            ..SupervisorOptions::default()
+        };
+        assert_eq!(agents_of(options), ["boss"]);
+    }
+
+    // Python: tests/test_supervisor.py::TestSupervisorConstructor::test_agents_empty_in_voice_auto_delegate_async_delivery
+    #[test]
+    fn agents_empty_in_voice_auto_delegate_async_delivery() {
+        let options = SupervisorOptions {
+            strategy: Some(WorkerStrategy::Sequential),
+            auto_delegate: true,
+            async_delivery: true,
+            ..SupervisorOptions::default()
+        };
+        assert_eq!(agents_of(options), Vec::<String>::new());
+    }
+
     // Python: tests/orchestration/test_loop_strategy.py::TestLoopConstructor::test_strategy_parsed
     #[test]
     fn a_worker_strategy_is_read_from_its_value() {

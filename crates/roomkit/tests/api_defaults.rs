@@ -1484,6 +1484,8 @@ fn supervisor_options_defaults_as_python() {
     assert_eq!(defaults.max_revisions, 3);
     // roomkit.Supervisor.__init__(auto_delegate) = False
     assert!(!defaults.auto_delegate);
+    // roomkit.Supervisor.__init__(async_delivery) = False
+    assert!(!defaults.async_delivery);
     // roomkit.Supervisor.__init__(refine_task) = True
     assert!(defaults.refine_task);
     // roomkit.Supervisor.__init__(refine_instruction) = None

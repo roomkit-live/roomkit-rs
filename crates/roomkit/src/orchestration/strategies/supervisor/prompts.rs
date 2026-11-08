@@ -159,6 +159,8 @@ pub(super) struct Step {
     pub(super) role: String,
     pub(super) output: String,
     pub(super) approved: bool,
+    /// Whether the step's last delegation completed.
+    pub(super) completed: bool,
 }
 
 /// The brief the supervisor's own turn summarizes: each step's output and
@@ -275,6 +277,7 @@ mod tests {
             role: role.to_owned(),
             output: "out".to_owned(),
             approved,
+            completed: true,
         };
         let digest = format_supervised_digest("Goal", &[step("A", true), step("B", false)], 2);
         assert!(digest.starts_with("Your team could NOT complete the task."));

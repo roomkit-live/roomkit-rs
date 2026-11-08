@@ -198,7 +198,7 @@ fn one_pass_results(message: &str, results: &[Presented]) -> String {
 /// The team's results on `task`, as the install's strategy runs it: a
 /// sequential team supervised step by step, a parallel one at once
 /// (Python's `_run_workers`).
-async fn run_workers<S: ConversationStore>(
+pub(super) async fn run_workers<S: ConversationStore>(
     kit: &RoomKit<S>,
     room_id: &RoomId,
     team: &Arc<Team>,
