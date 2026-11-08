@@ -12,6 +12,7 @@
 use std::sync::{Arc, PoisonError};
 
 use roomkit_core::model::{ChannelCategory, ChannelId, Metadata, RoomId};
+use roomkit_core::rules::discussion::agent_handle;
 use serde_json::{Value, json};
 
 use super::RoomKit;
@@ -348,9 +349,10 @@ async fn work_in_background<S: ConversationStore>(
         Err(RoomKitError::Value(message)) => return Ok(error_answer(&message)),
         Err(error) => return Err(error),
     };
-    // The agent as the room addresses it: its channel id, a discussion's
-    // handle once discussions come (RFC §19.7.5 rule 4).
-    let agent = identifier(call.channel_id.as_str(), "agent");
+    // The agent as the room addresses it: a discussion's handle, else its
+    // channel id (RFC §19.7.5 rule 4).
+    let metadata = room.map(|room| room.metadata).unwrap_or_default();
+    let agent = identifier(agent_handle(&metadata, call.channel_id.as_str()), "agent");
     let back = if started.hand_back == "post" {
         format!("its result is posted as {agent}'s message")
     } else {

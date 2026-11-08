@@ -8,6 +8,7 @@
 //! relayed or posted back to the agent.
 
 use roomkit_core::model::{ChannelCategory, ChannelId, RoomId};
+use roomkit_core::rules::discussion::agent_handle;
 
 use super::RoomKit;
 use super::tasks::DelegateOptions;
@@ -74,9 +75,16 @@ impl<S: ConversationStore> RoomKit<S> {
         let setup = self.background_setup(agent_id);
         let mode = hand_back.unwrap_or(setup.hand_back);
         let worker = setup.worker.unwrap_or_else(|| agent_id.clone());
-        // The agent as the room addresses it: its channel id, a discussion's
-        // handle once discussions come (RFC §19.7.5 rule 4).
-        let brief = worker_brief(&task, agent_id.as_str(), &mode);
+        // The agent as the room addresses it: a discussion's handle, else
+        // its channel id (RFC §19.7.5 rule 4).
+        let metadata = self
+            .store()
+            .get_room(room_id)
+            .await?
+            .map(|room| room.metadata)
+            .unwrap_or_default();
+        let agent_name = agent_handle(&metadata, agent_id.as_str());
+        let brief = worker_brief(&task, agent_name, &mode);
         let options = DelegateOptions {
             brief: Some(brief),
             notify: Some(agent_id.clone()),
