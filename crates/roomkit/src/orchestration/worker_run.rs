@@ -160,6 +160,51 @@ pub(crate) struct WorkerStatus {
     pub(crate) ended: fn(&WorkerOutcome) -> WorkerEnd,
 }
 
+tokio::task_local! {
+    /// The entries a background run's cut delegations still owe (RFC
+    /// §19.7.3): the run that scopes its work with them posts its own
+    /// terminal entry after theirs.
+    static CUT_ENTRIES: Arc<CutEntries>;
+}
+
+/// The terminal entries a run's cut delegations owe: each delegation cut
+/// before its task ended posts its entry once that task's end names it,
+/// and a background run cut by the kit's close posts its own after them,
+/// as Python's cancelled run unwinds its delegations first (RFC §19.7.3).
+#[derive(Debug)]
+pub(crate) struct CutEntries {
+    owed: tokio::sync::watch::Sender<usize>,
+}
+
+impl Default for CutEntries {
+    fn default() -> Self {
+        Self {
+            owed: tokio::sync::watch::Sender::new(0),
+        }
+    }
+}
+
+impl CutEntries {
+    /// `work`, its delegations owing their entries to these.
+    pub(crate) fn scope<F: Future>(self: &Arc<Self>, work: F) -> impl Future<Output = F::Output> {
+        CUT_ENTRIES.scope(Arc::clone(self), work)
+    }
+
+    /// Resolves once no cut delegation owes its entry.
+    pub(crate) async fn settled(&self) {
+        let mut owed = self.owed.subscribe();
+        drop(owed.wait_for(|owed| *owed == 0).await);
+    }
+
+    fn owe(&self) {
+        self.owed.send_modify(|owed| *owed = owed.saturating_add(1));
+    }
+
+    fn paid(&self) {
+        self.owed.send_modify(|owed| *owed = owed.saturating_sub(1));
+    }
+}
+
 /// Delegates `task` to `worker_id` from `room_id` inline and waits for it,
 /// within `timeout` (`None`: unbounded): a task past it is cancelled and
 /// its delegation reads as timed out, the call answering once the task
@@ -186,6 +231,7 @@ pub(crate) async fn run_worker<S: ConversationStore>(
         worker_id: worker_id.clone(),
         status,
         run: Arc::default(),
+        cut_entries: CUT_ENTRIES.try_with(Arc::clone).ok(),
     };
     posts.post(StatusLevel::Pending, task, None, Metadata::new());
     // The run learns its task once it ends, before a cut reaches the run:
@@ -253,6 +299,7 @@ pub(crate) async fn follow_worker<S: ConversationStore>(
             task_id: Some(task.id.clone()),
             ..Run::default()
         })),
+        cut_entries: None,
     };
     posts.post(StatusLevel::Pending, &task.task, None, Metadata::new());
     let mut cut = CutPost {
@@ -296,6 +343,9 @@ struct Posts<S> {
     worker_id: ChannelId,
     status: Option<WorkerStatus>,
     run: Arc<Mutex<Run>>,
+    /// What the background run this delegation works for waits for once
+    /// cut, when it runs in one.
+    cut_entries: Option<Arc<CutEntries>>,
 }
 
 impl<S> Clone for Posts<S> {
@@ -305,6 +355,7 @@ impl<S> Clone for Posts<S> {
             worker_id: self.worker_id.clone(),
             status: self.status.clone(),
             run: Arc::clone(&self.run),
+            cut_entries: self.cut_entries.clone(),
         }
     }
 }
@@ -338,6 +389,9 @@ impl<S: ConversationStore> Posts<S> {
             };
             if cut {
                 posts.cancelled(&result.task_id);
+                if let Some(cut_entries) = &posts.cut_entries {
+                    cut_entries.paid();
+                }
             }
             match &on_complete {
                 Some(on_complete) => on_complete(result),
@@ -450,7 +504,11 @@ impl<S: ConversationStore> Drop for CutPost<'_, S> {
                 self.posts
                     .post(StatusLevel::Failed, "cancelled", None, Metadata::new());
             }
-            None => {}
+            None => {
+                if let Some(cut_entries) = &self.posts.cut_entries {
+                    cut_entries.owe();
+                }
+            }
         }
     }
 }

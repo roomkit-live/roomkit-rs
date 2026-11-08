@@ -225,13 +225,15 @@ impl TeamServer {
         // Read in the call: the outcome continues its turn's chain (RFC
         // §23.3).
         let chain_depth = ExecutionContext::current().turn_depth().unwrap_or(0);
+        // Remembered before the run starts, which forgets it once it ends.
+        let answer = dispatched(&self.team, follows);
+        self.remember(room_id, &answer);
         let run = self.background_run(kit, room_id, task);
         if let Err(error) = start_background_run(kit, run, chain_depth) {
             self.running().remove(room_id);
+            self.forget(room_id);
             return Err(error);
         }
-        let answer = dispatched(&self.team, follows);
-        self.remember(room_id, &answer);
         Ok(answer)
     }
 
@@ -507,7 +509,46 @@ mod tests {
     use roomkit_core::model::{ChannelId, Metadata, RoomId};
     use serde_json::{Value, json};
 
-    use super::{TeamServer, WorkerStrategy};
+    use super::{Presented, TeamServer, WorkerStrategy, outcome_text, pipeline_ended};
+    use crate::orchestration::StatusLevel;
+
+    fn presented(label: &str, output: &str, approved: Option<bool>) -> Presented {
+        Presented {
+            label: label.to_owned(),
+            output: output.to_owned(),
+            approved,
+            completed: true,
+        }
+    }
+
+    // Python: tests/tasks/test_delegation_result_delivery.py::test_a_supervisor_s_background_workers_hand_back_to_it
+    #[test]
+    fn a_background_team_s_hand_back_bounds_each_worker_s_output() {
+        let long = "a".repeat(9000);
+        let told = outcome_text(Some(&vec![
+            presented("Analyst", &long, None),
+            presented("Critic", "Short.", None),
+        ]));
+        assert!(told.starts_with(
+            "[Your background workers completed. Share their results with the user.]"
+        ));
+        assert!(told.contains(&"a".repeat(4000)));
+        assert!(!told.contains(&"a".repeat(4001)));
+        assert!(told.contains("Short."));
+    }
+
+    // Python: tests/orchestration/test_supervisor_text_background.py::test_a_rejected_supervised_chain_is_told_failed_in_the_background
+    #[test]
+    fn a_rejected_supervised_chain_is_told_failed_in_the_background() {
+        let steps = vec![presented("w1", "w1 work", Some(false))];
+        let told = outcome_text(Some(&steps));
+        assert!(told.starts_with("[Your background workers could not complete the work."));
+        assert!(told.contains("(UNVALIDATED)"));
+        assert_eq!(
+            pipeline_ended(&steps),
+            (StatusLevel::Failed, "a step was not validated".to_owned())
+        );
+    }
     use crate::kit::{RoomKit, RoomKitOptions};
     use crate::orchestration::agents::tests::held_agent;
     use crate::orchestration::strategies::supervisor::Team;

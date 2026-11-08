@@ -10,12 +10,15 @@
 //! with nothing handed back; a run the close finds before its first step
 //! never runs its work.
 
+use std::sync::Arc;
+
 use roomkit_core::model::{ChannelId, Metadata, RoomId};
 
 use crate::channel::BoxFuture;
 use crate::error::RoomKitError;
 use crate::kit::{RoomKit, WeakRoomKit};
 use crate::orchestration::StatusLevel;
+use crate::orchestration::worker_run::CutEntries;
 use crate::store::ConversationStore;
 use crate::stream::KIT_CLOSED;
 use crate::tasks::handback::{hand_back, not_handed_back};
@@ -119,14 +122,19 @@ where
     };
     // The run's own unit: a close called from within it spares it.
     let marks = Marks::current();
+    let cut_entries = Arc::new(CutEntries::default());
     let ran = tokio::select! {
         biased;
         () = cut_by_close(&kit, &marks) => None,
-        ran = work => Some(ran),
+        ran = cut_entries.scope(work) => Some(ran),
     };
     let outcome = match ran {
-        // Cut: posted cancelled and freed as the guard drops.
-        None => return,
+        // Cut: posted cancelled and freed as the guard drops, once the
+        // delegations the cut work left post their own ends.
+        None => {
+            cut_entries.settled().await;
+            return;
+        }
         Some(Ok(outcome)) => Some(outcome),
         Some(Err(error)) => {
             // For the logs and the status bus, never a model (RFC §9.3).

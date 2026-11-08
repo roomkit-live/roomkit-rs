@@ -499,3 +499,113 @@ async fn a_sequential_team_is_supervised_in_the_background_as_in_its_turn() {
     let in_background = team_delegations(true).await;
     assert_eq!(in_background, in_turn);
 }
+
+/// A kit holding room `r1`, installed with a supervisor `boss` over
+/// `boss_model` whose team, its one worker `worker` over `worker_model`,
+/// runs in the background as `strategy` says.
+async fn team_kit_with<B, P>(boss_model: B, worker_model: P, strategy: WorkerStrategy) -> RoomKit
+where
+    B: AiProvider + Clone + 'static,
+    P: AiProvider + Clone + 'static,
+{
+    let kit = RoomKit::new(RoomKitOptions::default());
+    let sms = RecordingTransport::new(
+        id("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(sms).unwrap();
+    let boss = Agent::new(id("boss"), boss_model, AgentOptions::default()).unwrap();
+    let worker = Agent::new(id("worker"), worker_model, AgentOptions::default()).unwrap();
+    let options = SupervisorOptions {
+        strategy: Some(strategy),
+        async_delivery: true,
+        ..SupervisorOptions::default()
+    };
+    let team = Supervisor::new(
+        StrategyAgent::channel(boss),
+        vec![StrategyAgent::channel(worker)],
+        options,
+    )
+    .unwrap();
+    let created = CreateRoomOptions {
+        room_id: Some(room()),
+        orchestration: Some(Some(Arc::new(team))),
+        ..CreateRoomOptions::default()
+    };
+    kit.create_room(created).await.unwrap();
+    kit.attach_channel(&room(), &id("sms"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    kit
+}
+
+/// The kit's close cuts a background team's run while its worker runs:
+/// the worker's task ends cancelled, the worker's terminal entry then the
+/// run's are posted failed `cancelled`, in that order, and the worker never
+/// answers.
+async fn a_closed_background_team_ends_cancelled(strategy: WorkerStrategy) {
+    let held = Held::new();
+    let kit = team_kit_with(DispatchesOnce::default(), held.clone(), strategy).await;
+    let ends = Arc::new(Mutex::new(Vec::new()));
+    let noted = Arc::clone(&ends);
+    let observer = HookOptions {
+        execution: HookExecution::Async,
+        ..HookOptions::default()
+    };
+    let hook = move |event: RoomEvent, _| {
+        let agent = event
+            .metadata
+            .get("agent_id")
+            .and_then(|value| value.as_str());
+        if agent == Some("worker") {
+            let status = event
+                .metadata
+                .get("task_status")
+                .and_then(|value| value.as_str());
+            noted
+                .lock()
+                .unwrap()
+                .push(status.unwrap_or_default().to_owned());
+        }
+        ready(())
+    };
+    kit.hook(HookTrigger::OnTaskCompleted, hook, observer)
+        .unwrap();
+
+    ask(&kit, "Write me something.").await;
+    tokio::time::timeout(Duration::from_secs(5), held.started.notified())
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), kit.close())
+        .await
+        .unwrap()
+        .unwrap();
+    held.release.add_permits(1);
+    tokio::task::yield_now().await;
+
+    assert_eq!(*ends.lock().unwrap(), ["cancelled"]);
+    let entries = terminal_entries(&kit).await;
+    let last: Vec<_> = entries.iter().rev().take(2).rev().cloned().collect();
+    let cancelled = |agent: &str| {
+        (
+            agent.to_owned(),
+            StatusLevel::Failed,
+            "cancelled".to_owned(),
+        )
+    };
+    assert_eq!(last, [cancelled("worker"), cancelled("orchestration")]);
+    assert_eq!(held.answered.load(Ordering::SeqCst), 0);
+}
+
+// Python: tests/orchestration/test_background_close.py::test_close_ends_a_background_run[supervisor-tool]
+#[tokio::test]
+async fn the_kit_s_close_ends_a_background_team_s_run_cancelled() {
+    a_closed_background_team_ends_cancelled(WorkerStrategy::Parallel).await;
+}
+
+// Python: tests/orchestration/test_background_close.py::test_close_ends_a_background_run[supervised-tool]
+#[tokio::test]
+async fn the_kit_s_close_ends_a_background_supervised_team_s_run_cancelled() {
+    a_closed_background_team_ends_cancelled(WorkerStrategy::Sequential).await;
+}
