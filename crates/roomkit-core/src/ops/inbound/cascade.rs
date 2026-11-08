@@ -240,8 +240,9 @@ impl Machine {
         };
         // A response delivered is one of the answers of the call whose
         // cascade it belongs to, the call's own or an adopted entry's
-        // (Python's `InboundResult.response_events`).
-        if matches!(origin, PassOrigin::Response { .. }) {
+        // (Python's `InboundResult.response_events`), once it is stored:
+        // one the kit's persistence policy keeps out is none (RFC §14.3).
+        if matches!(origin, PassOrigin::Response { .. }) && cx.config.persists(event.r#type) {
             self.answered(report.lineage, &event);
         }
         if let Some(changed) = &changed {

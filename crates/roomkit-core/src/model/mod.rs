@@ -26,6 +26,7 @@ mod inbound;
 mod media_url;
 mod output;
 mod participant;
+mod persistence;
 mod positive;
 mod response_metadata;
 
@@ -67,6 +68,7 @@ pub use output::{ChannelOutput, ErrorRecord};
 pub use participant::{
     IdentificationStatus, Participant, ParticipantRole, ParticipantStatus, VerificationStatus,
 };
+pub use persistence::PersistencePolicy;
 pub use post::Post;
 pub use response_metadata::ResponseMetadata;
 pub use room::{AgentResponsePolicy, Room, RoomStatus, RoomTimers};

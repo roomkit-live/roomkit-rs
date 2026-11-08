@@ -387,6 +387,7 @@ impl<S: ConversationStore> RoomKit<S> {
             delivery_claim_lock_manager,
             telemetry,
             inbound_rate_limit,
+            persistence_policy,
         } = options;
         let telemetry = telemetry::telemetry_of(telemetry);
         store.set_telemetry(Arc::clone(&telemetry.provider), telemetry.sensitive);
@@ -405,6 +406,7 @@ impl<S: ConversationStore> RoomKit<S> {
             timeout: identity_timeout,
         });
         config.verification.clone_from(&verification_policy);
+        config.persistence_policy = persistence_policy;
         let inner = Arc::new_cyclic(|kit: &Weak<Inner<S>>| Inner {
             config: RwLock::new(Arc::new(config)),
             channels: RwLock::new(HashMap::new()),

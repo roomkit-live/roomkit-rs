@@ -130,31 +130,35 @@ impl Pending {
     /// update is stored, each transition's record is committed in turn
     /// (gap G-046); once a record is, its transition's framework event is
     /// emitted, and its hooks, which receive the room as that transition
-    /// left it (gap G-027), are kept to fire after the release.
+    /// left it (gap G-027), are kept to fire after the release. A record
+    /// the kit's persistence policy keeps out is not written, and its
+    /// transition is announced all the same (RFC §14.3).
     pub(crate) fn stored(
         mut self: Box<Self>,
         cx: &mut Cx<'_>,
         outcome: Outcome,
     ) -> Result<Applied, ErrorRecord> {
         outcome.into_written()?;
-        let next = match self.recording.take() {
+        let mut next = match self.recording.take() {
             Some(index) => {
                 self.announce(cx, index);
                 index.saturating_add(1)
             }
             None => 0,
         };
-        let record = self.record_at(next);
-        let request = record.and_then(|record| record::commit(cx, &mut self.context, &record));
-        let Some(request) = request else {
-            return Ok(Applied::Opened((*self).opened()));
-        };
-        self.recording = Some(next);
-        let effect = record::issue_write(cx, request);
-        Ok(Applied::Writing {
-            effect,
-            pending: self,
-        })
+        while let Some(record) = self.record_at(next) {
+            if let Some(request) = record::commit(cx, &mut self.context, &record) {
+                self.recording = Some(next);
+                let effect = record::issue_write(cx, request);
+                return Ok(Applied::Writing {
+                    effect,
+                    pending: self,
+                });
+            }
+            self.announce(cx, next);
+            next = next.saturating_add(1);
+        }
+        Ok(Applied::Opened((*self).opened()))
     }
 
     /// The lifecycle record of the transition at `index`, if any: the
@@ -177,7 +181,7 @@ impl Pending {
     }
 
     /// Emits the framework event of the transition at `index`, whose record
-    /// is committed, and keeps its hooks, with the room as the transition
+    /// is committed or kept out, and keeps its hooks, with the room as the transition
     /// left it and the records committed so far.
     fn announce(&mut self, cx: &mut Cx<'_>, index: usize) {
         let Some((due, room)) = self.applied.get(index) else {

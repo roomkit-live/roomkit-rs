@@ -779,7 +779,6 @@ reason = "not in 0.x: a voice or realtime session's greeting comes with voice"
 python = "roomkit.RoomKit.__init__"
 params = [
     "stt", "tts", "voice",
-    "persistence_policy",
     "turn_backend",
     "error_classes",
 ]

@@ -5,7 +5,9 @@
 //! An instruction is never committed (RFC §10.1.1 rules 4 and 5): its pass
 //! decides it, blocked or delivered, with no commit, so it consumes no index
 //! and moves no counter, and a paused room stays paused until an event is
-//! committed (gap G-065).
+//! committed (gap G-065). Nor is an event of a type the kit's persistence
+//! policy keeps out (RFC §14.3): it is delivered, but for an edit's or a
+//! delete's target, written alone, nothing of it is stored.
 
 use super::pass::{Changed, PassResult};
 use crate::model::{
@@ -17,11 +19,21 @@ use crate::rules::authors::AUTHOR;
 use crate::rules::lifecycle::{self, Transition};
 use crate::rules::permissions::{self, DeliveryPlan};
 
-/// A commit asked for, and what the pass did once it is durable; no effect
-/// for an instruction, which the pass decides without writing.
+/// A commit asked for, and what the pass did once it is durable; no write
+/// for an instruction, which the pass decides without writing, nor for an
+/// event the kit's persistence policy keeps out that changes nothing.
 pub(super) struct Committing {
-    pub(super) effect: Option<EffectId>,
+    pub(super) write: Option<Write>,
     pub(super) result: PassResult,
+}
+
+/// What a pass writes before its result stands.
+pub(super) enum Write {
+    /// The event's commit, answered with the event as stored.
+    Commit(EffectId),
+    /// An edit's or a delete's target alone, the change kept out of the
+    /// timeline by the kit's persistence policy (RFC §14.3).
+    Target(EffectId),
 }
 
 /// Commits `event` delivered, the room's activity (RFC §10.1 step 12): the
@@ -34,6 +46,9 @@ pub(super) struct Committing {
 /// with the room as the commit leaves it, for the mutation trigger.
 /// `register` is the room's register of authors as the event's author
 /// record left it, when it changed (RFC §10.1 step 12, gap G-089).
+///
+/// `policy_aware` is whether the kit's persistence policy reads the pass at
+/// all: a hook's injected event is stored whatever it says (RFC §14.3).
 pub(super) fn delivered(
     cx: &mut Cx<'_>,
     mut event: RoomEvent,
@@ -41,13 +56,14 @@ pub(super) fn delivered(
     mut context: Box<RoomContext>,
     written: Option<RoomEvent>,
     register: Option<Metadata>,
+    policy_aware: bool,
 ) -> Committing {
     event.status = EventStatus::Delivered;
     if event.r#type == EventType::Instruction {
         // Delivered to the agents it names, with the index step 8 showed its
         // hooks, which the next event takes (RFC §10.1.1 rule 5).
         return Committing {
-            effect: None,
+            write: None,
             result: PassResult::Delivered {
                 event: Box::new(event),
                 plan,
@@ -56,15 +72,14 @@ pub(super) fn delivered(
             },
         };
     }
+    if policy_aware && !cx.config.persists(event.r#type) {
+        return unstored(cx, event, plan, context, written);
+    }
     let now = cx.env.now();
     resume(&mut context, now);
     let (target, changed) = match written {
         Some(changed) => {
-            for recent in &mut context.recent_events {
-                if recent.id == changed.id {
-                    recent.clone_from(&changed);
-                }
-            }
+            rewrite_target(&mut context, &changed);
             let target = Box::new(changed.clone());
             let changed = Changed {
                 target: changed,
@@ -83,13 +98,65 @@ pub(super) fn delivered(
     };
     let effect = cx.io.issue_locked(request, room_id);
     Committing {
-        effect: Some(effect),
+        write: Some(Write::Commit(effect)),
         result: PassResult::Delivered {
             event: Box::new(event),
             plan,
             context,
             changed,
         },
+    }
+}
+
+/// Delivers `event`, of a type the kit's persistence policy keeps out,
+/// without committing it (RFC §14.3): it takes no index, moves none of the
+/// room's counters and is no activity, a paused room staying paused. It
+/// keeps the index its hooks were shown, and joins its delivery set's
+/// context as its newest event, as a committed event does (Python's
+/// `_commit_to_lane`). An accepted edit or delete writes its target alone
+/// (`written`, Python's `_write_unstored_change`), which its mutation
+/// trigger then reads in the room as it stands, the change its newest
+/// event.
+fn unstored(
+    cx: &mut Cx<'_>,
+    event: RoomEvent,
+    plan: DeliveryPlan,
+    mut context: Box<RoomContext>,
+    written: Option<RoomEvent>,
+) -> Committing {
+    let write = written.as_ref().map(|changed| {
+        rewrite_target(&mut context, changed);
+        let request = StoreRequest::WriteChangeTarget {
+            room_id: event.room_id.clone(),
+            target: Box::new(changed.clone()),
+        };
+        Write::Target(cx.io.issue_locked(request, event.room_id.clone()))
+    });
+    join_newest(&mut context.recent_events, &event);
+    let changed = written.map(|target| {
+        Box::new(Changed {
+            target,
+            context: (*context).clone(),
+        })
+    });
+    Committing {
+        write,
+        result: PassResult::Delivered {
+            event: Box::new(event),
+            plan,
+            context,
+            changed,
+        },
+    }
+}
+
+/// Writes `changed`, an edit's or a delete's target as the change leaves
+/// it, in place of its copies in `context`'s history.
+fn rewrite_target(context: &mut RoomContext, changed: &RoomEvent) {
+    for recent in &mut context.recent_events {
+        if recent.id == changed.id {
+            recent.clone_from(changed);
+        }
     }
 }
 
@@ -153,7 +220,7 @@ pub(super) fn blocked(
     };
     if event.r#type == EventType::Instruction {
         return Committing {
-            effect: None,
+            write: None,
             result,
         };
     }
@@ -166,7 +233,7 @@ pub(super) fn blocked(
     };
     let effect = cx.io.issue_locked(request, room_id);
     Committing {
-        effect: Some(effect),
+        write: Some(Write::Commit(effect)),
         result,
     }
 }

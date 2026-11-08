@@ -13,7 +13,7 @@
 //! hooks left them (RFC §7.5 rule 2).
 
 use super::super::cascade::entry_result;
-use super::super::commit::{self, Committing};
+use super::super::commit::{self, Committing, Write};
 use super::super::delivery::Placement;
 use super::super::greeting;
 use super::super::queues::Lineage;
@@ -330,7 +330,9 @@ impl CommitPass {
             written,
         } = unrecorded;
         if let Ok(register) = authors::with_author(&mut event, &context, timeline) {
-            let delivered = commit::delivered(cx, event, plan, context, written, register);
+            let policy_aware = !matches!(self.origin, PassOrigin::Injected { .. });
+            let delivered =
+                commit::delivered(cx, event, plan, context, written, register, policy_aware);
             return self.committing(cx, delivered);
         }
         // The room holds no register, and its window not its timeline whole.
@@ -456,10 +458,19 @@ impl CommitPass {
 
     /// Waits for the commit to be durable, the trigger's marked as the one
     /// that decides the call (`Effect::decides`); an instruction, which
-    /// writes nothing, goes on at once (RFC §10.1.1 rule 5).
+    /// writes nothing, goes on at once (RFC §10.1.1 rule 5), and so does an
+    /// event the kit's persistence policy keeps out, once the target it
+    /// changes is written (RFC §14.3).
     fn committing(&mut self, cx: &mut Cx<'_>, committing: Committing) -> State {
-        let Some(effect) = committing.effect else {
-            return self.place(cx, committing.result);
+        let effect = match committing.write {
+            None => return self.place(cx, committing.result),
+            Some(Write::Target(effect)) => {
+                return State::WritingTarget {
+                    effect,
+                    result: committing.result,
+                };
+            }
+            Some(Write::Commit(effect)) => effect,
         };
         if self.origin == PassOrigin::Trigger {
             cx.io.decides(effect, entry_result(&committing.result));
@@ -493,6 +504,20 @@ impl CommitPass {
                 result.adopt(*stored);
                 self.place(cx, result)
             }
+            Err(error) => self.release(cx, Err(Abort::Store(error))),
+        }
+    }
+
+    /// The target of a change the kit's persistence policy keeps out is
+    /// written: the change takes its place, as a committed one does.
+    pub(super) fn on_target_written(
+        &mut self,
+        cx: &mut Cx<'_>,
+        result: PassResult,
+        outcome: Outcome,
+    ) -> State {
+        match outcome.into_written() {
+            Ok(()) => self.place(cx, result),
             Err(error) => self.release(cx, Err(Abort::Store(error))),
         }
     }

@@ -34,7 +34,7 @@ pub(crate) enum RequestKind {
     Commit,
     PersistSideEffects,
     /// A write answered `Stored`: a room's creation or update, a binding's
-    /// store or delete, an event's update.
+    /// store or delete, an event's update, a change's target written alone.
     Write,
     ResolveIdentity,
     HandleInbound,
@@ -127,7 +127,8 @@ impl StoreRequest {
             | Self::UpdateEvent { .. }
             | Self::AddParticipant { .. }
             | Self::UpdateParticipant { .. }
-            | Self::RecordDeliveryResults { .. } => RequestKind::Write,
+            | Self::RecordDeliveryResults { .. }
+            | Self::WriteChangeTarget { .. } => RequestKind::Write,
             Self::ResolveIdentity { .. } => RequestKind::ResolveIdentity,
         }
     }

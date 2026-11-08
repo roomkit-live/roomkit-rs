@@ -546,6 +546,8 @@ fn room_kit_options_defaults_as_python() {
     assert!(defaults.orchestration.is_none());
     // roomkit.RoomKit.__init__(inbound_rate_limit) = None
     assert!(defaults.inbound_rate_limit.is_none());
+    // roomkit.RoomKit.__init__(persistence_policy) = None
+    assert!(defaults.persistence_policy.is_none());
     // roomkit.RoomKit.__init__(store) = None
     let store: Arc<InMemoryStore> = defaults.store;
     assert_eq!(Arc::strong_count(&store), 1);

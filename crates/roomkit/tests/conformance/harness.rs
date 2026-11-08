@@ -71,7 +71,8 @@ fn delivery_backend(kit: &Value) -> Option<roomkit::InMemoryDeliveryBackend> {
 }
 
 /// The kit's options a scenario's setup names, over `options`: its
-/// chain-depth limit, its `process_timeout` and its router.
+/// chain-depth limit, its `process_timeout`, its router, its inbound rate
+/// limit and its persistence policy.
 fn kit_options<S>(
     mut options: RoomKitOptions<S>,
     kit: &Value,
@@ -97,6 +98,11 @@ fn kit_options<S>(
         // A limit the model refuses is a broken fixture, as Python's runner
         // raises on it.
         options.inbound_rate_limit = Some(serde_json::from_value(limit.clone()).unwrap());
+    }
+    if let Some(policy) = kit.get("persistence_policy") {
+        // A policy naming a type the model lacks is a broken fixture, as
+        // Python's runner raises on it.
+        options.persistence_policy = Some(serde_json::from_value(policy.clone()).unwrap());
     }
     options
 }

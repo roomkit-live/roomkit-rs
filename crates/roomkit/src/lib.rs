@@ -106,12 +106,12 @@ pub mod model {
         HookResult, IdentificationStatus, Identity, IdentityHookResult, IdentityId, IdentityResult,
         InboundMessage, InjectedEvent, Latitude, LocationContent, Longitude, MediaContent,
         Metadata, ModelError, Observation, ObservationId, Participant, ParticipantId,
-        ParticipantRole, ParticipantStatus, ProviderResult, RateLimit, ResponseMetadata,
-        RetryPolicy, RichContent, RichFormat, Room, RoomContext, RoomEvent, RoomId, RoomStatus,
-        RoomTimers, SystemContent, Task, TaskId, TaskStatus, TemplateContent, TextContent,
-        ThreadSummary, Timestamp, ToolCallContent, ToolCallOutcome, ToolCallStatus, Verification,
-        VerificationPolicy, VerificationRequest, VerificationRequestStatus, VerificationStatus,
-        VideoContent, Visibility,
+        ParticipantRole, ParticipantStatus, PersistencePolicy, ProviderResult, RateLimit,
+        ResponseMetadata, RetryPolicy, RichContent, RichFormat, Room, RoomContext, RoomEvent,
+        RoomId, RoomStatus, RoomTimers, SystemContent, Task, TaskId, TaskStatus, TemplateContent,
+        TextContent, ThreadSummary, Timestamp, ToolCallContent, ToolCallOutcome, ToolCallStatus,
+        Verification, VerificationPolicy, VerificationRequest, VerificationRequestStatus,
+        VerificationStatus, VideoContent, Visibility,
     };
 
     pub use crate::delivery::outcome::{DeliveryOutcome, DeliveryOutcomeStatus};

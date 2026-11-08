@@ -7,7 +7,8 @@ use thiserror::Error;
 
 use crate::model::{
     AgentResponsePolicy, ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection,
-    ChannelId, ChannelMediaType, ChannelType, RoomId, Timestamp, VerificationPolicy,
+    ChannelId, ChannelMediaType, ChannelType, EventType, PersistencePolicy, RoomId, Timestamp,
+    VerificationPolicy,
 };
 use crate::rules::addresses::{self, AddressForm, Addressing, CountryCode};
 use crate::rules::chain_depth::DEFAULT_MAX_CHAIN_DEPTH;
@@ -207,6 +208,10 @@ pub struct KitConfig {
     /// (`hold_unverified`); `None`, the default, leaves the pipeline as it
     /// is.
     pub verification: Option<VerificationPolicy>,
+    /// Which event types the kit's commits store (RFC §14.3): an event of
+    /// a type it keeps out is delivered and not stored, consuming no index.
+    /// `None`, the default, stores every type.
+    pub persistence_policy: Option<PersistencePolicy>,
 }
 
 /// How a kit resolves its senders' identities (RFC §11.4, §11.5).
@@ -231,7 +236,17 @@ impl KitConfig {
             agent_response_policy: AgentResponsePolicy::default(),
             identity: None,
             verification: None,
+            persistence_policy: None,
         }
+    }
+
+    /// Whether the kit's commits store an event of `event_type`: every type
+    /// without a persistence policy, as its policy says with one (RFC
+    /// §14.3).
+    pub fn persists(&self, event_type: EventType) -> bool {
+        self.persistence_policy
+            .as_ref()
+            .is_none_or(|policy| policy.should_persist(event_type))
     }
 
     /// Whether identity resolution runs for a channel of `channel_type`

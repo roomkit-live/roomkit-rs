@@ -447,6 +447,18 @@ pub enum StoreRequest {
         /// How many it holds at most.
         limit: u64,
     },
+    /// Write `target` whole, the target of an edit or a delete the kit's
+    /// persistence policy keeps out of the timeline, with no row of the
+    /// change and the room's counters unmoved; a delete's target written
+    /// deleted marks its edits deleted with it (RFC §10.3, §14.3, Python's
+    /// `write_change_target`). Answer [`StoreOutcome::Stored`], or
+    /// [`Outcome::Failed`] when the room holds no such event.
+    WriteChangeTarget {
+        /// The room.
+        room_id: RoomId,
+        /// The target, as the change leaves it.
+        target: Box<RoomEvent>,
+    },
 }
 
 /// A call of a channel (RFC §6.1), answered by a [`ChannelOutcome`].

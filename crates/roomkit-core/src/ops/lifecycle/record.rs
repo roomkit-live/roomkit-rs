@@ -20,13 +20,18 @@ use crate::rules::records::Record;
 /// The commit of `record` as the next event of the room `context` holds,
 /// which then reflects it: its counters, and the record the newest event of
 /// its history, the oldest dropped past the room's context window. `None`
-/// when the room's status refuses it.
+/// when the room's status refuses it, or when the kit's persistence policy
+/// keeps its type out: nothing is written and the counters stay (RFC
+/// §14.3).
 pub(crate) fn commit(
     cx: &Cx<'_>,
     context: &mut RoomContext,
     record: &Record,
 ) -> Option<StoreRequest> {
     if !record.records_transition() && !context.room.status.accepts_events() {
+        return None;
+    }
+    if !cx.config.persists(record.event_type()) {
         return None;
     }
     let room = &mut context.room;
@@ -82,6 +87,7 @@ pub(crate) fn issue_write(cx: &mut Cx<'_>, request: StoreRequest) -> EffectId {
         | StoreRequest::AddParticipant { .. }
         | StoreRequest::UpdateParticipant { .. }
         | StoreRequest::RecordDeliveryResults { .. }
-        | StoreRequest::ListEventsPage { .. } => cx.io.issue(request),
+        | StoreRequest::ListEventsPage { .. }
+        | StoreRequest::WriteChangeTarget { .. } => cx.io.issue(request),
     }
 }

@@ -12,8 +12,8 @@ use std::time::Duration;
 use roomkit_core::model::{
     Access, AgentResponsePolicy, ChannelBinding, ChannelCategory, ChannelDirection, ChannelId,
     ChannelType, DirectEvent, EventContent, EventId, EventSource, EventType, Metadata,
-    ParticipantId, Post, RateLimit, RetryPolicy, RoomId, RoomTimers, Timestamp, VerificationPolicy,
-    Visibility,
+    ParticipantId, PersistencePolicy, Post, RateLimit, RetryPolicy, RoomId, RoomTimers, Timestamp,
+    VerificationPolicy, Visibility,
 };
 
 use crate::identity::IdentityResolver;
@@ -158,6 +158,14 @@ pub struct RoomKitOptions<S = InMemoryStore> {
     /// before anything is read or written, blocked with the reason
     /// `rate_limited` (RFC §10.1); `None`, none is refused for its rate.
     pub inbound_rate_limit: Option<RateLimit>,
+    /// Python `persistence_policy=None`: which event types the kit's
+    /// commits store (RFC §14.3). An event of a type it keeps out is
+    /// delivered all the same and stored nowhere, consuming no index; an
+    /// edit or a delete kept out still writes its target, alone. A hook's
+    /// injected event, a record stored blocked and a record committed
+    /// outside the pipeline are stored whatever it says. `None` stores
+    /// every type.
+    pub persistence_policy: Option<PersistencePolicy>,
 }
 
 /// Python's defaults, over a new in-memory store. Defined for the in-memory
@@ -195,6 +203,7 @@ impl<S> RoomKitOptions<S> {
             delivery_claim_lock_manager: None,
             telemetry: None,
             inbound_rate_limit: None,
+            persistence_policy: None,
         }
     }
 }
@@ -222,6 +231,7 @@ impl<S> fmt::Debug for RoomKitOptions<S> {
             )
             .field("telemetry", &self.telemetry)
             .field("inbound_rate_limit", &self.inbound_rate_limit)
+            .field("persistence_policy", &self.persistence_policy)
             .finish_non_exhaustive()
     }
 }

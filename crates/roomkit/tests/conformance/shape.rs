@@ -46,8 +46,10 @@ const KIT: &[&str] = &[
     "delivery_gap_timeout_ms",
     "lock_manager",
     "inbound_rate_limit",
+    "persistence_policy",
 ];
 const RATE_LIMIT: &[&str] = &["max_per_second", "max_per_minute", "max_per_hour"];
+const PERSISTENCE_POLICY: &[&str] = &["persist_types", "exclude_types"];
 const MEDIA_RESOLVER: &[&str] = &["media"];
 const ATTACHED_MEDIA: &[&str] = &["key"];
 const REFUSES: &[&str] = &[
@@ -500,6 +502,12 @@ pub(crate) fn unknown_members(scenario: &Value) -> Vec<String> {
         &kit["inbound_rate_limit"],
         RATE_LIMIT,
         "setup.kit.inbound_rate_limit",
+        &mut found,
+    );
+    optional(
+        &kit["persistence_policy"],
+        PERSISTENCE_POLICY,
+        "setup.kit.persistence_policy",
         &mut found,
     );
     optional(

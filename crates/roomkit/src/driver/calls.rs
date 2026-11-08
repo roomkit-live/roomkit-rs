@@ -117,6 +117,10 @@ pub(super) async fn store<S: ConversationStore>(store: &S, request: StoreRequest
         StoreRequest::UpdateEvent { event_id, updates } => update_event(store, &event_id, updates)
             .await
             .map(|()| StoreOutcome::Stored),
+        StoreRequest::WriteChangeTarget { room_id, target } => store
+            .write_change_target(&room_id, *target)
+            .await
+            .map(|()| StoreOutcome::Stored),
         StoreRequest::DeleteEvent {
             room_id,
             event_id,
