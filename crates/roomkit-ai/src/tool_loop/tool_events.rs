@@ -1,9 +1,9 @@
 //! A round's tool calls as the room's subscribers read them (RFC §6.4,
 //! §8.4): `TOOL_CALL_START` with each call once the round announced them,
 //! `TOOL_CALL_END` with each result and status once the reader took their
-//! end rows, and, for a round cut before, an aborted end for each call whose
-//! end row the reader had not asked past, so that a cut leaves no start
-//! without its end. Python's `_publish_tool_event`, `_started_calls`,
+//! end rows, and, for a round cut before, each call's own end for the end
+//! rows the reader asked past and an aborted end for the others, so that a
+//! cut leaves no start without its end. Python's `_publish_tool_event`, `_started_calls`,
 //! `_ended_calls` and `_aborted_results`.
 //!
 //! A room's realtime channel has no visibility gate: a turn whose trigger
@@ -141,10 +141,12 @@ impl ToolEvents {
 /// A round's calls from their start to their end rows handed to the
 /// reader: `TOOL_CALL_START` once they are announced, `TOOL_CALL_END` once
 /// the reader took every end, after the stored rows. Dropped before, the
-/// round cut, it publishes each call's end: its own for the ends the reader
-/// asked past, aborted for the others, which is what a cut turn's rows read.
-/// A reader that stops among the end rows, the turn not cut, keeps their own
-/// outcomes in its rows, yet reads them aborted here (RMK-1586).
+/// round cut, it publishes each call's end: its own for the end rows the
+/// reader asked past, aborted for the others. A call whose tool answered
+/// after the cut is stored cancelled, as published; one whose tool answered
+/// before the cut, or before the reader stopped, and whose end row the
+/// reader had not asked past, is stored with its own outcome yet published
+/// aborted (RMK-1586).
 pub(super) struct Running {
     events: Option<ToolEvents>,
     calls: Vec<ToolCall>,
