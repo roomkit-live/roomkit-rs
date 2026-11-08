@@ -6,6 +6,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Security:** a copy of a runtime mark a memory's message holds over two adjacent text parts is replaced, as Python's (RFC §6.4, RMK-1574): the run is read back to back, as the model reads it, and made one part when it reads otherwise than each part cleaned alone; each part was cleaned alone, so `[Conver` then `sation summary — earlier messages compacted]` reached a provider that joins the parts as the summary's header.
 - The structured copy an `ON_TOOL_CALL` hook leaves is on the call's `TOOL_CALL_END` row, as in Python (RFC §9.3): a surface can render it while the model reads the result alone.
 - `AiChannelOptions::tool_call_intents_only`, Python's `tool_call_intents_only` (RFC §6.4): the tools that ask for a call's intent; the others are shown as they are.
 - A discussion's turn is cut by what another process stores while it runs, and its process keeps the lease meanwhile, as Python's (RFC §19.7.5 rules 1, 12 and 16, RMK-1233): once a second while a turn runs, the process giving it reads the stored queue; a turn whose agent another process set to listen, or which a configuration installed since no longer holds, is cut as a `Cancel` does, and one whose discussion another process uninstalled is cut with its end recorded nowhere, its process leaving the discussion after it, where each ran to its end. The lease is renewed before it expires, where a turn longer than the lease's 15 seconds let another process give a turn beside it.

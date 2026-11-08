@@ -146,15 +146,52 @@ pub(crate) fn runtime_or_cleaned(mut message: AiMessage) -> AiMessage {
     }
     match &mut message.content {
         AiMessageContent::Text(text) => *text = without_mark_copies(text),
-        AiMessageContent::Parts(parts) => {
-            for part in parts {
-                if let AiContentPart::Text(part) = part {
-                    part.text = without_mark_copies(&part.text);
-                }
+        AiMessageContent::Parts(parts) => *parts = cleaned_parts(std::mem::take(parts)),
+    }
+    message
+}
+
+/// `parts` with each copy of a runtime mark in their text replaced, a run
+/// of adjacent text parts read back to back, as the model reads it; any
+/// other part kept as it is. Python's `cleaned_content`.
+fn cleaned_parts(parts: Vec<AiContentPart>) -> Vec<AiContentPart> {
+    let mut cleaned = Vec::with_capacity(parts.len());
+    let mut run = Vec::new();
+    for part in parts {
+        match part {
+            AiContentPart::Text(part) => run.push(part.text),
+            other @ (AiContentPart::Image(_)
+            | AiContentPart::Thinking(_)
+            | AiContentPart::ToolCall(_)
+            | AiContentPart::ToolResult(_)) => {
+                cleaned.extend(cleaned_run(&std::mem::take(&mut run)));
+                cleaned.push(other);
             }
         }
     }
-    message
+    cleaned.extend(cleaned_run(&run));
+    cleaned
+}
+
+/// `run`, the texts of adjacent text parts, each cleaned, or as one part
+/// when the run cleaned back to back reads otherwise: a copy written over
+/// two of them (a part may hold only its start, which reads as no copy
+/// alone). Python's `_cleaned_run`.
+fn cleaned_run(run: &[String]) -> Vec<AiContentPart> {
+    if run.is_empty() {
+        return Vec::new();
+    }
+    let parts: Vec<String> = run.iter().map(|text| without_mark_copies(text)).collect();
+    let whole = without_mark_copies(&run.concat());
+    let texts = if whole == parts.concat() {
+        parts
+    } else {
+        vec![whole]
+    };
+    texts
+        .into_iter()
+        .map(|text| AiContentPart::Text(AiTextPart::new(text)))
+        .collect()
 }
 
 /// What [`MemoryProvider::retrieve`] takes beside the room, the event and
