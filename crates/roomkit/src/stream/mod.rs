@@ -114,6 +114,12 @@ pub enum StreamItem {
     /// and the rows: Python's `UsageMarker`. Never stored; the default
     /// `deliver_stream` skips it.
     Usage(UsageMarker),
+    /// How the turn's loop ended, the stream's last item, before the
+    /// response's failure when it fails (RFC §6.4): Python's
+    /// `LoopEndMarker`. A turn whose last row is a call's end has its record
+    /// written on that row once the stream ended, so the row handed carries
+    /// none. Never stored; the default `deliver_stream` skips it.
+    LoopEnd(LoopEndMarker),
 }
 
 /// What a muted channel's turn leaves of its output, its stream closed

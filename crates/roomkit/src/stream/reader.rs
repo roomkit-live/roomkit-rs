@@ -51,7 +51,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use super::segments::Segments;
 use super::silence::Hold;
-use super::{DeliveryStream, Pulled, ResponseItem, StreamItem, UsageMarker};
+use super::{DeliveryStream, LoopEndMarker, Pulled, ResponseItem, StreamItem, UsageMarker};
 use crate::RoomKit;
 use crate::channel::ChannelError;
 use crate::context::{self, Adopting, ExecutionContext, ReadTurns};
@@ -254,6 +254,7 @@ pub(super) async fn read_kept<S: ConversationStore>(
         hold,
         precounted: false,
         keeper: instruction_keeper(inner),
+        loop_end: None,
     };
     let placeholder = producer.segments.placeholder();
     let reader_marks = Marks::current().with(producer.reader_unit);
@@ -635,6 +636,9 @@ struct Producer {
     precounted: bool,
     /// Where the instruction the turn read is kept (RFC §10.1.1).
     keeper: InstructionKeeper,
+    /// The loop's end as its marker told it, handed to the target as the
+    /// stream's last item (RFC §6.4, Python's `SegmentWriter._end_marker`).
+    loop_end: Option<LoopEndMarker>,
 }
 
 impl Producer {
@@ -856,7 +860,13 @@ impl Producer {
         let text = match &item {
             Some(Ok(StreamItem::Text(text))) => Some(text.clone()),
             Some(
-                Ok(StreamItem::Row(_) | StreamItem::Thinking(_) | StreamItem::Usage(_)) | Err(_),
+                Ok(
+                    StreamItem::Row(_)
+                    | StreamItem::Thinking(_)
+                    | StreamItem::Usage(_)
+                    | StreamItem::LoopEnd(_),
+                )
+                | Err(_),
             )
             | None => None,
         };
@@ -928,6 +938,7 @@ impl Producer {
                 if let Some(row) = self.segments.last_text(false) {
                     self.commit(row).await;
                 }
+                self.hand_loop_end();
                 self.over = Some(Over::End);
             }
             // The target reads the text as it comes; nobody else does. A
@@ -978,6 +989,7 @@ impl Producer {
             }
             Some(Ok(RemoteItem::Item(ResponseItem::LoopEnd(marker)))) => {
                 self.segments.end_turn(marker.record());
+                self.loop_end = Some(marker);
             }
             // The loop goes on after a round without a call: its text is a
             // segment of its own (RFC §6.4).
@@ -991,11 +1003,24 @@ impl Producer {
                 if let Some(row) = self.segments.last_text(false) {
                     self.commit(row).await;
                 }
+                self.hand_loop_end();
                 let record = record_of(&*error);
                 self.failed_at = Some(address_of(&error));
                 self.ready.push_back(Err(error));
                 self.over = Some(Over::Failed(record));
             }
+        }
+    }
+
+    /// Hands the target the loop's end, once the loop told it, after the
+    /// last text's row and before the response's failure: whichever row
+    /// carries the turn's record, the target learns how the turn ended from
+    /// its own stream (RFC §6.4). Nothing for a target that no longer reads.
+    fn hand_loop_end(&mut self) {
+        if let Some(marker) = self.loop_end.take()
+            && self.reads == Reads::Target
+        {
+            self.ready.push_back(Ok(StreamItem::LoopEnd(marker)));
         }
     }
 

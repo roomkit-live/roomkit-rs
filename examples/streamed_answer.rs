@@ -146,6 +146,7 @@ impl Channel for Screen {
                 }
                 StreamItem::Thinking(reasoning) => println!("  screen: thinking {reasoning:?}"),
                 StreamItem::Usage(told) => println!("  screen: this step used {:?}", told.usage),
+                StreamItem::LoopEnd(end) => println!("  screen: the turn ended {}", end.reason),
                 _ => {}
             }
         }

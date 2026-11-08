@@ -493,7 +493,8 @@ pub trait Channel: Send + Sync + 'static {
     /// ([`supports_streaming_delivery_for`](Channel::supports_streaming_delivery_for)):
     /// `text_stream` yields the response's text as it comes, each piece of
     /// the model's reasoning as [`StreamItem::Thinking`], what each generation
-    /// used as [`StreamItem::Usage`], and each row once the store holds it, with its id and its index; the channel is never
+    /// used as [`StreamItem::Usage`], each row once the store holds it, with its id and its index, and last how the turn's
+    /// loop ended as [`StreamItem::LoopEnd`], before the response's failure when it fails (RFC §6.4); the channel is never
     /// delivered those rows again. `event` is the empty event the
     /// response renders under: its source the agent, answering the event the
     /// response answers. The channel sets the pace: returning before the
@@ -615,7 +616,12 @@ async fn buffered(stream: &mut DeliveryStream) -> (String, Option<ChannelError>)
     while let Some(item) = stream.next().await {
         match item {
             Ok(StreamItem::Text(chunk)) => text.push_str(&chunk),
-            Ok(StreamItem::Row(_) | StreamItem::Thinking(_) | StreamItem::Usage(_)) => {}
+            Ok(
+                StreamItem::Row(_)
+                | StreamItem::Thinking(_)
+                | StreamItem::Usage(_)
+                | StreamItem::LoopEnd(_),
+            ) => {}
             Err(failure) => return (text, Some(failure)),
         }
     }

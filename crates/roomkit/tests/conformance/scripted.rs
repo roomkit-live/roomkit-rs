@@ -227,6 +227,9 @@ pub(crate) struct ScriptedChannel {
     /// Whether its `deliver_stream` records what each generation told
     /// (README: `reads_usage`).
     reads_usage: bool,
+    /// Whether its `deliver_stream` records the turn's end the stream hands
+    /// last (README: `reads_loop_end`).
+    reads_loop_end: bool,
     run: Weak<Run>,
     parse: Reactions,
     on_event: Reactions,
@@ -282,6 +285,7 @@ impl ScriptedChannel {
         Ok(Self {
             declaration,
             reads_usage: spec.get("reads_usage") == Some(&Value::Bool(true)),
+            reads_loop_end: spec.get("reads_loop_end") == Some(&Value::Bool(true)),
             run: Arc::downgrade(run),
             parse: Reactions::new(spec.get("parse")),
             on_event: Reactions::new(spec.get("on_event")),
@@ -616,6 +620,16 @@ impl Channel for ScriptedChannel {
                             "provider": marker.provider,
                         });
                         run.record_streamed(&room_id, channel_id, told);
+                    }
+                }
+                Ok(StreamItem::LoopEnd(marker)) => {
+                    if self.reads_loop_end {
+                        let ended = json!({
+                            "reason": marker.reason.to_string(),
+                            "rounds": marker.rounds,
+                            "usage": marker.usage,
+                        });
+                        run.record_streamed(&room_id, channel_id, json!({ "loop_end": ended }));
                     }
                 }
                 Ok(StreamItem::Thinking(thinking)) => {

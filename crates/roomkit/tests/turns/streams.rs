@@ -544,6 +544,7 @@ impl Channel for Logging {
                 Ok(StreamItem::Row(row)) => {
                     format!("row {:?} {:?}", row.r#type, text_of(&row.content))
                 }
+                Ok(StreamItem::LoopEnd(end)) => format!("loop_end {}", end.reason),
                 Ok(_) => "other".to_owned(),
                 Err(error) => format!("error {error}"),
             };
@@ -697,7 +698,8 @@ async fn text_written_inside_a_call_crosses_in_order() {
                 "text \"b c \"",
                 "row ToolCallEnd \"[Tool call: look]\"",
                 "text \"d \"",
-                "row Message \"b c d \""
+                "row Message \"b c d \"",
+                "loop_end completed"
             ]),
             lines(&[
                 "Message \"a \"",

@@ -93,6 +93,7 @@ const CHANNEL: &[&str] = &[
     "deliver",
     "streams",
     "reads_usage",
+    "reads_loop_end",
     "deliver_stream",
     "on_room_attached",
     "on_room_detached",
