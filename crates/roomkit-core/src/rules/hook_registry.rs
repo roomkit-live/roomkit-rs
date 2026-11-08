@@ -862,7 +862,7 @@ impl HookRegistry {
 
     /// Whether `newer`, a later copy of the kit's registry, holds a hook of
     /// the room `room_id` of a name this copy lacks there.
-    pub fn lacks_room_hooks_of(&self, room_id: &RoomId, newer: &Self) -> bool {
+    pub(crate) fn lacks_room_hooks_of(&self, room_id: &RoomId, newer: &Self) -> bool {
         newer
             .in_scope(Some(room_id))
             .any(|hook| self.room_hook(room_id, &hook.spec.name).is_none())
@@ -876,6 +876,7 @@ impl HookRegistry {
     /// process installed joins it once it reads the room (RFC §19.7.5 rule
     /// 16), as Python's hook engine, which every firing reads, sees the
     /// room's hooks at once.
+    #[doc(hidden)]
     pub fn adopt_room_hooks(&mut self, room_id: &RoomId, newer: &Self) {
         let adopted: Vec<Registered> = newer
             .in_scope(Some(room_id))

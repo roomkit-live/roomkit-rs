@@ -438,6 +438,7 @@ pub trait Operation {
     /// so that the message whose context read the room fires the
     /// discussion's hooks, as Python's hook engine, read at each firing,
     /// does. Nothing by default.
+    #[doc(hidden)]
     fn adopt_room_hooks(&mut self, room_id: &RoomId, hooks: &HookRegistry) {
         let _ = (room_id, hooks);
     }
