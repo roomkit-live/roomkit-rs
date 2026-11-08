@@ -153,6 +153,11 @@ pub struct RoomKitOptions<S = InMemoryStore> {
     /// [`NoopTelemetryProvider`](crate::telemetry::NoopTelemetryProvider)
     /// by default.
     pub telemetry: Option<crate::telemetry::TelemetryConfig>,
+    /// Python `inbound_rate_limit=None`: a rate limit on every inbound
+    /// message, by its channel. A channel's message past it is refused
+    /// before anything is read or written, blocked with the reason
+    /// `rate_limited` (RFC §10.1); `None`, none is refused for its rate.
+    pub inbound_rate_limit: Option<RateLimit>,
 }
 
 /// Python's defaults, over a new in-memory store. Defined for the in-memory
@@ -189,6 +194,7 @@ impl<S> RoomKitOptions<S> {
             lock_manager: None,
             delivery_claim_lock_manager: None,
             telemetry: None,
+            inbound_rate_limit: None,
         }
     }
 }
@@ -215,6 +221,7 @@ impl<S> fmt::Debug for RoomKitOptions<S> {
                 &self.delivery_claim_lock_manager.is_some(),
             )
             .field("telemetry", &self.telemetry)
+            .field("inbound_rate_limit", &self.inbound_rate_limit)
             .finish_non_exhaustive()
     }
 }
@@ -286,6 +293,12 @@ scoped_options! {
     /// What [`RoomKit::commit_event`](crate::RoomKit::commit_event) takes
     /// beside the room and the record.
     CommitEventOptions;
+    /// What [`RoomKit::set_room_timers`](crate::RoomKit::set_room_timers)
+    /// takes beside the room and the timers.
+    SetRoomTimersOptions;
+    /// What [`RoomKit::set_agent_response_policy`](crate::RoomKit::set_agent_response_policy)
+    /// takes beside the room and the policy.
+    SetAgentResponsePolicyOptions;
 }
 
 /// What [`RoomKit::create_room`](crate::RoomKit::create_room) takes, Python's

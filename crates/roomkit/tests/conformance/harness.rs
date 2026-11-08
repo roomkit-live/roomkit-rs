@@ -93,6 +93,9 @@ fn kit_options<S>(
     if let Some(timeout) = kit["process_timeout_ms"].as_u64() {
         options.process_timeout = Duration::from_millis(timeout);
     }
+    if let Some(limit) = kit.get("inbound_rate_limit") {
+        options.inbound_rate_limit = serde_json::from_value(limit.clone()).ok();
+    }
     options
 }
 

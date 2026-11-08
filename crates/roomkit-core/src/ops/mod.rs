@@ -71,7 +71,8 @@ pub use inbound::{
 pub use lifecycle::{
     AnnounceRoomCreated, ArchiveRoom, AttachChannel, CheckTimers, CloseRoom, CreateRoom,
     DetachChannel, LifecycleChange, LifecycleError, LifecyclePayload, PauseRoom, ReopenRoom,
-    ResumeRoom, TimersChecked, UpdateBinding, UpdateRoomMetadata,
+    ResumeRoom, SetAgentResponsePolicy, SetRoomTimers, TimersChecked, UpdateBinding,
+    UpdateRoomMetadata,
 };
 pub use members::{ChangeMember, MemberChange, MemberError, Membered};
 pub use protocol::{

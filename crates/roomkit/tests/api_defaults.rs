@@ -44,6 +44,8 @@ use roomkit::RouteOptions;
 use roomkit::SendEventOptions;
 use roomkit::SendGreetingOptions;
 use roomkit::SetAccessOptions;
+use roomkit::SetAgentResponsePolicyOptions;
+use roomkit::SetRoomTimersOptions;
 use roomkit::SetVisibilityOptions;
 use roomkit::SubmitFeedbackOptions;
 use roomkit::TransportChannelOptions;
@@ -117,6 +119,20 @@ fn check_all_timers_options_defaults_as_python() {
 fn check_room_timers_options_defaults_as_python() {
     let defaults = CheckRoomTimersOptions::default();
     // roomkit.RoomKit.check_room_timers(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}
+
+#[test]
+fn set_room_timers_options_defaults_as_python() {
+    let defaults = SetRoomTimersOptions::default();
+    // roomkit.RoomKit.set_room_timers(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}
+
+#[test]
+fn set_agent_response_policy_options_defaults_as_python() {
+    let defaults = SetAgentResponsePolicyOptions::default();
+    // roomkit.RoomKit.set_agent_response_policy(organization_id) = None
     assert!(defaults.organization_id.is_none());
 }
 
@@ -528,6 +544,8 @@ fn room_kit_options_defaults_as_python() {
     assert!(defaults.attached_media.is_none());
     // roomkit.RoomKit.__init__(orchestration) = None
     assert!(defaults.orchestration.is_none());
+    // roomkit.RoomKit.__init__(inbound_rate_limit) = None
+    assert!(defaults.inbound_rate_limit.is_none());
     // roomkit.RoomKit.__init__(store) = None
     let store: Arc<InMemoryStore> = defaults.store;
     assert_eq!(Arc::strong_count(&store), 1);

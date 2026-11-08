@@ -763,13 +763,6 @@ reason = "the delivery path's own fields, held private: no channel of 0.x plays 
 [[missing]]
 python = "roomkit.RoomKit"
 members = [
-    "set_agent_response_policy", "set_room_timers",
-]
-reason = "not in 0.x: the kit's other reads and setters"
-
-[[missing]]
-python = "roomkit.RoomKit"
-members = [
     "bind_voice_session", "connect_video", "connect_voice", "disconnect_video",
     "disconnect_voice", "join", "leave",
     "stt", "synthesize", "transcribe",
@@ -786,7 +779,7 @@ reason = "not in 0.x: a voice or realtime session's greeting comes with voice"
 python = "roomkit.RoomKit.__init__"
 params = [
     "stt", "tts", "voice",
-    "inbound_rate_limit", "persistence_policy",
+    "persistence_policy",
     "turn_backend",
     "error_classes",
 ]

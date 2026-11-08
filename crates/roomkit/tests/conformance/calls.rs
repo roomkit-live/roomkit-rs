@@ -9,9 +9,9 @@ use std::future::Future;
 use std::time::Duration;
 
 use roomkit::model::{
-    Access, ChannelCategory, ChannelId, ChannelType, DeliveryStatus, EventContent, EventDirection,
-    EventId, EventSource, EventType, InboundMessage, Metadata, Observation, Participant,
-    ParticipantId, RoomEvent, RoomId, RoomTimers, Visibility,
+    Access, AgentResponsePolicy, ChannelCategory, ChannelId, ChannelType, DeliveryStatus,
+    EventContent, EventDirection, EventId, EventSource, EventType, InboundMessage, Metadata,
+    Observation, Participant, ParticipantId, RoomEvent, RoomId, RoomTimers, Visibility,
 };
 use roomkit::orchestration::StatusEntry;
 use roomkit::providers::sms::WebhookMeta;
@@ -22,8 +22,9 @@ use roomkit::{
     Immediate, InboundResult, MuteOptions, MuteOutputOptions, PostOptions,
     ProcessDeliveryStatusOptions, ProcessInboundOptions, ProcessWebhookOptions, Queued,
     RegenerateResponseOptions, RegenerateTargetOptions, RemoveRoomHookOptions, RoomKitError,
-    SendEventOptions, SendGreetingOptions, SetAccessOptions, SetVisibilityOptions, UnmuteOptions,
-    UnmuteOutputOptions, UpdateBindingMetadataOptions, UpdateEventOptions, WaitForIdle,
+    SendEventOptions, SendGreetingOptions, SetAccessOptions, SetAgentResponsePolicyOptions,
+    SetRoomTimersOptions, SetVisibilityOptions, UnmuteOptions, UnmuteOutputOptions,
+    UpdateBindingMetadataOptions, UpdateEventOptions, WaitForIdle,
 };
 use roomkit_ai::{AiGenerationEvent, AiResponseEvent, ThinkingEvent, ToolRoundEvent};
 use serde::de::DeserializeOwned;
@@ -376,7 +377,36 @@ async fn other_call(
     if name == "send_greeting" {
         return send_greeting(run, name, spec).await;
     }
+    if matches!(name, "set_room_timers" | "set_agent_response_policy") {
+        return setting_call(run, name, spec).await;
+    }
     lifecycle_call(run, name, spec).await
+}
+
+/// A host's setter of a room's settings: its timers, its agent response
+/// policy (README, `set_room_timers`, `set_agent_response_policy`).
+async fn setting_call(
+    run: &std::sync::Arc<Run>,
+    name: &str,
+    spec: &Value,
+) -> Result<Called, Unreadable> {
+    let room = room_id(spec)?;
+    let outcome = if name == "set_room_timers" {
+        let options = SetRoomTimersOptions {
+            organization_id: organization_id(spec),
+        };
+        let timers: RoomTimers = field(spec, "timers")?;
+        run.kit().set_room_timers(&room, timers, options).await
+    } else {
+        let options = SetAgentResponsePolicyOptions {
+            organization_id: organization_id(spec),
+        };
+        let policy: AgentResponsePolicy = field(spec, "policy")?;
+        run.kit()
+            .set_agent_response_policy(&room, policy, options)
+            .await
+    };
+    Ok(finish(run, name, outcome, dump))
 }
 
 async fn lifecycle_call(
@@ -605,14 +635,9 @@ pub(crate) async fn create_room(
     room: &Value,
     orchestration: Option<Option<crate::strategy_calls::Strategy>>,
 ) -> Result<Called, Unreadable> {
-    let timers = match room.get("timers") {
-        Some(timers) => Some(RoomTimers {
-            inactive_after_seconds: optional(timers, "inactive_after_seconds")?.flatten(),
-            closed_after_seconds: optional(timers, "closed_after_seconds")?.flatten(),
-            ..RoomTimers::default()
-        }),
-        None => None,
-    };
+    // The whole timers, an explicit last activity among them, which the
+    // room keeps (Python's `create_room(timers=)`).
+    let timers = optional::<RoomTimers>(room, "timers")?;
     let options = CreateRoomOptions {
         room_id: Some(field(room, "id")?),
         metadata: optional::<Metadata>(room, "metadata")?.unwrap_or_default(),

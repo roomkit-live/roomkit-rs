@@ -47,6 +47,7 @@ mod read_markers;
 mod regenerate;
 mod registry;
 mod room_hooks;
+mod room_settings;
 mod rooms;
 mod shutdown;
 mod start_task;
@@ -106,8 +107,8 @@ pub use self::options::{
     DetachChannelOptions, GetBindingOptions, GetRoomOptions, GetTimelineOptions,
     ListBindingsOptions, ListMembersOptions, MuteOptions, PauseRoomOptions, PostOptions,
     ProcessInboundOptions, ReopenRoomOptions, ResumeRoomOptions, RoomKitOptions, SendEventOptions,
-    SetAccessOptions, SetVisibilityOptions, UnmuteOptions, UpdateBindingMetadataOptions,
-    UpdateEventOptions,
+    SetAccessOptions, SetAgentResponsePolicyOptions, SetRoomTimersOptions, SetVisibilityOptions,
+    UnmuteOptions, UpdateBindingMetadataOptions, UpdateEventOptions,
 };
 pub use self::output::{MuteOutputOptions, UnmuteOutputOptions};
 pub use self::read_markers::{ListReadMarkersOptions, MarkAllReadOptions, MarkReadOptions};
@@ -249,6 +250,9 @@ pub(crate) struct Inner<S> {
     /// The breakers and the rate limits of the transports' sends (RFC
     /// §13.1, §13.2).
     pub(crate) sends: crate::sends::Sends,
+    /// The kit's inbound rate limit and its buckets, by channel (Python's
+    /// `inbound_rate_limit`).
+    pub(crate) inbound_limit: Option<crate::sends::InboundLimit>,
     /// Set once the channels were closed at the kit's close, with those
     /// whose close failed: they are closed once.
     channels_closed: tokio::sync::OnceCell<shutdown::Ended>,
@@ -352,6 +356,10 @@ impl<S: ConversationStore> RoomKit<S> {
     }
 
     /// A kit built with `options` whose runs read `environment`.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the kit's one constructor: a struct literal of its every part, one line each"
+    )]
     pub(crate) fn with_environment(
         options: RoomKitOptions<S>,
         environment: Arc<dyn Environment + Send + Sync>,
@@ -378,6 +386,7 @@ impl<S: ConversationStore> RoomKit<S> {
             lock_manager,
             delivery_claim_lock_manager,
             telemetry,
+            inbound_rate_limit,
         } = options;
         let telemetry = telemetry::telemetry_of(telemetry);
         store.set_telemetry(Arc::clone(&telemetry.provider), telemetry.sensitive);
@@ -423,6 +432,7 @@ impl<S: ConversationStore> RoomKit<S> {
             turns: Arc::default(),
             room_turns: Arc::default(),
             sends: crate::sends::Sends::default(),
+            inbound_limit: inbound_rate_limit.map(crate::sends::InboundLimit::new),
             channels_closed: tokio::sync::OnceCell::new(),
             shutdown: shutdown::Shutdown::default(),
             store_released: AtomicBool::new(false),
@@ -613,6 +623,17 @@ impl<S: ConversationStore> RoomKit<S> {
         options: ProcessInboundOptions,
         publication: Option<String>,
     ) -> Result<InboundResult, RoomKitError> {
+        // A message past its channel's inbound rate is refused before
+        // anything is read, written or traced, as Python's.
+        if let Some(limit) = &self.inner.inbound_limit
+            && !limit.acquire(&message.channel_id)
+        {
+            return Ok(InboundResult {
+                blocked: true,
+                reason: Some(crate::sends::RATE_LIMITED.to_owned()),
+                ..InboundResult::default()
+            });
+        }
         // A channel that refuses the call opens no span: Python opens it once
         // the channel is known, for the sender as the channel writes it.
         let is_host = self

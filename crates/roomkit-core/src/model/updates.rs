@@ -6,8 +6,8 @@
 use std::collections::BTreeMap;
 
 use super::{
-    Access, ChannelBinding, EventContent, EventSource, Metadata, ParticipantId, Room, RoomEvent,
-    RoomStatus, Timestamp, Visibility,
+    Access, AgentResponsePolicy, ChannelBinding, EventContent, EventSource, Metadata,
+    ParticipantId, Room, RoomEvent, RoomStatus, Timestamp, Visibility,
 };
 
 /// A partial update of a room (RFC §14.1 `update_room(room_id, updates)`):
@@ -35,6 +35,12 @@ pub struct RoomUpdates {
     pub paused_at: Option<Option<Timestamp>>,
     /// The room's last activity (`timers.last_activity_at`).
     pub last_activity_at: Option<Option<Timestamp>>,
+    /// The room's inactivity bound (`timers.inactive_after_seconds`).
+    pub inactive_after_seconds: Option<Option<u64>>,
+    /// The room's close bound (`timers.closed_after_seconds`).
+    pub closed_after_seconds: Option<Option<u64>>,
+    /// What an agent's own output asks in the room (RFC §19.3.1).
+    pub agent_response_policy: Option<AgentResponsePolicy>,
     /// Metadata keys to write, each replacing the key's stored value.
     pub metadata: Metadata,
     /// Metadata keys to remove.
@@ -85,6 +91,15 @@ impl RoomUpdates {
         }
         if let Some(last_activity_at) = self.last_activity_at {
             room.timers.last_activity_at = last_activity_at;
+        }
+        if let Some(inactive_after_seconds) = self.inactive_after_seconds {
+            room.timers.inactive_after_seconds = inactive_after_seconds;
+        }
+        if let Some(closed_after_seconds) = self.closed_after_seconds {
+            room.timers.closed_after_seconds = closed_after_seconds;
+        }
+        if let Some(policy) = self.agent_response_policy {
+            room.agent_response_policy = policy;
         }
         for key in &self.removed_metadata {
             room.metadata.shift_remove(key);

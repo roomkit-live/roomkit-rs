@@ -52,6 +52,37 @@ pub(crate) struct Sends {
     buckets: Mutex<HashMap<ChannelId, Bucket>>,
 }
 
+/// Why a message past its channel's inbound rate is refused: Python's
+/// reason.
+pub(crate) const RATE_LIMITED: &str = "rate_limited";
+
+/// The kit's inbound rate limit and its buckets, by channel: Python's
+/// `inbound_rate_limit` and the `TokenBucketRateLimiter` that holds it.
+#[derive(Debug)]
+pub(crate) struct InboundLimit {
+    limit: RateLimit,
+    buckets: Mutex<HashMap<ChannelId, Bucket>>,
+}
+
+impl InboundLimit {
+    /// The buckets of `limit`, each full at its channel's first message.
+    pub(crate) fn new(limit: RateLimit) -> Self {
+        Self {
+            limit,
+            buckets: Mutex::default(),
+        }
+    }
+
+    /// Takes a token from `channel_id`'s bucket: whether its message is
+    /// within the limit. A limit with no bound refuses nothing.
+    pub(crate) fn acquire(&self, channel_id: &ChannelId) -> bool {
+        let Some(rate) = rate_per_second(&self.limit) else {
+            return true;
+        };
+        Guard::of(lock(&self.buckets), channel_id).take(rate, Instant::now())
+    }
+}
+
 /// A send the channel's open breaker skipped: nothing was sent.
 #[derive(Debug)]
 pub(crate) struct CircuitOpen;

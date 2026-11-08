@@ -20,6 +20,7 @@ mod metadata;
 mod payload;
 pub(crate) mod record;
 pub(crate) mod report;
+mod settings;
 mod status;
 
 use std::sync::Arc;
@@ -30,6 +31,7 @@ pub use self::announce::AnnounceRoomCreated;
 pub use self::bindings::{AttachChannel, DetachChannel, UpdateBinding};
 pub use self::metadata::UpdateRoomMetadata;
 pub use self::payload::{LifecycleChange, LifecyclePayload};
+pub use self::settings::{SetAgentResponsePolicy, SetRoomTimers};
 pub use self::status::{
     ArchiveRoom, CheckTimers, CloseRoom, PauseRoom, ReopenRoom, ResumeRoom, TimersChecked,
 };

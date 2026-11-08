@@ -378,7 +378,10 @@ async fn update_room<S: ConversationStore>(
     let lifecycle = updates.status.is_some()
         || updates.closed_at.is_some()
         || updates.paused_at.is_some()
-        || updates.last_activity_at.is_some();
+        || updates.last_activity_at.is_some()
+        || updates.inactive_after_seconds.is_some()
+        || updates.closed_after_seconds.is_some()
+        || updates.agent_response_policy.is_some();
     if !lifecycle {
         let options = PatchRoomMetadataOptions {
             unset: mem::take(&mut updates.removed_metadata),

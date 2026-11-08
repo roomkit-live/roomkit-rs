@@ -45,7 +45,9 @@ const KIT: &[&str] = &[
     "orchestration",
     "delivery_gap_timeout_ms",
     "lock_manager",
+    "inbound_rate_limit",
 ];
+const RATE_LIMIT: &[&str] = &["max_per_second", "max_per_minute", "max_per_hour"];
 const MEDIA_RESOLVER: &[&str] = &["media"];
 const ATTACHED_MEDIA: &[&str] = &["key"];
 const REFUSES: &[&str] = &[
@@ -430,6 +432,8 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
         "update_binding_metadata" => &["room_id", "channel_id", "metadata"],
         "set_visibility" => &["room_id", "channel_id", "visibility"],
         "close_room" | "archive_room" | "check_timers" | "regenerate_target" => &["room_id"],
+        "set_room_timers" => &["room_id", "timers"],
+        "set_agent_response_policy" => &["room_id", "policy"],
         "send_greeting" => &["room_id", "channel_id", "agent_id", "greeting"],
         "register_channel" => &["channel"],
         "unregister_channel" => &["channel_id"],
@@ -491,6 +495,12 @@ pub(crate) fn unknown_members(scenario: &Value) -> Vec<String> {
         &mut found,
     );
     let kit = &setup["kit"];
+    optional(
+        &kit["inbound_rate_limit"],
+        RATE_LIMIT,
+        "setup.kit.inbound_rate_limit",
+        &mut found,
+    );
     optional(
         &kit["media_resolver"],
         MEDIA_RESOLVER,
