@@ -3,8 +3,8 @@
 //! `TOOL_CALL_END` with each result and status once the reader took their
 //! end rows, and, for a round cut before, each call's own end for the end
 //! rows the reader asked past and an aborted end for the others, so that a
-//! cut leaves no start without its end. Python's `_publish_tool_event`, `_started_calls`,
-//! `_ended_calls` and `_aborted_results`.
+//! cut leaves no start without its end. Python's `_publish_tool_event`,
+//! `_started_calls`, `_ended_calls` and `_aborted_results`.
 //!
 //! A room's realtime channel has no visibility gate: a turn whose trigger
 //! scopes its answers publishes nothing, and the kit publishes only while

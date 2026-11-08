@@ -737,8 +737,9 @@ impl<P: AiProvider> Loop<P> {
     /// calls, then each result. A `Cancel` that came while the calls were
     /// announced stops them all: none runs, each ends cancelled (RFC
     /// §21.3). The room's subscribers read the calls' start before they
-    /// run and their end once the reader took their end rows, or the end
-    /// those rows say when the round is cut (RFC §6.4, §8.4).
+    /// run and their end once the reader took their end rows, or, when the
+    /// round is cut, their own end for the end rows the reader asked past
+    /// and an aborted end for the others (RFC §6.4, §8.4).
     async fn run_calls(
         &self,
         generation: Generation,
