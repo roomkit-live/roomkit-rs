@@ -39,6 +39,7 @@ mod rules;
 mod spans;
 mod text_window;
 mod thinking;
+mod tool_events;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -66,6 +67,7 @@ pub(crate) use self::text_window::TextPublication;
 use self::text_window::{RoundWindows, TextWindow};
 pub(crate) use self::thinking::ThinkingPublication;
 use self::thinking::ThinkingWindow;
+use self::tool_events::{Ended, Running, ToolEvents};
 use crate::author_images::refuses_content;
 use crate::loop_events::DeclaredTool;
 use crate::memory::{MemoryProvider, after_memory};
@@ -391,7 +393,7 @@ impl<P: AiProvider> Loop<P> {
             self.said
                 .extend(generation.said().map(|said| (messages.len(), said)));
             let usage = generation.done.usage.clone();
-            let (read, ran) = self.round_of_calls(generation, &steering, &out).await;
+            let (read, ran) = self.run_calls(generation, (&steering, round), &out).await;
             self.media.keep_results(messages.len(), &ran.results);
             messages.extend(read);
             // A round counts once its calls ran (Python's `_run_announced_calls`).
@@ -729,21 +731,31 @@ impl<P: AiProvider> Loop<P> {
         }
     }
 
-    /// Runs a round's calls, each starting once the reader read every
+    /// Runs round `round`'s calls, each starting once the reader read every
     /// start, concurrently, their ends handed over in call order; returns
     /// what the next generation reads of the round: its message with its
     /// calls, then each result. A `Cancel` that came while the calls were
     /// announced stops them all: none runs, each ends cancelled (RFC
-    /// §21.3).
-    async fn round_of_calls(
+    /// §21.3). The room's subscribers read the calls' start before they
+    /// run and their end once they ended, or were cut (RFC §6.4, §8.4).
+    async fn run_calls(
         &self,
         generation: Generation,
-        steering: &Steering,
+        (steering, round): (&Steering, u32),
         out: &Yielder<Result<TurnItem, ProviderError>>,
     ) -> (Vec<Message>, Ran) {
         for called in &generation.calls {
             out.give(Ok(TurnItem::ToolStart(called.call.clone()))).await;
         }
+        let ids = (&self.context.room_id, &self.context.channel_id);
+        let answers_room = self.thinking_publication.answers_room;
+        let events = ToolEvents::new(self.turn.as_ref(), ids, round, answers_room);
+        let made = generation.calls.iter().map(|called| &called.call);
+        if let Some(events) = &events {
+            events.started(made.clone());
+        }
+        let running = Running::new(events.as_ref(), made.cloned().collect());
+        let started = Instant::now();
         let unrun = steering.cancelled();
         let ends = if unrun {
             generation
@@ -759,6 +771,19 @@ impl<P: AiProvider> Loop<P> {
                 .map(|(position, called)| self.serve(called, place_under_its_id(calls, position)));
             join_all(serving.collect()).await
         };
+        running.ended();
+        if let Some(events) = &events {
+            let ended: Vec<Ended<'_>> = ends
+                .iter()
+                .map(|end| Ended {
+                    call: &end.call,
+                    result: end.result.as_text(),
+                    failed: end.outcome != ToolCallOutcome::Served,
+                })
+                .collect();
+            let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            events.ended(&ended, Some(duration_ms));
+        }
         let mut ran = Ran::default();
         if !unrun {
             ran.calls = generation.calls.iter().map(Called::replayed).collect();

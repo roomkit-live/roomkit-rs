@@ -9,12 +9,13 @@ use pretty_assertions::assert_eq;
 use roomkit::model::HookResult;
 use roomkit::model::hook::{AllowOptions, BlockOptions};
 use roomkit::model::{EventContent, EventType, ToolCallContent, ToolCallOutcome};
-use roomkit::{HookExecution, HookOptions, HookTrigger, ToolCallEvent};
+use roomkit::realtime::{EphemeralEvent, EphemeralEventType};
+use roomkit::{HookExecution, HookOptions, HookTrigger, SubscribeRoomOptions, ToolCallEvent};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{AiChannelOptions, AiTool, ToolResult, Tools};
 use serde_json::{Value, json};
 
-use super::support::Room;
+use super::support::{Room, room_id};
 
 const INTENT: &str = "Je recherche les fichiers texte du projet.";
 
@@ -255,6 +256,88 @@ async fn a_call_s_intent_rides_apart_from_its_arguments() {
         json!({ "input_tokens": 30, "output_tokens": 6 })
     );
     assert_eq!(record["ai_usage_complete"], true);
+}
+
+/// An ephemeral event's type and the intent of each of its calls.
+type Published = (EphemeralEventType, Vec<Option<Value>>);
+
+/// What the room's subscribers read of each call: the event's type, and
+/// the intent of each of its calls, `None` for an entry with no `intent`
+/// key; the room's agent answers "Files?" with `rounds`, intents on or off.
+async fn published(rounds: Vec<ScriptedRound>, on: bool) -> Vec<Published> {
+    let received = Arc::default();
+    let room = Room::equipped(
+        ScriptedProvider::new(rounds),
+        shell(&received, closed()),
+        |options| AiChannelOptions {
+            tool_call_intents: on,
+            ..options
+        },
+    )
+    .await;
+    let read: Arc<Mutex<Vec<Published>>> = Arc::default();
+    let seen = Arc::clone(&read);
+    let record = move |event: EphemeralEvent| {
+        let seen = Arc::clone(&seen);
+        async move {
+            let calls = event.data.get("tool_calls").and_then(Value::as_array);
+            let intents = calls
+                .into_iter()
+                .flatten()
+                .map(|call| call.get("intent").cloned())
+                .collect();
+            seen.lock().unwrap().push((event.r#type, intents));
+        }
+    };
+    room.kit
+        .subscribe_room(&room_id(), record, SubscribeRoomOptions::default())
+        .await
+        .unwrap();
+    room.says("Files?").await;
+    roomkit::testing::idle(&room.kit).await;
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    room.kit.close().await.unwrap();
+    let read = read.lock().unwrap().clone();
+    read.into_iter()
+        .filter(|(kind, _)| {
+            matches!(
+                kind,
+                EphemeralEventType::ToolCallStart | EphemeralEventType::ToolCallEnd
+            )
+        })
+        .collect()
+}
+
+// Python: tests/test_channels/test_tool_call_intents.py::test_a_call_s_intent_rides_apart_from_its_arguments
+// (its TOOL_CALL_START and TOOL_CALL_END payloads)
+#[tokio::test]
+async fn a_call_s_intent_rides_its_start_and_its_end_on_the_realtime() {
+    let call = json!({ "command": "ls", "_roomkit_intent": INTENT });
+    let rounds = vec![calling(&call), ScriptedRound::answering("Done.")];
+    assert_eq!(
+        published(rounds, true).await,
+        [
+            (EphemeralEventType::ToolCallStart, vec![Some(json!(INTENT))]),
+            (EphemeralEventType::ToolCallEnd, vec![Some(json!(INTENT))]),
+        ]
+    );
+}
+
+// Python: tests/test_channels/test_tool_call_intents.py::test_off_nothing_is_taken_from_a_call
+// (no TOOL_CALL_START payload carries an intent)
+#[tokio::test]
+async fn off_no_start_or_end_on_the_realtime_carries_an_intent() {
+    let call = json!({ "command": "ls" });
+    let rounds = vec![calling(&call), ScriptedRound::answering("Done.")];
+    assert_eq!(
+        published(rounds, false).await,
+        [
+            (EphemeralEventType::ToolCallStart, vec![None]),
+            (EphemeralEventType::ToolCallEnd, vec![None]),
+        ]
+    );
 }
 
 /// A later turn reads the earlier call as the turn that made it did.
