@@ -32,8 +32,7 @@ use super::warnings::Warnings;
 
 const PREAMBLE: &str = "You have access to Agent Skills — specialized knowledge packages. Use \
 the activate_skill tool to load a skill's full instructions before using it. Available skills are \
-listed below. The skill loader does not execute scripts. \
-Use only tools provided by the host for any execution, subject to its permissions.";
+listed below. Note: Script execution is not available in this environment.";
 
 const ALREADY_ACTIVE: &str = r#"{"ok": true, "name": "doc-helper", "_note": "This skill is already active \u2014 its full instructions are in your system rules, under 'Active skill instructions'. Follow them. There is nothing more to load: use other tools to act.", "already_active": true, "references": ["guide.md"]}"#;
 

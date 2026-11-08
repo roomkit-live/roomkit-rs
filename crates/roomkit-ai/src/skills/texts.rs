@@ -11,11 +11,12 @@ pub(crate) use roomkit_core::rules::python_repr as quoted_name;
 use serde_json::Value;
 
 /// The skills' preamble, before the manifest, with the note that no script
-/// runs here (this implementation runs none).
+/// runs here (this implementation runs none): Python's `SKILLS_PREAMBLE`
+/// and `SKILLS_NO_SCRIPTS_NOTE`, which a channel with no script executor
+/// writes.
 pub(crate) const PREAMBLE: &str = "You have access to Agent Skills — specialized knowledge \
 packages. Use the activate_skill tool to load a skill's full instructions before using it. \
-Available skills are listed below. The skill loader does not execute scripts. \
-Use only tools provided by the host for any execution, subject to its permissions.";
+Available skills are listed below. Note: Script execution is not available in this environment.";
 
 /// The heading of the active skills' instructions in the system prompt.
 pub(crate) const ACTIVE_HEADING: &str = "# Active skill instructions (binding rules)";
