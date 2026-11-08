@@ -8,6 +8,9 @@
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
+#[path = "support/warnings.rs"]
+mod warnings;
+
 use std::sync::Arc;
 
 use roomkit::model::{
@@ -22,9 +25,11 @@ use roomkit::{
 };
 use roomkit_ai::{
     Agent, AgentOptions, AiContentPart, AiContext, AiMessageContent, AiProvider, AiResponse,
-    AiToolCall, MockAiProvider, MockAiProviderOptions, ProviderError, ToolResult,
+    AiToolCall, MockAiProvider, MockAiProviderOptions, ProviderError, ProviderErrorOptions,
+    ToolResult,
 };
 use serde_json::json;
+use warnings::Warnings;
 
 fn id(name: &str) -> ChannelId {
     ChannelId::new(name).unwrap()
@@ -528,4 +533,86 @@ async fn no_router_hook_in_voice_auto_delegate_async_delivery() {
     })
     .await;
     assert!(!names.contains(&"supervisor_router_r1".to_owned()));
+}
+
+/// A model whose every generation fails with a provider's 400.
+#[derive(Clone, Default)]
+struct Upstream400;
+
+impl AiProvider for Upstream400 {
+    fn model_name(&self) -> &'static str {
+        "mock"
+    }
+
+    fn generate<'a>(
+        &'a self,
+        _context: &'a AiContext,
+    ) -> impl Future<Output = Result<AiResponse, ProviderError>> + Send + 'a {
+        let options = ProviderErrorOptions {
+            provider: "mock".to_owned(),
+            status_code: Some(400),
+            ..ProviderErrorOptions::default()
+        };
+        std::future::ready(Err(ProviderError::new("upstream 400", options)))
+    }
+}
+
+// Python: tests/orchestration/test_supervisor_pass1_cut.py::test_a_failed_pass_gives_its_error_logged_once
+// The first pass fails on its first round here, where Python's fails after
+// one: the line is the same either way.
+#[tokio::test]
+async fn a_failed_pass_gives_its_error_logged_once() {
+    let (warnings, _capturing) = Warnings::capture();
+    let kit = RoomKit::new(RoomKitOptions::default());
+    let identity = |role: &str| AgentOptions {
+        role: Some(role.to_owned()),
+        ..AgentOptions::default()
+    };
+    let lead = Agent::new(id("sup"), Upstream400, identity("Coordinator")).unwrap();
+    let worker_model = model(vec![says("worker answer")]);
+    let worker = agent("worker", "Worker", worker_model.clone());
+    kit.register_channel(lead).unwrap();
+    kit.register_channel(worker).unwrap();
+    let options = SupervisorOptions {
+        strategy: Some(WorkerStrategy::Parallel),
+        auto_delegate: true,
+        ..SupervisorOptions::default()
+    };
+    let team = Supervisor::new(id("sup"), vec![id("worker").into()], options).unwrap();
+    let sms = RecordingTransport::new(
+        id("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(sms.clone()).unwrap();
+    let room = RoomId::new("r1").unwrap();
+    let created = CreateRoomOptions {
+        room_id: Some(room.clone()),
+        orchestration: Some(Some(Arc::new(team))),
+        ..CreateRoomOptions::default()
+    };
+    kit.create_room(created).await.unwrap();
+    kit.attach_channel(&room, &id("sms"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+
+    let message = InboundMessage::new(id("sms"), "u", TextContent::new("Find it."));
+    let result = kit
+        .process_inbound(message, ProcessInboundOptions::default())
+        .await
+        .unwrap();
+    kit.close().await.unwrap();
+
+    let named = warnings.containing("upstream 400");
+    assert_eq!(
+        (
+            result.error.map(|error| error.error_type),
+            worker_model.calls().len(),
+            sms.deliveries().len(),
+            named.len(),
+            named.iter().all(|line| line.starts_with("WARN ")),
+        ),
+        (Some("ProviderError".to_owned()), 0, 0, 1, true),
+        "{named:?}"
+    );
 }

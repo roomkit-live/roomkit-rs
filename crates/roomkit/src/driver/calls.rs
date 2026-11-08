@@ -1346,7 +1346,7 @@ fn channel_output(result: Result<ChannelOutput, ChannelError>) -> Outcome {
 /// its type's name (RFC §5.13); any other a failure of the class a
 /// [`ClassedError`] names, its attributes kept, else of type
 /// `ChannelError`, a boxed error having no class name.
-fn channel_failed(error: &ChannelError) -> Outcome {
+pub(crate) fn channel_failed(error: &ChannelError) -> Outcome {
     let kit_error = error.downcast_ref::<RoomKitError>();
     let classed = error.downcast_ref::<ClassedError>();
     let code = match kit_error {

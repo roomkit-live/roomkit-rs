@@ -469,9 +469,10 @@ impl Stops {
 /// What a target's failure no operation reports is reported as (RFC §12.2
 /// step 13s): one of a target left to end alone, or of a read whose work, a
 /// held task's that was cut, may be dropped before it takes the read's
-/// answer.
+/// answer; and the failure of a strategy's first pass, which the read
+/// reports itself (RFC §19.7.3).
 #[derive(Clone, Debug)]
-struct Failing {
+pub(super) struct Failing {
     responder: ChannelBinding,
     answers: RoomEvent,
     correlation_id: String,
@@ -481,7 +482,7 @@ struct Failing {
 }
 
 impl Failing {
-    fn of(read: &StreamRead) -> Self {
+    pub(super) fn of(read: &StreamRead) -> Self {
         Self {
             responder: read.responder.clone(),
             answers: read.answers.clone(),
@@ -513,12 +514,40 @@ impl Failing {
             return;
         }
         let error = target_record(error);
-        failure_log::log_failure(Log::Framework, &error, &self.what(), false);
+        self.report_record(inner, &error, &self.what()).await;
+    }
+
+    /// Logs the failure of a strategy's first pass, `error`, once, and fires
+    /// `ON_ERROR` for it as a streamed turn's, with the correlation id of
+    /// the rows the pass wrote (RFC §19.7.3, Python's
+    /// `_report_pass1_failure`).
+    pub(super) async fn report_first_pass<S: ConversationStore>(
+        &self,
+        inner: &Arc<Inner<S>>,
+        error: &ErrorRecord,
+    ) {
+        let what = format!(
+            "Pass 1 of {} in room {}",
+            self.responder.channel_id, self.answers.room_id
+        );
+        self.report_record(inner, error, &what).await;
+    }
+
+    /// Logs `error` once, `what` failing, and fires `ON_ERROR` for it as the
+    /// core reports a read's (RFC §9.2, §12.2 step 13s), with the room as it
+    /// stands.
+    async fn report_record<S: ConversationStore>(
+        &self,
+        inner: &Arc<Inner<S>>,
+        error: &ErrorRecord,
+        what: &str,
+    ) {
+        failure_log::log_failure(Log::Framework, error, what, false);
         let failure = StreamFailure {
             responder: &self.responder,
             answers: &self.answers,
             correlation_id: Some(&self.correlation_id),
-            error: &error,
+            error,
         };
         let payload = failure.payload(&*inner.environment());
         let hooks = inner

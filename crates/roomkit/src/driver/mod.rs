@@ -52,6 +52,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::{self, AbortHandle, JoinError, JoinHandle, JoinSet};
 use tokio::time::Instant;
 
+pub(crate) use self::calls::channel_failed;
 pub(crate) use self::calls::cut_by_close;
 pub(crate) use self::calls::load_context;
 pub(crate) use self::calls::perform;

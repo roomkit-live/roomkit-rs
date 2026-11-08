@@ -30,12 +30,12 @@ use super::pass::{CommitPass, PassOrigin, PassResult};
 use super::queues::Lineage;
 use super::{InboundResult, stamp};
 use crate::model::{
-    ChannelBinding, ChannelId, ChannelOutput, ErrorRecord, EventDirection, EventSource, EventType,
-    RoomContext, RoomEvent, TextContent, Visibility,
+    ChannelBinding, ChannelId, ChannelOutput, DeliveryError, ErrorRecord, EventDirection,
+    EventSource, EventType, RoomContext, RoomEvent, TextContent, Visibility,
 };
 use crate::ops::protocol::{
-    ChannelRequest, EffectId, EntryId, Outcome, ROW_HIDDEN, ROW_WITHHELD, StoreRequest,
-    StreamTarget, TURN_CUT,
+    ChannelOutcome, ChannelRequest, EffectId, EntryId, Outcome, ROW_HIDDEN, ROW_WITHHELD, Raised,
+    StoreRequest, StreamTarget, TURN_CUT,
 };
 use crate::ops::{Cx, Environment};
 use crate::rules::chain_depth::{self, ReentryBudget};
@@ -152,6 +152,10 @@ pub(super) struct StreamEnd {
     pub(super) output: Option<ChannelOutput>,
     /// The streaming target's channel, when one read the stream.
     pub(super) target: Option<ChannelId>,
+    /// When what followed a strategy's first pass raised (RFC §19.7.3), the
+    /// failed delivery the error declares: the turn failed, its `output`'s
+    /// `error`, as an `on_event()` that raised, never as its stream.
+    pub(super) raised: Option<DeliveryError>,
 }
 
 impl StreamEnd {
@@ -258,20 +262,13 @@ impl StreamRead {
                 }
             }
             ReadStage::Reading(_) => {
-                let output = match outcome.into_output() {
-                    Ok(output) => Some(*output),
-                    // A read its cascade cut reports nothing.
-                    Err(error) if error.error_type == TURN_CUT => None,
-                    Err(error) => Some(ChannelOutput {
-                        error: Some(error),
-                        ..ChannelOutput::default()
-                    }),
-                };
+                let (output, raised) = read_answer(outcome);
                 Read::Over(Box::new(StreamEnd {
                     job: self.job,
                     context: self.context,
                     output,
                     target: self.target,
+                    raised,
                 }))
             }
         }
@@ -342,6 +339,7 @@ impl StreamRead {
             context: None,
             output: None,
             target: None,
+            raised: None,
         }))
     }
 
@@ -416,6 +414,31 @@ impl StreamRead {
             .retain(|target| &target.binding.channel_id != skips);
         None
     }
+}
+
+/// What the answer to a read leaves: the target's output, its `error` the
+/// response's failure, nothing for a read its cascade cut; or, when what
+/// followed a strategy's first pass raised ([`ChannelOutcome::Raised`],
+/// RFC §19.7.3), the turn's error and the failed delivery it declares.
+fn read_answer(outcome: Outcome) -> (Option<ChannelOutput>, Option<DeliveryError>) {
+    if let Outcome::Channel(ChannelOutcome::Raised(raised)) = outcome {
+        let Raised { error, delivery } = *raised;
+        let output = ChannelOutput {
+            error: Some(error),
+            ..ChannelOutput::default()
+        };
+        return (Some(output), Some(delivery));
+    }
+    let output = match outcome.into_output() {
+        Ok(output) => Some(*output),
+        // A read its cascade cut reports nothing.
+        Err(error) if error.error_type == TURN_CUT => None,
+        Err(error) => Some(ChannelOutput {
+            error: Some(error),
+            ..ChannelOutput::default()
+        }),
+    };
+    (output, None)
 }
 
 /// The transports `job`'s response's rows reach in the room as `context`

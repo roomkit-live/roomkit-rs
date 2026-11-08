@@ -523,7 +523,12 @@ pub enum ChannelRequest {
     ///
     /// Answer [`ChannelOutcome::Output`] once the stream is over: the
     /// target's output, its `error` the response's failure, or the
-    /// target's own (RFC §6.1 `ChannelOutput.error`).
+    /// target's own (RFC §6.1 `ChannelOutput.error`); an `error` marked
+    /// reported (`ErrorRecord::marked_reported`) was reported to `ON_ERROR`
+    /// and logged by the reader, and is only handed on to the caller. Answer [`ChannelOutcome::Raised`] when the
+    /// turn raised once its stream was read, what follows a strategy's
+    /// first pass (RFC §19.7.3): the turn failed as an `OnEvent` that
+    /// raised, never its stream.
     ReadStream {
         /// The turn whose response it is.
         turn: EffectId,
@@ -896,7 +901,8 @@ pub enum ChannelOutcome {
     /// code and whether a retry may succeed, as Python's `DeliveryResult`
     /// reads an exception's `code` and `retryable` (RFC §5.13), an agent's
     /// error rebuilt across the turn backend. An answer of
-    /// [`ChannelRequest::OnEvent`].
+    /// [`ChannelRequest::OnEvent`], and of [`ChannelRequest::ReadStream`]
+    /// for a turn that raised once its stream was read.
     Raised(Box<Raised>),
     /// The channel was told of its room's attach or detach, or holds
     /// nothing to be told: an answer of [`ChannelRequest::RoomAttached`] and

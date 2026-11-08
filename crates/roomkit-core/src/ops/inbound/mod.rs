@@ -96,6 +96,7 @@ mod result;
 mod stage;
 mod stamp;
 mod stream;
+mod turn_raised;
 mod verification;
 mod work_read;
 
@@ -776,6 +777,9 @@ impl Machine {
         }
         if self.cascade.stream_awaits(effect) {
             return self.on_stream_outcome(cx, outcome);
+        }
+        if self.cascade.record_awaits(effect) {
+            return self.cascade.on_record_outcome(cx, effect, outcome);
         }
         if self.trigger.releasing_hand == Some(effect) {
             return self.on_hand_released(outcome);

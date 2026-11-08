@@ -6,19 +6,28 @@
 //! with its own turn on a stand-in for the event, or with its fallback.
 //!
 //! Each pass's rows are the room's as any streamed turn's: they commit
-//! through the operation, `BEFORE_BROADCAST` once, and carry the read's
-//! `correlation_id`, which the operation's report of either pass's failure
-//! carries too.
+//! through the operation, `BEFORE_BROADCAST` once. Each pass is a turn of
+//! its own (RFC §10.6.1): the first pass's rows carry a `correlation_id` of
+//! their own, which the read's report of its failure carries, and the
+//! second pass's carry the read's, which the operation's report of its
+//! failure carries (Python's `_pass1_task`, then the room turn's stream).
+//! What follows the first pass raising fails the turn as an `on_event()`
+//! that raises ([`ChannelOutcome::Raised`]): Python runs it within the
+//! supervisor's `on_event()`.
 
 use std::sync::Arc;
 
-use roomkit_core::model::{ErrorRecord, EventDirection, EventSource, Metadata, RoomEvent};
-use roomkit_core::ops::{ChannelOutcome, Entry, Outcome};
+use roomkit_core::model::{
+    ChannelId, DeliveryResult, ErrorRecord, EventDirection, EventSource, Metadata, RoomEvent,
+};
+use roomkit_core::ops::{ChannelOutcome, Entry, Outcome, Raised};
 
 use super::Stops;
-use super::reader::{KeptStream, StreamRead, read_kept};
+use super::reader::{Failing, KeptStream, StreamRead, read_kept};
 use super::segments::Segments;
+use crate::channel::ChannelError;
 use crate::context;
+use crate::error::RoomKitError;
 use crate::kit::Inner;
 use crate::store::ConversationStore;
 use crate::turn::TurnKit;
@@ -26,8 +35,9 @@ use crate::turn_runners::{Answering, Next, Then};
 use crate::turns::Answer;
 
 /// Reads `kept`, a strategy's first pass, then what `then` makes of it:
-/// the answer of the operation's `ReadStream`. A first pass that failed
-/// answers with its failure, which the operation reports once.
+/// the answer of the operation's `ReadStream`. A first pass that failed is
+/// reported here, once, and answers with its failure, which the operation
+/// hands on unreported (RFC §19.7.3).
 pub(super) async fn read<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
     kept: KeptStream,
@@ -39,13 +49,21 @@ pub(super) async fn read<S: ConversationStore>(
         responder: read.responder.clone(),
         answers: read.answers.clone(),
         target: None,
-        correlation_id: read.correlation_id.clone(),
+        // A turn of its own: its rows carry an id of their own, as every id
+        // the kit gives (RFC §10.6.1).
+        correlation_id: inner.environment().new_event_id().to_string(),
         // A first pass's text is kept out of the room (RFC §19.7.3): it is
         // no trace's, whoever reads the turn after it.
         as_trace: false,
     };
+    let failing = Failing::of(&first_read);
     let (mut first, pass) = Box::pin(read_kept(inner, kept, stops.clone(), first_read, true)).await;
-    let Some(pass) = pass.filter(|_| first.error.is_none()) else {
+    if let Some(error) = first.error.take() {
+        failing.report_first_pass(inner, &error).await;
+        first.error = Some(error.marked_reported());
+        return ChannelOutcome::Output(Box::new(first)).into();
+    }
+    let Some(pass) = pass else {
         return ChannelOutcome::Output(Box::new(first)).into();
     };
     // A read stopped meanwhile (the operation's stop, the kit's close, the
@@ -73,11 +91,39 @@ pub(super) async fn read<S: ConversationStore>(
             ChannelOutcome::Output(Box::new(first)).into()
         }
         Ok(Next::Own(answering)) => second_pass(inner, *answering, stops, read).await,
-        Err(error) => {
-            first.error = Some(ErrorRecord::new(error.class_name(), error.to_string()));
-            ChannelOutcome::Output(Box::new(first)).into()
-        }
+        Err(error) => raised(&read.responder.channel_id, error),
     }
+}
+
+/// What follows the first pass raised `error` (its workers): the turn
+/// failed as an `on_event()` that raises, its error read as a channel's,
+/// with the failed delivery it declares (RFC §19.7.3, §5.13).
+fn raised(responder: &ChannelId, error: RoomKitError) -> Outcome {
+    let (error, failed) = match crate::driver::channel_failed(&ChannelError::from(error)) {
+        Outcome::Channel(ChannelOutcome::ProviderDelivery(result)) => {
+            let failed = DeliveryResult::refused(responder.clone(), *result);
+            let message = failed.error.as_ref().map(|error| error.message.clone());
+            let error = ErrorRecord::new("ProviderDeliveryError", message.unwrap_or_default());
+            (error, failed)
+        }
+        Outcome::Failed(error) => {
+            let failed = DeliveryResult::raised(responder.clone(), &error);
+            (error, failed)
+        }
+        // A channel's failure reads as one of the two above.
+        other @ (Outcome::Hold(_)
+        | Outcome::Store(_)
+        | Outcome::Channel(_)
+        | Outcome::Hook(_)
+        | Outcome::Routed(_)
+        | Outcome::DeadlinePassed
+        | Outcome::Identity(_)
+        | Outcome::Discussion(_)) => return other,
+    };
+    let Some(delivery) = failed.error else {
+        return Outcome::Failed(error);
+    };
+    ChannelOutcome::Raised(Box::new(Raised { error, delivery })).into()
 }
 
 /// The agent's own turn on the event the strategy hands it, read as the

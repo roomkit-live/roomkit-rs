@@ -36,13 +36,14 @@ use std::collections::VecDeque;
 use serde_json::Value;
 
 use super::delivery::{DeliverySet, SetOutcome};
+use super::delivery_record::DeliveryRecord;
 use super::direct::DirectCall;
 use super::job::{Job, RecordNote, RowNote, Run};
 use super::pass::{CommitPass, PassOrigin};
 use super::record::RecordPass;
 use super::stream::{self, PendingRow, Read, StreamEnd, StreamJob, StreamRead};
 use super::{Machine, Stage};
-use crate::model::{EventId, Metadata, RoomEvent, RoomId};
+use crate::model::{ErrorRecord, EventId, Metadata, RoomEvent, RoomId};
 use crate::ops::failure_log::Log;
 use crate::ops::io::Io;
 use crate::ops::protocol::{AnswerOf, EffectId, Entry, EntryId, Notice, Outcome, SpanNote};
@@ -137,6 +138,10 @@ pub(super) struct Cascade {
     stream: Option<StreamRead>,
     /// The rows a stream's reader handed back, waiting for their pass.
     rows: Vec<PendingRow>,
+    /// The records on their events of the deliveries that failed once their
+    /// set was over: an agent's turn whose stream's first pass was followed
+    /// by a raise (RFC §19.7.3, §5.13).
+    records: Vec<DeliveryRecord>,
 }
 
 impl Cascade {
@@ -158,6 +163,7 @@ impl Cascade {
             streams: VecDeque::new(),
             stream: None,
             rows: Vec::new(),
+            records: Vec::new(),
         }
     }
 
@@ -401,6 +407,7 @@ impl Cascade {
             && self.streams.is_empty()
             && self.stream.is_none()
             && self.rows.is_empty()
+            && self.records.is_empty()
     }
 
     /// Whether the cascade runs no pass nor set, and none is queued: a
@@ -413,6 +420,38 @@ impl Cascade {
             && self.dropping.is_empty()
             && self.stream.is_none()
             && self.rows.is_empty()
+    }
+
+    /// Writes `record` beside the cascade's work, which ends once it is
+    /// written.
+    pub(super) fn keep_record(&mut self, record: DeliveryRecord) {
+        self.records.push(record);
+    }
+
+    /// Whether a record [`keep_record`](Self::keep_record) kept waits for
+    /// `effect`.
+    pub(super) fn record_awaits(&self, effect: EffectId) -> bool {
+        self.records.iter().any(|record| record.awaits(effect))
+    }
+
+    /// Hands the record waiting for `effect` its answer; a record written
+    /// leaves the cascade.
+    pub(super) fn on_record_outcome(
+        &mut self,
+        cx: &mut Cx<'_>,
+        effect: EffectId,
+        outcome: Outcome,
+    ) {
+        let Some(position) = self.records.iter().position(|record| record.awaits(effect)) else {
+            return;
+        };
+        let written = self
+            .records
+            .get_mut(position)
+            .is_some_and(|record| matches!(record.accept(cx, outcome), Progress::Done(())));
+        if written {
+            self.records.remove(position);
+        }
     }
 
     /// Whether the stream being read waits for `effect`.
@@ -757,22 +796,37 @@ impl Machine {
     /// read's answer holds in `response_events` the rows it wrote the turn's
     /// record on, as stored.
     fn stream_over(&mut self, cx: &mut Cx<'_>, mut end: StreamEnd) {
-        let (Some(output), Some(context)) = (end.output.take(), end.context.take()) else {
+        let (Some(mut output), Some(context)) = (end.output.take(), end.context.take()) else {
             return;
         };
+        if let Some(delivery) = end.raised.take() {
+            let error = output.error.take().unwrap_or_else(|| {
+                ErrorRecord::new("ChannelError", "the turn raised once its stream was read")
+            });
+            return self.turn_raised(cx, &end.job, &context, error, delivery);
+        }
         let own = !end.job.chained && end.job.lineage == Lineage::Call;
+        // A failure the read reported already, a strategy's first pass's
+        // (RFC §19.7.3, Python's `mark_reported`): handed on to the caller,
+        // never reported nor logged again.
+        let reported = output
+            .error
+            .as_mut()
+            .is_some_and(ErrorRecord::take_reported);
         self.rewrite_answers(end.job.lineage, &output.response_events);
         self.keep_stream_end(&end.job, &output);
         let Some(error) = output.error else {
             return;
         };
-        stream::report_failure(cx, &end.job, &context, &error);
-        cx.io.notify(Notice::Failure {
-            log: Log::Framework,
-            what: end.failed_what(),
-            error: error.clone(),
-            caller_logs: self.call.failures.receives(own, end.target.is_some()),
-        });
+        if !reported {
+            stream::report_failure(cx, &end.job, &context, &error);
+            cx.io.notify(Notice::Failure {
+                log: Log::Framework,
+                what: end.failed_what(),
+                error: error.clone(),
+                caller_logs: self.call.failures.receives(own, end.target.is_some()),
+            });
+        }
         if own {
             let told = error.clone();
             cx.io
