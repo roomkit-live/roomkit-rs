@@ -38,7 +38,7 @@ mod spans;
 
 use std::collections::HashMap;
 use std::future::poll_fn;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::task::Poll;
 
 use roomkit_core::model::{ErrorRecord, RoomEvent, RoomId, Timestamp};
@@ -381,6 +381,7 @@ async fn drive<S: ConversationStore, O: Operation>(
         indexes: Indexes::default(),
         shared,
         adoptions,
+        joined_rooms: Arc::default(),
         effect_of_task: HashMap::new(),
         call_of_effect: HashMap::new(),
         callers: HashMap::new(),
@@ -444,6 +445,10 @@ struct Driver<'kit, S> {
     shared: Arc<RunShared>,
     /// The calls into the room its work hands the run.
     adoptions: mpsc::UnboundedReceiver<Adoption>,
+    /// The rooms whose stored discussion this process joined as a context
+    /// read of the run read them, until the operation reads their hooks
+    /// (RFC §19.7.5 rule 16, RMK-1476).
+    joined_rooms: Arc<Mutex<Vec<RoomId>>>,
     /// The effect each call answers, by its task.
     effect_of_task: HashMap<task::Id, EffectId>,
     /// The call of each effect, until it finishes, to abort it when the
@@ -718,6 +723,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 Some(Event::Joined(joined)) => {
                     // A call the operation gave up on answers nothing.
                     if let Some((id, outcome)) = self.joined(joined) {
+                        self.hand_joined_hooks(operation);
                         return Ok(operation.complete(id, outcome)?);
                     }
                 }
@@ -1101,9 +1107,12 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 }
                 self.spawn(id, work, deadline, None, writing);
             }
-            Request::Store(request) => self.spawn(id, work, deadline, None, async move {
-                calls::store_followed(&inner, request).await
-            }),
+            Request::Store(request) => {
+                let joined = Arc::clone(&self.joined_rooms);
+                self.spawn(id, work, deadline, None, async move {
+                    calls::store_followed(&inner, request, &joined).await
+                });
+            }
             Request::Channel(request) => {
                 self.reads_for_entry(id, &request, answers);
                 let shared = Arc::clone(&self.shared);
@@ -1457,6 +1466,26 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     /// The effect a finished call answers, and its outcome: a call that
     /// panicked or was cancelled fails its effect instead of the kit.
     /// `None` for a call the operation gave up on.
+    /// Hands `operation` the hooks of the rooms whose discussion this
+    /// process joined as the run read them, before the read's outcome: the
+    /// message whose context read the room fires the discussion's hooks,
+    /// its names read (RFC §19.7.5 rules 4 and 16, RMK-1476).
+    fn hand_joined_hooks<O: Operation>(&self, operation: &mut O) {
+        let joined = std::mem::take(
+            &mut *self
+                .joined_rooms
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
+        if joined.is_empty() {
+            return;
+        }
+        let config = self.inner.config();
+        for room_id in &joined {
+            operation.adopt_room_hooks(room_id, &config.hooks);
+        }
+    }
+
     fn joined(
         &mut self,
         joined: Result<(task::Id, Outcome), JoinError>,

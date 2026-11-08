@@ -860,6 +860,25 @@ impl HookRegistry {
             .collect()
     }
 
+    /// Takes the hooks the room `room_id` holds in `newer`, a later copy of
+    /// the kit's registry, in place of those it holds here: an operation
+    /// that read the registry before a strategy set the room up reads that
+    /// room's hooks as they are now, the kit's own left as it read them. A
+    /// process following a discussion another process installed joins it
+    /// once it reads the room (RFC §19.7.5 rule 16), as Python's hook
+    /// engine, which every firing reads, sees the room's hooks at once.
+    pub fn adopt_room_hooks(&mut self, room_id: &RoomId, newer: &Self) {
+        self.hooks
+            .retain(|hook| hook.room.as_ref() != Some(room_id));
+        let adopted = newer
+            .hooks
+            .iter()
+            .filter(|hook| hook.room.as_ref() == Some(room_id))
+            .cloned();
+        self.hooks.extend(adopted);
+        self.next = self.next.max(newer.next);
+    }
+
     /// The registrations of one scope: the kit's for `None`, else the
     /// room's.
     fn in_scope<'registry>(
@@ -1525,6 +1544,38 @@ mod tests {
             registry.register(sync_hook("kit", 0)).unwrap();
             let chain = registry.chain(HookTrigger::BeforeBroadcast, &event_in("r1"));
             assert_eq!(names(&registry, &chain), ["kit", "room"]);
+        }
+
+        // RFC §19.7.5 rule 16 (RMK-1476): a call that read the registry
+        // before a strategy set its room up fires that room's hooks once it
+        // adopts them; the kit's hooks stay as it read them, another room's
+        // too.
+        #[test]
+        fn adopting_a_room_s_hooks_leaves_the_kit_s_as_read() {
+            let mut read = HookRegistry::new();
+            read.register(sync_hook("kit", 0)).unwrap();
+            read.add_room_hook(room("r2"), sync_hook("other", 0))
+                .unwrap();
+            let mut newer = read.clone();
+            newer.register(sync_hook("later", 0)).unwrap();
+            newer
+                .add_room_hook(room("r1"), sync_hook("names", 1))
+                .unwrap();
+
+            read.adopt_room_hooks(&room("r1"), &newer);
+
+            let in_r1 = read.chain(HookTrigger::BeforeBroadcast, &event_in("r1"));
+            let in_r2 = read.chain(HookTrigger::BeforeBroadcast, &event_in("r2"));
+            assert_eq!(
+                (names(&read, &in_r1), names(&read, &in_r2)),
+                (
+                    vec!["kit".to_owned(), "names".to_owned()],
+                    vec!["kit".to_owned(), "other".to_owned()]
+                )
+            );
+            // An id the copy gives out next is none the newer one gave.
+            let next = read.register(sync_hook("next", 0)).unwrap();
+            assert!(newer.get(next).is_none());
         }
 
         // Python: tests/test_hooks.py::TestRoomHookManagement::test_remove_room_hook

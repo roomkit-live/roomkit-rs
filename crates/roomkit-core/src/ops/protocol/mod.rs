@@ -38,7 +38,7 @@ use crate::model::{
     ChannelId, ErrorRecord, EventId, Metadata, RoomContext, RoomEvent, RoomId, Timestamp,
 };
 use crate::rules::chain_depth::ReentryBudget;
-use crate::rules::hook_registry::{HookId, HookTrigger};
+use crate::rules::hook_registry::{HookId, HookRegistry, HookTrigger};
 
 /// Identifies an effect within its operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -429,6 +429,17 @@ pub trait Operation {
     fn adopt(&mut self, entry: Entry, origin: EffectId) -> Result<EntryId, Box<Entry>> {
         let _ = origin;
         Err(Box::new(entry))
+    }
+
+    /// Reads the hooks the room `room_id` holds in `hooks`, a later copy of
+    /// the kit's registry, in place of those it read at its start: the
+    /// driver hands them once reading the room made the kit join the
+    /// discussion it stores, another process's (RFC §19.7.5 rule 16), so
+    /// that the message whose context read the room fires the discussion's
+    /// hooks, as Python's hook engine, read at each firing, does. Nothing by
+    /// default.
+    fn adopt_room_hooks(&mut self, room_id: &RoomId, hooks: &HookRegistry) {
+        let _ = (room_id, hooks);
     }
 
     /// The call's caller stopped waiting before its decision

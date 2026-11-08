@@ -265,24 +265,33 @@ const IDENTITY_ERROR: &str = "IdentityError";
 
 /// Carries out `request` on the store, a context read followed by the
 /// discussion its room stores (RFC §19.7.5 rule 16): Python's
-/// `_build_context`, which follows it for every context the kit builds.
+/// `_build_context`, which follows it for every context the kit builds. A
+/// discussion this process joins so goes to `joined`, whose hooks the run's
+/// operation reads before the context (RMK-1476).
 pub(super) async fn store_followed<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
     request: StoreRequest,
+    joined: &std::sync::Mutex<Vec<RoomId>>,
 ) -> Outcome {
     let outcome = store(&*inner.store, request).await;
-    if let Outcome::Store(StoreOutcome::Context(context)) = &outcome {
-        follow_discussion(inner, &context.room);
+    if let Outcome::Store(StoreOutcome::Context(context)) = &outcome
+        && follow_discussion(inner, &context.room)
+    {
+        joined
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(context.room.id.clone());
     }
     outcome
 }
 
-/// Joins, follows or leaves the discussion `room` stores (rule 16).
-pub(crate) fn follow_discussion<S: ConversationStore>(inner: &Arc<Inner<S>>, room: &Room) {
+/// Joins, follows or leaves the discussion `room` stores (rule 16);
+/// whether this process joined it now.
+pub(crate) fn follow_discussion<S: ConversationStore>(inner: &Arc<Inner<S>>, room: &Room) -> bool {
     let kit = RoomKit {
         inner: Arc::clone(inner),
     };
-    kit.follow_discussion(room);
+    kit.follow_discussion(room)
 }
 
 /// The room's context (RFC §10.1 step 3), as the Python implementation's

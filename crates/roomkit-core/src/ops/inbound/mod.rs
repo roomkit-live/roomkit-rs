@@ -127,6 +127,7 @@ use crate::model::{ChannelId, DirectEvent, EventId, InboundMessage, Post, RoomId
 use crate::ops::io::Bound;
 pub use crate::ops::protocol::{InboundError, InboundResult};
 use crate::rules::chain_depth::{Draw, ReentryBudget};
+use crate::rules::hook_registry::HookRegistry;
 
 /// The inbound pipeline for one call (RFC §10.1, §10.5).
 ///
@@ -496,6 +497,16 @@ impl Operation for Inbound {
 
     fn adopt(&mut self, entry: Entry, origin: EffectId) -> Result<EntryId, Box<Entry>> {
         self.machine.adopt(&self.io, entry, origin)
+    }
+
+    /// The room's hooks as the kit holds them now, the kit's own as the
+    /// call read them at its start: a routed message read in a process that
+    /// joined the room's discussion as it read the room fires that
+    /// discussion's names hook (RFC §19.7.5 rules 4 and 16, RMK-1476).
+    fn adopt_room_hooks(&mut self, room_id: &RoomId, hooks: &HookRegistry) {
+        Arc::make_mut(&mut self.config)
+            .hooks
+            .adopt_room_hooks(room_id, hooks);
     }
 
     /// Expires the call when it is not decided yet: every request within
