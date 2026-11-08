@@ -8,6 +8,7 @@ use std::collections::{BTreeSet, HashMap};
 use roomkit::model::{
     ChannelId, ChannelType, EventId, EventType, Metadata, RoomContext, RoomEvent,
 };
+use roomkit_core::rules::discussion::people::labelled;
 use roomkit_core::rules::transcript::{
     RUNTIME_RECORD, SUMMARY_HEADER, fence, people_count, quoted, turn_labels, turn_sources,
     without_mark_copies,
@@ -88,7 +89,12 @@ impl SummaryLines<'_> {
                 None => turns.push(event),
             }
         }
-        let labels = turn_labels(turns.iter().copied(), self.context);
+        // A name that reads as a label of the agent's own turns ("You")
+        // carries "(a participant)" (RFC §6.4): Python's `turn_speakers`.
+        let labels: Vec<Option<String>> = turn_labels(turns.iter().copied(), self.context)
+            .into_iter()
+            .map(|label| label.map(labelled))
+            .collect();
         // Speakers are counted by source (RFC §6.4): two nameless senders
         // of one channel are two, one sender under two names one.
         let sources = turn_sources(turns.iter().copied(), self.context);

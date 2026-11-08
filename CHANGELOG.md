@@ -6,6 +6,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A summarizing or compacting memory's summarizer reads a person whose name reads like a label of an agent's own turns (`You`, `assistant`) with `(a participant)` after the name, as Python's and as a worker's brief (RFC §6.4, §20.3, RMK-1435).
 - **Security:** a copy of a runtime mark a memory's message holds over two adjacent text parts is replaced, as Python's (RFC §6.4, RMK-1574): the run is read back to back, as the model reads it, and made one part when it reads otherwise than each part cleaned alone; each part was cleaned alone, so `[Conver` then `sation summary — earlier messages compacted]` reached a provider that joins the parts as the summary's header.
 - The structured copy an `ON_TOOL_CALL` hook leaves is on the call's `TOOL_CALL_END` row, as in Python (RFC §9.3): a surface can render it while the model reads the result alone.
 - `AiChannelOptions::tool_call_intents_only`, Python's `tool_call_intents_only` (RFC §6.4): the tools that ask for a call's intent; the others are shown as they are.
