@@ -737,7 +737,8 @@ impl<P: AiProvider> Loop<P> {
     /// calls, then each result. A `Cancel` that came while the calls were
     /// announced stops them all: none runs, each ends cancelled (RFC
     /// §21.3). The room's subscribers read the calls' start before they
-    /// run and their end once they ended, or were cut (RFC §6.4, §8.4).
+    /// run and their end once the reader took their end rows, or the end
+    /// those rows say when the round is cut (RFC §6.4, §8.4).
     async fn run_calls(
         &self,
         generation: Generation,
@@ -747,16 +748,15 @@ impl<P: AiProvider> Loop<P> {
         for called in &generation.calls {
             out.give(Ok(TurnItem::ToolStart(called.call.clone()))).await;
         }
+        let unrun = steering.cancelled();
+        // A round a `Cancel` keeps from running publishes nothing of its
+        // calls, as Python's ends before it executes them.
         let ids = (&self.context.room_id, &self.context.channel_id);
-        let answers_room = self.thinking_publication.answers_room;
+        let answers_room = self.thinking_publication.answers_room && !unrun;
         let events = ToolEvents::new(self.turn.as_ref(), ids, round, answers_room);
         let made = generation.calls.iter().map(|called| &called.call);
-        if let Some(events) = &events {
-            events.started(made.clone());
-        }
-        let running = Running::new(events.as_ref(), made.cloned().collect());
+        let mut running = Running::start(events, made);
         let started = Instant::now();
-        let unrun = steering.cancelled();
         let ends = if unrun {
             generation
                 .calls
@@ -771,18 +771,14 @@ impl<P: AiProvider> Loop<P> {
                 .map(|(position, called)| self.serve(called, place_under_its_id(calls, position)));
             join_all(serving.collect()).await
         };
-        running.ended();
-        if let Some(events) = &events {
-            let ended: Vec<Ended<'_>> = ends
-                .iter()
-                .map(|end| Ended {
-                    call: &end.call,
-                    result: end.result.as_text(),
-                    failed: end.outcome != ToolCallOutcome::Served,
-                })
-                .collect();
+        if running.published() {
+            let ended = ends.iter().map(|end| Ended {
+                call: end.call.clone(),
+                result: end.result.as_text(),
+                failed: end.outcome != ToolCallOutcome::Served,
+            });
             let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-            events.ended(&ended, Some(duration_ms));
+            running.calls_ended(ended.collect(), duration_ms);
         }
         let mut ran = Ran::default();
         if !unrun {
@@ -815,7 +811,9 @@ impl<P: AiProvider> Loop<P> {
             }
             read.push(result);
             out.give(Ok(TurnItem::ToolEnd(end))).await;
+            running.took_end();
         }
+        running.handed();
         self.search.next_round();
         (read, ran)
     }

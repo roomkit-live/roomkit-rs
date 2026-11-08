@@ -23,12 +23,23 @@ const RESULT_PREVIEW: usize = 500;
 const ABORTED: &str = "{\"error\": \"Tool call aborted\"}";
 
 /// How one call of a round ended, as its `TOOL_CALL_END` reads it.
-pub(super) struct Ended<'a> {
-    pub(super) call: &'a ToolCall,
+pub(super) struct Ended {
+    pub(super) call: ToolCall,
     /// The result the model reads.
     pub(super) result: String,
     /// Whether the model reads it as a failure.
     pub(super) failed: bool,
+}
+
+impl Ended {
+    /// `call` cut while it ran, as Python's `_aborted_results` ends it.
+    fn aborted(call: ToolCall) -> Self {
+        Self {
+            call,
+            result: ABORTED.to_owned(),
+            failed: true,
+        }
+    }
 }
 
 /// Who reads a round's tool calls: the room's subscribers, through the
@@ -81,7 +92,7 @@ impl ToolEvents {
     /// `TOOL_CALL_END`: each of `ends` with its result's first
     /// [`RESULT_PREVIEW`] characters and its status, and its intent when its
     /// call has one; `duration_ms` the round's, once its calls ran.
-    pub(super) fn ended(&self, ends: &[Ended<'_>], duration_ms: Option<u64>) {
+    fn ended(&self, ends: &[Ended], duration_ms: Option<u64>) {
         let calls = ends
             .iter()
             .map(|end| {
@@ -94,24 +105,11 @@ impl ToolEvents {
                         "result": preview,
                         "status": status,
                     }),
-                    end.call,
+                    &end.call,
                 )
             })
             .collect();
         self.publish(EphemeralEventType::ToolCallEnd, calls, duration_ms);
-    }
-
-    /// `TOOL_CALL_END` for each of `calls`, cut while they ran.
-    pub(super) fn aborted(&self, calls: &[ToolCall]) {
-        let ends: Vec<Ended<'_>> = calls
-            .iter()
-            .map(|call| Ended {
-                call,
-                result: ABORTED.to_owned(),
-                failed: true,
-            })
-            .collect();
-        self.ended(&ends, None);
     }
 
     /// Queues `event_type` with `calls`, the round and the channel.
@@ -139,29 +137,80 @@ impl ToolEvents {
     }
 }
 
-/// A round's calls while they run: dropped before [`Running::ended`], the
-/// round cut, it publishes their aborted end.
-pub(super) struct Running<'a> {
-    events: Option<&'a ToolEvents>,
+/// A round's calls from their start to their end rows handed to the
+/// reader: `TOOL_CALL_START` once they are announced, `TOOL_CALL_END` once
+/// the reader took every end, after the stored rows. Dropped before, the
+/// round cut, it publishes the end each call's rows say: its own for the
+/// ends the reader took, aborted for the others.
+pub(super) struct Running {
+    events: Option<ToolEvents>,
     calls: Vec<ToolCall>,
+    /// How each call ended and the round's duration, once they ended.
+    ended: Option<(Vec<Ended>, u64)>,
+    /// How many of the ends the reader took.
+    taken: usize,
 }
 
-impl<'a> Running<'a> {
-    pub(super) fn new(events: Option<&'a ToolEvents>, calls: Vec<ToolCall>) -> Self {
-        Self { events, calls }
-    }
-
-    /// The calls ended: nothing is published on drop any more.
-    pub(super) fn ended(mut self) {
-        self.events = None;
-    }
-}
-
-impl Drop for Running<'_> {
-    fn drop(&mut self) {
-        if let Some(events) = self.events {
-            events.aborted(&self.calls);
+impl Running {
+    /// Publishes `calls`' start for `events`' subscribers, none without.
+    pub(super) fn start<'a>(
+        events: Option<ToolEvents>,
+        calls: impl IntoIterator<Item = &'a ToolCall> + Clone,
+    ) -> Self {
+        let calls = match &events {
+            Some(events) => {
+                events.started(calls.clone());
+                calls.into_iter().cloned().collect()
+            }
+            None => Vec::new(),
+        };
+        Self {
+            events,
+            calls,
+            ended: None,
+            taken: 0,
         }
+    }
+
+    /// Whether anyone reads the round's calls.
+    pub(super) fn published(&self) -> bool {
+        self.events.is_some()
+    }
+
+    /// The calls ended as `ends` say, the round having taken `duration_ms`.
+    pub(super) fn calls_ended(&mut self, ends: Vec<Ended>, duration_ms: u64) {
+        self.ended = Some((ends, duration_ms));
+    }
+
+    /// The reader took the next end.
+    pub(super) fn took_end(&mut self) {
+        self.taken += 1;
+    }
+
+    /// The reader took every end: their `TOOL_CALL_END`, with the round's
+    /// duration.
+    pub(super) fn handed(mut self) {
+        if let (Some(events), Some((ends, duration_ms))) = (self.events.take(), &self.ended) {
+            events.ended(ends, Some(*duration_ms));
+        }
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        let Some(events) = self.events.take() else {
+            return;
+        };
+        let calls = std::mem::take(&mut self.calls);
+        let ends: Vec<Ended> = match self.ended.take() {
+            None => calls.into_iter().map(Ended::aborted).collect(),
+            Some((ended, _)) => {
+                let taken = self.taken;
+                let rest = calls.into_iter().skip(taken).map(Ended::aborted);
+                ended.into_iter().take(taken).chain(rest).collect()
+            }
+        };
+        events.ended(&ends, None);
     }
 }
 

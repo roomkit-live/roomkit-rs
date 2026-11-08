@@ -18,6 +18,7 @@ mod servers;
 mod steering;
 mod support;
 mod thinking;
+mod tool_events;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 

@@ -401,7 +401,6 @@ async fn wait_for_lock(run: &Arc<Run>, room_id: &str, waiters: usize) -> bool {
         .is_ok()
 }
 
-/// Records the room's thinking events, for a scenario that expects them.
 /// Whether the scenario expects what a room's subscribers read of a turn's
 /// reasoning or of its tool calls (README: `thinking_events`, `tool_events`).
 fn records_ephemerals(scenario: &Value) -> bool {
@@ -410,6 +409,8 @@ fn records_ephemerals(scenario: &Value) -> bool {
         .any(|kind| scenario["expect"].get(kind).is_some())
 }
 
+/// Records the room's thinking and tool call events, for a scenario that
+/// expects them.
 async fn subscribe_thinking(run: &Arc<Run>, room: &str) -> Result<(), String> {
     let id = RoomId::new(room).map_err(|e| e.to_string())?;
     let (recorder, room) = (Arc::downgrade(run), room.to_owned());
