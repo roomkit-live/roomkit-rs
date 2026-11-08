@@ -49,7 +49,8 @@ pub fn kit_with_environment<S: ConversationStore>(
 /// waits for itself: a test awaits it once its calls returned. Each
 /// discussion's driver looks at its stored queue first, which another
 /// process sharing the store may have changed, and its turns are waited
-/// for.
+/// for. Scheduled status publications and the work their hooks start are
+/// waited for too, before a scenario reads the status history.
 #[doc(hidden)]
 pub async fn idle<S>(kit: &RoomKit<S>) {
     // A discussion's driver looks first at what another process may have
@@ -57,6 +58,12 @@ pub async fn idle<S>(kit: &RoomKit<S>) {
     kit.inner.discussions.rouse_all();
     loop {
         kit.inner.tasks.idle().await;
+        kit.inner.status_bus.idle().await;
+        // A status callback can start a kit task, which can post again.
+        // Both sets must be idle in the same pass.
+        if kit.inner.tasks.running() != 0 || !kit.inner.status_bus.is_idle() {
+            continue;
+        }
         // A discussion's driver is no task of the kit's: at rest it looks at
         // its queue once a second, for ever.
         if kit.inner.discussions.settled() {

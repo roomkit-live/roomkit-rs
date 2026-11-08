@@ -346,9 +346,8 @@ impl Tasks {
         Some(task)
     }
 
-    /// Tracks work of `kind` with no task while the guard lives, which no
-    /// abort ends: the work a test makes ignore its cut.
-    #[cfg(test)]
+    /// Tracks work driven elsewhere while its guard lives, with no abort
+    /// handle: a bus's publication, or work a test makes ignore its cut.
     pub(crate) fn track_unabortable(self: &Arc<Self>, kind: Kind) -> Tracked {
         let within = Marks::current().with(Unit::new()).units().into();
         let key = track(&mut self.state(), kind, within);
@@ -575,8 +574,7 @@ impl Tasks {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// How many tracked tasks run, for tests.
-    #[cfg(test)]
+    /// How many tracked tasks run, including work driven elsewhere.
     pub(crate) fn running(&self) -> usize {
         self.state().running.len()
     }

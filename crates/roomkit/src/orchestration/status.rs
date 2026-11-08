@@ -17,6 +17,7 @@ use crate::context::ExecutionContext;
 use crate::environment::SystemEnvironment;
 use crate::error::{RoomKitError, repr};
 use crate::start_order::StartOrder;
+use crate::tasks::{Kind, Tasks};
 
 /// How many entries [`StatusBus::recent`] reads by default, Python's
 /// `n=10`.
@@ -238,6 +239,9 @@ pub struct StatusBus {
     /// The line the publications of the posts start in: in the order of
     /// their posts, as Python's tasks do on its one loop.
     publications: Arc<StartOrder>,
+    /// Publications scheduled by this bus, independent of a kit's close.
+    /// The conformance idle waits for them before reading recent entries.
+    pending: Arc<Tasks>,
 }
 
 impl fmt::Debug for StatusBus {
@@ -265,6 +269,7 @@ impl StatusBus {
         Self {
             backend,
             publications: Arc::default(),
+            pending: Arc::default(),
         }
     }
 
@@ -328,10 +333,25 @@ impl StatusBus {
         entry: StatusEntry,
     ) -> impl Future<Output = ()> + Send + use<> {
         let backend = Arc::clone(&self.backend);
+        // Count it before its first poll: a queued task is already work the
+        // bus owes. Dropping an unstarted future also releases the guard.
+        let pending = self.pending.track_unabortable(Kind::Observer);
         let poster = ExecutionContext::current().turn_depth().unwrap_or(0);
         let within = ExecutionContext::default().at_least(poster);
-        self.publications
-            .in_turn(within.scope(async move { backend.publish(entry).await }))
+        self.publications.in_turn(within.scope(async move {
+            let _pending = pending;
+            backend.publish(entry).await;
+        }))
+    }
+
+    /// Waits for the bus's scheduled publications, for the conformance idle.
+    pub(crate) async fn idle(&self) {
+        self.pending.idle().await;
+    }
+
+    /// Whether a callback has scheduled another publication since the wait.
+    pub(crate) fn is_idle(&self) -> bool {
+        self.pending.running() == 0
     }
 
     /// Hands every entry posted from now on to `callback`.
@@ -442,6 +462,16 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn a_publication_dropped_before_its_first_poll_is_no_longer_pending() {
+        let bus = StatusBus::default();
+        let entry = StatusEntry::new("t", "worker", "done", StatusLevel::Completed);
+        let publication = bus.publication(entry);
+        assert!(!bus.is_idle());
+        drop(publication);
+        assert!(bus.is_idle());
+    }
 
     fn bus() -> StatusBus {
         StatusBus::default()
