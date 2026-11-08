@@ -2,17 +2,68 @@
 //! `conformance/README.md`, "Matching". An object names the members it
 //! checks, a list matches element by element, and a few operators
 //! (`"$any"`, `$unordered`, `$absent`, `$present`, `$contains`, `$lacks`)
-//! loosen a member.
+//! loosen a member. `$as` names a value, which every `$as` of that name in
+//! the scenario matches ([`Names`]).
 
 use serde_json::{Map, Value};
 
+/// The values the `$as` of one scenario's comparison named so far: a name
+/// holds the first value it matched, and two names never hold equal values
+/// (README, "Matching").
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Names(Vec<(String, Value)>);
+
+impl Names {
+    fn matches(&mut self, name: &str, actual: Option<&Value>, path: &str) -> Vec<String> {
+        let Some(actual) = actual.filter(|actual| !actual.is_null()) else {
+            return vec![format!("{path}: absent")];
+        };
+        if let Some((_, held)) = self.0.iter().find(|(held, _)| held == name) {
+            return if equal(held, actual) {
+                Vec::new()
+            } else {
+                vec![format!(
+                    "{path}: {} is not ${name}, {}",
+                    short(actual),
+                    short(held)
+                )]
+            };
+        }
+        if let Some((other, _)) = self.0.iter().find(|(_, held)| equal(held, actual)) {
+            return vec![format!(
+                "{path}: {} is ${other} already, not ${name}",
+                short(actual)
+            )];
+        }
+        self.0.push((name.to_owned(), actual.clone()));
+        Vec::new()
+    }
+}
+
+/// Whether two values a run gave are the same: scalars as matching compares
+/// them, a list or an object member by member.
+fn equal(held: &Value, actual: &Value) -> bool {
+    match (held, actual) {
+        (Value::Array(_) | Value::Object(_), _) | (_, Value::Array(_) | Value::Object(_)) => {
+            held == actual
+        }
+        _ => same_scalar(held, actual),
+    }
+}
+
 /// Every place where `actual` (`None`: a member the actual object does not
-/// hold) does not match `expected`, as `path: why`.
-pub(crate) fn mismatches(expected: &Value, actual: Option<&Value>, path: &str) -> Vec<String> {
+/// hold) does not match `expected`, as `path: why`; `names` holds what the
+/// comparison's `$as` named so far.
+pub(crate) fn mismatches(
+    expected: &Value,
+    actual: Option<&Value>,
+    path: &str,
+    names: &mut Names,
+) -> Vec<String> {
     match expected {
         Value::String(text) if text == "$any" => Vec::new(),
-        Value::Object(object) => object_mismatches(object, actual, path),
-        Value::Array(items) => list_mismatches(items, actual, path),
+        Value::Object(object) => object_mismatches(object, actual, path, names),
+        Value::Array(items) => list_mismatches(items, actual, path, names),
         Value::Null => match actual {
             None | Some(Value::Null) => Vec::new(),
             Some(other) => vec![format!("{path}: {other} is not null")],
@@ -55,9 +106,13 @@ fn object_mismatches(
     expected: &Map<String, Value>,
     actual: Option<&Value>,
     path: &str,
+    names: &mut Names,
 ) -> Vec<String> {
     if let Some(Value::Array(items)) = expected.get("$unordered") {
-        return unordered_mismatches(items, actual, path);
+        return unordered_mismatches(items, actual, path, names);
+    }
+    if let Some(Value::String(name)) = expected.get("$as") {
+        return names.matches(name, actual, path);
     }
     if expected.get("$absent") == Some(&Value::Bool(true)) {
         return if absent(actual) {
@@ -93,11 +148,18 @@ fn object_mismatches(
     };
     expected
         .iter()
-        .flat_map(|(key, value)| mismatches(value, actual.get(key), &format!("{path}.{key}")))
+        .flat_map(|(key, value)| {
+            mismatches(value, actual.get(key), &format!("{path}.{key}"), names)
+        })
         .collect()
 }
 
-fn list_mismatches(expected: &[Value], actual: Option<&Value>, path: &str) -> Vec<String> {
+fn list_mismatches(
+    expected: &[Value],
+    actual: Option<&Value>,
+    path: &str,
+    names: &mut Names,
+) -> Vec<String> {
     let Some(Value::Array(actual)) = actual else {
         return vec![format!("{path}: expected a list, got {}", shown(actual))];
     };
@@ -114,19 +176,29 @@ fn list_mismatches(expected: &[Value], actual: Option<&Value>, path: &str) -> Ve
         .zip(actual)
         .enumerate()
         .flat_map(|(position, (want, got))| {
-            mismatches(want, Some(got), &format!("{path}[{position}]"))
+            mismatches(want, Some(got), &format!("{path}[{position}]"), names)
         })
         .collect()
 }
 
-fn unordered_mismatches(expected: &[Value], actual: Option<&Value>, path: &str) -> Vec<String> {
+fn unordered_mismatches(
+    expected: &[Value],
+    actual: Option<&Value>,
+    path: &str,
+    names: &mut Names,
+) -> Vec<String> {
     let Some(Value::Array(actual)) = actual else {
         return vec![format!("{path}: expected a list, got {}", shown(actual))];
     };
-    unordered_items(expected, actual, path)
+    unordered_items(expected, actual, path, names)
 }
 
-fn unordered_items(expected: &[Value], actual: &[Value], path: &str) -> Vec<String> {
+fn unordered_items(
+    expected: &[Value],
+    actual: &[Value],
+    path: &str,
+    names: &mut Names,
+) -> Vec<String> {
     if expected.len() != actual.len() {
         return vec![format!(
             "{path}: expected {} items in any order, got {}",
@@ -135,7 +207,8 @@ fn unordered_items(expected: &[Value], actual: &[Value], path: &str) -> Vec<Stri
         )];
     }
     let mut used = vec![false; actual.len()];
-    if assign(expected, actual, &mut used) {
+    if let Some(matched) = assign(expected, actual, &mut used, names.clone()) {
+        *names = matched;
         Vec::new()
     } else {
         vec![format!(
@@ -146,21 +219,27 @@ fn unordered_items(expected: &[Value], actual: &[Value], path: &str) -> Vec<Stri
     }
 }
 
-fn assign(expected: &[Value], actual: &[Value], used: &mut [bool]) -> bool {
+/// The names an order matching `expected` holds, or `None` when no order
+/// matches: each try names on a copy of `names`.
+fn assign(expected: &[Value], actual: &[Value], used: &mut [bool], names: Names) -> Option<Names> {
     let Some((first, rest)) = expected.split_first() else {
-        return true;
+        return Some(names);
     };
     for (index, item) in actual.iter().enumerate() {
-        if used[index] || !mismatches(first, Some(item), "").is_empty() {
+        if used[index] {
+            continue;
+        }
+        let mut trial = names.clone();
+        if !mismatches(first, Some(item), "", &mut trial).is_empty() {
             continue;
         }
         used[index] = true;
-        if assign(rest, actual, used) {
-            return true;
+        if let Some(matched) = assign(rest, actual, used, trial) {
+            return Some(matched);
         }
         used[index] = false;
     }
-    false
+    None
 }
 
 /// A room's framework events: in order, a `$unordered` group matching as
@@ -169,6 +248,7 @@ pub(crate) fn framework_mismatches(
     expected: &[Value],
     actual: &[Value],
     path: &str,
+    names: &mut Names,
 ) -> Vec<String> {
     let mut found = Vec::new();
     let mut cursor = 0;
@@ -177,12 +257,12 @@ pub(crate) fn framework_mismatches(
         if let Some(Value::Array(group)) = item.get("$unordered") {
             let group: Vec<Value> = group.iter().map(as_event).collect();
             let end = (cursor + group.len()).min(actual.len());
-            found.extend(unordered_items(&group, &actual[cursor..end], &here));
+            found.extend(unordered_items(&group, &actual[cursor..end], &here, names));
             cursor += group.len();
             continue;
         }
         match actual.get(cursor) {
-            Some(event) => found.extend(mismatches(&as_event(item), Some(event), &here)),
+            Some(event) => found.extend(mismatches(&as_event(item), Some(event), &here, names)),
             None => found.push(format!("{here}: expected {item}, got nothing more")),
         }
         cursor += 1;

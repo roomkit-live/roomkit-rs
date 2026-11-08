@@ -6,18 +6,20 @@ use std::collections::{BTreeSet, HashMap};
 
 use serde_json::{Value, json};
 
-use crate::matching::{framework_mismatches, mismatches};
+use crate::matching::{Names, framework_mismatches, mismatches};
 use crate::normalize::{Normalizer, Observed, is_lifecycle_record};
 use crate::run::{Run, lock};
 
 pub(crate) fn compare(run: &Run, scenario: &Value, observed: &Observed) -> Vec<String> {
     let mut normalizer = Normalizer::new(observed);
+    // What the `$as` of the steps and of `expect` named (README, "Matching").
+    let mut names = Names::default();
     let mut found = Vec::new();
     for check in lock(&run.checks).iter() {
         found.extend(outcome_mismatches(
             check.expect.as_ref(),
             &check.outcome,
-            &mut normalizer,
+            (&mut normalizer, &mut names),
             &check.path,
         ));
     }
@@ -34,6 +36,7 @@ pub(crate) fn compare(run: &Run, scenario: &Value, observed: &Observed) -> Vec<S
         expect: &scenario["expect"],
         rooms,
         found,
+        names,
     };
     comparison.records();
     comparison.hooks();
@@ -51,6 +54,7 @@ struct Comparison<'a> {
     expect: &'a Value,
     rooms: HashMap<String, String>,
     found: Vec<String>,
+    names: Names,
 }
 
 impl Comparison<'_> {
@@ -91,7 +95,7 @@ impl Comparison<'_> {
     fn check(&mut self, expected: &Value, actual: Option<&Value>, path: &str) {
         let actual = actual.map(|actual| self.normalizer.value(actual));
         self.found
-            .extend(mismatches(expected, actual.as_ref(), path));
+            .extend(mismatches(expected, actual.as_ref(), path, &mut self.names));
     }
 
     fn records(&mut self) {
@@ -149,13 +153,13 @@ impl Comparison<'_> {
             }
         }
         let events = framework_events(
-            &mut self.normalizer,
+            (&mut self.normalizer, &mut self.names),
             &self.observed.framework_events,
             (&expect["framework_events"], "framework_events"),
         );
         self.found.extend(events);
         let events = framework_events(
-            &mut self.normalizer,
+            (&mut self.normalizer, &mut self.names),
             &self.observed.ai_events,
             (&expect["ai_events"], "ai_events"),
         );
@@ -298,7 +302,12 @@ impl Comparison<'_> {
                 .cloned()
                 .unwrap_or_default();
             let path = format!("actions.{label}");
-            let found = outcomes_of(expected, &outcomes, &mut self.normalizer, &path);
+            let found = outcomes_of(
+                expected,
+                &outcomes,
+                (&mut self.normalizer, &mut self.names),
+                &path,
+            );
             self.found.extend(found);
         }
     }
@@ -308,7 +317,7 @@ impl Comparison<'_> {
 fn outcomes_of(
     expected: &Value,
     outcomes: &[Value],
-    normalizer: &mut Normalizer,
+    (normalizer, names): (&mut Normalizer, &mut Names),
     path: &str,
 ) -> Vec<String> {
     let unordered = expected.get("$unordered").and_then(Value::as_array);
@@ -329,15 +338,22 @@ fn outcomes_of(
             .zip(outcomes)
             .enumerate()
             .flat_map(|(position, (want, got))| {
-                outcome_mismatches(Some(want), got, normalizer, &format!("{path}[{position}]"))
+                let path = format!("{path}[{position}]");
+                outcome_mismatches(Some(want), got, (normalizer, names), &path)
             })
             .collect();
     }
     let mut remaining: Vec<&Value> = outcomes.iter().collect();
     for want in &wanted {
-        let position = remaining
-            .iter()
-            .position(|got| outcome_mismatches(Some(want), got, normalizer, path).is_empty());
+        let position = remaining.iter().position(|got| {
+            let mut trial = names.clone();
+            let matched =
+                outcome_mismatches(Some(want), got, (normalizer, &mut trial), path).is_empty();
+            if matched {
+                *names = trial;
+            }
+            matched
+        });
         match position {
             Some(position) => {
                 remaining.remove(position);
@@ -349,7 +365,7 @@ fn outcomes_of(
 }
 
 fn framework_events(
-    normalizer: &mut Normalizer,
+    (normalizer, names): (&mut Normalizer, &mut Names),
     recorded: &[Value],
     (expected, member): (&Value, &str),
 ) -> Vec<String> {
@@ -367,6 +383,7 @@ fn framework_events(
             &events,
             &actual,
             &format!("{member}.{alias}"),
+            names,
         ));
     }
     found
@@ -375,7 +392,7 @@ fn framework_events(
 fn outcome_mismatches(
     expected: Option<&Value>,
     outcome: &Value,
-    normalizer: &mut Normalizer,
+    (normalizer, names): (&mut Normalizer, &mut Names),
     path: &str,
 ) -> Vec<String> {
     let error = &outcome["error"];
@@ -393,7 +410,7 @@ fn outcome_mismatches(
                 outcome["result"]
             )];
         }
-        return mismatches(&want, Some(error), &format!("{path}.error"));
+        return mismatches(&want, Some(error), &format!("{path}.error"), names);
     }
     if !error.is_null() {
         return vec![format!("{path}: unexpected error {error}")];
@@ -401,7 +418,7 @@ fn outcome_mismatches(
     match expected.get("result") {
         Some(want) => {
             let actual = normalizer.value(&outcome["result"]);
-            mismatches(want, Some(&actual), &format!("{path}.result"))
+            mismatches(want, Some(&actual), &format!("{path}.result"), names)
         }
         None => Vec::new(),
     }
