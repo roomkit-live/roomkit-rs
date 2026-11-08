@@ -139,9 +139,10 @@ pub(super) struct Cascade {
     /// The rows a stream's reader handed back, waiting for their pass.
     rows: Vec<PendingRow>,
     /// The records on their events of the deliveries that failed once their
-    /// set was over: an agent's turn whose stream's first pass was followed
-    /// by a raise (RFC §19.7.3, §5.13).
-    records: Vec<DeliveryRecord>,
+    /// set was over, each with the cascade it belongs to: an agent's turn
+    /// whose stream's first pass was followed by a raise (RFC §19.7.3,
+    /// §5.13).
+    records: Vec<(Lineage, DeliveryRecord)>,
 }
 
 impl Cascade {
@@ -357,6 +358,7 @@ impl Cascade {
                 .as_ref()
                 .is_some_and(|read| read.lineage() == lineage)
             || !self.rows.is_empty()
+            || self.records.iter().any(|(held, _)| *held == lineage)
     }
 
     /// The adopted entry the running pass is owed to, when `effect` is one
@@ -422,16 +424,17 @@ impl Cascade {
             && self.rows.is_empty()
     }
 
-    /// Writes `record` beside the cascade's work, which ends once it is
-    /// written.
-    pub(super) fn keep_record(&mut self, record: DeliveryRecord) {
-        self.records.push(record);
+    /// Writes `record` beside the work of `lineage`'s cascade, which holds
+    /// it until it is written: its caller is answered once it is, as a
+    /// set's own record (RFC §10.1 step 18).
+    pub(super) fn keep_record(&mut self, lineage: Lineage, record: DeliveryRecord) {
+        self.records.push((lineage, record));
     }
 
     /// Whether a record [`keep_record`](Self::keep_record) kept waits for
     /// `effect`.
     pub(super) fn record_awaits(&self, effect: EffectId) -> bool {
-        self.records.iter().any(|record| record.awaits(effect))
+        self.records.iter().any(|(_, record)| record.awaits(effect))
     }
 
     /// Hands the record waiting for `effect` its answer; a record written
@@ -442,13 +445,17 @@ impl Cascade {
         effect: EffectId,
         outcome: Outcome,
     ) {
-        let Some(position) = self.records.iter().position(|record| record.awaits(effect)) else {
+        let Some(position) = self
+            .records
+            .iter()
+            .position(|(_, record)| record.awaits(effect))
+        else {
             return;
         };
         let written = self
             .records
             .get_mut(position)
-            .is_some_and(|record| matches!(record.accept(cx, outcome), Progress::Done(())));
+            .is_some_and(|(_, record)| matches!(record.accept(cx, outcome), Progress::Done(())));
         if written {
             self.records.remove(position);
         }

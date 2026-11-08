@@ -525,10 +525,10 @@ pub enum ChannelRequest {
     /// target's output, its `error` the response's failure, or the
     /// target's own (RFC §6.1 `ChannelOutput.error`); an `error` marked
     /// reported (`ErrorRecord::marked_reported`) was reported to `ON_ERROR`
-    /// and logged by the reader, and is only handed on to the caller. Answer [`ChannelOutcome::Raised`] when the
-    /// turn raised once its stream was read, what follows a strategy's
-    /// first pass (RFC §19.7.3): the turn failed as an `OnEvent` that
-    /// raised, never its stream.
+    /// and logged by the reader, and is only handed on to the caller.
+    /// Answer [`ChannelOutcome::Raised`] when the turn raised once its
+    /// stream was read, what follows a strategy's first pass (RFC §19.7.3):
+    /// the turn failed as an `OnEvent` that raised, never its stream.
     ReadStream {
         /// The turn whose response it is.
         turn: EffectId,

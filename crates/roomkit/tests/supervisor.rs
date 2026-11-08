@@ -616,3 +616,92 @@ async fn a_failed_pass_gives_its_error_logged_once() {
         "{named:?}"
     );
 }
+
+/// A kit holding room `r1` bound to an SMS transport, an auto-delegating
+/// supervisor whose first pass answers "Acme", and its worker no longer
+/// registered: the worker raises once the first pass handed on its task.
+async fn kit_whose_worker_raises() -> RoomKit {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    kit.register_channel(agent("sup", "Coordinator", model(vec![says("Acme")])))
+        .unwrap();
+    kit.register_channel(agent("worker", "Worker", model(vec![])))
+        .unwrap();
+    let options = SupervisorOptions {
+        strategy: Some(WorkerStrategy::Parallel),
+        auto_delegate: true,
+        ..SupervisorOptions::default()
+    };
+    let team = Supervisor::new(id("sup"), vec![id("worker").into()], options).unwrap();
+    let sms = RecordingTransport::new(
+        id("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(sms).unwrap();
+    let room = RoomId::new("r1").unwrap();
+    let created = CreateRoomOptions {
+        room_id: Some(room.clone()),
+        orchestration: Some(Some(Arc::new(team))),
+        ..CreateRoomOptions::default()
+    };
+    kit.create_room(created).await.unwrap();
+    kit.attach_channel(&room, &id("sms"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    kit.unregister_channel(&id("worker")).unwrap();
+    kit
+}
+
+// The failed delivery a raise after the first pass leaves is recorded on
+// the message before the call returns, on a multi-thread runtime too, as
+// Python's root pass awaits `_record_failed_deliveries` (RFC §5.13,
+// §10.1 step 18).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_raise_after_the_first_pass_is_recorded_before_the_call_returns() {
+    let kit = kit_whose_worker_raises().await;
+    let room = RoomId::new("r1").unwrap();
+    let mut recorded = Vec::new();
+    for round in 0..5 {
+        let body = format!("Look into Acme, {round}.");
+        let message = InboundMessage::new(id("sms"), "u1", TextContent::new(body));
+        let result = kit
+            .process_inbound(message, ProcessInboundOptions::default())
+            .await
+            .unwrap();
+        let event_id = result.event.unwrap().id;
+        let timeline = kit
+            .get_timeline(&room, GetTimelineOptions::default())
+            .await
+            .unwrap();
+        let stored = timeline.into_iter().find(|event| event.id == event_id);
+        recorded.push(stored.is_some_and(|event| event.delivery_results.contains_key("sup")));
+    }
+    kit.close().await.unwrap();
+    assert_eq!(recorded, vec![true; 5]);
+}
+
+// A raise after the first pass is logged once, as Python's router logs a
+// target that raised (RFC §15.2).
+#[tokio::test]
+async fn a_raise_after_the_first_pass_is_logged_once() {
+    let (warnings, _capturing) = Warnings::capture();
+    let kit = kit_whose_worker_raises().await;
+
+    let message = InboundMessage::new(id("sms"), "u1", TextContent::new("Look into Acme."));
+    let result = kit
+        .process_inbound(message, ProcessInboundOptions::default())
+        .await
+        .unwrap();
+    kit.close().await.unwrap();
+
+    let named = warnings.containing("Processing target sup failed");
+    assert_eq!(
+        (
+            result.error.map(|error| error.error_type),
+            named.len(),
+            named.iter().all(|line| line.starts_with("ERROR ")),
+        ),
+        (Some("ChannelNotRegisteredError".to_owned()), 1, true),
+        "{named:?}"
+    );
+}

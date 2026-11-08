@@ -18,7 +18,8 @@
 use std::sync::Arc;
 
 use roomkit_core::model::{
-    ChannelId, DeliveryResult, ErrorRecord, EventDirection, EventSource, Metadata, RoomEvent,
+    ChannelId, ChannelOutput, DeliveryResult, ErrorRecord, EventDirection, EventSource, Metadata,
+    RoomEvent,
 };
 use roomkit_core::ops::{ChannelOutcome, Entry, Outcome, Raised};
 
@@ -31,7 +32,7 @@ use crate::error::RoomKitError;
 use crate::kit::Inner;
 use crate::store::ConversationStore;
 use crate::turn::TurnKit;
-use crate::turn_runners::{Answering, Next, Then};
+use crate::turn_runners::{Answering, FirstPass, Next, Then};
 use crate::turns::Answer;
 
 /// Reads `kept`, a strategy's first pass, then what `then` makes of it:
@@ -45,26 +46,9 @@ pub(super) async fn read<S: ConversationStore>(
     stops: Stops,
     read: StreamRead,
 ) -> Outcome {
-    let first_read = StreamRead {
-        responder: read.responder.clone(),
-        answers: read.answers.clone(),
-        target: None,
-        // A turn of its own: its rows carry an id of their own, as every id
-        // the kit gives (RFC §10.6.1).
-        correlation_id: inner.environment().new_event_id().to_string(),
-        // A first pass's text is kept out of the room (RFC §19.7.3): it is
-        // no trace's, whoever reads the turn after it.
-        as_trace: false,
-    };
-    let failing = Failing::of(&first_read);
-    let (mut first, pass) = Box::pin(read_kept(inner, kept, stops.clone(), first_read, true)).await;
-    if let Some(error) = first.error.take() {
-        failing.report_first_pass(inner, &error).await;
-        first.error = Some(error.marked_reported());
-        return ChannelOutcome::Output(Box::new(first)).into();
-    }
-    let Some(pass) = pass else {
-        return ChannelOutcome::Output(Box::new(first)).into();
+    let (first, pass) = match read_first(inner, kept, &stops, &read).await {
+        Ok(read) => read,
+        Err(answer) => return ChannelOutcome::Output(answer).into(),
     };
     // A read stopped meanwhile (the operation's stop, the kit's close, the
     // held task's cut) cuts what follows the pass, its workers with it, as
@@ -92,6 +76,40 @@ pub(super) async fn read<S: ConversationStore>(
         }
         Ok(Next::Own(answering)) => second_pass(inner, *answering, stops, read).await,
         Err(error) => raised(&read.responder.channel_id, error),
+    }
+}
+
+/// Reads the first pass, `kept`, for `read`: a turn of its own, its rows a
+/// correlation id of their own, its text kept out of the room. A pass that
+/// failed is reported here, once, and its output, its error marked
+/// reported, answers the read, as one with nothing to hand on does.
+async fn read_first<S: ConversationStore>(
+    inner: &Arc<Inner<S>>,
+    kept: KeptStream,
+    stops: &Stops,
+    read: &StreamRead,
+) -> Result<(ChannelOutput, FirstPass), Box<ChannelOutput>> {
+    let first_read = StreamRead {
+        responder: read.responder.clone(),
+        answers: read.answers.clone(),
+        target: None,
+        // A turn of its own: its rows carry an id of their own, as every id
+        // the kit gives (RFC §10.6.1).
+        correlation_id: inner.environment().new_event_id().to_string(),
+        // A first pass's text is kept out of the room (RFC §19.7.3): it is
+        // no trace's, whoever reads the turn after it.
+        as_trace: false,
+    };
+    let failing = Failing::of(&first_read);
+    let (mut first, pass) = Box::pin(read_kept(inner, kept, stops.clone(), first_read, true)).await;
+    if let Some(error) = first.error.take() {
+        failing.report_first_pass(inner, &error).await;
+        first.error = Some(error.marked_reported());
+        return Err(Box::new(first));
+    }
+    match pass {
+        Some(pass) => Ok((first, pass)),
+        None => Err(Box::new(first)),
     }
 }
 
