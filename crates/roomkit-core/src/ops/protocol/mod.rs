@@ -431,13 +431,13 @@ pub trait Operation {
         Err(Box::new(entry))
     }
 
-    /// Reads the hooks the room `room_id` holds in `hooks`, a later copy of
-    /// the kit's registry, in place of those it read at its start: the
-    /// driver hands them once reading the room made the kit join the
-    /// discussion it stores, another process's (RFC §19.7.5 rule 16), so
-    /// that the message whose context read the room fires the discussion's
-    /// hooks, as Python's hook engine, read at each firing, does. Nothing by
-    /// default.
+    /// Takes the hooks the room `room_id` holds in `hooks`, a later copy of
+    /// the kit's registry, that it lacks, those it read at its start kept:
+    /// the driver hands them once a read of the room finds this process in
+    /// the discussion it stores, another process's (RFC §19.7.5 rule 16),
+    /// so that the message whose context read the room fires the
+    /// discussion's hooks, as Python's hook engine, read at each firing,
+    /// does. Nothing by default.
     fn adopt_room_hooks(&mut self, room_id: &RoomId, hooks: &HookRegistry) {
         let _ = (room_id, hooks);
     }

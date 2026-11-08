@@ -860,21 +860,28 @@ impl HookRegistry {
             .collect()
     }
 
-    /// Takes the hooks the room `room_id` holds in `newer`, a later copy of
-    /// the kit's registry, in place of those it holds here: an operation
-    /// that read the registry before a strategy set the room up reads that
-    /// room's hooks as they are now, the kit's own left as it read them. A
-    /// process following a discussion another process installed joins it
-    /// once it reads the room (RFC §19.7.5 rule 16), as Python's hook
-    /// engine, which every firing reads, sees the room's hooks at once.
+    /// Whether `newer`, a later copy of the kit's registry, holds a hook of
+    /// the room `room_id` of a name this copy lacks there.
+    pub fn lacks_room_hooks_of(&self, room_id: &RoomId, newer: &Self) -> bool {
+        newer
+            .in_scope(Some(room_id))
+            .any(|hook| self.room_hook(room_id, &hook.spec.name).is_none())
+    }
+
+    /// Adds the hooks the room `room_id` holds in `newer`, a later copy of
+    /// the kit's registry, of the names this copy lacks there, removing
+    /// none: an operation that read the registry before a strategy set the
+    /// room up fires that room's hooks too, every hook it read kept, the
+    /// kit's own as it read them. A process following a discussion another
+    /// process installed joins it once it reads the room (RFC §19.7.5 rule
+    /// 16), as Python's hook engine, which every firing reads, sees the
+    /// room's hooks at once.
     pub fn adopt_room_hooks(&mut self, room_id: &RoomId, newer: &Self) {
-        self.hooks
-            .retain(|hook| hook.room.as_ref() != Some(room_id));
-        let adopted = newer
-            .hooks
-            .iter()
-            .filter(|hook| hook.room.as_ref() == Some(room_id))
-            .cloned();
+        let adopted: Vec<Registered> = newer
+            .in_scope(Some(room_id))
+            .filter(|hook| self.room_hook(room_id, &hook.spec.name).is_none())
+            .cloned()
+            .collect();
         self.hooks.extend(adopted);
         self.next = self.next.max(newer.next);
     }
@@ -1548,28 +1555,32 @@ mod tests {
 
         // RFC §19.7.5 rule 16 (RMK-1476): a call that read the registry
         // before a strategy set its room up fires that room's hooks once it
-        // adopts them; the kit's hooks stay as it read them, another room's
-        // too.
+        // adopts them; every hook it read stays, one removed since
+        // included, the kit's hooks as it read them, another room's too.
         #[test]
         fn adopting_a_room_s_hooks_leaves_the_kit_s_as_read() {
             let mut read = HookRegistry::new();
             read.register(sync_hook("kit", 0)).unwrap();
+            read.add_room_hook(room("r1"), sync_hook("old", 0)).unwrap();
             read.add_room_hook(room("r2"), sync_hook("other", 0))
                 .unwrap();
             let mut newer = read.clone();
             newer.register(sync_hook("later", 0)).unwrap();
+            newer.remove_room_hook(&room("r1"), "old").unwrap();
             newer
                 .add_room_hook(room("r1"), sync_hook("names", 1))
                 .unwrap();
 
+            assert!(read.lacks_room_hooks_of(&room("r1"), &newer));
             read.adopt_room_hooks(&room("r1"), &newer);
+            assert!(!read.lacks_room_hooks_of(&room("r1"), &newer));
 
             let in_r1 = read.chain(HookTrigger::BeforeBroadcast, &event_in("r1"));
             let in_r2 = read.chain(HookTrigger::BeforeBroadcast, &event_in("r2"));
             assert_eq!(
                 (names(&read, &in_r1), names(&read, &in_r2)),
                 (
-                    vec!["kit".to_owned(), "names".to_owned()],
+                    vec!["kit".to_owned(), "old".to_owned(), "names".to_owned()],
                     vec!["kit".to_owned(), "other".to_owned()]
                 )
             );

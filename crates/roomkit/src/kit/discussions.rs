@@ -331,20 +331,18 @@ impl<S: ConversationStore> RoomKit<S> {
     /// gone is left when this process only followed it. Run for every
     /// context the pipeline builds, before a `process_inbound` naming its
     /// room, and by the strategy calls: Python's `_follow_discussion`, which
-    /// every context the kit builds runs. Whether this process joined the
-    /// discussion now, its hooks registered for the room.
-    pub(crate) fn follow_discussion(&self, room: &Room) -> bool {
+    /// every context the kit builds runs.
+    pub(crate) fn follow_discussion(&self, room: &Room) {
         let config = DiscussionConfig::stored(&room.metadata);
         let held = self.inner.discussions.get(&room.id);
         match (config, held) {
-            (Some(config), None) => return self.join_stored(room, config),
+            (Some(config), None) => self.join_stored(room, config),
             (Some(config), Some(held)) => held.follow(config),
             (None, Some(held)) if !held.installed() => {
                 self.leave_discussion(&room.id, &held);
             }
             _ => {}
         }
-        false
     }
 
     /// Reads `room_id` and follows the discussion it stores now, when this
@@ -380,15 +378,14 @@ impl<S: ConversationStore> RoomKit<S> {
 
     /// Follows the discussion `room` stores, `config`, another process's:
     /// this process routes and queues by it (rule 16). Python's
-    /// `_join_stored`. Whether it joined it: not when another call of this
-    /// process did first.
-    fn join_stored(&self, room: &Room, config: DiscussionConfig) -> bool {
+    /// `_join_stored`.
+    fn join_stored(&self, room: &Room, config: DiscussionConfig) {
         let room_id = room.id.clone();
         let organization_id = room.organization_id.clone();
         let follower = DiscussionRoom::following(self, room_id.clone(), organization_id, config);
         let seam: Arc<dyn DiscussionSeam> = Arc::<DiscussionRoom<S>>::clone(&follower);
         if !self.inner.discussions.hold_if_none(room_id.clone(), seam) {
-            return false;
+            return;
         }
         for hook in follower.hooks() {
             if let Err(error) = self.hook_engine().replace_room_hook(&room_id, hook) {
@@ -400,7 +397,6 @@ impl<S: ConversationStore> RoomKit<S> {
                 );
             }
         }
-        true
     }
 
     /// Stops following `held`, the discussion of `room_id`: its hooks

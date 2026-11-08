@@ -499,14 +499,16 @@ impl Operation for Inbound {
         self.machine.adopt(&self.io, entry, origin)
     }
 
-    /// The room's hooks as the kit holds them now, the kit's own as the
-    /// call read them at its start: a routed message read in a process that
+    /// The room's hooks the kit holds now that the call lacks, the hooks it
+    /// read at its start kept: a routed message read in a process that
     /// joined the room's discussion as it read the room fires that
     /// discussion's names hook (RFC §19.7.5 rules 4 and 16, RMK-1476).
     fn adopt_room_hooks(&mut self, room_id: &RoomId, hooks: &HookRegistry) {
-        Arc::make_mut(&mut self.config)
-            .hooks
-            .adopt_room_hooks(room_id, hooks);
+        if self.config.hooks.lacks_room_hooks_of(room_id, hooks) {
+            Arc::make_mut(&mut self.config)
+                .hooks
+                .adopt_room_hooks(room_id, hooks);
+        }
     }
 
     /// Expires the call when it is not decided yet: every request within
