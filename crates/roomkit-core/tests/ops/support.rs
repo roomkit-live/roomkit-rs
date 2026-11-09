@@ -256,6 +256,8 @@ pub(crate) struct Sim {
     /// channel by the time the room's lock is first taken: `(room, channel,
     /// sender)`.
     pub(crate) recorded_meanwhile: Option<(RoomId, ChannelId, ParticipantId)>,
+    /// Room snapshots committed off-lock just before successive lifecycle writes.
+    pub(crate) rooms_before_update: VecDeque<Room>,
     /// Whether the store finds `room_1`.
     pub(crate) room_exists: bool,
     /// What the hooks change in the room while they run.
@@ -379,6 +381,7 @@ impl Sim {
             routes: VecDeque::new(),
             route_queries: Vec::new(),
             recorded_meanwhile: None,
+            rooms_before_update: VecDeque::new(),
             room_exists: true,
             hooks_change: None,
             parse_contexts: Vec::new(),
@@ -1123,6 +1126,9 @@ impl Sim {
             Request::Store(StoreRequest::UpdateRoom { room_id, .. }) => {
                 format!("update room {room_id}")
             }
+            Request::Store(StoreRequest::UpdateRoomIf { room, .. }) => {
+                format!("update room {}", room.id)
+            }
             Request::Store(StoreRequest::StoreBinding { binding }) => {
                 format!("store binding {}", binding.channel_id)
             }
@@ -1459,6 +1465,9 @@ impl Sim {
         Some(match request {
             Request::Store(StoreRequest::UpdateRoom { room_id, .. }) => {
                 (format!("update room {room_id}"), store_down())
+            }
+            Request::Store(StoreRequest::UpdateRoomIf { room, .. }) => {
+                (format!("update room {}", room.id), store_down())
             }
             Request::Store(StoreRequest::StoreBinding { binding }) => (
                 format!("store binding {}", binding.channel_id),
@@ -1805,6 +1814,9 @@ impl Sim {
             }
             StoreRequest::CreateRoom { room } => self.create_room(room),
             StoreRequest::UpdateRoom { room_id, updates } => {
+                if let Some(room) = self.rooms_before_update.pop_front() {
+                    self.room = room;
+                }
                 assert!(
                     self.state(self.current).locks.contains(&room_id) || updates.status.is_none(),
                     "a status was written outside the room lock"
@@ -1813,6 +1825,37 @@ impl Sim {
                 self.trace
                     .push(format!("update room {room_id} {:?}", self.room.status));
                 Outcome::Store(StoreOutcome::Stored)
+            }
+            StoreRequest::UpdateRoomIf {
+                room,
+                status,
+                paused_at,
+                last_activity_at,
+            } => {
+                assert!(self.state(self.current).locks.contains(&room.id));
+                if let Some(committed) = self.rooms_before_update.pop_front() {
+                    self.room = committed;
+                }
+                if !self.room_exists
+                    || self.room.status != status
+                    || self.room.paused_at != paused_at
+                    || self.room.timers.last_activity_at != last_activity_at
+                {
+                    self.trace.push(format!("update room {} missed", room.id));
+                    return Outcome::Store(StoreOutcome::RoomUpdated(None));
+                }
+                let count = self.room.event_count;
+                let latest = self.room.latest_index;
+                let delivered = self.room.delivered_index;
+                self.room = *room;
+                self.room.event_count = count;
+                self.room.latest_index = latest;
+                self.room.delivered_index = delivered;
+                self.trace.push(format!(
+                    "update room {} {:?}",
+                    self.room.id, self.room.status
+                ));
+                Outcome::Store(StoreOutcome::RoomUpdated(Some(Box::new(self.room.clone()))))
             }
             StoreRequest::DeleteBinding { channel_id, .. } => {
                 self.trace.push(format!("delete binding {channel_id}"));
@@ -2122,6 +2165,7 @@ fn store_room(request: &StoreRequest) -> &RoomId {
         | StoreRequest::WriteUnstored { room_id, .. } => room_id,
         StoreRequest::Commit { event, .. } => &event.room_id,
         StoreRequest::CreateRoom { room } => &room.id,
+        StoreRequest::UpdateRoomIf { room, .. } => &room.id,
         StoreRequest::StoreBinding { binding } => &binding.room_id,
         StoreRequest::AddParticipant { participant }
         | StoreRequest::UpdateParticipant { participant } => &participant.room_id,

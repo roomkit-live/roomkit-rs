@@ -69,6 +69,10 @@ macro_rules! status_change {
             fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {
                 self.change.complete(id, outcome)
             }
+
+            fn expire(&mut self) -> Vec<EffectId> {
+                self.change.expire()
+            }
         }
     };
 }
@@ -159,5 +163,9 @@ impl Operation for CheckTimers {
 
     fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {
         self.change.complete(id, outcome)
+    }
+
+    fn expire(&mut self) -> Vec<EffectId> {
+        self.change.expire()
     }
 }

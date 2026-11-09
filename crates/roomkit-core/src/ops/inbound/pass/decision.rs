@@ -144,7 +144,7 @@ impl CommitPass {
     ) -> State {
         match outcome.into_context() {
             Ok(Some(context)) => self.apply(cx, verdict, context, true),
-            Ok(None) => self.release(cx, Err(Abort::RoomNotFound)),
+            Ok(None) => self.on_missing_room(cx),
             Err(error) => self.release(cx, Err(Abort::Store(error))),
         }
     }
@@ -189,7 +189,12 @@ impl CommitPass {
         let status = context.room.status;
         if !status.accepts_events() {
             super::super::report::room_refused(cx, &self.event, &self.origin, status);
-            return self.release(cx, Ok(PassResult::Refused { status }));
+            return self.release(
+                cx,
+                Ok(PassResult::Refused {
+                    status: Some(status),
+                }),
+            );
         }
         let set_by_a_hook = verdict
             .payload

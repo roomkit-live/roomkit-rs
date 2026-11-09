@@ -10,7 +10,7 @@ use crate::model::{
     ChannelBinding, ChannelId, ChannelOutput, ChannelType, DeliveryError, ErrorRecord, EventId,
     EventUpdates, Identity, IdentityHookResult, IdentityId, IdentityResult, InboundMessage,
     Metadata, Observation, ObservationId, Participant, ProviderResult, Room, RoomContext,
-    RoomEvent, RoomId, RoomUpdates, Task, TaskId, Timestamp, Verification,
+    RoomEvent, RoomId, RoomStatus, RoomUpdates, Task, TaskId, Timestamp, Verification,
 };
 use crate::ops::RecentEvents;
 use crate::rules::hook_chain::HookOutcome;
@@ -465,6 +465,20 @@ pub enum StoreRequest {
         /// it.
         author_register: Option<Metadata>,
     },
+    /// Conditionally write a room whose timer transition was computed from
+    /// these fields. Answer `RoomUpdated(None)` if a concurrent commit moved
+    /// them or removed the room; otherwise return the room actually stored,
+    /// including its preserved counters (RFC §5.1, §14.1 `update_room_if`).
+    UpdateRoomIf {
+        /// The room after every due transition.
+        room: Box<Room>,
+        /// The status the transition read.
+        status: RoomStatus,
+        /// The pause the transition read.
+        paused_at: Option<Timestamp>,
+        /// The activity the transition read.
+        last_activity_at: Option<Timestamp>,
+    },
 }
 
 /// A call of a channel (RFC §6.1), answered by a [`ChannelOutcome`].
@@ -854,6 +868,8 @@ pub enum StoreOutcome {
     Stored,
     /// The identity the address belongs to, if any.
     Resolved(Option<Identity>),
+    /// A conditional room write: the stored room, or none when its condition missed.
+    RoomUpdated(Option<Box<Room>>),
 }
 
 /// A side effect of a [`StoreRequest::PersistSideEffects`] the store did

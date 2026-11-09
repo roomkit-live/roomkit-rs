@@ -155,6 +155,15 @@ pub(super) async fn store<S: ConversationStore>(store: &S, request: StoreRequest
         StoreRequest::UpdateRoom { room_id, updates } => update_room(store, &room_id, updates)
             .await
             .map(|()| StoreOutcome::Stored),
+        StoreRequest::UpdateRoomIf {
+            room,
+            status,
+            paused_at,
+            last_activity_at,
+        } => store
+            .update_room_if(*room, status, paused_at, last_activity_at)
+            .await
+            .map(|room| StoreOutcome::RoomUpdated(room.map(Box::new))),
         StoreRequest::StoreBinding { binding } => store_binding(store, binding)
             .await
             .map(|()| StoreOutcome::Stored),

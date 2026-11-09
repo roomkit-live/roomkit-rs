@@ -129,6 +129,8 @@ pub(crate) struct Section<W: SectionWork> {
     timers: Vec<DueTransition>,
     /// Their hooks, fired once the lock is released (RFC §5.1 When).
     timer_hooks: TimerHooks,
+    /// Finish the timer gate, then skip the abandoned caller's work.
+    cancelled_after_timers: bool,
 }
 
 #[derive(Debug)]
@@ -172,6 +174,7 @@ impl<W: SectionWork> Section<W> {
             state: State::Start,
             timers: Vec::new(),
             timer_hooks: TimerHooks::default(),
+            cancelled_after_timers: false,
         }
     }
 
@@ -205,6 +208,12 @@ impl<W: SectionWork> Section<W> {
     /// Whether the section still waits for the room's lock, holding none.
     pub(crate) fn locking(&self) -> bool {
         matches!(self.state, State::Locking(_))
+    }
+
+    /// A direct caller left while its timer gate was writing. Its timers
+    /// and their reports finish, but its own change must not begin.
+    pub(crate) fn cancel_after_timers(&mut self) {
+        self.cancelled_after_timers |= matches!(self.state, State::ApplyingTimers { .. });
     }
 
     /// The work, before the section starts it.
@@ -293,8 +302,7 @@ impl<W: SectionWork> Section<W> {
                 })) => {
                     self.timers = transitions;
                     self.timer_hooks = hooks;
-                    let begun = self.work.begin(cx, context);
-                    self.working(cx, begun)
+                    self.after_timers(cx, context)
                 }
                 Ok(Applied::Writing { effect, pending }) => {
                     State::ApplyingTimers { effect, pending }
@@ -345,6 +353,15 @@ impl<W: SectionWork> Section<W> {
             }
             Gate::Writing { effect, pending } => State::ApplyingTimers { effect, pending },
         }
+    }
+
+    fn after_timers(&mut self, cx: &mut Cx<'_>, context: Box<RoomContext>) -> State<W> {
+        if self.cancelled_after_timers {
+            let error = ErrorRecord::new("CancelledError", "the caller left during its timer gate");
+            return self.release(cx, Err(W::failure(Failure::Store(error))));
+        }
+        let begun = self.work.begin(cx, context);
+        self.working(cx, begun)
     }
 
     /// Goes on with the work, or releases the lock once it is done.

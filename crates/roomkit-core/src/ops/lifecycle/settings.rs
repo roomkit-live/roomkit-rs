@@ -167,6 +167,10 @@ impl Operation for SetRoomTimers {
     fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {
         self.change.complete(id, outcome)
     }
+
+    fn expire(&mut self) -> Vec<EffectId> {
+        self.change.expire()
+    }
 }
 
 /// Sets what an agent's own output asks in a room (RFC §19.3.1), under the
@@ -203,5 +207,9 @@ impl Operation for SetAgentResponsePolicy {
 
     fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {
         self.change.complete(id, outcome)
+    }
+
+    fn expire(&mut self) -> Vec<EffectId> {
+        self.change.expire()
     }
 }

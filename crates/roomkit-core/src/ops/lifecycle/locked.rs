@@ -142,6 +142,11 @@ impl<C: SectionChange<Refusal = LifecycleError>> LockedChange<C> {
         self.io.complete(id, outcome)
     }
 
+    pub(super) fn expire(&mut self) -> Vec<EffectId> {
+        self.section.cancel_after_timers();
+        self.io.expire()
+    }
+
     /// The same change, made in the room's work that `draw` names, its
     /// trigger's hook bodies drawing their calls on that work's budget, at
     /// least `floor` deep (RFC §8.3, §10.3).

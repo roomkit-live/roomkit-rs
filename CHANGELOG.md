@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Timer transitions preserve concurrent activity, finish their reports after caller cancellation, and give both hooks the final room context; response passes on a deleted room report its refusal (RFC §5.1, RMK-1608).
+
 - Closing or archiving a room clears its pause timestamp; archiving an open room records its close timestamp, preserving an existing one, as Python does. Shared conformance also checks all room transitions and runs named timer checks with their organization scope (RFC §5.1, RMK-1607).
 
 - rmcp 3.9: RUSTSEC-2026-0462, unbounded buffering of a Streamable HTTP response. The kit's own HTTP client already bounded a response at 4 MiB.

@@ -9,7 +9,7 @@ use super::{
 };
 use crate::model::{
     ChannelBinding, ChannelId, ChannelOutput, DeliveryError, ErrorRecord, Identity,
-    IdentityHookResult, IdentityResult, RoomContext, RoomEvent, RoomId, Verification,
+    IdentityHookResult, IdentityResult, Room, RoomContext, RoomEvent, RoomId, Verification,
 };
 use crate::rules::hook_chain::HookOutcome;
 
@@ -59,6 +59,7 @@ pub(crate) enum RequestKind {
     /// A code reply attempted (RFC §11.7.4).
     TryCode,
     Discussion,
+    UpdateRoomIf,
 }
 
 impl Request {
@@ -114,6 +115,7 @@ impl StoreRequest {
     fn kind(&self) -> RequestKind {
         match self {
             Self::LoadContext { .. } => RequestKind::LoadContext,
+            Self::UpdateRoomIf { .. } => RequestKind::UpdateRoomIf,
             Self::GetEventByIdempotencyKey { .. } => RequestKind::GetEventByIdempotencyKey,
             Self::GetEvent { .. } => RequestKind::GetEvent,
             Self::ListEvents { .. } | Self::ListEventsPage { .. } => RequestKind::ListEvents,
@@ -168,6 +170,7 @@ impl RequestKind {
             Self::Commit => "Committed",
             Self::PersistSideEffects => "Persisted",
             Self::Write => "Stored",
+            Self::UpdateRoomIf => "RoomUpdated",
             Self::ResolveIdentity => "Resolved",
             Self::HandleInbound => "Parsed",
             Self::ChannelCall => "Output",
@@ -225,6 +228,7 @@ impl RequestKind {
                 matches!(outcome, Outcome::Store(StoreOutcome::Persisted(_)))
             }
             Self::Write => matches!(outcome, Outcome::Store(StoreOutcome::Stored)),
+            Self::UpdateRoomIf => matches!(outcome, Outcome::Store(StoreOutcome::RoomUpdated(_))),
             Self::ResolveIdentity => matches!(outcome, Outcome::Store(StoreOutcome::Resolved(_))),
             Self::HandleInbound => matches!(outcome, Outcome::Channel(ChannelOutcome::Parsed(_))),
             Self::ChannelCall => matches!(
@@ -425,6 +429,13 @@ impl Outcome {
         }
     }
 
+    pub(crate) fn into_room_updated(self) -> Result<Option<Box<Room>>, ErrorRecord> {
+        match self {
+            Self::Store(StoreOutcome::RoomUpdated(room)) => Ok(room),
+            other => Err(other.into_failure()),
+        }
+    }
+
     /// A write's answer, a commit's included: `Stored` or `Committed`.
     pub(crate) fn into_written(self) -> Result<(), ErrorRecord> {
         match self {
@@ -590,6 +601,7 @@ impl Outcome {
                 StoreOutcome::Committed(_) => "Committed",
                 StoreOutcome::Persisted(_) => "Persisted",
                 StoreOutcome::Stored => "Stored",
+                StoreOutcome::RoomUpdated(_) => "RoomUpdated",
                 StoreOutcome::Resolved(_) => "Resolved",
             },
             Self::Channel(ChannelOutcome::Parsed(_)) => "Parsed",

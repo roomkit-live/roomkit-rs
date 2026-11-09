@@ -1,93 +1,66 @@
-//! The timer transitions every locked section applies before it decides
-//! (RFC §5.1, gap G-045).
+//! Apply due timers before a locked section decides (RFC §5.1).
 //!
-//! A locked section reads its room under the lock, then opens the gate.
-//! When a timer transition fell due, the gate writes it, every due one in a
-//! single write, each at the instant it fell due. Then, for each one in the
-//! order they fell due, it commits the transition's lifecycle record, which
-//! a CLOSED room still takes (RFC §5.1, gap G-046), and emits its framework
-//! event, before the section decides anything else: a message refused
-//! because its room's close fell due reports `room_closed` before
-//! `room_refused_event`. Each one's trigger fires once the section releases
-//! the room's lock, as an ASYNC trigger does (RFC §5.1 When,
-//! [`TimerHooks`]). The section then decides on the room as the transitions
-//! and their records left it, so a late message is refused exactly, and an
-//! event takes the index after the records.
+//! One conditional write applies every due transition at its due instant.
+//! A concurrent commit makes the gate reread and recompute, never overwrite
+//! activity. Each transition's record and framework event precede the section's
+//! decision; both hooks receive the final context after the lock is released.
 
-use crate::model::{ErrorRecord, Room, RoomContext, RoomUpdates};
-use crate::ops::Cx;
-use crate::ops::protocol::{EffectId, Notice, Outcome, StoreRequest};
-use crate::rules::lifecycle::{self, Transition};
-use crate::rules::records::Record;
-use crate::rules::timers::{self, DueTransition};
+mod write;
 
 use super::record;
 use super::report::{self, Reported, TimerDue};
+use crate::model::{ErrorRecord, Room, RoomContext};
+use crate::ops::Cx;
+use crate::ops::protocol::{EffectId, Notice, Outcome, StoreRequest};
+use crate::rules::lifecycle::Transition;
+use crate::rules::records::Record;
+use crate::rules::timers::DueTransition;
 
-/// What the gate finds on a room read under its lock.
 #[derive(Debug)]
 pub(crate) enum Gate {
-    /// No timer transition is due: the section decides on the room as read.
     Clear(Box<RoomContext>),
-    /// The due transitions are being written; the section waits for
-    /// `effect`, then hands its outcome to `pending`.
     Writing {
         effect: EffectId,
         pending: Box<Pending>,
     },
 }
 
-/// Due transitions whose writes are outstanding: the room's update, then
-/// each one's lifecycle record.
 #[derive(Debug)]
-pub(crate) struct Pending {
-    /// Each transition, with the room as it left it.
-    applied: Vec<(DueTransition, Room)>,
-    /// The room as the last transition left it, and the records committed
-    /// so far.
-    context: Box<RoomContext>,
-    /// The transition whose record's commit is outstanding; `None` while
-    /// the room's update is.
-    recording: Option<usize>,
-    /// The hooks of the transitions announced so far.
-    hooks: Vec<Notice>,
+pub(crate) enum Pending {
+    Room(write::Write),
+    Records(Records),
+    Context(Records),
 }
 
-/// What the gate does once one of its writes is stored.
+#[derive(Debug)]
+pub(crate) struct Records {
+    context: Box<RoomContext>,
+    due: Vec<DueTransition>,
+    recording: usize,
+}
+
 #[derive(Debug)]
 pub(crate) enum Applied {
-    /// Every write is stored: the section decides on the room as they left
-    /// it.
     Opened(Opened),
-    /// The next transition's record is being committed; the section waits
-    /// for `effect`, then hands its outcome to `pending` again.
     Writing {
         effect: EffectId,
         pending: Box<Pending>,
     },
 }
 
-/// What the gate hands back once its write is stored.
 #[derive(Debug)]
 pub(crate) struct Opened {
-    /// The room as the transitions left it.
     pub(crate) context: Box<RoomContext>,
-    /// The transitions applied, in the order they fell due.
     pub(crate) transitions: Vec<DueTransition>,
-    /// Their triggers' hooks, which the section fires once it released the
-    /// room's lock.
     pub(crate) hooks: TimerHooks,
 }
 
-/// The hooks of the timer transitions a gate applied, which fire once the
-/// section that holds the room's lock released it (RFC §5.1 When).
+/// Timer hooks fire once the section releases its room lock, including a
+/// section nested under another lock (RFC §5.1 When).
 #[derive(Debug, Default)]
 pub(crate) struct TimerHooks(Vec<Notice>);
 
 impl TimerHooks {
-    /// Fires the hooks, the section's lock released: at once, or, for a
-    /// section nested under another's lock, once that one released it
-    /// ([`Io::notify_after_release`](crate::ops::io::Io::notify_after_release)).
     pub(crate) fn fire(self, cx: &mut Cx<'_>) {
         for notice in self.0 {
             cx.io.notify_after_release(notice);
@@ -95,142 +68,125 @@ impl TimerHooks {
     }
 }
 
-/// Opens the gate on `context`, read under the room's lock.
 pub(crate) fn open(cx: &mut Cx<'_>, context: Box<RoomContext>) -> Gate {
-    let now = cx.env.now();
-    let due = timers::due(&context.room, now);
-    if due.is_empty() {
-        return Gate::Clear(context);
-    }
-    let mut room = context.room.clone();
-    let mut applied = Vec::with_capacity(due.len());
-    for transition in due {
-        lifecycle::apply(&mut room, transition.transition, transition.at);
-        room.updated_at = now;
-        applied.push((transition, room.clone()));
-    }
-    let effect = cx.io.issue(StoreRequest::UpdateRoom {
-        room_id: room.id.clone(),
-        updates: RoomUpdates::lifecycle(&room),
-    });
-    let context = Box::new(RoomContext { room, ..*context });
-    Gate::Writing {
-        effect,
-        pending: Box::new(Pending {
-            applied,
-            context,
-            recording: None,
-            hooks: Vec::new(),
-        }),
+    match write::Write::start(cx, context, 0) {
+        write::Progress::Done { context, .. } => Gate::Clear(context),
+        write::Progress::Waiting { effect, write } => Gate::Writing {
+            effect,
+            pending: Box::new(Pending::Room(write)),
+        },
     }
 }
 
 impl Pending {
-    /// Takes the outcome of the gate's write outstanding. Once the room's
-    /// update is stored, each transition's record is committed in turn
-    /// (gap G-046); once a record is, its transition's framework event is
-    /// emitted, and its hooks, which receive the room as that transition
-    /// left it (gap G-027), are kept to fire after the release. A record
-    /// the kit's persistence policy keeps out is not written, and its
-    /// transition is announced all the same (RFC §14.3).
     pub(crate) fn stored(
-        mut self: Box<Self>,
+        self: Box<Self>,
         cx: &mut Cx<'_>,
         outcome: Outcome,
     ) -> Result<Applied, ErrorRecord> {
-        outcome.into_written()?;
-        let mut next = match self.recording.take() {
-            Some(index) => {
-                self.announce(cx, index);
-                index.saturating_add(1)
-            }
-            None => 0,
-        };
-        while let Some(record) = self.record_at(next) {
-            if let Some(request) = record::commit(cx, &mut self.context, &record) {
-                self.recording = Some(next);
-                let effect = record::issue_write(cx, request);
-                return Ok(Applied::Writing {
+        match *self {
+            Self::Room(write) => match write.answered(cx, outcome)? {
+                write::Progress::Waiting { effect, write } => Ok(Applied::Writing {
                     effect,
-                    pending: self,
-                });
-            }
-            self.announce(cx, next);
-            next = next.saturating_add(1);
-        }
-        Ok(Applied::Opened((*self).opened()))
-    }
-
-    /// The lifecycle record of the transition at `index`, if any: the
-    /// timer's threshold, and the instant it fell due.
-    fn record_at(&self, index: usize) -> Option<Record> {
-        let (due, _) = self.applied.get(index)?;
-        let room = &self.context.room;
-        let threshold = match due.transition {
-            Transition::Pause => room.timers.inactive_after_seconds,
-            Transition::Resume | Transition::Reopen | Transition::Close | Transition::Archive => {
-                room.timers.closed_after_seconds
-            }
-        };
-        Some(Record::Timer {
-            room_id: room.id.clone(),
-            transition: due.transition,
-            threshold: threshold.unwrap_or_default(),
-            at: due.at,
-        })
-    }
-
-    /// Emits the framework event of the transition at `index`, whose record
-    /// is committed or kept out, and keeps its hooks, with the room as the transition
-    /// left it and the records committed so far.
-    fn announce(&mut self, cx: &mut Cx<'_>, index: usize) {
-        let Some((due, room)) = self.applied.get(index) else {
-            return;
-        };
-        let Some(reported) = reported(due, &self.context.room) else {
-            return;
-        };
-        let counted = &self.context.room;
-        let context = RoomContext {
-            room: Room {
-                event_count: counted.event_count,
-                latest_index: counted.latest_index,
-                ..room.clone()
+                    pending: Box::new(Self::Room(write)),
+                }),
+                write::Progress::Done { context, due } => Ok(Records {
+                    context,
+                    due,
+                    recording: 0,
+                }
+                .next(cx)),
             },
-            ..(*self.context).clone()
-        };
-        self.hooks
-            .extend(report::report_after_release(cx, reported, &context));
-    }
-
-    /// What the gate hands back once every write is stored.
-    fn opened(self) -> Opened {
-        let Self {
-            applied,
-            context,
-            hooks,
-            ..
-        } = self;
-        Opened {
-            context,
-            transitions: applied.into_iter().map(|(due, _)| due).collect(),
-            hooks: TimerHooks(hooks),
+            Self::Context(mut records) => {
+                records.context = outcome.into_context()?.ok_or_else(|| {
+                    ErrorRecord::new(
+                        "RoomNotFoundError",
+                        "the timer room was deleted before its context read",
+                    )
+                })?;
+                Ok(records.opened(cx))
+            }
+            Self::Records(mut records) => {
+                outcome.into_written()?;
+                records.announce(cx);
+                records.recording += 1;
+                Ok(records.next(cx))
+            }
         }
     }
 }
 
-/// What a timer's transition of `room` reports: `room_paused` and
-/// `room_closed` with the reason `timer` (RFC §8.2), its hooks' payload
-/// naming the timer's threshold and the instant it fell due.
-fn reported(due: &DueTransition, room: &Room) -> Option<Reported<'static>> {
-    let threshold = match due.transition {
+impl Records {
+    /// A kept-out record still reports its transition; a stored record reports
+    /// only once its write is durable, before the next record or decision.
+    fn next(mut self, cx: &mut Cx<'_>) -> Applied {
+        while let Some(due) = self.due.get(self.recording) {
+            let record = Record::Timer {
+                room_id: self.context.room.id.clone(),
+                transition: due.transition,
+                threshold: threshold(due, &self.context.room),
+                at: due.at,
+            };
+            if let Some(request) = record::commit(cx, &mut self.context, &record) {
+                return Applied::Writing {
+                    effect: record::issue_write(cx, request),
+                    pending: Box::new(Pending::Records(self)),
+                };
+            }
+            self.announce(cx);
+            self.recording += 1;
+        }
+        if self.due.is_empty() {
+            return self.opened(cx);
+        }
+        let effect = cx.io.issue(StoreRequest::LoadContext {
+            room_id: self.context.room.id.clone(),
+            recent_events: cx.config.recent_events(),
+        });
+        Applied::Writing {
+            effect,
+            pending: Box::new(Pending::Context(self)),
+        }
+    }
+
+    fn announce(&self, cx: &mut Cx<'_>) {
+        if let Some(due) = self.due.get(self.recording)
+            && let Some(reported) = reported(due, &self.context.room)
+        {
+            report::announce(cx, reported, &self.context.room.id);
+        }
+    }
+
+    /// Construct both hooks only after all records have reached the store.
+    fn opened(self, cx: &mut Cx<'_>) -> Applied {
+        let hooks = self
+            .due
+            .iter()
+            .filter_map(|due| {
+                report::hooks_after_release(cx, reported(due, &self.context.room)?, &self.context)
+            })
+            .collect();
+        Applied::Opened(Opened {
+            context: self.context,
+            transitions: self.due,
+            hooks: TimerHooks(hooks),
+        })
+    }
+}
+
+fn threshold(due: &DueTransition, room: &Room) -> u64 {
+    match due.transition {
         Transition::Pause => room.timers.inactive_after_seconds,
         Transition::Resume | Transition::Reopen | Transition::Close | Transition::Archive => {
             room.timers.closed_after_seconds
         }
-    };
+    }
+    .unwrap_or_default()
+}
+
+fn reported(due: &DueTransition, room: &Room) -> Option<Reported<'static>> {
     let timer = TimerDue {
-        threshold: threshold.unwrap_or_default(),
+        threshold: threshold(due, room),
         at: due.at,
     };
     match due.transition {

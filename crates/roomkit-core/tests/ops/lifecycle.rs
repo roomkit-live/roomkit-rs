@@ -1091,6 +1091,7 @@ mod check_timers {
                     "load_context room_1".to_owned(),
                     "update room room_1 Paused".to_owned(),
                     "commit #0 system delivered \"Room room_1 paused by timer\"".to_owned(),
+                    "load_context room_1".to_owned(),
                     "release room_1".to_owned(),
                 ]
             )
@@ -1193,12 +1194,59 @@ mod check_timers {
     }
 
     #[test]
-    fn hands_the_pause_s_hooks_the_room_as_the_pause_left_it() {
+    fn hands_both_timer_hooks_the_final_room_and_all_records() {
         let mut sim = timed_room();
         sim.observer("on_paused", HookTrigger::OnRoomPaused);
+        sim.observer("on_closed", HookTrigger::OnRoomClosed);
         sim.env.advance(Duration::from_secs(3600));
-        check(&mut sim);
-        assert_eq!(sim.async_contexts()[0].room.status, RoomStatus::Paused);
+        let checked = check(&mut sim);
+        let contexts = sim.async_contexts();
+        assert_eq!(contexts.len(), 2);
+        for context in contexts {
+            assert_eq!(context.room, checked.room);
+            assert_eq!(context.recent_events, sim.timeline);
+        }
+    }
+
+    // Python: tests/test_room_timers.py::test_a_commit_landing_before_the_transition_write_is_not_overwritten
+    #[test]
+    fn a_commit_landing_before_the_transition_write_is_not_overwritten() {
+        for closing in [false, true] {
+            let mut sim = if closing { paused_room() } else { timed_room() };
+            sim.env.advance(Duration::from_secs(180));
+            let mut committed = sim.room.clone();
+            committed.status = RoomStatus::Active;
+            committed.paused_at = None;
+            committed.timers.last_activity_at = Some(after_start(180));
+            sim.rooms_before_update.push_back(committed.clone());
+            let checked = check(&mut sim);
+            assert_eq!(checked.room, committed);
+            assert!(checked.transitions.is_empty());
+            assert!(sim.framework_events().is_empty());
+            assert!(sim.timeline.is_empty());
+        }
+    }
+
+    // Python: core/_timer_transitions.py::TimerTransitions._write_due (_ATTEMPTS = 3).
+    #[test]
+    fn a_timer_beaten_by_three_writes_leaves_the_latest_room_to_the_next_check() {
+        let mut sim = timed_room();
+        sim.env.advance(Duration::from_secs(183));
+        for instant in [1, 2, 3] {
+            let mut fresh = sim.room.clone();
+            fresh.timers.last_activity_at = Some(after_start(instant));
+            sim.rooms_before_update.push_back(fresh);
+        }
+        let checked = check(&mut sim);
+        assert_eq!(checked.room.status, RoomStatus::Active);
+        assert_eq!(checked.room.timers.last_activity_at, Some(after_start(3)));
+        assert!(checked.transitions.is_empty());
+        assert!(sim.framework_events().is_empty());
+        assert!(sim.timeline.is_empty());
+        assert_eq!(sim.traced("update room").len(), 3);
+        let next = check(&mut sim);
+        assert_eq!(next.room.status, RoomStatus::Closed);
+        assert_eq!(next.transitions.len(), 2);
     }
 
     #[test]
@@ -1261,6 +1309,7 @@ mod the_status_gate {
                 "load_context room_1",
                 "update room room_1 Closed",
                 "commit #0 system delivered \"Room room_1 closed by timer\"",
+                "load_context room_1",
                 "release room_1",
             ]
         );
@@ -1390,7 +1439,7 @@ mod the_status_gate {
             (
                 sim.timeline_lines(),
                 sim.framework_event_names(),
-                sim.trace[sim.trace.len() - 7..].to_vec()
+                sim.trace[sim.trace.len() - 8..].to_vec()
             ),
             (
                 vec![
@@ -1414,6 +1463,7 @@ mod the_status_gate {
                     "update room room_1 Closed",
                     "commit #1 system delivered \"Room room_1 paused by timer\"",
                     "commit #2 system delivered \"Room room_1 closed by timer\"",
+                    "load_context room_1",
                     "release room_1"
                 ]
                 .map(str::to_owned)
@@ -1444,6 +1494,7 @@ mod the_status_gate {
                     "load_context room_1",
                     "update room room_1 Closed",
                     "commit #0 system delivered \"Room room_1 closed by timer\"",
+                    "load_context room_1",
                     "update room room_1 Closed",
                     "delete binding sms",
                     "load_context room_1",

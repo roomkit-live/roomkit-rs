@@ -29,6 +29,7 @@
 //! turn waited for is not taken, a call in flight is dropped, and the
 //! operation is answered `DeadlinePassed`.
 
+mod call_lifetime;
 mod calls;
 mod holds;
 mod in_flight;
@@ -52,6 +53,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::{self, AbortHandle, JoinError, JoinHandle, JoinSet};
 use tokio::time::Instant;
 
+use self::call_lifetime::CallLifetime;
 pub(crate) use self::calls::channel_failed;
 pub(crate) use self::calls::cut_by_close;
 pub(crate) use self::calls::load_context;
@@ -284,8 +286,9 @@ where
 /// it ran out, a commit it had in flight then reported as a read-back that
 /// failed (RFC §12.10.4). A caller that keeps the call's future but stops
 /// polling it holds no work the close waits for; one that drops it cancels
-/// the call, its task aborted, as when the call ran in the caller's own
-/// task. Boxed by its callers: the operation and the run's state would make
+/// the call, unless its timer gate has begun its conditional write: that
+/// gate finishes its records and notifications (RFC §5.1, §13.6). Boxed by
+/// its callers: the operation and the run's state would make
 /// every caller's future large.
 async fn run_in_its_task<S: ConversationStore, O: Operation + Send + 'static>(
     inner: &Arc<Inner<S>>,
@@ -298,11 +301,14 @@ where
     O::Output: Send + 'static,
 {
     let in_flight = Arc::new(InFlight::default());
+    let lifetime = Arc::new(CallLifetime::default());
+    let running = Arc::clone(&lifetime);
     let (kit, noting) = (Arc::clone(inner), Arc::clone(&in_flight));
     let run = async move {
         let how = Driven::Call {
             own,
             in_flight: noting,
+            lifetime: running,
         };
         drive(&kit, environment, call, operation, Leases::Granted, how).await
     };
@@ -310,7 +316,7 @@ where
     let Some(task) = inner.tasks.spawn(Kind::Call, context.scope(run)) else {
         return Err(Stop::Failed(RoomKitError::KitClosed));
     };
-    let mut task = Owned(task);
+    let mut task = Owned(task, lifetime);
     match (&mut task.0).await {
         Ok(output) => output,
         // A panic of the driver's own loop is a defect of this crate: the
@@ -324,12 +330,14 @@ where
     }
 }
 
-/// A call's task, aborted when its caller's future is dropped.
-struct Owned<T>(JoinHandle<T>);
+/// A call's task: caller drop aborts it unless its timer gate owes reports.
+struct Owned<T>(JoinHandle<T>, Arc<CallLifetime>);
 
 impl<T> Drop for Owned<T> {
     fn drop(&mut self) {
-        self.0.abort();
+        if self.1.abandon() {
+            self.0.abort();
+        }
     }
 }
 
@@ -337,7 +345,11 @@ impl<T> Drop for Owned<T> {
 /// or a direct call's, noting the commit it has in flight.
 enum Driven<'run> {
     Inbound(&'run mut Caller),
-    Call { own: bool, in_flight: Arc<InFlight> },
+    Call {
+        own: bool,
+        in_flight: Arc<InFlight>,
+        lifetime: Arc<CallLifetime>,
+    },
 }
 
 /// Runs `operation`, made by the kit's call `call`, until it is ready,
@@ -355,9 +367,13 @@ async fn drive<S: ConversationStore, O: Operation>(
     leases: Leases,
     how: Driven<'_>,
 ) -> Result<O::Output, Stop> {
-    let (mut caller, own, in_flight) = match how {
-        Driven::Inbound(caller) => (Some(caller), false, None),
-        Driven::Call { own, in_flight } => (None, own, Some(in_flight)),
+    let (mut caller, own, in_flight, lifetime) = match how {
+        Driven::Inbound(caller) => (Some(caller), false, None, None),
+        Driven::Call {
+            own,
+            in_flight,
+            lifetime,
+        } => (None, own, Some(in_flight), Some(lifetime)),
     };
     let (shared, adoptions) = RunShared::new();
     let mut held = Held::new(Arc::clone(&shared), leases);
@@ -410,6 +426,7 @@ async fn drive<S: ConversationStore, O: Operation>(
         stop: None,
         cut_now: false,
         in_flight,
+        lifetime,
     };
     // Boxed: the waits and calls a run polls would make every caller's
     // future large.
@@ -530,6 +547,8 @@ struct Driver<'kit, S> {
     /// Where a direct call's run notes the commit it has in flight, which a
     /// run the close aborted warns of; an inbound run's record notes its.
     in_flight: Option<Arc<InFlight>>,
+    /// A direct timer check finishes its decided transition despite caller drop.
+    lifetime: Option<Arc<CallLifetime>>,
 }
 
 /// What a wait of the run waits for.
@@ -569,6 +588,8 @@ enum Event<'kit> {
     Adoption(Adoption),
     /// The caller of an inbound call stopped waiting.
     CallerGone,
+    /// A direct caller left after its timer gate began writing.
+    DirectCallerGone,
     /// The caller of an entry the operation adopted stopped waiting for its
     /// answer.
     EntryCallerGone(EntryId),
@@ -690,6 +711,11 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 Some(Event::Phase(phase)) => {
                     self.phase = phase;
                     return self.closing(operation, phase).await;
+                }
+                Some(Event::DirectCallerGone) => {
+                    let given_up = operation.expire();
+                    self.give_up_with_followers(operation, given_up);
+                    return Ok(());
                 }
                 Some(Event::CallerGone) => {
                     if self.caller.as_deref_mut().is_some_and(Caller::expires) {
@@ -1067,6 +1093,15 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         }
     }
 
+    /// A timer gate finishes its decided writes after its caller leaves.
+    fn timer_write_was_abandoned(&self, request: &StoreRequest) -> bool {
+        matches!(request, StoreRequest::UpdateRoomIf { .. })
+            && self
+                .lifetime
+                .as_ref()
+                .is_some_and(|life| !life.finish_timers())
+    }
+
     /// Starts `effect`: a hold is answered at once when it can be, or
     /// waited for; any other family is a call, run by its family's handler.
     fn start(&mut self, effect: Effect) -> Option<(EffectId, Outcome)> {
@@ -1095,6 +1130,15 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         match request {
             Request::Hold(hold) => return self.hold(id, hold, deadline),
             Request::Store(request) if writes(&request) => {
+                if self.timer_write_was_abandoned(&request) {
+                    return Some((
+                        id,
+                        Outcome::Failed(ErrorRecord::new(
+                            "CancelledError",
+                            "the caller left before its timer write",
+                        )),
+                    ));
+                }
                 let (writing, written, went_on) = calls::write(&inner, request);
                 if let Some((event, answer)) = commit {
                     self.note_the_commit(&event, decides, answer, &written);
@@ -1418,6 +1462,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             caller,
             callers,
             entry_cancels,
+            lifetime,
             phases,
             phase,
             ..
@@ -1429,6 +1474,12 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 Ok(now) => now,
                 // The kit is gone: the run's calls end with it.
                 Err(_closed) => std::future::pending().await,
+            }
+        };
+        let direct_gone = async {
+            match lifetime {
+                Some(lifetime) => lifetime.gone().await,
+                None => std::future::pending().await,
             }
         };
         let event = poll_fn(|cx| {
@@ -1476,6 +1527,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         tokio::select! {
             biased;
             now = moved => Some(Event::Phase(now)),
+            () = direct_gone => Some(Event::DirectCallerGone),
             event = event => event,
         }
     }

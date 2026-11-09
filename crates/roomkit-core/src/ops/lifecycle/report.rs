@@ -140,16 +140,14 @@ pub(crate) fn report_within(
     cx.fire_within(trigger, &payload, context, draw.budget(), *floor);
 }
 
-/// Emits the change's framework event now, and hands back its trigger's
-/// hooks to fire once the room's lock is released, as an ASYNC trigger
-/// fires (RFC §5.1 When): a timer transition the gate applies under the
-/// lock reports so. `None` when no hook observes the trigger.
-pub(crate) fn report_after_release(
+/// Builds a transition's hooks after every due transition and record was
+/// stored. The framework event was already emitted by `announce`; these
+/// hooks receive the final context and fire after the lock is released.
+pub(crate) fn hooks_after_release(
     cx: &mut Cx<'_>,
     reported: Reported<'_>,
     context: &RoomContext,
 ) -> Option<Notice> {
-    announce(cx, reported, &context.room.id);
     let Observers {
         trigger,
         hooks,

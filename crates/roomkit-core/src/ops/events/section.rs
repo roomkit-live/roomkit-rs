@@ -81,6 +81,11 @@ impl<C: EventChange> EventSection<C> {
         self.io.complete(id, outcome)
     }
 
+    pub(super) fn expire(&mut self) -> Vec<EffectId> {
+        self.section.cancel_after_timers();
+        self.io.expire()
+    }
+
     /// Advances the call; `output` reads its result from what it gave.
     pub(super) fn poll<T>(
         &mut self,

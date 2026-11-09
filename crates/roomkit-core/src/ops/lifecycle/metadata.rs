@@ -99,4 +99,8 @@ impl Operation for UpdateRoomMetadata {
     fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {
         self.change.complete(id, outcome)
     }
+
+    fn expire(&mut self) -> Vec<EffectId> {
+        self.change.expire()
+    }
 }

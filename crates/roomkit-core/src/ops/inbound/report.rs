@@ -190,7 +190,7 @@ pub(super) fn room_refused(
     cx: &mut Cx<'_>,
     event: &RoomEvent,
     origin: &PassOrigin,
-    status: RoomStatus,
+    status: impl Into<Option<RoomStatus>>,
 ) {
     let operation = if origin.is_entry() {
         RefusedOperation::Inbound

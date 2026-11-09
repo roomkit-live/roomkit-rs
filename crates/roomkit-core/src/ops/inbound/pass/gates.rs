@@ -40,7 +40,7 @@ impl CommitPass {
     pub(super) fn on_context(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> State {
         let context = match outcome.into_context() {
             Ok(Some(context)) => context,
-            Ok(None) => return self.release(cx, Err(Abort::RoomNotFound)),
+            Ok(None) => return self.on_missing_room(cx),
             Err(error) => return self.release(cx, Err(Abort::Store(error))),
         };
         let foreign = self
@@ -54,6 +54,17 @@ impl CommitPass {
             Gate::Clear(context) => self.on_gate(cx, context),
             Gate::Writing { effect, pending } => State::ApplyingTimers { effect, pending },
         }
+    }
+
+    /// A room lost during a pass refuses it observably, with no status.
+    pub(super) fn on_missing_room(&mut self, cx: &mut Cx<'_>) -> State {
+        if !self.greeting {
+            super::super::report::room_refused(cx, &self.event, &self.origin, None);
+        }
+        if !self.greeting && !self.origin.is_entry() {
+            return self.release(cx, Ok(PassResult::Refused { status: None }));
+        }
+        self.release(cx, Err(Abort::RoomNotFound))
     }
 
     /// The room's status gate, on the room as its due timers left it, then
@@ -85,7 +96,12 @@ impl CommitPass {
             } else {
                 super::super::report::room_refused(cx, &self.event, &self.origin, status);
             }
-            return self.release(cx, Ok(PassResult::Refused { status }));
+            return self.release(
+                cx,
+                Ok(PassResult::Refused {
+                    status: Some(status),
+                }),
+            );
         }
         let mut context = context;
         if let Some(participation) = self.participation.take() {

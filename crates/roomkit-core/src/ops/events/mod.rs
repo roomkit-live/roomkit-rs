@@ -143,6 +143,10 @@ impl Operation for UpdateEvent {
     fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {
         self.section.complete(id, outcome)
     }
+
+    fn expire(&mut self) -> Vec<EffectId> {
+        self.section.expire()
+    }
 }
 
 /// Removes a stored event from its room for good, under the room's lock
@@ -207,6 +211,10 @@ impl Operation for DeleteEvent {
     fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {
         self.section.complete(id, outcome)
     }
+
+    fn expire(&mut self) -> Vec<EffectId> {
+        self.section.expire()
+    }
 }
 
 /// Releases held messages (RFC §11.7.6): under the room's lock, each of
@@ -256,6 +264,10 @@ impl Operation for RestoreHeld {
 
     fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {
         self.section.complete(id, outcome)
+    }
+
+    fn expire(&mut self) -> Vec<EffectId> {
+        self.section.expire()
     }
 }
 
@@ -315,5 +327,9 @@ impl Operation for CommitRecord {
 
     fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {
         self.section.complete(id, outcome)
+    }
+
+    fn expire(&mut self) -> Vec<EffectId> {
+        self.section.expire()
     }
 }

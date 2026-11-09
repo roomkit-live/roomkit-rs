@@ -75,6 +75,10 @@ impl Operation for AttachChannel {
     fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {
         self.change.complete(id, outcome)
     }
+
+    fn expire(&mut self) -> Vec<EffectId> {
+        self.change.expire()
+    }
 }
 
 /// Detaches a channel from a room under its lock: records the channel's
@@ -129,6 +133,10 @@ impl Operation for DetachChannel {
 
     fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {
         self.change.complete(id, outcome)
+    }
+
+    fn expire(&mut self) -> Vec<EffectId> {
+        self.change.expire()
     }
 }
 
@@ -218,5 +226,9 @@ impl Operation for UpdateBinding {
 
     fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {
         self.change.complete(id, outcome)
+    }
+
+    fn expire(&mut self) -> Vec<EffectId> {
+        self.change.expire()
     }
 }

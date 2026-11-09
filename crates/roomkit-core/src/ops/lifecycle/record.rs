@@ -79,6 +79,7 @@ pub(crate) fn issue_write(cx: &mut Cx<'_>, request: StoreRequest) -> EffectId {
         | StoreRequest::PersistSideEffects { .. }
         | StoreRequest::CreateRoom { .. }
         | StoreRequest::UpdateRoom { .. }
+        | StoreRequest::UpdateRoomIf { .. }
         | StoreRequest::StoreBinding { .. }
         | StoreRequest::DeleteBinding { .. }
         | StoreRequest::UpdateEvent { .. }

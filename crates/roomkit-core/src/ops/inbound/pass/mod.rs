@@ -139,7 +139,7 @@ pub(super) enum PassResult {
     /// room: nothing was stored (RFC §5.1, gap G-070).
     Refused {
         /// The status that refused it.
-        status: RoomStatus,
+        status: Option<RoomStatus>,
     },
     /// An instruction to a discussion that is over, which gives no turn
     /// (RFC §19.7.5 rule 15): nothing was stored.

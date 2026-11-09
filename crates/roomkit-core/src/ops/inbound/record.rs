@@ -39,6 +39,8 @@ pub(super) enum RecordResult {
     Replayed(Box<RoomEvent>),
     /// The room no longer accepts events: nothing was stored.
     Refused,
+    /// The room disappeared before this replacement record reached it.
+    Missing,
 }
 
 /// Everything a record's commit produced.
@@ -255,7 +257,7 @@ impl SectionWork for RecordWork {
     }
 
     fn missing(&self, _room_id: &RoomId) -> Result<RecordResult, Abort> {
-        Err(Abort::RoomNotFound)
+        Ok(RecordResult::Missing)
     }
 
     /// A direct injection's caller that does not reach the room has its
@@ -362,7 +364,10 @@ impl SectionWork for RecordWork {
         }
     }
 
-    /// A record reports its refusal by the room's status under the lock,
-    /// and nothing once it is released.
-    fn report(&self, _cx: &mut Cx<'_>, _result: &Result<RecordResult, Abort>) {}
+    /// A deleted room refuses each replacement record with a null status.
+    fn report(&self, cx: &mut Cx<'_>, result: &Result<RecordResult, Abort>) {
+        if matches!(result, Ok(RecordResult::Missing)) {
+            report::room_refused_as(cx, &self.record, self.refused_as, None);
+        }
+    }
 }

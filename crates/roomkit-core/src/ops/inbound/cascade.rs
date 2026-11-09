@@ -686,7 +686,7 @@ pub(super) fn record_result(report: RecordReport) -> InboundResult {
             ..stored_record(*record)
         },
         RecordResult::Replayed(original) => replay_result(&original),
-        RecordResult::Refused => InboundResult {
+        RecordResult::Refused | RecordResult::Missing => InboundResult {
             blocked: true,
             reason: Some("room_closed".to_owned()),
             ..InboundResult::default()

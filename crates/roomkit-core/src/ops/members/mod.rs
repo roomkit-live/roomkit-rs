@@ -121,6 +121,11 @@ impl Operation for ChangeMember {
     fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {
         self.io.complete(id, outcome)
     }
+
+    fn expire(&mut self) -> Vec<EffectId> {
+        self.section.cancel_after_timers();
+        self.io.expire()
+    }
 }
 
 /// The participant the change left, its trigger's hooks fired now that the
