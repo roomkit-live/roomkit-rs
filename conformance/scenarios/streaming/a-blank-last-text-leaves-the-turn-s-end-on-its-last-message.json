@@ -114,7 +114,8 @@
             "ai_usage": {
               "output_tokens": 5
             }
-          }
+          },
+          "status": "delivered"
         },
         {
           "index": 2,
@@ -145,6 +146,12 @@
             "type": "tool_call_end"
           }
         ]
+      }
+    },
+    "rooms": {
+      "room-1": {
+        "event_count": 4,
+        "latest_index": 3
       }
     }
   }
