@@ -25,7 +25,6 @@ use crate::error::RoomKitError;
 use crate::hooks::{self, Kept};
 use crate::kit::{HookEngine, Inner, RoomKit};
 use crate::store::{ConversationStore, InMemoryStore};
-use crate::tasks::Kind;
 use crate::telemetry::{SpanKind, end_hook_span, end_observer_span};
 
 /// What [`execute_delivery`] takes beside the kit and the item: Python's
@@ -462,7 +461,7 @@ fn start_observers<S: ConversationStore>(
             end_observer_span(span, &outcome);
             observer.report_observer(&spec, trigger, room_id, &outcome);
         };
-        if inner.tasks.spawn_alone(Kind::Observer, observing).is_none() {
+        if inner.tasks.spawn_observer(observing).is_none() {
             tracing::debug!(target: "roomkit::hooks", ?trigger, "the kit is shut down: a delivery's hook is not run");
         }
     }

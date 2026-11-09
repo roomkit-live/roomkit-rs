@@ -652,34 +652,16 @@ impl<S: ConversationStore> Inner<S> {
         started: Option<tokio::sync::mpsc::UnboundedSender<()>>,
     ) {
         let floor = ExecutionContext::current().turn_depth().unwrap_or(0);
+        // Reserve every body's place as the trigger fires, before its
+        // background coordinator can be scheduled after a later firing.
+        let bodies = self.ordered_observers(observers, payload, &context, started.clone());
         let inner = Arc::clone(self);
         let observing = async move {
             // Dropped with the task the kit's close cuts, the set aborts
             // the observers it still runs.
             let mut running = JoinSet::new();
-            for (spec, kept) in observers {
-                let Some(handler) = P::handler(&kept) else {
-                    continue;
-                };
-                let body =
-                    hooks::observe_traced(spec.clone(), handler, payload.clone(), context.clone());
-                let within = ExecutionContext::current().scope(body);
-                let started = started.clone();
-                running.spawn(async move {
-                    let mut within = std::pin::pin!(within);
-                    // Told once its body ran up to its first wait, not before:
-                    // the next announcement's hooks start after that.
-                    let first =
-                        std::future::poll_fn(|cx| Poll::Ready(within.as_mut().poll(cx))).await;
-                    if let Some(started) = started {
-                        let _ = started.send(());
-                    }
-                    let outcome = match first {
-                        Poll::Ready(outcome) => outcome,
-                        Poll::Pending => within.await,
-                    };
-                    (spec, outcome)
-                });
+            for body in bodies {
+                running.spawn(ExecutionContext::current().scope(body));
             }
             // Every body told or gone, a panic's first poll among them, the
             // announcement waiting on them goes on.
@@ -700,6 +682,33 @@ impl<S: ConversationStore> Inner<S> {
         if self.tasks.spawn_alone(Kind::Observer, task).is_none() {
             tracing::debug!(target: "roomkit::hooks", "the kit is shut down: an observer is not run");
         }
+    }
+
+    /// Builds ordered bodies now; their coordinator keeps the close unit,
+    /// timeout reporting and the work that follows their completion.
+    fn ordered_observers<P: ObservedPayload>(
+        &self,
+        observers: Observers,
+        payload: P,
+        context: &RoomContext,
+        started: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+    ) -> Vec<BoxFuture<'static, (HookSpec, HookOutcome<P>)>> {
+        observers
+            .into_iter()
+            .filter_map(|(spec, kept)| {
+                let handler = P::handler(&kept)?;
+                let body =
+                    hooks::observe_traced(spec.clone(), handler, payload.clone(), context.clone());
+                let started = started.clone();
+                let observing = async move {
+                    let outcome = tell_after_start(body, started).await;
+                    (spec, outcome)
+                };
+                let ordered: BoxFuture<'static, (HookSpec, HookOutcome<P>)> =
+                    Box::pin(self.tasks.observer_starts.in_turn(observing));
+                Some(ordered)
+            })
+            .collect()
     }
 
     /// Reports how the observer `spec` of `room_id` ended: a timeout as
@@ -744,6 +753,23 @@ impl<S: ConversationStore> Inner<S> {
 
 /// Waits on `future` once, with a waker that does nothing: whether it ended
 /// at once.
+/// Tells the publication waiting for a hook once the body has run to its
+/// first wait, not once the ordering gate or its task has been polled.
+async fn tell_after_start<T>(
+    body: impl Future<Output = T>,
+    started: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+) -> T {
+    let mut body = std::pin::pin!(body);
+    let first = std::future::poll_fn(|cx| Poll::Ready(body.as_mut().poll(cx))).await;
+    if let Some(started) = started {
+        let _ = started.send(());
+    }
+    match first {
+        Poll::Ready(outcome) => outcome,
+        Poll::Pending => body.await,
+    }
+}
+
 #[cfg(test)]
 fn ready_at_once(future: impl Future<Output = ()>) -> bool {
     let mut future = std::pin::pin!(future);

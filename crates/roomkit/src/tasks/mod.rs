@@ -147,8 +147,8 @@ pub(crate) struct Tasks {
     /// The cuts of the held tasks' works, which their turns' reads stop
     /// on (RFC §23.3).
     pub(crate) task_cuts: Arc<TaskCuts>,
-    /// The line the observer hooks the driver fires start in, in the order
-    /// they were fired: a change's `ON_EVENT_DELETED` hooks in the order of
+    /// The line all observer hooks start in, in the order they were
+    /// fired: a change's `ON_EVENT_DELETED` hooks in the order of
     /// the ids it returned (RFC §10.3), on any runtime.
     pub(crate) observer_starts: StartOrder,
 }
@@ -247,6 +247,16 @@ pub(crate) struct Tracked {
 }
 
 impl Tasks {
+    /// Starts an observer in firing order, without waiting for earlier
+    /// observers to finish. Its close unit is its own, as in `spawn_alone`.
+    pub(crate) fn spawn_observer<F>(self: &Arc<Self>, future: F) -> Option<JoinHandle<F::Output>>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        self.spawn_alone(Kind::Observer, self.observer_starts.in_turn(future))
+    }
+
     /// Runs `future` as a task of `kind` the kit tracks, in a unit of its
     /// own within the units of the current code; `None`, nothing spawned,
     /// once the close's grace ran out, but for work the close spares, and

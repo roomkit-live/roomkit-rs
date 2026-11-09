@@ -1473,7 +1473,7 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
 
     fn spawn_observer(&self, task: BoxFuture<'static, ()>) -> bool {
         self.upgrade()
-            .and_then(|inner| inner.tasks.spawn_alone(Kind::Observer, task))
+            .and_then(|inner| inner.tasks.spawn_observer(task))
             .is_some()
     }
 

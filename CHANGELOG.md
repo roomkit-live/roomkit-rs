@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Observer hooks outside the inbound driver start in firing order on every runtime, while their bodies still finish independently (RFC §9.2, RMK-1550, RMK-1563).
+
 - A streamed answer reads up to 256 MiB, envelopes included, where it was cut at 4 MiB: a model that wraps each token of its reasoning in some 200 bytes of JSON failed the turn after about 20,000 tokens (`the provider's answer is longer than 4194304 bytes`). An answer read whole keeps its 4 MiB.
 - A record replacing an agent answer at the depth limit keeps the trigger's response scope, including `none`, as Python does (RFC §8.5, RMK-1600).
 

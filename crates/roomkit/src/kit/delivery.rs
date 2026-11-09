@@ -21,7 +21,6 @@ use crate::error::RoomKitError;
 use crate::hooks::{self, HookOptions, Kept};
 use crate::providers::sms::WebhookMeta;
 use crate::store::{ConversationStore, InMemoryStore};
-use crate::tasks::Kind;
 use crate::telemetry::{SpanKind, end_observer_span};
 use crate::{DeliveryBackend, DeliveryItem, DeliveryStrategy, Immediate};
 
@@ -502,7 +501,7 @@ impl<S: ConversationStore> Inner<S> {
                 end_observer_span(span, &outcome);
                 inner.report_observer(&spec, trigger, room_id, &outcome);
             };
-            if self.tasks.spawn_alone(Kind::Observer, observing).is_none() {
+            if self.tasks.spawn_observer(observing).is_none() {
                 tracing::debug!(
                     target: "roomkit::hooks",
                     ?trigger,
