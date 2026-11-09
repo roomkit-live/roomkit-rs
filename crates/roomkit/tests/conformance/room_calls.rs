@@ -7,7 +7,7 @@ use roomkit::{
     ArchiveRoomOptions, CheckRoomTimersOptions, CloseRoomOptions, PauseRoomOptions,
     ReopenRoomOptions, ResumeRoomOptions,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::calls::{Called, Unreadable, dump, field, finish, optional};
 use crate::run::Run;
@@ -55,24 +55,17 @@ pub(crate) async fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Cal
 /// Reaches a setup status before observation, without writing the store directly.
 pub(crate) async fn seed_status(run: &Arc<Run>, room: &Value) -> Result<(), Unreadable> {
     let id = field::<RoomId>(room, "id")?;
-    let status = room["status"].as_str();
-    if status == Some("paused") {
-        run.kit()
-            .pause_room(&id, PauseRoomOptions::default())
-            .await
-            .map_err(|e| e.to_string())?;
-    }
-    if matches!(status, Some("closed" | "archived")) {
-        run.kit()
-            .close_room(&id, CloseRoomOptions::default())
-            .await
-            .map_err(|e| e.to_string())?;
-    }
-    if status == Some("archived") {
-        run.kit()
-            .archive_room(&id, ArchiveRoomOptions::default())
-            .await
-            .map_err(|e| e.to_string())?;
+    let transitions: &[&str] = match room["status"].as_str() {
+        Some("paused") => &["pause_room"],
+        Some("closed") => &["close_room"],
+        Some("archived") => &["close_room", "archive_room"],
+        _ => &[],
+    };
+    let spec = json!({ "room_id": id });
+    for name in transitions {
+        call(run, name, &spec)
+            .await?
+            .map_err(|error| error.to_string())?;
     }
     Ok(())
 }
