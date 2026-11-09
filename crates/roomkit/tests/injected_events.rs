@@ -197,7 +197,7 @@ async fn caller_cancelled_waiting_for_the_lock() {
         requests,
     });
     let (kit, ws) = opened(RoomKitOptions {
-        lock_manager: Some(locks.clone()),
+        lock_manager: Some(Arc::<WatchedLocks>::clone(&locks)),
         ..RoomKitOptions::default()
     })
     .await;

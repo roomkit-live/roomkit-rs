@@ -422,8 +422,8 @@ async fn run_chain<S: ConversationStore>(
     }
 }
 
-/// Only BEFORE_BROADCAST commits a hook result's injections (RFC §9.4).
-/// BEFORE_DELIVER keeps the decision but must not discard injections silently.
+/// Only `BEFORE_BROADCAST` commits a hook result's injections (RFC §9.4).
+/// `BEFORE_DELIVER` keeps the decision but must not discard injections silently.
 fn warn_dropped_injections(outcome: &HookOutcome<RoomEvent>, spec: &HookSpec) {
     let HookOutcome::Returned(result) = outcome else {
         return;
