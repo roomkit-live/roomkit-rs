@@ -91,7 +91,10 @@ pub(crate) async fn process_kit(
 
 /// Scenario id → the rule this implementation breaks (roomkit-specs
 /// `conformance/README.md`, "Known failures").
-pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[];
+pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[(
+    "reasoning/a-named-thinking-field-carries-a-round-s-reasoning",
+    "the generic OpenAI provider has no configurable thinking_field yet (RFC §6.4, RMK-1606)",
+)];
 
 /// A scenario that has not finished by then fails instead of hanging the
 /// suite.

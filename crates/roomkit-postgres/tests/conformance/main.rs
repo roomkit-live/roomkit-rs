@@ -90,6 +90,10 @@ use crate::support::TempSchema;
 /// depend on the machine's speed and may pass.
 pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[
     (
+        "reasoning/a-named-thinking-field-carries-a-round-s-reasoning",
+        "the generic OpenAI provider has no configurable thinking_field yet (RFC §6.4, RMK-1606)",
+    ),
+    (
         "orchestration/a-team-worker-past-its-task-timeout-is-read-as-timed-out-beside-the-others",
         "timing: the worker that answers has 50 ms, which a debug build's round trips to a server \
          pass, and is cut with the one that must be (RMK-1334)",
