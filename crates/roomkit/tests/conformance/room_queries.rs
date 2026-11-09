@@ -84,20 +84,16 @@ pub(crate) async fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Cal
 
 /// Read every room for observation and idle detection; the store's default is
 /// one page, which cannot prove a sweep beyond that page.
-/// A scenario may close every kit, leaving no persistent store to observe.
+/// The observation connection stays open even when the scenario closes every kit.
 pub(crate) async fn all_rooms(run: &Run) -> Result<Vec<roomkit::model::Room>, roomkit::StoreError> {
-    let reader = run.reader();
+    let store = run.observer_store();
     let mut rooms = Vec::new();
     loop {
         let options = roomkit::store::ListRoomsOptions {
             limit: 100,
             offset: u64::try_from(rooms.len()).unwrap(),
         };
-        let page = match reader.store().list_rooms(options).await {
-            Ok(page) => page,
-            Err(_) if run.open_kits().is_empty() => return Ok(rooms),
-            Err(error) => return Err(error),
-        };
+        let page = store.list_rooms(options).await?;
         let last = page.len() < 100;
         rooms.extend(page);
         if last {

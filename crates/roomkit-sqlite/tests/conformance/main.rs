@@ -117,6 +117,20 @@ pub(crate) async fn new_kit(
     )
 }
 
+/// Observe the same file through a connection no scenario call can close.
+#[expect(
+    clippy::unused_async,
+    reason = "Postgres opens its observer asynchronously"
+)]
+pub(crate) async fn observer_store(
+    _store: &std::sync::Arc<Store>,
+    file: &TempFile,
+) -> std::sync::Arc<Store> {
+    std::sync::Arc::new(SqliteStore::new(SqliteStoreOptions {
+        path: file.path().into(),
+    }))
+}
+
 /// Another process serving the rooms (README, `processes`): a kit over a
 /// store of its own on the run's file, as another process opens it, and the
 /// run's `lock_manager`.

@@ -73,6 +73,18 @@ pub(crate) async fn new_kit(configure: impl FnOnce(RoomKitOptions) -> RoomKitOpt
     (RoomKit::new(configure(RoomKitOptions::default())), ())
 }
 
+/// Memory stays readable after close: its shared store is also the observer.
+#[expect(
+    clippy::unused_async,
+    reason = "persistent stores open a separate observer"
+)]
+pub(crate) async fn observer_store(
+    store: &std::sync::Arc<Store>,
+    _kept: &(),
+) -> std::sync::Arc<Store> {
+    std::sync::Arc::clone(store)
+}
+
 /// Another process serving the rooms (README, `processes`): a kit over the
 /// run's `store` and `lock_manager`.
 #[expect(

@@ -196,7 +196,8 @@ pub(crate) async fn run(scenario: &Value) -> Vec<String> {
     let Some(store) = shared_store else {
         return vec!["setup: the kit took no store".to_owned()];
     };
-    let run = Arc::new(Run::new(kit, store, scenario));
+    let snapshot_store = crate::observer_store(&store, &store_file).await;
+    let run = Arc::new(Run::new(kit, store, snapshot_store, scenario));
     slot.set(&run);
     *lock(&run.backend) = backend;
     *lock(&run.strategies) = strategies;
@@ -242,6 +243,7 @@ pub(crate) async fn run(scenario: &Value) -> Vec<String> {
     for kit in run.open_kits() {
         kit.close().await.unwrap();
     }
+    run.observer_store().close().await;
     observed.text_events = std::mem::take(&mut *lock(&text_events));
     let mut found = lock(&run.problems).clone();
     found.extend(compare(&run, scenario, &observed));
@@ -448,8 +450,7 @@ async fn subscribe_thinking(run: &Arc<Run>, room: &str) -> Result<(), String> {
 }
 
 async fn observe(run: &Arc<Run>, step_outcomes: Vec<Value>) -> Observed {
-    let reader = run.reader();
-    let store = reader.store();
+    let store = run.observer_store();
     let rooms = crate::room_queries::all_rooms(run).await.unwrap();
     let mut timelines = Vec::new();
     for room in &rooms {
@@ -484,7 +485,7 @@ async fn observe(run: &Arc<Run>, step_outcomes: Vec<Value>) -> Observed {
             room_key.clone(),
             serde_json::to_value(room).unwrap_or_default(),
         );
-        let bindings = store.list_bindings(&room.id).await.unwrap_or_default();
+        let bindings = store.list_bindings(&room.id).await.unwrap();
         observed.bindings.insert(
             room_key.clone(),
             bindings
@@ -497,7 +498,7 @@ async fn observe(run: &Arc<Run>, step_outcomes: Vec<Value>) -> Observed {
                 })
                 .collect(),
         );
-        let observations = store.list_observations(&room.id).await.unwrap_or_default();
+        let observations = store.list_observations(&room.id).await.unwrap();
         observed.observations.insert(
             room_key.clone(),
             observations
@@ -505,7 +506,7 @@ async fn observe(run: &Arc<Run>, step_outcomes: Vec<Value>) -> Observed {
                 .map(|o| serde_json::to_value(o).unwrap_or_default())
                 .collect(),
         );
-        let participants = store.list_participants(&room.id).await.unwrap_or_default();
+        let participants = store.list_participants(&room.id).await.unwrap();
         observed.participants.insert(
             room_key.clone(),
             participants
@@ -516,7 +517,7 @@ async fn observe(run: &Arc<Run>, step_outcomes: Vec<Value>) -> Observed {
         let tasks = store
             .list_tasks(&room.id, roomkit::store::ListTasksOptions::default())
             .await
-            .unwrap_or_default();
+            .unwrap();
         observed.tasks.insert(
             room_key,
             tasks

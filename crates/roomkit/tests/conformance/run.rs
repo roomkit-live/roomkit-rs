@@ -115,6 +115,8 @@ pub(crate) struct Run {
     discussion_done: Mutex<HashMap<String, bool>>,
     /// The kit's store, shared: what a router of the run's own is built over.
     store: Arc<crate::Store>,
+    /// A connection the scenario never closes, used only to observe persisted state.
+    observer_store: Arc<crate::Store>,
     /// The labels whose outcomes the scenario's `expect.actions` checks.
     asserted_actions: BTreeSet<String>,
     pub(crate) gates: Gates,
@@ -171,7 +173,12 @@ impl Run {
     }
 
     /// A run of `scenario` on `kit`, recording nothing yet.
-    pub(crate) fn new(kit: crate::Kit, store: Arc<crate::Store>, scenario: &Value) -> Self {
+    pub(crate) fn new(
+        kit: crate::Kit,
+        store: Arc<crate::Store>,
+        observer_store: Arc<crate::Store>,
+        scenario: &Value,
+    ) -> Self {
         let tapped: Vec<&str> = LEVEL_0_EVENTS
             .iter()
             .chain(&crate::task_calls::LEVEL_2_EVENTS)
@@ -191,6 +198,7 @@ impl Run {
             processes: Mutex::default(),
             closed: Mutex::default(),
             store,
+            observer_store,
             asserted_actions,
             gates: Gates::default(),
             recording: AtomicBool::new(false),
@@ -279,6 +287,10 @@ impl Run {
 
     pub(crate) fn store(&self) -> Arc<crate::Store> {
         Arc::clone(&self.store)
+    }
+
+    pub(crate) fn observer_store(&self) -> Arc<crate::Store> {
+        Arc::clone(&self.observer_store)
     }
 
     /// Labels `value` as `label`, beside the labels the calls' `as` name:
@@ -818,11 +830,10 @@ impl Run {
             return Vec::new();
         };
         let mut events: Vec<Value> = self
-            .reader()
-            .store()
+            .observer_store()
             .list_events(&room_id, every_row())
             .await
-            .unwrap_or_default()
+            .unwrap()
             .iter()
             .map(|event| serde_json::to_value(event).unwrap_or_default())
             .collect();

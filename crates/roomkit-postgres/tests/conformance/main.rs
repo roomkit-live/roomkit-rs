@@ -135,6 +135,11 @@ pub(crate) async fn new_kit(
     (RoomKit::new(options), schema)
 }
 
+/// Observe the same schema through a pool no scenario call can close.
+pub(crate) async fn observer_store(_store: &Arc<Store>, schema: &TempSchema) -> Arc<Store> {
+    Arc::new(schema.initialized_store().await)
+}
+
 /// Another process serving the rooms (README, `processes`): a kit over a
 /// store of its own on the run's schema and an advisory lock manager of its
 /// own, as another process opens them.
