@@ -17,6 +17,7 @@ use roomkit_core::ops::{EffectId, Outcome};
 use tokio::sync::{Notify, mpsc, watch};
 
 use super::adoption::Adoption;
+use crate::delivery_keys::CancelRequest;
 use crate::room_turns::Queued;
 use crate::stream::KeptStream;
 use crate::turns::{Canceller, OwedEnd};
@@ -60,6 +61,8 @@ pub(crate) struct RunShared {
     /// The turns the run's calls submitted and await the output of, by
     /// their effect: a call given up cuts its turn at once.
     turns: Mutex<HashMap<EffectId, Canceller>>,
+    /// Which delivery cuts the turn or stream read of each effect.
+    cancellations: Mutex<HashMap<EffectId, Arc<CancelRequest>>>,
     /// The turns asked that wait their place in their channel's line in
     /// the room, by their turn's effect, until their stream is read (RFC
     /// §6.4): one never read gives its place up.
@@ -121,6 +124,7 @@ impl RunShared {
             streams: Mutex::new(HashMap::new()),
             stops: Mutex::new(HashMap::new()),
             turns: Mutex::new(HashMap::new()),
+            cancellations: Mutex::new(HashMap::new()),
             queued: Mutex::new(HashMap::new()),
             read_turns: ReadTurns::default(),
             entry_reads: Mutex::new(HashMap::new()),
@@ -162,6 +166,10 @@ impl RunShared {
     /// its frame stands in no admission order any more.
     pub(crate) fn answered(&self, effect: EffectId) {
         self.holdings().calls.remove(&effect);
+        self.cancellations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&effect);
     }
 
     /// Whether the call for `effect` still runs.
@@ -198,6 +206,10 @@ impl RunShared {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clear();
+        self.cancellations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
     }
 
     /// Keeps the turn of `effect` waiting its place, until its stream is
@@ -218,11 +230,36 @@ impl RunShared {
     }
 
     /// The call of `effect` submitted a turn, which `turn` cuts.
-    pub(crate) fn turn_submitted(&self, effect: EffectId, turn: Canceller) {
+    pub(crate) fn turn_submitted(
+        &self,
+        effect: EffectId,
+        turn: Canceller,
+    ) -> Option<crate::delivery_keys::Following> {
+        let following = self
+            .cancellation(effect)
+            .map(|cancel| cancel.follows(&turn));
         self.turns
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(effect, turn);
+        following
+    }
+
+    /// Names the delivery's cut before the request is spawned.
+    pub(crate) fn cancels_with(&self, effect: EffectId, cancel: Arc<CancelRequest>) {
+        self.cancellations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(effect, cancel);
+    }
+
+    /// The cut a turn submission or a stream read follows.
+    pub(crate) fn cancellation(&self, effect: EffectId) -> Option<Arc<CancelRequest>> {
+        self.cancellations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&effect)
+            .cloned()
     }
 
     /// The call of `effect` read its turn's output.

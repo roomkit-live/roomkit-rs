@@ -641,6 +641,7 @@ async fn read_stream<S: ConversationStore>(
     let task_cut = inner.tasks.task_cuts.of(&Marks::current());
     let _task_read = task_cut.as_ref().map(TaskCut::reading);
     let mut stops = Stops {
+        delivery: shared.cancellation(effect),
         read: shared.stop_signal(effect),
         kit: inner.turns.cutting(),
         task: task_cut.as_ref().map(|cut| cut.signal()),

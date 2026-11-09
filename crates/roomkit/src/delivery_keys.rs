@@ -29,6 +29,8 @@ use roomkit_core::ops::InboundResult;
 use roomkit_core::rules::verification::HELD_KEY;
 use tokio::time::Instant;
 
+use crate::turns::{Canceller, WeakCanceller};
+
 /// A request to cut a delivery's turns, with its reason: what a
 /// cancellation by key, or a handle's `cancel`, asks of the run that
 /// delivers (RFC §10.1 "Explicit delivery cancellation").
@@ -39,20 +41,73 @@ pub(crate) struct CancelRequest(Mutex<Requested>);
 struct Requested {
     reason: Option<String>,
     waker: Option<Waker>,
+    turns: Vec<FollowedTurn>,
+}
+
+/// Keeps a turn joined only while its output or stream is actually read.
+/// A stream handed back but still unread is cleaned up by the driver.
+#[derive(Debug)]
+pub(crate) struct Following {
+    _active: Arc<()>,
+}
+
+#[derive(Debug)]
+struct FollowedTurn {
+    turn: WeakCanceller,
+    active: Weak<()>,
+}
+
+impl FollowedTurn {
+    fn live(&self) -> bool {
+        self.active.strong_count() > 0 && self.turn.live()
+    }
+
+    fn cancel(&self) {
+        if let Some(_active) = self.active.upgrade() {
+            self.turn.cancel();
+        }
+    }
 }
 
 impl CancelRequest {
     /// Asks for the cut, for `reason`: whether this call asked first.
     pub(crate) fn request(&self, reason: &str) -> bool {
-        let mut state = locked(&self.0);
-        if state.reason.is_some() {
-            return false;
+        let (turns, waker) = {
+            let mut state = locked(&self.0);
+            if state.reason.is_some() {
+                return false;
+            }
+            state.reason = Some(reason.to_owned());
+            (std::mem::take(&mut state.turns), state.waker.take())
+        };
+        // The cut crosses before the caller can release a target or a tool.
+        // The driver still owns admission, records and cleanup of the cut.
+        for turn in turns {
+            turn.cancel();
         }
-        state.reason = Some(reason.to_owned());
-        if let Some(waker) = state.waker.take() {
+        if let Some(waker) = waker {
             waker.wake();
         }
         true
+    }
+
+    /// Joins a turn to its delivery's cut, or cuts it immediately when the
+    /// request preceded submission. No strong reference retains the turn.
+    pub(crate) fn follows(&self, turn: &Canceller) -> Following {
+        let turn = turn.downgrade();
+        let active = Arc::new(());
+        let mut state = locked(&self.0);
+        if state.reason.is_some() {
+            drop(state);
+            turn.cancel();
+        } else {
+            state.turns.retain(FollowedTurn::live);
+            state.turns.push(FollowedTurn {
+                turn,
+                active: Arc::downgrade(&active),
+            });
+        }
+        Following { _active: active }
     }
 
     /// Why the cut was asked for, once it was.
@@ -112,10 +167,10 @@ struct NamedState {
 impl NamedState {
     /// Why the delivery was cancelled, if it was.
     fn cancelled(&self) -> Option<String> {
-        match &self.target {
-            Some(target) => target.reason(),
-            None => self.cancelled.clone(),
-        }
+        self.target
+            .as_ref()
+            .and_then(|target| target.reason())
+            .or_else(|| self.cancelled.clone())
     }
 }
 
@@ -126,7 +181,7 @@ impl Named {
     /// counted: until then the delivery is no organization's. A held
     /// delivery no run delivers has its cancellation recorded on its event.
     fn cancel(&self, reason: &str, organization_id: Option<&str>) -> bool {
-        let recorded = {
+        let (target, recorded) = {
             let mut state = locked(&self.state);
             if let Some(organization) = organization_id {
                 if !state.located {
@@ -142,14 +197,18 @@ impl Named {
             if state.cancelled().is_some() {
                 return false;
             }
-            if let Some(target) = &state.target {
-                target.request(reason);
-                None
-            } else {
-                state.cancelled = Some(reason.to_owned());
-                state.held.as_ref().map(|(held, _)| held.clone())
-            }
+            state.cancelled = Some(reason.to_owned());
+            let target = state.target.clone();
+            let recorded = target
+                .is_none()
+                .then(|| state.held.as_ref().map(|(held, _)| held.clone()))
+                .flatten();
+            (target, recorded)
         };
+        // Sending a control may invoke a transport tap: hold no name lock.
+        if let Some(target) = target {
+            target.request(reason);
+        }
         if let Some(held) = recorded {
             self.record(held, reason);
         }
@@ -173,24 +232,28 @@ impl Named {
         let Some((_, reason)) = asked else {
             return;
         };
-        match &state.target {
-            Some(target) => {
-                target.request(&reason);
-            }
-            None => {
-                state.cancelled.get_or_insert(reason);
-            }
+        let reason = state.cancelled().unwrap_or(reason);
+        state.cancelled = Some(reason.clone());
+        let target = state.target.clone();
+        drop(state);
+        if let Some(target) = target {
+            target.request(&reason);
         }
     }
 
     /// Makes `target` the cut of the run that delivers it: asked at once
     /// when the delivery was cancelled already.
     fn attach(&self, target: Arc<CancelRequest>) {
-        let mut state = locked(&self.state);
-        if let Some(reason) = &state.cancelled {
-            target.request(reason);
+        let reason = {
+            let mut state = locked(&self.state);
+            let reason = state.cancelled();
+            state.cancelled.clone_from(&reason);
+            state.target = Some(Arc::clone(&target));
+            reason
+        };
+        if let Some(reason) = reason {
+            target.request(&reason);
         }
-        state.target = Some(target);
     }
 
     /// The call that delivers it is decided, `result`: a committed event the
@@ -529,6 +592,21 @@ mod tests {
         guard.attach(Arc::clone(&cut));
         assert_eq!(cut.reason().as_deref(), Some("stopped"));
         assert_eq!(keys.cancel("a", "stopped", None), 0);
+    }
+
+    // Python: core/_delivery_keys.py::NamedDelivery.attach reads cancelled
+    // from the current cascade before handing the name to the next one.
+    #[test]
+    fn a_cancel_of_the_current_run_survives_handing_its_name_to_another() {
+        let keys = Arc::new(DeliveryKeys::default());
+        let mut guard = keys.naming(Some("a"), None);
+        let first = Arc::new(CancelRequest::default());
+        guard.attach(Arc::clone(&first));
+        first.request("stopped");
+        let next = Arc::new(CancelRequest::default());
+        guard.attach(Arc::clone(&next));
+        assert_eq!(next.reason().as_deref(), Some("stopped"));
+        assert_eq!(keys.cancel("a", "again", None), 0);
     }
 
     // Python: tests/test_verification_release_cancel.py::test_a_held_message_past_its_release_age_is_named_no_more

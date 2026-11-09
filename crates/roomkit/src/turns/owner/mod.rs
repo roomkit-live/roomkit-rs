@@ -97,6 +97,9 @@ pub(super) struct OwnerState {
     pub(super) granted: AtomicU64,
     /// The reason the owner cancelled the turn, once it did.
     pub(super) cancel: watch::Sender<Option<String>>,
+    /// Claims the control before invoking its transport tap, which may
+    /// reenter cancellation while another worker is cutting the same turn.
+    cancel_claimed: AtomicBool,
     /// Whether the turn is over for the owner.
     pub(super) over: watch::Sender<bool>,
     /// The `steer` messages sent and not answered yet (RFC §10.6.8).
@@ -140,6 +143,12 @@ pub(crate) struct Canceller {
 }
 
 impl Canceller {
+    /// A delivery's signal must not keep the turn, or its execution context,
+    /// alive after the turn ended.
+    pub(crate) fn downgrade(&self) -> WeakCanceller {
+        WeakCanceller(Arc::downgrade(&self.state))
+    }
+
     /// Cuts the turn: `cancel` crosses at once, before the call's task is
     /// even dropped, so its executor reads it before it goes on.
     pub(crate) fn cancel(&self, reason: &str) {
@@ -155,6 +164,22 @@ impl Canceller {
     /// Whether the turn's end is owed, as it is and as it will be.
     pub(crate) fn owed_end(&self) -> OwedEnd {
         self.state.end_owed.clone()
+    }
+}
+
+/// A delivery's non-owning route to a turn's cancellation control.
+#[derive(Clone, Debug)]
+pub(crate) struct WeakCanceller(std::sync::Weak<OwnerState>);
+
+impl WeakCanceller {
+    pub(crate) fn live(&self) -> bool {
+        self.0.upgrade().is_some_and(|state| !*state.over.borrow())
+    }
+
+    pub(crate) fn cancel(&self) {
+        if let Some(state) = self.0.upgrade() {
+            cancel(&state, "cancelled");
+        }
     }
 }
 
@@ -174,6 +199,7 @@ pub(crate) fn open(
         told_ends: Mutex::new(HashMap::new()),
         granted: AtomicU64::new(0),
         cancel: watch::Sender::new(None),
+        cancel_claimed: AtomicBool::new(false),
         over: watch::Sender::new(false),
         steers: Steers::default(),
         steer_cut: AtomicBool::new(false),
@@ -187,7 +213,7 @@ pub(crate) fn open(
 /// Sends `cancel` once, the pump then waiting for the end within the
 /// cancel bound.
 pub(super) fn cancel(state: &OwnerState, reason: &str) {
-    if *state.over.borrow() || state.cancel.borrow().is_some() {
+    if *state.over.borrow() || state.cancel_claimed.swap(true, Ordering::AcqRel) {
         return;
     }
     let control = Control::Cancel {

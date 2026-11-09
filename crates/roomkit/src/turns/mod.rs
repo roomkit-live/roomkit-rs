@@ -65,7 +65,7 @@ use self::memory::Request;
 pub(crate) use self::memory::{CarriedRequest, MemoryTurn};
 use self::observe::Observers;
 pub(crate) use self::observe::{Carried, Tap};
-pub(crate) use self::owner::{Canceller, OwedEnd, OwnerTurn, RemoteItem};
+pub(crate) use self::owner::{Canceller, OwedEnd, OwnerTurn, RemoteItem, WeakCanceller};
 pub(crate) use self::owner_inputs::InputTurn;
 use self::owner_inputs::OwnerInputs;
 use self::pipe::{MAX_MESSAGE_BYTES, pipe};
@@ -249,22 +249,21 @@ impl Turns {
     /// The turn's failure as a record: the channel's error, the link's under
     /// `TurnLinkError`, or for a turn the kit's close cut, `TURN_CUT`, no
     /// failure.
-    pub(crate) async fn run(
+    pub(crate) async fn run<G: Send>(
         self: &Arc<Self>,
         kit: &Arc<dyn TurnKit>,
         binding: &ChannelBinding,
         event: RoomEvent,
         context: RoomContext,
-        submitted: impl FnOnce(Canceller),
+        submitted: impl FnOnce(Canceller) -> G,
     ) -> Result<Answer, TurnFailure> {
         // The turn's tasks run in a unit of their own, within the call's
         // run's: a close from the turn's work spares them all (RFC
         // §12.10.4).
         let unit = Unit::new();
-        let mut turn = Marks::current()
+        let (mut turn, _following) = Marks::current()
             .with(unit)
-            .sync_scope(|| self.submit(kit, binding, event, context))?;
-        submitted(turn.canceller());
+            .sync_scope(|| self.submit(kit, binding, event, context, submitted))?;
         let (output, streams) = turn.output(self.cutting()).await?;
         Ok(if streams {
             Answer::Streamed(Box::new(output), turn)
@@ -275,13 +274,14 @@ impl Turns {
 
     /// Hands a turn to the kit's own executor, and opens its owner's side,
     /// the turn's tasks in the unit the current code runs in.
-    fn submit(
+    fn submit<G>(
         self: &Arc<Self>,
         kit: &Arc<dyn TurnKit>,
         binding: &ChannelBinding,
         event: RoomEvent,
         mut context: RoomContext,
-    ) -> Result<OwnerTurn, ErrorRecord> {
+        submitted: impl FnOnce(Canceller) -> G,
+    ) -> Result<(OwnerTurn, G), ErrorRecord> {
         if self.closed.load(Ordering::Acquire) || *self.cut.borrow() {
             return Err(closed());
         }
@@ -327,6 +327,9 @@ impl Turns {
             event,
             history,
         };
+        // Register the delivery's cut before the executor can run its first
+        // step on another worker. An earlier cut is already in its pipe.
+        let following = submitted(turn.canceller());
         let taken = kit.spawn(pump)
             && executor::take(self, Arc::clone(&memory), controls_read, carried, kit);
         if !taken {
@@ -338,7 +341,7 @@ impl Turns {
             organization_id.as_deref(),
             turn.steerable(),
         );
-        Ok(turn)
+        Ok((turn, following))
     }
 
     /// Steers the running turns `address` names (RFC §21.3, §10.6.8): a

@@ -169,7 +169,13 @@ async fn second_pass<S: ConversationStore>(
         responder: binding.clone(),
         ..read
     };
-    match inner.turns.run(&kit, &binding, event, context, drop).await {
+    let delivery = stops.delivery.clone();
+    let submitted = move |turn| delivery.map(|delivery| delivery.follows(&turn));
+    match inner
+        .turns
+        .run(&kit, &binding, event, context, submitted)
+        .await
+    {
         // Mute closes the answer unread unless read-only takes precedence (RFC §7.5).
         Ok(Answer::Streamed(output, mut turn)) if binding.muted && binding.access.writes() => {
             turn.close_stream().await;

@@ -207,10 +207,15 @@ impl Queued {
         let context =
             history::turn_context_as_asked(&*inner.store, &binding, &event, context, window).await;
         let kit: Arc<dyn TurnKit> = Arc::new(Arc::downgrade(inner));
+        let delivery = stops.delivery.clone();
         let run = within_kit(
             &inner.telemetry,
             span,
-            inner.turns.run(&kit, &binding, event, context, |_| {}),
+            inner
+                .turns
+                .run(&kit, &binding, event, context, move |turn| {
+                    delivery.map(|delivery| delivery.follows(&turn))
+                }),
         );
         let answered = tokio::select! {
             biased;

@@ -476,6 +476,9 @@ impl DeliverySet {
                 context: target.context.clone(),
             };
             let effect = cx.io.issue_drawing_on(request, &self.budget);
+            if target.role == Role::Agent {
+                cx.io.answers(effect, self.lineage.answers());
+            }
             self.calls.insert(effect, (index, Call::OnEvent));
         }
         self.progress(cx)

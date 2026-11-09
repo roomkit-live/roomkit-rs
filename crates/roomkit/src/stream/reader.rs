@@ -195,6 +195,10 @@ pub(super) async fn read_kept<S: ConversationStore>(
     read: StreamRead,
     first_pass: bool,
 ) -> (ChannelOutput, Option<FirstPass>) {
+    let _following = stops
+        .delivery
+        .as_ref()
+        .map(|delivery| delivery.follows(&kept.turn.canceller()));
     let failing = Failing::of(&read);
     let StreamRead {
         responder,
@@ -412,6 +416,8 @@ where
 /// held task whose work the read runs within (RFC §23.3).
 #[derive(Clone, Debug)]
 pub(crate) struct Stops {
+    /// The delivery's immediate cut, independent of the driver's next poll.
+    pub(crate) delivery: Option<Arc<crate::delivery_keys::CancelRequest>>,
     /// `true` once the operation stops the read.
     pub(crate) read: watch::Receiver<bool>,
     /// `true` once the kit's close started.
@@ -446,6 +452,16 @@ impl Stops {
     /// Returns once the read is stopped, with the reason its turn is cut
     /// with.
     pub(crate) async fn stopped(&mut self) -> &'static str {
+        if *self.kit.borrow() {
+            return KIT_CLOSED;
+        }
+        if self
+            .delivery
+            .as_ref()
+            .is_some_and(|cancel| cancel.reason().is_some())
+        {
+            return CALLER_CANCELLED;
+        }
         let read = async { self.read.wait_for(|stopped| *stopped).await.is_ok() };
         let kit = async { self.kit.wait_for(|cut| *cut).await.is_ok() };
         let task = async {

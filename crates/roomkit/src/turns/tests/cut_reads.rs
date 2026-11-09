@@ -366,6 +366,31 @@ fn awaited(kit: &RoomKit) -> tokio::task::JoinHandle<Result<InboundResult, RoomK
     })
 }
 
+// Python: DeliveryCascade.cancel_turns cuts each stream before cancel_delivery
+// returns. The driver cannot run between the call below and the wire read on
+// this current-thread runtime: no scheduler delay decides the assertion.
+#[tokio::test]
+async fn cancelling_by_key_signals_the_read_turn_before_the_driver_runs_again() {
+    let target = ReadingOn::flushing(Duration::ZERO);
+    let kit = room(holding(), &target).await;
+    let timed = Timed::on(&kit, Instant::now());
+    let call = awaited(&kit);
+    target.read.notified().await;
+
+    let count = kit
+        .cancel_delivery("key-1", crate::CancelDeliveryOptions::default())
+        .await;
+    let crossed = timed.count(Carried::Control, "cancel");
+
+    call.await.unwrap().unwrap();
+    kit.close().await.unwrap();
+    assert_eq!(count, 1);
+    assert_eq!(
+        crossed, 1,
+        "the cut must cross before cancel_delivery returns"
+    );
+}
+
 /// Cuts `call`, an awaited call [`awaited`] spawned, by its key: how many
 /// deliveries the cut reached, and what the call returned within 1 s, if it
 /// did, its `cancellation_reason`.

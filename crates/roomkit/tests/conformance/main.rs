@@ -153,25 +153,6 @@ fn every_scenario_gives_what_the_rfc_says() {
     );
 }
 
-/// Scenario id → the rule this implementation may break on four workers
-/// alone, beside [`KNOWN_FAILURES`]: a cut by key or by handle reaches its
-/// turn once the driver runs, so a held streaming target let go right
-/// after can read the stream's end first (RMK-1549).
-const SEVERAL_WORKERS_KNOWN_FAILURES: &[(&str, &str)] = &[
-    (
-        "delivery/an-adopted-call-cut-past-its-adopter-s-deadline",
-        "timing: §10.1 Explicit delivery cancellation, a cut racing a resumed target (RMK-1549)",
-    ),
-    (
-        "delivery/an-adopted-call-s-handle-cuts-its-turn-while-a-target-reads",
-        "timing: §10.1 Explicit delivery cancellation, a cut racing a resumed target (RMK-1549)",
-    ),
-    (
-        "delivery/an-adopted-call-s-key-cuts-its-turn-while-a-target-reads",
-        "timing: §10.1 Explicit delivery cancellation, a cut racing a resumed target (RMK-1549)",
-    ),
-];
-
 /// Four workers, as a program on tokio's default multi-thread runtime runs.
 fn four_workers() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_multi_thread()
@@ -184,10 +165,5 @@ fn four_workers() -> tokio::runtime::Runtime {
 /// Every scenario gives the same on four workers as on one thread.
 #[test]
 fn every_scenario_gives_the_same_on_several_workers() {
-    let known: Vec<(&str, &str)> = KNOWN_FAILURES
-        .iter()
-        .chain(SEVERAL_WORKERS_KNOWN_FAILURES)
-        .copied()
-        .collect();
-    scenarios::every_scenario_gives_what_the_rfc_says("four workers", four_workers, &known);
+    scenarios::every_scenario_gives_what_the_rfc_says("four workers", four_workers, KNOWN_FAILURES);
 }

@@ -1115,6 +1115,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             }
             Request::Channel(request) => {
                 self.reads_for_entry(id, &request, answers);
+                self.cancels_for_call(id, answers);
                 let shared = Arc::clone(&self.shared);
                 self.spawn(id, work, deadline, span, async move {
                     Box::pin(calls::channel(&inner, &shared, id, request)).await
@@ -1151,6 +1152,22 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         };
         if let Some(cleanup) = self.entry_cleanups.get(&entry) {
             self.shared.reads_for_entry(effect, cleanup.read_turns());
+        }
+    }
+
+    /// A turn and its read follow their own cascade's cut, including when
+    /// this driver adopted several independent calls into the room.
+    fn cancels_for_call(&self, effect: EffectId, answers: Option<AnswerOf>) {
+        let cancel = match answers {
+            Some(AnswerOf::Call) => self
+                .caller
+                .as_deref()
+                .map(|caller| caller.record().cancellation()),
+            Some(AnswerOf::Entry(entry)) => self.entry_cancels.get(&entry).cloned(),
+            None => None,
+        };
+        if let Some(cancel) = cancel {
+            self.shared.cancels_with(effect, cancel);
         }
     }
 

@@ -114,10 +114,13 @@ pub struct Effect {
     /// `InboundResult.response_events`: the call's own cascade's, or an
     /// entry's it adopted. A driver whose run the kit's close aborts reports
     /// the answers each stored, as Python's callers read their cascades'.
-    /// For a [`ChannelRequest::ReadStream`] of an inbound call, whose
+    /// For an intelligence [`ChannelRequest::OnEvent`] or a
+    /// [`ChannelRequest::ReadStream`] of an inbound call, whose
     /// cascade reads the answer: once that cascade is cut, whether the
     /// turn it reads owes its end is that call's cleanup's (RFC §10.6.8),
     /// as Python's cleanup reads `end_owed` on its own cascade's streams.
+    /// The driver joins the requested turn to that cascade's cancellation
+    /// before its executor can start (RFC §10.1).
     /// `None` for any other request.
     pub answers: Option<AnswerOf>,
 }

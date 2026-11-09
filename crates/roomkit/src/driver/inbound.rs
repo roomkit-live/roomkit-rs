@@ -340,6 +340,11 @@ impl Record {
         self.cancel.request(reason)
     }
 
+    /// The cut turns follow before they can execute on another worker.
+    pub(super) fn cancellation(&self) -> Arc<CancelRequest> {
+        Arc::clone(&self.cancel)
+    }
+
     /// Why the call's turns are cut, once asked.
     fn cancel_reason(&self) -> Option<String> {
         self.cancel.reason()
