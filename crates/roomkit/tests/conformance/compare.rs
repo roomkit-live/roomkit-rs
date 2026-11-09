@@ -234,6 +234,10 @@ impl Comparison<'_> {
             let calls = Value::Array(self.observed.resolver.clone());
             self.check(expected, Some(&calls), "resolver");
         }
+        if let Some(expected) = expect.get("router_calls") {
+            let calls = Value::Array(self.observed.router_calls.clone());
+            self.check(expected, Some(&calls), "router_calls");
+        }
         if let Some(expected) = expect.get("media_resolver") {
             let calls = Value::Array(self.observed.media_resolver.clone());
             self.check(expected, Some(&calls), "media_resolver");

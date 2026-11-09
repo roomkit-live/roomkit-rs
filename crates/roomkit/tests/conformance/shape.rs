@@ -371,6 +371,7 @@ const EXPECT: &[&str] = &[
     "room_callbacks",
     "participants",
     "resolver",
+    "router_calls",
     "media_resolver",
     "tool_audit",
     "session_audit",

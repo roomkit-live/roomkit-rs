@@ -31,7 +31,7 @@ use crate::run::{Check, Run, Scope, lock};
 /// A router answering every routed message with one room (README,
 /// `kit.router`), once held at its gate when it has one.
 struct ScriptedRouter {
-    room: RoomId,
+    room: Option<RoomId>,
     gate: Option<String>,
     run: RunSlot,
 }
@@ -39,16 +39,30 @@ struct ScriptedRouter {
 impl InboundRoomRouter for ScriptedRouter {
     fn route<'a>(
         &'a self,
-        _channel_id: &'a ChannelId,
-        _channel_type: &'a ChannelType,
-        _options: RouteOptions,
+        channel_id: &'a ChannelId,
+        channel_type: &'a ChannelType,
+        options: RouteOptions,
     ) -> RouterFuture<'a> {
         let room = self.room.clone();
         Box::pin(async move {
+            if let Some(run) = self
+                .run
+                .run()
+                .filter(|run| run.recording.load(Ordering::SeqCst))
+            {
+                lock(&run.observed).router_calls.push(json!({
+                    "channel_id": channel_id,
+                    "channel_type": channel_type,
+                    "participant_id": options.participant_id,
+                    "channel_data": options.channel_data,
+                    "organization_id": options.organization_id,
+                    "identity_id": options.identity.map(|identity| identity.id),
+                }));
+            }
             if let (Some(gate), Some(run)) = (&self.gate, self.run.run()) {
                 run.gates.hold(gate).await;
             }
-            Ok(Some(room))
+            Ok(room)
         })
     }
 }
@@ -78,10 +92,10 @@ fn kit_options<S>(
     kit: &Value,
     slot: &RunSlot,
 ) -> RoomKitOptions<S> {
-    if let Some(room) = kit["router"]["room_id"]
-        .as_str()
-        .and_then(|id| RoomId::new(id).ok())
-    {
+    if let Some(router) = kit.get("router") {
+        // A malformed answer is a broken fixture, never the default router.
+        let answer = router.get("room_id").expect("kit.router requires room_id");
+        let room: Option<RoomId> = serde_json::from_value(answer.clone()).unwrap();
         options.inbound_router = Some(Arc::new(ScriptedRouter {
             room,
             gate: kit["router"]["gate"].as_str().map(str::to_owned),
