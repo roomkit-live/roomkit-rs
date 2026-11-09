@@ -12,8 +12,8 @@ use std::time::Duration;
 use roomkit_core::model::hook::{AllowOptions, BlockOptions};
 use roomkit_core::model::{
     Access, BindingUpdate, ChannelBinding, ChannelCategory, ChannelDirection, ChannelOutput,
-    ChannelType, DirectEvent, ErrorRecord, EventType, HookResult, InjectedEvent, Room, RoomStatus,
-    RoomTimers, TextContent, Timestamp, Visibility,
+    ChannelType, DirectEvent, ErrorRecord, EventType, HookResult, InjectedEvent, Room, RoomEvent,
+    RoomStatus, RoomTimers, TextContent, Timestamp, Visibility,
 };
 use roomkit_core::ops::{
     ArchiveRoom, AttachChannel, CheckTimers, CloseRoom, CreateRoom, DetachChannel, Entry,
@@ -1221,9 +1221,9 @@ mod check_timers {
             sim.rooms_before_update.push_back(committed.clone());
             let checked = check(&mut sim);
             assert_eq!(checked.room, committed);
-            assert!(checked.transitions.is_empty());
-            assert!(sim.framework_events().is_empty());
-            assert!(sim.timeline.is_empty());
+            assert_eq!(checked.transitions, Vec::<DueTransition>::new());
+            assert_eq!(sim.framework_events(), Vec::<&FrameworkEvent>::new());
+            assert_eq!(sim.timeline, Vec::<RoomEvent>::new());
         }
     }
 
@@ -1240,9 +1240,9 @@ mod check_timers {
         let checked = check(&mut sim);
         assert_eq!(checked.room.status, RoomStatus::Active);
         assert_eq!(checked.room.timers.last_activity_at, Some(after_start(3)));
-        assert!(checked.transitions.is_empty());
-        assert!(sim.framework_events().is_empty());
-        assert!(sim.timeline.is_empty());
+        assert_eq!(checked.transitions, Vec::<DueTransition>::new());
+        assert_eq!(sim.framework_events(), Vec::<&FrameworkEvent>::new());
+        assert_eq!(sim.timeline, Vec::<RoomEvent>::new());
         assert_eq!(sim.traced("update room").len(), 3);
         let next = check(&mut sim);
         assert_eq!(next.room.status, RoomStatus::Closed);

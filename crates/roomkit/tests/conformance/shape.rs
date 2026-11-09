@@ -441,20 +441,6 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
         "set_visibility" => &["room_id", "channel_id", "visibility"],
         "pause_room" | "resume_room" | "reopen_room" | "close_room" | "archive_room"
         | "check_timers" | "regenerate_target" => &["room_id"],
-        "get_room" | "list_bindings" => &["room_id"],
-        "get_binding" => &["room_id", "channel_id"],
-        "list_members" => &["room_id", "include_left"],
-        "get_timeline" => &[
-            "room_id",
-            "offset",
-            "limit",
-            "visibility_filter",
-            "after_index",
-            "before_index",
-            "newest_first",
-            "include_blocked",
-        ],
-        "check_all_timers" => &[],
         "set_room_timers" => &["room_id", "timers"],
         "set_agent_response_policy" => &["room_id", "policy"],
         "send_greeting" => &["room_id", "channel_id", "agent_id", "greeting"],
@@ -480,7 +466,8 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
         "cancel_delivery" => &["key", "reason"],
         "steer" => &["channel_id", "directive", "room_id"],
         other => {
-            return crate::task_calls::arguments(other)
+            return crate::room_queries::arguments(other)
+                .or_else(|| crate::task_calls::arguments(other))
                 .or_else(|| crate::store_calls::arguments(other))
                 .or_else(|| crate::member_calls::arguments(other))
                 .or_else(|| crate::input_calls::arguments(other))

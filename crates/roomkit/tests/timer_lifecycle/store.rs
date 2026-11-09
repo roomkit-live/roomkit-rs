@@ -42,7 +42,7 @@ impl TimerStore {
     async fn find(&self, options: store::FindRoomsOptions) -> Result<Vec<Room>, StoreError> {
         let rooms = self.store.find_rooms(options).await?;
         if self.delete_listed.swap(false, Ordering::SeqCst) {
-            self.store.delete_room(&rooms[0].id).await?;
+            self.store.delete_room(&rooms.first().unwrap().id).await?;
         }
         self.hold_once(&self.after_listing).await;
         Ok(rooms)

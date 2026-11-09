@@ -91,7 +91,6 @@ pub(crate) async fn all_rooms(run: &Run) -> Result<Vec<roomkit::model::Room>, ro
         let options = roomkit::store::ListRoomsOptions {
             limit: 100,
             offset: u64::try_from(rooms.len()).unwrap(),
-            ..Default::default()
         };
         let page = reader.store().list_rooms(options).await?;
         let last = page.len() < 100;
@@ -100,4 +99,25 @@ pub(crate) async fn all_rooms(run: &Run) -> Result<Vec<roomkit::model::Room>, ro
             return Ok(rooms);
         }
     }
+}
+
+/// Arguments of the public reads and sweep, beside organization scope.
+pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
+    Some(match call {
+        "get_room" | "list_bindings" => &["room_id"],
+        "get_binding" => &["room_id", "channel_id"],
+        "list_members" => &["room_id", "include_left"],
+        "get_timeline" => &[
+            "room_id",
+            "offset",
+            "limit",
+            "visibility_filter",
+            "after_index",
+            "before_index",
+            "newest_first",
+            "include_blocked",
+        ],
+        "check_all_timers" => &[],
+        _ => return None,
+    })
 }

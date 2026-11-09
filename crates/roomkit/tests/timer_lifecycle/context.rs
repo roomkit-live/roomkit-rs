@@ -28,19 +28,24 @@ async fn timer_hooks_read_activity_committed_after_the_transition_write() {
     kit.store().after_write.store(true, Ordering::SeqCst);
     let checking = {
         let kit = kit.clone();
-        tokio::spawn(async move { kit.check_room_timers(&id("room"), Default::default()).await })
+        tokio::spawn(async move {
+            kit.check_room_timers(&id("room"), CheckRoomTimersOptions::default())
+                .await
+        })
     };
     reached(&kit).await;
+    let mut greeting = RoomEvent::new(
+        id("room"),
+        EventSource::new(ChannelId::new("voice").unwrap(), ChannelType::VOICE),
+        TextContent::new("hello"),
+    );
+    greeting.status = roomkit::model::EventStatus::Delivered;
     kit.store()
         .store
         .commit_event(
             &id("room"),
-            RoomEvent::new(
-                id("room"),
-                EventSource::new(ChannelId::new("voice").unwrap(), ChannelType::VOICE),
-                TextContent::new("hello"),
-            ),
-            Default::default(),
+            greeting,
+            roomkit::store::CommitEventOptions::default(),
         )
         .await
         .unwrap();

@@ -547,7 +547,7 @@ struct Driver<'kit, S> {
     /// Where a direct call's run notes the commit it has in flight, which a
     /// run the close aborted warns of; an inbound run's record notes its.
     in_flight: Option<Arc<InFlight>>,
-    /// A direct timer check finishes its decided transition despite caller drop.
+    /// A direct call finishes its decided timer transition despite caller drop.
     lifetime: Option<Arc<CallLifetime>>,
 }
 

@@ -67,14 +67,19 @@ async fn a_commit_landing_before_the_transition_write_is_not_overwritten() {
             })
         };
         reached(&kit).await;
-        let event = RoomEvent::new(
+        let mut event = RoomEvent::new(
             id("room"),
             EventSource::new(ChannelId::new("voice").unwrap(), ChannelType::VOICE),
             TextContent::new("hello"),
         );
+        event.status = roomkit::model::EventStatus::Delivered;
         kit.store()
             .store
-            .commit_event(&id("room"), event, Default::default())
+            .commit_event(
+                &id("room"),
+                event,
+                roomkit::store::CommitEventOptions::default(),
+            )
             .await
             .unwrap();
         let committed = kit
@@ -95,7 +100,7 @@ async fn a_commit_landing_before_the_transition_write_is_not_overwritten() {
         assert_eq!(checked.status, RoomStatus::Active);
         assert_eq!(checked.event_count, 1);
         assert_eq!(checked.latest_index, Some(0));
-        assert!(tap.events().is_empty());
+        assert_eq!(tap.events(), Vec::<roomkit::FrameworkEvent>::new());
         assert_eq!(kit.store().conditional_writes.load(Ordering::SeqCst), 1);
         kit.close().await.unwrap();
     }
@@ -121,7 +126,7 @@ async fn a_sweep_passes_a_failed_or_deleted_room_and_checks_the_rest() {
         assert_eq!(changed.len(), 1);
         assert_eq!(changed[0].id, id("good"));
         assert_eq!(changed[0].status, RoomStatus::Paused);
-        assert!(!warnings.containing("bad").is_empty());
+        assert_ne!(warnings.containing("bad"), Vec::<String>::new());
         kit.close().await.unwrap();
     }
 }

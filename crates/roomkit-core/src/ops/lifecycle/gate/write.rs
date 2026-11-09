@@ -1,5 +1,5 @@
 //! A timer's conditional write, retried from the latest room after an off-lock
-//! commit. Python: core/_timer_transitions.py::TimerTransitions._write_due.
+//! commit. Python: `core/_timer_transitions.py::TimerTransitions._write_due`.
 
 use crate::model::{ErrorRecord, RoomContext};
 use crate::ops::Cx;

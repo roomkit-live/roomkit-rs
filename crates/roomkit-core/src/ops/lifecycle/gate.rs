@@ -79,12 +79,8 @@ pub(crate) fn open(cx: &mut Cx<'_>, context: Box<RoomContext>) -> Gate {
 }
 
 impl Pending {
-    pub(crate) fn stored(
-        self: Box<Self>,
-        cx: &mut Cx<'_>,
-        outcome: Outcome,
-    ) -> Result<Applied, ErrorRecord> {
-        match *self {
+    pub(crate) fn stored(self, cx: &mut Cx<'_>, outcome: Outcome) -> Result<Applied, ErrorRecord> {
+        match self {
             Self::Room(write) => match write.answered(cx, outcome)? {
                 write::Progress::Waiting { effect, write } => Ok(Applied::Writing {
                     effect,
