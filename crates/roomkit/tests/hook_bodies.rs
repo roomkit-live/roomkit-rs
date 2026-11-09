@@ -207,7 +207,7 @@ impl Channel for Answering {
         &self,
         message: InboundMessage,
         context: RoomContext,
-    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
         ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
     }
 
@@ -216,7 +216,7 @@ impl Channel for Answering {
         _event: RoomEvent,
         _binding: ChannelBinding,
         _context: RoomContext,
-    ) -> impl std::future::Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
         ready(Ok(ChannelOutput::empty()))
     }
 }
@@ -1192,7 +1192,7 @@ impl Channel for Updating {
         &self,
         message: InboundMessage,
         context: RoomContext,
-    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
         ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
     }
 }

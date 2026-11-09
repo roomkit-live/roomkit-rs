@@ -35,31 +35,31 @@ impl Channel for Streaming {
         ChannelCategory::Intelligence
     }
 
-    async fn handle_inbound(
+    fn handle_inbound(
         &self,
         message: InboundMessage,
         context: RoomContext,
-    ) -> Result<RoomEvent, ChannelError> {
-        Ok(roomkit::default_inbound_event(self, &message, &context))
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
     }
 
-    async fn deliver(
+    fn deliver(
         &self,
         _: RoomEvent,
         _: ChannelBinding,
         _: RoomContext,
-    ) -> Result<ChannelOutput, ChannelError> {
-        Ok(ChannelOutput::empty())
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        ready(Ok(ChannelOutput::empty()))
     }
 
-    async fn on_event(
+    fn on_event(
         &self,
         event: RoomEvent,
         _: ChannelBinding,
         _: RoomContext,
-    ) -> Result<ChannelOutput, ChannelError> {
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
         if event.source.channel_type != ChannelType::SMS {
-            return Ok(ChannelOutput::empty());
+            return ready(Ok(ChannelOutput::empty()));
         }
         let segments = (0..self.0)
             .flat_map(|n| {
@@ -69,9 +69,9 @@ impl Channel for Streaming {
                 ]
             })
             .collect();
-        Ok(current_turn_host()
+        ready(Ok(current_turn_host()
             .unwrap()
-            .respond_with_stream(Box::pin(Segments(segments))))
+            .respond_with_stream(Box::pin(Segments(segments)))))
     }
 }
 
