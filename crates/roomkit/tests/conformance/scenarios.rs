@@ -46,6 +46,34 @@ pub(crate) fn current_thread() -> tokio::runtime::Runtime {
         .unwrap()
 }
 
+/// The area of the scenarios that need a turn executor beside the kit.
+const APART: &str = "executors/";
+
+/// Why no runner of this repository runs that area (RFC §10.6.7): the turn
+/// backend and its executor are private here.
+const NO_EXECUTOR_APART: &str = "§10.6.7: an executor apart needs a public turn backend";
+
+/// Whether `id` is a scenario no runner here runs, reported as a known failure.
+#[expect(
+    clippy::print_stdout,
+    reason = "the suite prints its known failures, as a test does"
+)]
+fn reported_apart(id: &str, failing: &mut Vec<String>) -> bool {
+    let apart = id.starts_with(APART);
+    if apart {
+        println!("known failure {id}:\n  {NO_EXECUTOR_APART}");
+        failing.push(id.to_owned());
+    }
+    apart
+}
+
+/// The scenario at `path`, which names `id`.
+fn load(path: &Path, id: &str) -> Value {
+    let scenario: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(scenario["id"], id, "{} names another id", path.display());
+    scenario
+}
+
 /// Every scenario runs on a runtime `runtime` builds, the pass named
 /// `pass`; those this implementation fails there are exactly `known`, the
 /// known failures (roomkit-specs `conformance/README.md`, "Known
@@ -73,14 +101,10 @@ pub(crate) fn every_scenario_gives_what_the_rfc_says(
             continue;
         }
         selected += 1;
-        let scenario: Value =
-            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-        assert_eq!(
-            scenario["id"],
-            id.as_str(),
-            "{} names another id",
-            path.display()
-        );
+        let scenario = load(path, &id);
+        if reported_apart(&id, &mut failing) {
+            continue;
+        }
         let unknown = shape::unknown_members(&scenario);
         if !unknown.is_empty() {
             report.push(format!(
