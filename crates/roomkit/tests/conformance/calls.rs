@@ -84,6 +84,7 @@ fn inbound_result(result: &InboundResult) -> Value {
     json!({
         "event": result.event.as_ref().map(dump),
         "blocked": result.blocked,
+        "duplicate": result.duplicate,
         "reason": result.reason,
         "error": result.error.as_ref().map(|record| record.message.clone()),
         "response_metadata": result.response_metadata,
@@ -537,7 +538,7 @@ pub(crate) fn send_event_options(spec: &Value) -> Result<SendEventOptions, Unrea
     options.response_visibility = optional(spec, "response_visibility")?;
     options.addressed_to = optional(spec, "addressed_to")?;
     options.parent_event_id = optional(spec, "parent_event_id")?;
-    options.idempotency_key = optional(spec, "idempotency_key")?;
+    options.idempotency_key = optional::<Option<String>>(spec, "idempotency_key")?.flatten();
     options.metadata = optional(spec, "metadata")?.unwrap_or_default();
     options.chain_depth = optional(spec, "chain_depth")?.unwrap_or_default();
     options.standalone = optional(spec, "standalone")?.unwrap_or_default();

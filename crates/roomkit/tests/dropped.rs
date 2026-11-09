@@ -26,6 +26,8 @@ use roomkit::{
 };
 use tokio::sync::Notify;
 
+#[path = "dropped/idempotency.rs"]
+mod idempotency;
 #[path = "support/warnings.rs"]
 mod warnings;
 
@@ -56,6 +58,7 @@ struct GatedStore {
     go: Arc<Notify>,
     fails: AtomicBool,
     panics: AtomicBool,
+    cannot_resolve_keys: AtomicBool,
 }
 
 impl ConversationStore for GatedStore {
@@ -275,6 +278,9 @@ impl ConversationStore for GatedStore {
         key: &str,
         channel_id: Option<&ChannelId>,
     ) -> Result<Option<RoomEvent>, StoreError> {
+        if self.cannot_resolve_keys.load(Ordering::SeqCst) {
+            return Ok(None);
+        }
         self.store
             .get_event_by_idempotency_key(room_id, key, channel_id)
             .await

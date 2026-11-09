@@ -54,6 +54,9 @@ pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
         "store.get_thread_summaries" => &["room_id", "root_event_ids"],
         "store.add_event" | "store.update_event" => &["event"],
         "store.get_event" => &["event_id"],
+        "store.check_idempotency" | "store.get_event_by_idempotency_key" => {
+            &["room_id", "key", "channel_id"]
+        }
         "store.record_delivery_results" => &["room_id", "event_id", "results"],
         "store.write_change_target" => &["room_id", "target"],
         "store.update_room_if" => &["room", "status", "paused_at", "last_activity_at"],
@@ -195,6 +198,9 @@ pub(crate) async fn call(
     let reader = run.reader();
     let store = reader.store();
     Ok(match name {
+        "store.check_idempotency" | "store.get_event_by_idempotency_key" => {
+            (idempotency(run, name, spec).await?, None)
+        }
         "store.add_event" => stored_event(run, name, store.add_event(event(spec, "event")?).await),
         "store.update_event" => {
             stored_event(run, name, store.update_event(event(spec, "event")?).await)
@@ -225,6 +231,30 @@ pub(crate) async fn call(
             (read_markers(run, name, spec).await?, None)
         }
         _ => (read_or_write(run, name, spec).await?, None),
+    })
+}
+
+/// Resolve a key in the scope the caller names, with no channel meaning the room.
+async fn idempotency(run: &Run, name: &str, spec: &Value) -> Result<Called, Unreadable> {
+    let reader = run.reader();
+    let store = reader.store();
+    let room: RoomId = field(spec, "room_id")?;
+    let key: String = field(spec, "key")?;
+    let channel: Option<ChannelId> = field(spec, "channel_id")?;
+    Ok(if name == "store.check_idempotency" {
+        stored(
+            run,
+            name,
+            store.check_idempotency(&room, &key, channel.as_ref()).await,
+        )
+    } else {
+        stored(
+            run,
+            name,
+            store
+                .get_event_by_idempotency_key(&room, &key, channel.as_ref())
+                .await,
+        )
     })
 }
 
