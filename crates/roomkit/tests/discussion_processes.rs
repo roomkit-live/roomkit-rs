@@ -19,7 +19,7 @@ use roomkit::model::*;
 use roomkit::orchestration::DiscussionOptions;
 use roomkit::store::{self, ConversationStore as _};
 use roomkit::testing::{
-    EchoAgent, EchoAgentOptions, Environment, RecordingTransport, RecordingTransportOptions, idle,
+    EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions, idle,
     kit_with_environment,
 };
 use roomkit::{
@@ -31,7 +31,9 @@ use roomkit::{
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, ProviderError};
-use roomkit_core::ops::SystemEnvironment;
+#[path = "support/clock.rs"]
+mod clock;
+use clock::TokioClock;
 use roomkit_core::rules::transcoding::text_of;
 
 const AGENTS: [&str; 3] = ["investigator", "sre", "comms"];
@@ -43,42 +45,6 @@ fn id(name: &str) -> ChannelId {
 
 fn room() -> RoomId {
     RoomId::new("r1").unwrap()
-}
-
-/// The kits' clock on tokio's, which a paused test advances: the lease
-/// expires as its time passes. Ids are the system's, unique across the
-/// processes.
-#[derive(Clone)]
-struct TokioClock {
-    start: tokio::time::Instant,
-    base: Timestamp,
-}
-
-impl TokioClock {
-    fn new() -> Self {
-        Self {
-            start: tokio::time::Instant::now(),
-            base: SystemEnvironment.now(),
-        }
-    }
-}
-
-impl Environment for TokioClock {
-    fn now(&self) -> Timestamp {
-        self.base.checked_add(self.start.elapsed()).unwrap()
-    }
-
-    fn new_event_id(&self) -> EventId {
-        SystemEnvironment.new_event_id()
-    }
-
-    fn new_observation_id(&self) -> ObservationId {
-        SystemEnvironment.new_observation_id()
-    }
-
-    fn new_room_id(&self) -> RoomId {
-        SystemEnvironment.new_room_id()
-    }
 }
 
 /// Answers once a while has passed, and logs, across processes, `+name` as

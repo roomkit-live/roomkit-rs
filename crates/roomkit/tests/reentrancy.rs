@@ -12,6 +12,10 @@
     reason = "a test fails on a broken fixture"
 )]
 
+#[path = "support/clock.rs"]
+mod clock;
+use clock::TokioClock;
+
 use std::future::{Future, ready};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering as AtomicOrdering};
@@ -27,6 +31,7 @@ use roomkit::model::{
 };
 use roomkit::testing::{
     EchoAgent, EchoAgentOptions, EventTap, RecordingTransport, RecordingTransportOptions,
+    kit_with_environment,
 };
 use roomkit::{
     AttachChannelOptions, Channel, ChannelError, CloseRoomOptions, CommitEventOptions,
@@ -224,7 +229,11 @@ async fn room() -> (RoomKit, RecordingTransport) {
 
 /// [`room`] on a kit built with `options`.
 async fn room_with(options: RoomKitOptions) -> (RoomKit, RecordingTransport) {
-    let kit = RoomKit::new(options);
+    room_on(RoomKit::new(options)).await
+}
+
+/// Binds the standard room to a kit with the chosen clock and options.
+async fn room_on(kit: RoomKit) -> (RoomKit, RecordingTransport) {
     let audit = RecordingTransport::new(
         channel("audit"),
         ChannelType::WEBSOCKET,
@@ -2992,12 +3001,15 @@ async fn a_call_a_locked_hook_s_task_nests_goes_on_past_the_event_s_caller_gone(
 /// returns once the call is over, at the latest at that deadline,
 /// roomkit-rs's at once. Python:
 /// `tests/test_reentrance.py`, the test of the same name.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_call_a_locked_hook_s_task_nests_ends_by_the_event_s_deadline_past_its_caller() {
-    let (kit, _) = room_with(RoomKitOptions {
-        process_timeout: Duration::from_millis(50),
-        ..Default::default()
-    })
+    let (kit, _) = room_on(kit_with_environment(
+        RoomKitOptions {
+            process_timeout: Duration::from_millis(50),
+            ..Default::default()
+        },
+        TokioClock::new(),
+    ))
     .await;
     let tap = EventTap::on(&kit, &["process_timeout"]);
     let entered = Arc::new(Notify::new());
@@ -3051,6 +3063,10 @@ async fn a_call_a_locked_hook_s_task_nests_ends_by_the_event_s_deadline_past_its
     )
     .unwrap();
     let caller_kit = kit.clone();
+    // Scheduling must not consume the parent's deadline before the nested
+    // hook starts. Virtual time also distinguishes its 50 ms deadline from
+    // the nested call's own, which starts 20 ms later.
+    let began = tokio::time::Instant::now();
     let caller = tokio::spawn(async move { send(&caller_kit, "hello").await });
     tokio::time::timeout(BOUND, entered.notified())
         .await
@@ -3059,6 +3075,8 @@ async fn a_call_a_locked_hook_s_task_nests_ends_by_the_event_s_deadline_past_its
     drop(caller.await);
     let task = started.lock().unwrap().pop().unwrap();
     let sent = tokio::time::timeout(BOUND, task).await.unwrap().unwrap();
+    // Allow timer tick rounding, but never reach the nested call's deadline.
+    assert!((Duration::from_millis(50)..Duration::from_millis(70)).contains(&began.elapsed()));
     let other = send(&kit, "other").await.unwrap();
     assert_eq!(
         (sent.err(), messages(&kit).await, other.blocked, tap.types()),
