@@ -18,7 +18,9 @@ impl Machine {
         let Stage::Start(call) = self.stage.take() else {
             return;
         };
-        self.call.bound = Bound::Call(deadline::of_call(cx.config, cx.env.now()));
+        if matches!(self.call.bound, Bound::Unbounded) {
+            self.call.bound = Bound::Call(deadline::of_call(cx.config, cx.env.now()));
+        }
         match *call {
             Call::Message {
                 target,

@@ -30,19 +30,20 @@
 //! The kit's own work here is what roomkit-rs has of Python's doors: a
 //! SYNC hook's body, an ASYNC hook a delivery fires, a transport's
 //! delivery, an ASYNC observer run after the fact, an agent's tool call, a
-//! tool's observer and a task spawned with `keep_context`. Python's other
-//! doors, a voice, video or realtime session's end, a delegation's
-//! `on_complete`, a discussion's announcement and a held write, are
-//! features roomkit-rs does not have yet.
+//! tool's observer and a task spawned with `keep_context`. Delegation,
+//! discussion and held-write boundaries also have their own test modules;
+//! media session adapters are covered separately from these core doors.
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
 mod admission;
 mod answers;
 mod at_once;
+mod core_contracts;
 mod cut;
 mod doors;
 mod held;
+mod precommit;
 mod readers;
 mod record;
 mod shutdown;

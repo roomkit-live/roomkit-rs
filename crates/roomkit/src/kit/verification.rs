@@ -283,6 +283,7 @@ impl<S: ConversationStore> RoomKit<S> {
         request_id: &str,
         options: RecordFailedAttemptOptions,
     ) -> Result<VerificationRequest, RoomKitError> {
+        self.inner.open()?;
         let request = self
             .request_in_scope(request_id, options.organization_id.as_deref())
             .await?;

@@ -30,6 +30,7 @@ mod delivery;
 mod delivery_keys;
 pub(crate) mod discussions;
 mod engine;
+mod entry_window;
 mod ephemeral;
 mod events;
 mod greeting;
@@ -628,6 +629,7 @@ impl<S: ConversationStore> RoomKit<S> {
         // A content a struct literal built past its model's check is refused
         // before anything is read, as Python's model refuses it when built,
         // and one kept is written as its constructor writes it.
+        let deadline = crate::deadline::CallDeadline::new(self.config().process_timeout);
         message.content.check()?;
         // A message past its channel's inbound rate is refused then, before
         // anything else is read, written or traced (Python checks it once a
@@ -650,14 +652,14 @@ impl<S: ConversationStore> RoomKit<S> {
             .is_some_and(|channel| channel.channel_type == ChannelType::HOST);
         let channel = self.inner.channel(&message.channel_id);
         let (Some(channel), false) = (channel, is_host) else {
-            return Box::pin(self.traced_message(message, options, publication)).await;
+            return Box::pin(self.traced_message(message, options, publication, deadline)).await;
         };
         let sender = channel.normalize_address(&message.sender_id);
         let deferred = options.defer_delivery;
         let span = self
             .inner
             .inbound_span(&message, &sender, options.room_id.as_ref());
-        let work = Box::pin(self.traced_message(message, options, publication));
+        let work = Box::pin(self.traced_message(message, options, publication, deadline));
         let result = span.within(work).await;
         telemetry::end_inbound_span(span, &result, deferred);
         result
@@ -669,6 +671,7 @@ impl<S: ConversationStore> RoomKit<S> {
         mut message: InboundMessage,
         options: ProcessInboundOptions,
         publication: Option<String>,
+        deadline: crate::deadline::CallDeadline,
     ) -> Result<InboundResult, RoomKitError> {
         let answers = self.inner.answer(&mut message).map(|mut answers| {
             answers.publication = publication;
@@ -686,18 +689,20 @@ impl<S: ConversationStore> RoomKit<S> {
             .delivery_keys
             .naming(message.delivery_key.as_deref(), organization_id.as_deref());
         let entered = if let Some(room_id) = room_id {
-            // A discussion another process stored is followed before the
-            // pipeline reads its hooks, so its names hook reads this
-            // message's names (RFC §19.7.5 rules 4 and 16).
-            self.follow_stored_discussion(&room_id).await;
             let entry = Entry::Message {
                 room_id,
                 organization_id,
                 message: Box::new(message),
                 answers: answers.map(Box::new),
             };
-            self.enter_named(entry, PROCESS_INBOUND, defer_delivery, Some(named))
-                .await?
+            self.enter_named(
+                entry,
+                PROCESS_INBOUND,
+                defer_delivery,
+                Some(named),
+                deadline,
+            )
+            .await?
         } else {
             context::as_deep_as_its_turn(&mut message.chain_depth);
             self.inner.open()?;
@@ -712,7 +717,7 @@ impl<S: ConversationStore> RoomKit<S> {
                 &self.inner,
                 PROCESS_INBOUND,
                 None,
-                routed,
+                (routed, deadline),
                 defer_delivery,
                 Some(named),
             )

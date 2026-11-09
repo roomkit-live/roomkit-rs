@@ -103,6 +103,8 @@ mod work_read;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use crate::model::Timestamp;
+
 use self::adoption::Adoptions;
 pub use self::answering::TurnResponses;
 pub use self::answers::MessageAnswers;
@@ -473,6 +475,14 @@ impl Inbound {
 }
 
 impl Operation for Inbound {
+    fn call_deadline(&mut self, deadline: Timestamp) {
+        self.machine.call.bound = Bound::Call(Some(deadline));
+    }
+
+    fn entry_deadline(&mut self, entry: EntryId, deadline: Timestamp) {
+        self.machine.entry_deadline(entry, deadline);
+    }
+
     type Output = Result<InboundResult, InboundError>;
 
     fn poll(&mut self, environment: &dyn Environment) -> Step<Self::Output> {

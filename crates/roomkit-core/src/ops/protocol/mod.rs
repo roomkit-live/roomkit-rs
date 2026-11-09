@@ -398,6 +398,18 @@ pub enum Next<T> {
 /// between completions, until the operation is ready (see the
 /// [`ops`](crate::ops) module).
 pub trait Operation {
+    /// Supplies the runtime call's pre-commit deadline before its first poll.
+    #[doc(hidden)]
+    fn call_deadline(&mut self, deadline: Timestamp) {
+        let _ = deadline;
+    }
+
+    /// Supplies an adopted call's deadline before that entry's first poll.
+    #[doc(hidden)]
+    fn entry_deadline(&mut self, entry: EntryId, deadline: Timestamp) {
+        let _ = (entry, deadline);
+    }
+
     /// What the operation produces once it is over.
     type Output;
 

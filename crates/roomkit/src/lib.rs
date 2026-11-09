@@ -51,6 +51,7 @@ mod channel;
 mod classed;
 mod context;
 mod cursors;
+mod deadline;
 pub mod delivery;
 mod delivery_keys;
 mod discussion_turn;

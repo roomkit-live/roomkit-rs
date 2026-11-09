@@ -621,6 +621,7 @@ fn read_back(committed: Committed) -> InboundResult {
 /// caller still waits (decision 1 of step 2b).
 #[derive(Debug)]
 pub(super) struct Caller {
+    pub(super) deadline: crate::deadline::CallDeadline,
     /// Where the call's answer goes at its decision, when the caller's
     /// context detaches from the call's room or the call defers its
     /// delivery; `None` once it went.
@@ -788,6 +789,7 @@ impl Caller {
         telemetry: KitTelemetry,
     ) -> Self {
         Self {
+            deadline: crate::deadline::CallDeadline::default(),
             answer: Some(answer),
             defer,
             decided: false,
@@ -1075,7 +1077,7 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
     call: &'static str,
     room_id: Option<&RoomId>,
-    inbound: Inbound,
+    inbound: (Inbound, crate::deadline::CallDeadline),
     defer: bool,
     named: Option<NamedGuard>,
 ) -> Ran {
@@ -1109,7 +1111,7 @@ pub(crate) async fn run_rerun<S: ConversationStore>(
         inner,
         call,
         Some(room_id),
-        rerun,
+        (rerun, crate::deadline::CallDeadline::default()),
         false,
         named,
         Leases::Granted,
@@ -1123,7 +1125,7 @@ async fn run_leased<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
     call: &'static str,
     room_id: Option<&RoomId>,
-    inbound: Inbound,
+    inbound: (Inbound, crate::deadline::CallDeadline),
     defer: bool,
     named: Option<NamedGuard>,
     leases: Leases,
@@ -1131,6 +1133,7 @@ async fn run_leased<S: ConversationStore>(
     if let Err(error) = inner.open() {
         return Ran::ended(Err(error));
     }
+    let (inbound, deadline) = inbound;
     let (inbound, context, hand) = placed(inbound, room_id, ExecutionContext::current(), leases);
     // Nested on the lease of a run that did not adopt it, the call's later
     // sections are granted the lock while that lease lives, as a separate
@@ -1145,6 +1148,7 @@ async fn run_leased<S: ConversationStore>(
     let kit = Arc::clone(inner);
     let mut caller = Caller::new(answer, defer, Arc::clone(&record), kit.telemetry.clone());
     caller.hand = hand;
+    caller.deadline = deadline;
     // The key names the delivery until the run is over, or until the call's
     // caller is answered before the entries it adopted.
     caller.named = named;

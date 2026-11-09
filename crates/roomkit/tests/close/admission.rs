@@ -35,6 +35,9 @@ use crate::held::{
 use crate::support::{channel, transport};
 use roomkit_core::rules::transcoding::text_of;
 
+#[path = "admission/remaining.rs"]
+mod remaining;
+
 /// The kit's reads, each as text: they answer during the close and after
 /// it, the store open.
 async fn reads<S: ConversationStore>(kit: &RoomKit<S>) -> Vec<String> {
@@ -76,6 +79,27 @@ async fn reads<S: ConversationStore>(kit: &RoomKit<S>) -> Vec<String> {
             kit.list_read_markers(&room_id, ListReadMarkersOptions::default())
                 .await
         ),
+        format!(
+            "{:?}",
+            kit.is_member(&room_id, &"u1".parse().unwrap(), Default::default())
+                .await
+        ),
+        format!(
+            "{:?}",
+            kit.regenerate_target(&room_id, Default::default()).await
+        ),
+        format!(
+            "{:?}",
+            kit.list_channels()
+                .iter()
+                .map(|c| c.channel_id())
+                .collect::<Vec<_>>()
+        ),
+        format!(
+            "{:?}",
+            kit.hooks_for(HookTrigger::BeforeBroadcast)
+                .has_hooks(Default::default())
+        ),
     ]
 }
 
@@ -110,6 +134,7 @@ async fn the_kit_s_operations<S: ConversationStore>(kit: &RoomKit<S>) -> Vec<(&'
     let mut calls = the_kit_s_events(kit).await;
     calls.extend(the_kit_s_rooms(kit).await);
     calls.extend(the_kit_s_read_markers(kit).await);
+    calls.extend(remaining::operations(kit).await);
     calls
 }
 

@@ -14,6 +14,7 @@ use tokio::task::JoinHandle;
 use super::RoomKit;
 use super::options::{CommitEventOptions, SendEventOptions};
 use crate::context::{self, Adopting, Completion, ExecutionContext};
+use crate::deadline::CallDeadline;
 use crate::delivery_keys::{Named, NamedGuard};
 use crate::driver::{self, InboundOutput, Ran, Record, Stop};
 use crate::error::RoomKitError;
@@ -197,7 +198,12 @@ impl<S: ConversationStore> RoomKit<S> {
         call: &'static str,
         defer: bool,
     ) -> Result<Entered, RoomKitError> {
-        self.enter_named(entry, call, defer, None).await
+        let deadline = CallDeadline::new(
+            self.config()
+                .process_timeout
+                .filter(|_| !matches!(entry, Entry::Greeting { .. })),
+        );
+        self.enter_named(entry, call, defer, None, deadline).await
     }
 
     /// [`enter`](Self::enter), the call's delivery named by `named`, a
@@ -211,6 +217,7 @@ impl<S: ConversationStore> RoomKit<S> {
         call: &'static str,
         defer: bool,
         named: Option<NamedGuard>,
+        deadline: CallDeadline,
     ) -> Result<Entered, RoomKitError> {
         let chain_depth = match &mut entry {
             Entry::Message { message, .. } => &mut message.chain_depth,
@@ -221,19 +228,15 @@ impl<S: ConversationStore> RoomKit<S> {
         };
         context::as_deep_as_its_turn(chain_depth);
         self.inner.open()?;
-        self.inner.subscribed().await;
-        self.reached_from_its_work(&entry).await?;
-        let refused = refusal_of(&entry);
-        if let Some(named) = named.as_ref().filter(|named| named.named().has_key())
-            && ExecutionContext::current().works_in_room(entry.room_id())
-        {
-            self.locate_in_room(named.named(), entry.room_id()).await;
+        if let Some(ended) = self.prepare_entry(&entry, named.as_ref(), deadline).await? {
+            return Ok(ended);
         }
+        let refused = refusal_of(&entry);
         let adopted_named = named
             .as_ref()
             .filter(|named| named.named().has_key())
             .map(|named| Arc::clone(named.named()));
-        let entry = match context::adopt(entry, adopted_named).await {
+        let entry = match context::adopt(entry, adopted_named, deadline).await {
             // The run that adopted it names its delivery until its set ran.
             Adopting::Settled(result, completion) => {
                 return Ok(Entered {
@@ -252,8 +255,15 @@ impl<S: ConversationStore> RoomKit<S> {
         };
         let room_id = entry.room_id().clone();
         let operation = self.operation(entry)?;
-        let ran =
-            driver::run_inbound(&self.inner, call, Some(&room_id), operation, defer, named).await;
+        let ran = driver::run_inbound(
+            &self.inner,
+            call,
+            Some(&room_id),
+            (operation, deadline),
+            defer,
+            named,
+        )
+        .await;
         Entered::ran(ran, refused)
     }
 
@@ -263,7 +273,7 @@ impl<S: ConversationStore> RoomKit<S> {
     /// call is handed over, as Python's adopted call reads it first
     /// (`_prepare_event_inner`). A room the read does not find, gone or not
     /// read, leaves it where it is.
-    async fn locate_in_room(&self, named: &Named, room_id: &RoomId) {
+    pub(super) async fn locate_in_room(&self, named: &Named, room_id: &RoomId) {
         if named.is_located() {
             return;
         }
@@ -284,7 +294,7 @@ impl<S: ConversationStore> RoomKit<S> {
     /// work's reentry budget first thing: a room of another organization
     /// reads as not found and draws nothing, as the Python implementation
     /// reads the room first (RFC §17.2, §8.3).
-    async fn reached_from_its_work(&self, entry: &Entry) -> Result<(), RoomKitError> {
+    pub(super) async fn reached_from_its_work(&self, entry: &Entry) -> Result<(), RoomKitError> {
         let organization_id = match entry {
             Entry::Message {
                 organization_id, ..
@@ -417,7 +427,7 @@ impl Entered {
 /// its commit by Python's class for it, which names its room and source
 /// ([`RoomKitError::of_entry`]); a message's, which a refusal never fails,
 /// as [`From`] reads it.
-fn refusal_of(entry: &Entry) -> impl FnOnce(InboundError) -> RoomKitError + use<> {
+pub(super) fn refusal_of(entry: &Entry) -> impl FnOnce(InboundError) -> RoomKitError + use<> {
     let source = match entry {
         Entry::Direct { room_id, event, .. } => Some((room_id.clone(), event.channel_id.clone())),
         Entry::Post { room_id, post, .. } => Some((

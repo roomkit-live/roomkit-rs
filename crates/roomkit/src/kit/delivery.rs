@@ -176,6 +176,7 @@ impl<S: ConversationStore> RoomKit<S> {
         content: impl Into<String>,
         options: DeliverOptions<S>,
     ) -> Result<DeliveryOutcome, RoomKitError> {
+        self.inner.open()?;
         let DeliverOptions {
             channel_id,
             strategy,

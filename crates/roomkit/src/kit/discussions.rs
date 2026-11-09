@@ -364,18 +364,6 @@ impl<S: ConversationStore> RoomKit<S> {
         }
     }
 
-    /// Reads `room_id` and follows the discussion it stores when this
-    /// process holds none for it (rule 16); a room the store cannot read is
-    /// left to the call that reads it next.
-    pub(crate) async fn follow_stored_discussion(&self, room_id: &RoomId) {
-        if self.inner.discussions.get(room_id).is_some() {
-            return;
-        }
-        if let Ok(Some(room)) = self.store().get_room(room_id).await {
-            self.follow_discussion(&room);
-        }
-    }
-
     /// Follows the discussion `room` stores, `config`, another process's:
     /// this process routes and queues by it (rule 16). Python's
     /// `_join_stored`.

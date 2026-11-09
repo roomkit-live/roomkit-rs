@@ -20,6 +20,11 @@ use tokio::sync::Notify;
 pub(crate) struct StuckStore {
     store: InMemoryStore,
     pub(crate) committing: Arc<Notify>,
+    /// A read held at the store boundary until `release_read` is notified.
+    pub(crate) held_read: Mutex<Option<&'static str>>,
+    pub(crate) reading: Notify,
+    pub(crate) delayed_read: Mutex<Option<(&'static str, std::time::Duration)>>,
+    pub(crate) release_read: Notify,
     /// The commit of this text never ends, its row written first when
     /// `true`; it tells `committing` it started.
     hangs: Option<(&'static str, bool)>,
@@ -55,6 +60,29 @@ impl Drop for CutNote {
 }
 
 impl StuckStore {
+    async fn read(&self, name: &str) {
+        let delay = {
+            let mut delayed = self.delayed_read.lock().unwrap();
+            if delayed.as_ref().is_some_and(|(at, _)| *at == name) {
+                delayed.take().map(|(_, delay)| delay)
+            } else {
+                None
+            }
+        };
+        if let Some(delay) = delay {
+            tokio::time::sleep(delay).await;
+        }
+        let held = self
+            .held_read
+            .lock()
+            .unwrap()
+            .is_some_and(|held| held == name);
+        if held {
+            self.reading.notify_one();
+            self.release_read.notified().await;
+        }
+    }
+
     /// A store whose commit of `text` never ends, its row written first
     /// when `written`.
     pub(crate) fn hanging(text: &'static str, written: bool) -> Self {
@@ -117,6 +145,7 @@ impl ConversationStore for StuckStore {
     }
 
     async fn get_room(&self, room_id: &RoomId) -> Result<Option<Room>, StoreError> {
+        self.read("room").await;
         self.store.get_room(room_id).await
     }
 
@@ -256,6 +285,7 @@ impl ConversationStore for StuckStore {
     }
 
     async fn list_bindings(&self, room_id: &RoomId) -> Result<Vec<ChannelBinding>, StoreError> {
+        self.read("bindings").await;
         self.store.list_bindings(room_id).await
     }
 
@@ -304,6 +334,7 @@ impl ConversationStore for StuckStore {
         address: &str,
         options: store::ResolveIdentityOptions,
     ) -> Result<Option<Identity>, StoreError> {
+        self.read("identity").await;
         self.store
             .resolve_identity(channel_type, address, options)
             .await

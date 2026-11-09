@@ -9,6 +9,7 @@ use tokio::sync::{oneshot, watch};
 use tokio::task;
 
 use super::{ExecutionContext, Frame};
+use crate::deadline::CallDeadline;
 use crate::delivery_keys::{CancelRequest, Named};
 use crate::driver::{EntryCleanup, StoredAnswers};
 use crate::telemetry::{Late, current_late_span, get_current_span};
@@ -39,6 +40,7 @@ pub(crate) struct Completion {
 pub(crate) struct Adoption {
     /// The call.
     pub(crate) entry: Entry,
+    pub(crate) deadline: CallDeadline,
     /// The effect whose call made it, in that run.
     pub(crate) origin: EffectId,
     /// Where its answer goes.
@@ -99,7 +101,11 @@ pub(crate) enum Adopting {
 /// Reentrance). A call whose context hands it its room's lock runs apart,
 /// nested under that lock ([`Hand`](super::Hand)). Its delivery is named by
 /// `named`, a key's name of it, if any.
-pub(crate) async fn adopt(entry: Entry, named: Option<Arc<Named>>) -> Adopting {
+pub(crate) async fn adopt(
+    entry: Entry,
+    named: Option<Arc<Named>>,
+    deadline: CallDeadline,
+) -> Adopting {
     let context = ExecutionContext::current();
     if context.hands(entry.room_id()) {
         return Adopting::Apart(entry);
@@ -107,7 +113,7 @@ pub(crate) async fn adopt(entry: Entry, named: Option<Arc<Named>>) -> Adopting {
     let Some(frame) = context.taker(entry.room_id()).cloned() else {
         return Adopting::Apart(entry);
     };
-    hand(&frame, entry, named).await
+    hand(&frame, entry, named, deadline).await
 }
 
 /// Hands `entry` to the run whose call the current task runs, the innermost
@@ -118,12 +124,17 @@ pub(crate) async fn adopt_by_own_run(entry: Entry) -> Adopting {
     let Some(frame) = context.frames.last().cloned() else {
         return Adopting::Apart(entry);
     };
-    hand(&frame, entry, None).await
+    hand(&frame, entry, None, CallDeadline::default()).await
 }
 
 /// Hands `entry`, named by `named`, to `frame`'s run, and waits for its
 /// decision.
-async fn hand(frame: &Frame, entry: Entry, named: Option<Arc<Named>>) -> Adopting {
+async fn hand(
+    frame: &Frame,
+    entry: Entry,
+    named: Option<Arc<Named>>,
+    deadline: CallDeadline,
+) -> Adopting {
     let (reply, answer) = oneshot::channel();
     let (delivered, told) = watch::channel(None);
     let answers = Arc::new(StoredAnswers::default());
@@ -137,6 +148,7 @@ async fn hand(frame: &Frame, entry: Entry, named: Option<Arc<Named>>) -> Adoptin
     };
     let adoption = Adoption {
         entry,
+        deadline,
         origin: frame.effect,
         reply,
         delivered,

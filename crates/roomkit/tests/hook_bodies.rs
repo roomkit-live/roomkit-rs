@@ -34,6 +34,9 @@ use roomkit::{
 use roomkit_core::ops::ChannelConfig;
 use roomkit_core::rules::transcoding::text_of;
 
+#[path = "hook_bodies/streamed_budget.rs"]
+mod streamed_budget;
+
 /// `max_chain_depth` 1: ten passes and ten hook calls per cascade.
 const BUDGET: usize = 10;
 

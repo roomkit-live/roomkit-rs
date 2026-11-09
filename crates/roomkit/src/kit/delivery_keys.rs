@@ -61,6 +61,9 @@ impl<S: ConversationStore> RoomKit<S> {
         reason = "Python's method is a coroutine: the call is awaited"
     )]
     pub async fn cancel_delivery(&self, key: &str, options: CancelDeliveryOptions) -> usize {
+        if self.inner.open().is_err() {
+            return 0;
+        }
         let CancelDeliveryOptions {
             reason,
             organization_id,

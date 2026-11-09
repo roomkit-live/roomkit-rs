@@ -97,9 +97,15 @@ impl Clocks {
         }
     }
 
+    /// Maps a call's runtime deadline into this driver's clock. An expired
+    /// deadline stays expired instead of receiving a new call window.
+    fn timestamp_of(self, deadline: Instant) -> Option<Timestamp> {
+        self.kit
+            .checked_add(deadline.saturating_duration_since(self.runtime))
+    }
+
     /// The runtime instant of `deadline`, at once when it passed already;
-    /// `None` past the runtime clock's range, where nothing bounds the
-    /// request.
+    /// `None` past the runtime clock's range, where nothing bounds the request.
     fn instant_of(self, deadline: Timestamp) -> Option<Instant> {
         self.runtime
             .checked_add(deadline.duration_since(self.kit).unwrap_or_default())
@@ -363,7 +369,7 @@ async fn drive<S: ConversationStore, O: Operation>(
     inner: &Arc<Inner<S>>,
     environment: Arc<dyn Environment + Send + Sync>,
     call: &'static str,
-    operation: O,
+    mut operation: O,
     leases: Leases,
     how: Driven<'_>,
 ) -> Result<O::Output, Stop> {
@@ -383,6 +389,12 @@ async fn drive<S: ConversationStore, O: Operation>(
             Some(inbound::Under::Lease(lease)) => held.take_lease(lease),
             None => {}
         }
+    }
+    let clocks = Clocks::read(&*environment);
+    if let Some(deadline) = caller.as_ref().and_then(|caller| caller.deadline.0)
+        && let Some(at) = clocks.timestamp_of(deadline)
+    {
+        operation.call_deadline(at);
     }
     let driver = Driver {
         calls: JoinSet::new(),
@@ -410,7 +422,7 @@ async fn drive<S: ConversationStore, O: Operation>(
         entry_cut: HashMap::new(),
         entry_named: HashMap::new(),
         entry_names: HashMap::new(),
-        clocks: Clocks::read(&*environment),
+        clocks,
         environment,
         refused: None,
         caller,
@@ -1588,6 +1600,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     fn adopt<O: Operation>(&mut self, operation: &mut O, adoption: Adoption) {
         let Adoption {
             entry,
+            deadline,
             origin,
             reply,
             delivered,
@@ -1601,6 +1614,9 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         } = adoption;
         match operation.adopt(entry, origin) {
             Ok(id) => {
+                if let Some(at) = deadline.0.and_then(|at| self.clocks.timestamp_of(at)) {
+                    operation.entry_deadline(id, at);
+                }
                 // Made by its origin's code in that code's own task, not in
                 // a task the code spawned: it follows that code.
                 if task.is_some_and(|task| self.effect_of_task.get(&task) == Some(&origin)) {

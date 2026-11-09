@@ -45,6 +45,7 @@ pub(crate) fn error_of(error: &RoomKitError) -> Option<Value> {
         RoomKitError::ParticipantNotFound { .. } => named("participant_not_found"),
         RoomKitError::IdentityNotFound(_) => named("identity_not_found"),
         RoomKitError::RoomClosed { .. } => named("room_closed"),
+        RoomKitError::KitClosed => named("kit_closed"),
         RoomKitError::ProcessTimeout { .. } => named("process_timeout"),
         RoomKitError::ReentryLoopCap(_) => named("reentry_loop_cap"),
         RoomKitError::TransitionRefused { .. } => named("transition_refused"),

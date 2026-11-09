@@ -146,6 +146,8 @@ struct Adopted {
     /// The deadline of the work its origin is, when it has one: the call's
     /// for work before the call's decision, an entry's for that entry's.
     origin_deadline: Option<Timestamp>,
+    /// A runtime deadline supplied before the first poll.
+    own_deadline: Option<Timestamp>,
     /// The channel its event comes from, which its `process_timeout` names
     /// before the room lock (RFC §8.2).
     channel_id: Option<ChannelId>,
@@ -488,13 +490,15 @@ impl Adopted {
             Entry::Message { .. }
             | Entry::Direct { .. }
             | Entry::Post { .. }
-            | Entry::Row { .. } => deadline::of_call(config, now),
+            | Entry::Row { .. } => self.own_deadline.or_else(|| deadline::of_call(config, now)),
         };
         // One nested under its origin's lock holds that section, which
         // cannot outlive the origin's deadline.
         let borrows = follows || self.nested.is_some();
         let (deadline, at) = match self.origin_deadline {
-            Some(origin) if borrows => (Deadline::Borrowed, Some(origin)),
+            Some(origin) if borrows && own.is_none_or(|own| origin <= own) => {
+                (Deadline::Borrowed, Some(origin))
+            }
             Some(_) | None => (Deadline::Own, own),
         };
         self.deadline = deadline;
@@ -567,6 +571,7 @@ impl Machine {
             bound: Bound::Adopted(id, None),
             deadline: Deadline::Unset { follows: false },
             origin_deadline: io.bound_of(origin).deadline(),
+            own_deadline: None,
             channel_id: channel_of(&entry),
         };
         self.adopted.adopted.push((adopted, Box::new(entry)));
@@ -1011,6 +1016,18 @@ impl Machine {
             return;
         }
         self.settle_entry(cx, &adopted, Ok(cut));
+    }
+
+    /// Supplies the pre-commit window already started by the runtime.
+    pub(super) fn entry_deadline(&mut self, entry: EntryId, deadline: Timestamp) {
+        if let Some((adopted, _)) = self
+            .adopted
+            .adopted
+            .iter_mut()
+            .find(|(adopted, _)| adopted.id == entry)
+        {
+            adopted.own_deadline = Some(deadline);
+        }
     }
 
     /// The entry `entry`, not started yet, was made by its origin's code in
