@@ -24,7 +24,7 @@ pub(crate) struct Request {
     /// never carries a reasoning field, its call round's included (Python's
     /// `_with_thinking_field` reads the message's own role). A vendor's
     /// dialect reads it ([`crate::dialect::ChatDialect`]); OpenAI's sends
-    /// none.
+    /// none unless its configuration names the field.
     pub(crate) reasoning: Vec<Option<String>>,
     pub(crate) tools: Vec<AiTool>,
     /// The turn's temperature, when it gives one.

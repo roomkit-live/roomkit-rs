@@ -48,6 +48,15 @@ pub(crate) async fn chat_messages(dialect: &str, context: &AiContext) -> Result<
             let provider = OpenAiAiProvider::new(config).map_err(failed)?;
             provider.generate(context).await.map_err(failed)?;
         }
+        "openai_thinking_field" => {
+            let config = OpenAiConfig {
+                base_url: Some(base_url),
+                thinking_field: Some("reasoning_content".to_owned()),
+                ..OpenAiConfig::new("scripted", "scripted")
+            };
+            let provider = OpenAiAiProvider::new(config).map_err(failed)?;
+            provider.generate(context).await.map_err(failed)?;
+        }
         "deepseek" => {
             let config = DeepSeekConfig {
                 base_url,

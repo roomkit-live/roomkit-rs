@@ -111,7 +111,7 @@ impl<'a> CompletionRequest<'a> {
         config: &'a OpenAiConfig,
         request: &'a Request,
         streamed: bool,
-        dialect: ChatDialect,
+        dialect: ChatDialect<'_>,
     ) -> Self {
         let model = config.model.as_str();
         let system = request
@@ -176,7 +176,7 @@ impl<'a> CompletionRequest<'a> {
 fn wire_message<'a>(
     message: &'a Message,
     thinking: Option<&str>,
-    dialect: ChatDialect,
+    dialect: ChatDialect<'_>,
 ) -> WireMessage<'a> {
     let calls: Vec<WireCall<'_>> = message
         .tool_calls

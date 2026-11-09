@@ -138,6 +138,13 @@ pub struct OpenAiConfig {
     /// The namespace, its name and description, under which the Responses
     /// API declares the tools.
     pub tool_namespace: Option<(String, String)>,
+    /// The assistant message field this server reads a model's earlier
+    /// reasoning from, for a server whose documentation asks for it back
+    /// (`reasoning_content` on Z.ai's GLM). A round or an answer that
+    /// reasoned carries it there, and one that did not carries nothing.
+    /// `None` sends no earlier reasoning (RFC §6.4): strict servers refuse a
+    /// field they do not know, so it is never guessed. Chat Completions only.
+    pub thinking_field: Option<String>,
 }
 
 impl OpenAiConfig {
@@ -165,6 +172,7 @@ impl OpenAiConfig {
             vision: false,
             api: OpenAiApi::default(),
             tool_namespace: None,
+            thinking_field: None,
         }
     }
 
@@ -221,6 +229,7 @@ impl fmt::Debug for OpenAiConfig {
             .field("api", &self.api)
             .field("vision", &self.vision)
             .field("tool_namespace", &self.tool_namespace)
+            .field("thinking_field", &self.thinking_field)
             .field("reasoning_effort", &self.reasoning_effort)
             .field(
                 "supports_reasoning_effort_with_tools",

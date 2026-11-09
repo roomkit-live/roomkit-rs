@@ -253,7 +253,10 @@ impl OpenAiAiProvider {
         }
         let tools = !request.tools.is_empty();
         reasoning::check_model_serves(&self.config.model, self.official_entry(), tools)?;
-        let dialect = self.vendor.dialect();
+        let dialect = self
+            .vendor
+            .dialect()
+            .with_thinking_field(self.config.thinking_field.as_deref());
         let completion = CompletionRequest::new(&self.config, request, streamed, dialect);
         let mut value = serde_json::to_value(completion).map_err(|_| OpenAiError::Malformed {
             reason: "could not encode request".into(),

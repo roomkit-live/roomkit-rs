@@ -115,7 +115,7 @@ pub(crate) struct Sampling {
 
 impl Vendor {
     /// Where the vendor reads a replayed round's reasoning.
-    pub(crate) fn dialect(self) -> ChatDialect {
+    pub(crate) fn dialect(self) -> ChatDialect<'static> {
         match self {
             Self::OpenAi => OPENAI_CHAT,
             Self::DeepSeek { .. } => DEEPSEEK_CHAT,
