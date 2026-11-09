@@ -22,6 +22,10 @@ use crate::orchestration::StatusEntry;
 use crate::telemetry::{SpanKind, current_kit_telemetry, end_hook_span, end_observer_span};
 use crate::tool_calls::ToolCallEvent;
 
+#[cfg(test)]
+#[path = "hooks/injection_tests.rs"]
+mod injection_tests;
+
 /// What a hook's handler failed with. A SYNC hook that fails lets the event
 /// through, unless the hook or its trigger fails closed (RFC §9.3).
 pub type HookError = Box<dyn Error + Send + Sync>;
@@ -653,9 +657,29 @@ pub(crate) async fn run_traced<P: Send + 'static>(
     let span = current_kit_telemetry().and_then(|telemetry| {
         telemetry.hook_span(SpanKind::HookSync, &spec.name, spec.trigger, &room_id)
     });
-    let ran = run(handler, payload, context, spec.timeout, check).await;
+    let mut ran = run(handler, payload, context, spec.timeout, check).await;
+    retain_injections(&mut ran, spec);
     end_hook_span(span, &ran);
     ran
+}
+
+/// A valid SYNC decision keeps injections only on `BEFORE_BROADCAST` (§9.4).
+/// Observers discard their whole result and never enter this boundary.
+pub(crate) fn retain_injections<P>(outcome: &mut HookOutcome<P>, spec: &HookSpec) {
+    let HookOutcome::Returned(result) = outcome else {
+        return;
+    };
+    if spec.trigger == HookTrigger::BeforeBroadcast
+        || result.injected_events.is_empty()
+        || (result.action == HookAction::Modify && result.event.is_none())
+    {
+        return;
+    }
+    let trigger = serde_json::to_value(spec.trigger).unwrap_or_default();
+    tracing::warn!(target: "roomkit::hooks", hook = %spec.name,
+        trigger = %trigger, count = result.injected_events.len(),
+        "hook injections dropped: only BEFORE_BROADCAST commits injected events");
+    result.injected_events.clear();
 }
 
 /// An observer's [`run`] under its span, Python's `hook.async.<name>`, for a

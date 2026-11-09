@@ -868,14 +868,19 @@ pub(super) async fn hook<S: ConversationStore>(
             context,
             timeout,
         } => {
-            let span = inner.hook_with_spec(hook).and_then(|(_, spec)| {
+            let registered = inner.hook_with_spec(hook);
+            let span = registered.as_ref().and_then(|(_, spec)| {
                 let room_id = &event.room_id;
                 inner
                     .telemetry
                     .hook_span(SpanKind::HookSync, &spec.name, trigger, room_id)
             });
-            let outcome = match inner.kept_hook(hook) {
-                Some(kept) => hooks::run_kept(kept, *event, *context, timeout).await,
+            let outcome = match registered {
+                Some((kept, spec)) => {
+                    let mut ran = hooks::run_kept(kept, *event, *context, timeout).await;
+                    hooks::retain_injections(&mut ran, &spec);
+                    ran
+                }
                 None => {
                     HookOutcome::Raised(ErrorRecord::new("HookError", "the hook has no handler"))
                 }

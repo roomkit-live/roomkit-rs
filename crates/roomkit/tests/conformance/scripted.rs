@@ -769,8 +769,9 @@ pub(crate) fn hook_handler(
             if let Some(invalid) = reaction.get("invalid_result") {
                 return Ok(invalid_hook_result(invalid, &room_id)?);
             }
+            let result = run.resolve(reaction["result"].clone(), &scope).await;
             Ok(Some(hook_result(
-                reaction.get("result"),
+                (!result.is_null()).then_some(&result),
                 &payload,
                 &room_id,
             )?))

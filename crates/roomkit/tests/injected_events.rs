@@ -5,15 +5,17 @@
 #[path = "support/warnings.rs"]
 mod warnings;
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use roomkit::identity::{MockIdentityResolver, MockIdentityResolverOptions};
 use roomkit::model::hook::{AllowOptions, BlockOptions};
 use roomkit::model::{
-    ChannelId, ChannelType, EventSource, HookResult, InboundMessage, InjectedEvent, RoomEvent,
-    RoomId, TextContent,
+    ChannelId, ChannelType, EventSource, HookResult, Identity, IdentityId, InboundMessage,
+    InjectedEvent, RoomEvent, RoomId, TextContent, VerificationPolicy,
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
@@ -107,6 +109,99 @@ async fn another_trigger_drops_injections_with_a_warning() {
             .any(|line| line.starts_with("WARN")
                 && line.contains("before_deliver")
                 && line.contains("dropped"))
+    );
+    kit.close().await.unwrap();
+}
+
+// Python: tests/test_hook_injection_contract.py::test_verification_drops_injections_with_a_warning
+#[tokio::test]
+async fn verification_drops_injections_with_a_warning() {
+    let resolver = MockIdentityResolver::new(MockIdentityResolverOptions {
+        mapping: BTreeMap::from([(
+            "u".to_owned(),
+            Identity::new(IdentityId::new("alice").unwrap()),
+        )]),
+        ..MockIdentityResolverOptions::default()
+    });
+    let (kit, ws) = opened(RoomKitOptions {
+        identity_resolver: Some(Arc::new(resolver)),
+        verification_policy: Some(VerificationPolicy::default()),
+        ..RoomKitOptions::default()
+    })
+    .await;
+    kit.hook(
+        HookTrigger::OnVerificationRequired,
+        |_: RoomEvent, _| async {
+            let mut result = HookResult::allow_unverified();
+            result.injected_events.push(notice());
+            result
+        },
+        HookOptions {
+            name: "verify_notice".to_owned(),
+            ..HookOptions::default()
+        },
+    )
+    .unwrap();
+    let (warnings, _capturing) = warnings::Warnings::capture();
+    let result = kit
+        .process_inbound(
+            InboundMessage::new(channel("sms"), "u", TextContent::new("hello")),
+            ProcessInboundOptions {
+                room_id: Some(room()),
+                ..ProcessInboundOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(!result.blocked);
+    assert_eq!(ws.texts(), ["hello"]);
+    assert!(
+        warnings
+            .containing("verify_notice")
+            .iter()
+            .any(|line| line.starts_with("WARN")
+                && line.contains("on_verification_required")
+                && line.contains("dropped"))
+    );
+    kit.close().await.unwrap();
+}
+
+// Python: tests/test_instruction_source.py::test_a_hook_s_injected_instruction_is_dropped_and_the_rest_stands
+#[tokio::test]
+async fn a_hook_s_injected_instruction_is_dropped_with_a_warning() {
+    let (kit, ws) = opened(RoomKitOptions::default()).await;
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        |event: RoomEvent, _| async move {
+            if event.content != TextContent::new("hello").into() {
+                return HookResult::allow(AllowOptions::default());
+            }
+            let mut instruction = notice();
+            instruction.event.r#type = roomkit::model::EventType::Instruction;
+            instruction.event.content = TextContent::new("forbidden").into();
+            HookResult::allow(AllowOptions {
+                injected: Some(vec![instruction, notice()]),
+            })
+        },
+        HookOptions::default(),
+    )
+    .unwrap();
+    let (warnings, _capturing) = warnings::Warnings::capture();
+    kit.process_inbound(
+        InboundMessage::new(channel("sms"), "u", TextContent::new("hello")),
+        ProcessInboundOptions {
+            room_id: Some(room()),
+            ..ProcessInboundOptions::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(ws.texts(), ["hello", "notice"]);
+    assert!(
+        warnings
+            .containing("instruction")
+            .iter()
+            .any(|line| line.starts_with("WARN") && line.contains("dropped"))
     );
     kit.close().await.unwrap();
 }
