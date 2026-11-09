@@ -436,10 +436,7 @@ async fn subscribe_thinking(run: &Arc<Run>, room: &str) -> Result<(), String> {
 async fn observe(run: &Arc<Run>, step_outcomes: Vec<Value>) -> Observed {
     let reader = run.reader();
     let store = reader.store();
-    let rooms = store
-        .list_rooms(roomkit::store::ListRoomsOptions::default())
-        .await
-        .unwrap_or_default();
+    let rooms = crate::room_queries::all_rooms(run).await.unwrap();
     let mut timelines = Vec::new();
     for room in &rooms {
         timelines.push((room.id.to_string(), run.timeline(room.id.as_str()).await));

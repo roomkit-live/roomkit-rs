@@ -469,6 +469,7 @@ impl Run {
         trigger: &str,
         room_id: &str,
         payload: Option<&RoomEvent>,
+        context: &RoomContext,
     ) {
         if !self.recording.load(Ordering::SeqCst) {
             return;
@@ -480,6 +481,7 @@ impl Run {
             "trigger": trigger,
             "room_id": room_id,
             "event": event,
+            "context_room": context.room,
         });
         let mut observed = lock(&self.observed);
         observed
@@ -890,10 +892,9 @@ impl Run {
     /// latest index, its discussion's queue version, whether it stores a
     /// discussion.
     async fn rooms_read(&self) -> Vec<(String, Option<u64>, Value, bool)> {
-        let options = roomkit::store::ListRoomsOptions::default();
-        let rooms = self.reader().store().list_rooms(options).await;
-        rooms
-            .unwrap_or_default()
+        crate::room_queries::all_rooms(self)
+            .await
+            .unwrap()
             .into_iter()
             .map(|room| {
                 let queue = room.metadata.get("_speak_queue");

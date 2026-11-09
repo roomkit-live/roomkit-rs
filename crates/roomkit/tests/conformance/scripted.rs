@@ -693,7 +693,7 @@ pub(crate) fn session_hook_handler(
                 return Ok(allow);
             };
             let room_id = context.room.id.to_string();
-            run.record_hook(&name, &trigger, &room_id, None);
+            run.record_hook(&name, &trigger, &room_id, None, &context);
             if let Some(reaction) = reactions.pick(&json!({ "room_id": room_id })) {
                 perform(&run, &reaction, &Scope::in_room(&room_id)).await?;
             }
@@ -757,7 +757,7 @@ pub(crate) fn hook_handler(
                 return Ok(Some(HookResult::allow(AllowOptions::default())));
             };
             let room_id = context.room.id.to_string();
-            run.record_hook(&name, &trigger, &room_id, Some(&payload));
+            run.record_hook(&name, &trigger, &room_id, Some(&payload), &context);
             let Some(reaction) = reactions.pick(&event_subject(&payload, &room_id)) else {
                 return Ok(Some(HookResult::allow(AllowOptions::default())));
             };

@@ -51,6 +51,8 @@ mod memory;
 mod normalize;
 #[path = "../../../roomkit/tests/conformance/room_calls.rs"]
 mod room_calls;
+#[path = "../../../roomkit/tests/conformance/room_queries.rs"]
+mod room_queries;
 #[path = "../../../roomkit/tests/conformance/routing_calls.rs"]
 mod routing_calls;
 #[path = "../../../roomkit/tests/conformance/run.rs"]

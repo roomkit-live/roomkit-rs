@@ -467,6 +467,8 @@ async fn lifecycle_call(
         }
         "pause_room" | "resume_room" | "reopen_room" | "close_room" | "archive_room"
         | "check_timers" => crate::room_calls::call(run, name, spec).await?,
+        "get_room" | "get_binding" | "list_bindings" | "list_members" | "get_timeline"
+        | "check_all_timers" => crate::room_queries::call(run, name, spec).await?,
         "register_channel" => register_channel(run, &spec["channel"])?,
         "unregister_channel" => {
             let channel = channel_id(spec)?;

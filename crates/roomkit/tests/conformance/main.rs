@@ -37,6 +37,7 @@ mod member_calls;
 mod memory;
 mod normalize;
 mod room_calls;
+mod room_queries;
 mod routing_calls;
 mod run;
 mod scenarios;
