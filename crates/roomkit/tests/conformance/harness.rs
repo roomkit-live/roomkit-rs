@@ -94,7 +94,7 @@ fn kit_options<S>(
 ) -> RoomKitOptions<S> {
     if let Some(router) = kit.get("router") {
         // A malformed answer is a broken fixture, never the default router.
-        let answer = router.get("room_id").expect("kit.router requires room_id");
+        let answer = router.get("room_id").unwrap();
         let room: Option<RoomId> = serde_json::from_value(answer.clone()).unwrap();
         options.inbound_router = Some(Arc::new(ScriptedRouter {
             room,
