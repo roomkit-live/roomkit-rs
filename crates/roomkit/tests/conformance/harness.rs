@@ -16,8 +16,8 @@ use roomkit::realtime::{
     RealtimeFuture,
 };
 use roomkit::{
-    ArchiveRoomOptions, CloseRoomOptions, ConversationStore, InboundRoomRouter, RoomKitOptions,
-    RouteOptions, RouterFuture, SubscribeRoomOptions,
+    ConversationStore, InboundRoomRouter, RoomKitOptions, RouteOptions, RouterFuture,
+    SubscribeRoomOptions,
 };
 use serde_json::{Value, json};
 use tokio::task::JoinHandle;
@@ -252,20 +252,7 @@ async fn set_up(run: &Arc<Run>, setup: &Value) -> Result<(), String> {
         for participant in room["participants"].as_array().into_iter().flatten() {
             calls::add_participant(run, room, participant).await?;
         }
-        let status = room["status"].as_str();
-        let id = RoomId::new(room["id"].as_str().unwrap_or_default()).map_err(|e| e.to_string())?;
-        if matches!(status, Some("closed" | "archived")) {
-            run.kit()
-                .close_room(&id, CloseRoomOptions::default())
-                .await
-                .map_err(|e| e.to_string())?;
-        }
-        if status == Some("archived") {
-            run.kit()
-                .archive_room(&id, ArchiveRoomOptions::default())
-                .await
-                .map_err(|e| e.to_string())?;
-        }
+        crate::room_calls::seed_status(run, room).await?;
     }
     for hook in setup["hooks"].as_array().into_iter().flatten() {
         calls::register_hook(run, hook)?.map_err(|error| format!("register {hook}: {error}"))?;

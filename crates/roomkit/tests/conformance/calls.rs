@@ -16,15 +16,14 @@ use roomkit::model::{
 use roomkit::orchestration::StatusEntry;
 use roomkit::providers::sms::WebhookMeta;
 use roomkit::{
-    AddRoomHookOptions, ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions,
-    CloseRoomOptions, CommitEventOptions, ConversationStore, CreateRoomOptions, DeleteEventOptions,
-    DeliverOptions, DeliveryStrategy, DetachChannelOptions, HookOptions, HookTrigger, HostChannel,
-    Immediate, InboundResult, MuteOptions, MuteOutputOptions, PostOptions,
-    ProcessDeliveryStatusOptions, ProcessInboundOptions, ProcessWebhookOptions, Queued,
-    RegenerateResponseOptions, RegenerateTargetOptions, RemoveRoomHookOptions, RoomKitError,
-    SendEventOptions, SendGreetingOptions, SetAccessOptions, SetAgentResponsePolicyOptions,
-    SetRoomTimersOptions, SetVisibilityOptions, UnmuteOptions, UnmuteOutputOptions,
-    UpdateBindingMetadataOptions, UpdateEventOptions, WaitForIdle,
+    AddRoomHookOptions, AttachChannelOptions, CommitEventOptions, ConversationStore,
+    CreateRoomOptions, DeleteEventOptions, DeliverOptions, DeliveryStrategy, DetachChannelOptions,
+    HookOptions, HookTrigger, HostChannel, Immediate, InboundResult, MuteOptions,
+    MuteOutputOptions, PostOptions, ProcessDeliveryStatusOptions, ProcessInboundOptions,
+    ProcessWebhookOptions, Queued, RegenerateResponseOptions, RegenerateTargetOptions,
+    RemoveRoomHookOptions, RoomKitError, SendEventOptions, SendGreetingOptions, SetAccessOptions,
+    SetAgentResponsePolicyOptions, SetRoomTimersOptions, SetVisibilityOptions, UnmuteOptions,
+    UnmuteOutputOptions, UpdateBindingMetadataOptions, UpdateEventOptions, WaitForIdle,
 };
 use roomkit_ai::{AiGenerationEvent, AiResponseEvent, ThinkingEvent, ToolRoundEvent};
 use serde::de::DeserializeOwned;
@@ -466,42 +465,8 @@ async fn lifecycle_call(
         "mute" | "unmute" | "set_access" | "set_visibility" | "update_binding_metadata" => {
             binding_call(run, name, spec).await?
         }
-        "close_room" => {
-            let room = room_id(spec)?;
-            let options = CloseRoomOptions {
-                organization_id: organization_id(spec),
-            };
-            finish(run, name, run.kit().close_room(&room, options).await, dump)
-        }
-        "archive_room" => {
-            let room = room_id(spec)?;
-            let options = ArchiveRoomOptions {
-                organization_id: organization_id(spec),
-            };
-            finish(
-                run,
-                name,
-                run.kit().archive_room(&room, options).await,
-                dump,
-            )
-        }
-        "check_timers" => {
-            let room = room_id(spec)?;
-            let outcome = match run
-                .kit()
-                .check_all_timers(CheckAllTimersOptions::default())
-                .await
-            {
-                Ok(_) => run
-                    .kit()
-                    .store()
-                    .get_room(&room)
-                    .await
-                    .map_err(RoomKitError::from),
-                Err(error) => Err(error),
-            };
-            finish(run, name, outcome, dump)
-        }
+        "pause_room" | "resume_room" | "reopen_room" | "close_room" | "archive_room"
+        | "check_timers" => crate::room_calls::call(run, name, spec).await?,
         "register_channel" => register_channel(run, &spec["channel"])?,
         "unregister_channel" => {
             let channel = channel_id(spec)?;

@@ -439,7 +439,8 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
         "set_access" => &["room_id", "channel_id", "access"],
         "update_binding_metadata" => &["room_id", "channel_id", "metadata"],
         "set_visibility" => &["room_id", "channel_id", "visibility"],
-        "close_room" | "archive_room" | "check_timers" | "regenerate_target" => &["room_id"],
+        "pause_room" | "resume_room" | "reopen_room" | "close_room" | "archive_room"
+        | "check_timers" | "regenerate_target" => &["room_id"],
         "set_room_timers" => &["room_id", "timers"],
         "set_agent_response_policy" => &["room_id", "policy"],
         "send_greeting" => &["room_id", "channel_id", "agent_id", "greeting"],

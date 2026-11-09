@@ -36,6 +36,7 @@ mod media;
 mod member_calls;
 mod memory;
 mod normalize;
+mod room_calls;
 mod routing_calls;
 mod run;
 mod scenarios;
