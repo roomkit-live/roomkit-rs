@@ -55,6 +55,29 @@ async fn an_event_is_read_as_it_was_committed() {
     );
 }
 
+// Python: tests/test_store_memory.py::TestEventOwnership::test_mutating_a_written_event_does_not_reach_the_log
+// Python: tests/test_store_memory.py::TestEventOwnership::test_reads_may_share_the_stored_snapshot
+#[tokio::test]
+async fn a_written_event_is_independent_of_caller_owned_values() {
+    let mut original = event(0);
+    original
+        .metadata
+        .insert("nested".to_owned(), json!({"a": 1}));
+    let expected = original.clone();
+    let store = with_events(vec![original.clone()]).await;
+    original
+        .metadata
+        .insert("nested".to_owned(), json!({"a": 2}));
+    original.content = TextContent::new("changed before reading").into();
+    let mut read = store.get_event(&event_id("evt_0")).await.unwrap().unwrap();
+    assert_eq!(read, expected);
+    read.metadata.insert("nested".to_owned(), json!({"a": 3}));
+    read.content = TextContent::new("changed after reading").into();
+    let again = store.get_event(&event_id("evt_0")).await.unwrap().unwrap();
+    assert_eq!(again.id, read.id);
+    assert_eq!(again, expected);
+}
+
 /// RFC §8.1, §14.3: the store gives the index, the room's count of the
 /// indices it gave out, as Python's `commit_event` does: an event planned
 /// at an index the room holds, a stale one, lands at the next.

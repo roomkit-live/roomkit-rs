@@ -410,6 +410,7 @@ fn side_effects(output: &Value, room_id: &str, channel_id: &str) -> Value {
             .collect::<Vec<_>>(),
         "metadata_updates": output.get("metadata_updates").cloned().unwrap_or_else(|| json!({})),
         "response_metadata": output.get("response_metadata").cloned().unwrap_or_else(|| json!({})),
+        "provider_result": output.get("provider_result"),
         "error": output.get("error").and_then(Value::as_str).map(|message| {
             json!({ "error_type": "RuntimeError", "message": message })
         }),

@@ -409,6 +409,14 @@ async fn a_filter_that_admits_nothing_by_construction_is_refused() {
         (
             EventFilter {
                 after_time: Some(instant),
+                before_time: Some(Timestamp::from_unix_millis(999).unwrap()),
+                ..EventFilter::default()
+            },
+            "after_time must be before before_time",
+        ),
+        (
+            EventFilter {
+                after_time: Some(instant),
                 before_time: Some(instant),
                 ..EventFilter::default()
             },

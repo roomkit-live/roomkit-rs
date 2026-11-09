@@ -331,7 +331,9 @@ const OUTPUT: &[&str] = &[
     "metadata_updates",
     "response_metadata",
     "error",
+    "provider_result",
 ];
+const PROVIDER_RESULT: &[&str] = &["success", "provider_message_id", "error", "metadata"];
 const RESULT: &[&str] = &[
     "action",
     "event",
@@ -914,6 +916,7 @@ fn reaction_with_return(reaction: &Value, path: &str, found: &mut Vec<String>, p
         found,
     );
     let result = &reaction["result"];
+    provider_result(&reaction["output"], &format!("{path}.output"), found);
     optional(result, RESULT, &format!("{path}.result"), found);
     for (index, item) in items(&result["injected_events"]) {
         members(
@@ -1073,10 +1076,66 @@ fn invalid_return(
     }
 }
 
+/// Refuse malformed receipts before delivery can turn a bad fixture into an outcome.
+fn provider_result(output: &Value, path: &str, found: &mut Vec<String>) {
+    let Some(value) = output.get("provider_result").filter(|v| !v.is_null()) else {
+        return;
+    };
+    let at = format!("{path}.provider_result");
+    members(value, PROVIDER_RESULT, &at, found);
+    let Some(receipt) = value.as_object() else {
+        return;
+    };
+    if !receipt.get("success").is_some_and(Value::is_boolean) {
+        found.push(format!("{at}.success: a boolean is required"));
+    }
+    for key in ["provider_message_id", "error"] {
+        if receipt
+            .get(key)
+            .is_some_and(|v| !v.is_null() && !v.is_string())
+        {
+            found.push(format!("{at}.{key}: not a string or null"));
+        }
+    }
+    if receipt.get("metadata").is_some_and(|v| !v.is_object()) {
+        found.push(format!("{at}.metadata: not an object"));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn malformed_provider_receipts_are_refused_before_execution() {
+        for receipt in [
+            json!({}),
+            json!({"success": "yes"}),
+            json!({"success": 1}),
+            json!({"success": true, "provider_id": "typo"}),
+            json!({"success": true, "metadata": []}),
+            json!({"success": true, "error": 5}),
+            json!({"success": true, "provider_message_id": false}),
+            json!([]),
+            json!("bad"),
+        ] {
+            let input = json!({"setup": {"channels": [{"id": "out", "type": "sms", "deliver": [{"output": {"provider_result": receipt}}]}]}});
+            assert!(!unknown_members(&input).is_empty(), "{receipt}");
+        }
+    }
+
+    #[test]
+    fn provider_receipts_are_supported_outputs() {
+        for receipt in [
+            Value::Null,
+            json!({"success": true}),
+            json!({"success": true, "provider_message_id": "m1", "error": null, "metadata": {"accepted": true}}),
+        ] {
+            let input = json!({"setup": {"channels": [{"id": "out", "type": "sms", "deliver": [{"output": {"provider_result": receipt}}]}]}});
+            assert!(unknown_members(&input).is_empty(), "{receipt}");
+        }
+    }
 
     fn scenario(reaction: &Value) -> Value {
         json!({"setup": {"hooks": [{"name": "check", "trigger": "before_broadcast", "reactions": [reaction]}]}})
