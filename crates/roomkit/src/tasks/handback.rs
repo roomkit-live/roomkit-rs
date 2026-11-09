@@ -8,6 +8,8 @@
 //! strategy and the delivery hooks gate it like any proactive delivery and
 //! it is never stored as a participant's words.
 
+use std::num::NonZeroUsize;
+
 use roomkit_core::model::{ChannelCategory, ChannelId, Metadata, RoomId};
 use roomkit_core::rules::transcript::fence;
 
@@ -17,9 +19,9 @@ use crate::kit::{DeliverOptions, RoomKit};
 use crate::store::ConversationStore;
 use crate::tasks::text::{bounded_text, one_line};
 
-/// The share of one worker's output a hand-back carries: Python's
-/// `MAX_RESULT_CHARS`.
-const MAX_RESULT_CHARS: usize = 4_000;
+/// The share of one worker's output a hand-back carries, unless the
+/// delegation says otherwise: Python's `MAX_RESULT_CHARS`.
+pub(crate) const MAX_RESULT_CHARS: NonZeroUsize = NonZeroUsize::new(4_000).unwrap();
 
 /// What closes an intelligence channel's hand-back, whose turn gives the
 /// result only: Python's `RESULT_TURN_NOTE`.
@@ -34,10 +36,16 @@ pub(crate) const CALLER_HANDS_BACK: &str = "roomkit:caller-hands-back";
 
 /// `output`, cut to the share a hand-back carries: Python's `bounded`.
 pub(crate) fn bounded(output: &str) -> String {
-    if output.chars().count() <= MAX_RESULT_CHARS {
+    bounded_to(output, MAX_RESULT_CHARS)
+}
+
+/// `output`, cut to the `limit` characters a hand-back carries: Python's
+/// `bounded(output, limit)`.
+pub(crate) fn bounded_to(output: &str, limit: NonZeroUsize) -> String {
+    if output.chars().count() <= limit.get() {
         return output.to_owned();
     }
-    let kept: String = output.chars().take(MAX_RESULT_CHARS).collect();
+    let kept: String = output.chars().take(limit.get()).collect();
     format!("{kept}\n[...truncated]")
 }
 

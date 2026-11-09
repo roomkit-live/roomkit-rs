@@ -69,6 +69,7 @@ pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
             "hand_back",
             "require_structured_result",
             "max_result_retries",
+            "max_result_chars",
         ],
         "task.wait" | "cancel_task" => &["task_id"],
         "host.wait_task" => &["task_id", "timeout_ms"],
@@ -227,6 +228,7 @@ async fn delegate(run: &Arc<Run>, spec: &Value) -> Result<(Called, Option<String
     let options = DelegateOptions {
         wait: optional(spec, "wait")?.unwrap_or(defaults.wait),
         conversation: optional(spec, "conversation")?.unwrap_or(defaults.conversation),
+        max_result_chars: optional(spec, "max_result_chars")?.unwrap_or(defaults.max_result_chars),
         context: optional(spec, "context")?,
         share_channels: optional(spec, "share_channels")?,
         notify: optional(spec, "notify")?,

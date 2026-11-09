@@ -24,6 +24,7 @@ pub(crate) fn arguments(name: &str) -> Option<&'static [&'static str]> {
             "cache",
             "serialize_per_room",
             "max_conversation",
+            "max_result_chars",
         ]),
         "setup_delegation" => Some(&["agent_id", "handler", "targets"]),
         "delegate.handle" => Some(&["handler", "room_id", "calling_agent_id", "arguments"]),
@@ -65,6 +66,8 @@ pub(crate) async fn call(
                     .unwrap_or(defaults.serialize_per_room),
                 max_conversation: optional(spec, "max_conversation")?
                     .unwrap_or(defaults.max_conversation),
+                max_result_chars: optional(spec, "max_result_chars")?
+                    .unwrap_or(defaults.max_result_chars),
                 ..defaults
             };
             let built = DelegateHandler::new(run.kit(), options);

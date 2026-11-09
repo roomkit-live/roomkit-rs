@@ -13,6 +13,7 @@
 //! `roomkit_ai::tasks::setup_delegation` reads it.
 
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -22,6 +23,7 @@ use tokio::sync::{Mutex as TaskMutex, OwnedMutexGuard};
 
 use super::brief::{context_block, previous_tasks_block, task_brief};
 use super::cache::{CompletedTaskCache, Kept};
+use super::handback::MAX_RESULT_CHARS;
 use super::json::dumps_object;
 use super::{DelegatedTask, Kind, WaitOptions};
 use crate::error::RoomKitError;
@@ -52,7 +54,7 @@ const PREVIOUS_TASKS: usize = 3;
 /// What [`DelegateHandler::new`] takes beside the kit: Python's
 /// `DelegateHandler(kit, *, notify=None, default_share_channels=None,
 /// delivery_strategy=None, cache=None, serialize_per_room=False,
-/// max_conversation=0)`.
+/// max_conversation=0, max_result_chars=4000)`.
 pub struct DelegateHandlerOptions<S = InMemoryStore> {
     /// Python `notify=None`: the channel told of a task's end; the agent
     /// that called when `None`.
@@ -78,6 +80,11 @@ pub struct DelegateHandlerOptions<S = InMemoryStore> {
     /// worker may be another vendor's, and the model chooses it, so the host
     /// opens this.
     pub max_conversation: u64,
+    /// Python `max_result_chars=4000`: how much of the worker's output its
+    /// result carries back to the agent; past it, the output is cut and
+    /// says so (RFC §23.3 step 8). Python refuses a value below 1; here the
+    /// type cannot hold one.
+    pub max_result_chars: NonZeroUsize,
 }
 
 impl<S> Default for DelegateHandlerOptions<S> {
@@ -89,6 +96,7 @@ impl<S> Default for DelegateHandlerOptions<S> {
             cache: None,
             serialize_per_room: false,
             max_conversation: 0,
+            max_result_chars: MAX_RESULT_CHARS,
         }
     }
 }
@@ -102,6 +110,7 @@ impl<S> Clone for DelegateHandlerOptions<S> {
             cache: self.cache.clone(),
             serialize_per_room: self.serialize_per_room,
             max_conversation: self.max_conversation,
+            max_result_chars: self.max_result_chars,
         }
     }
 }
@@ -134,6 +143,7 @@ struct Inner<S> {
     cache: Option<CompletedTaskCache>,
     serialize_per_room: bool,
     max_conversation: u64,
+    max_result_chars: NonZeroUsize,
     room_turns: Arc<RoomTurns>,
 }
 
@@ -151,6 +161,7 @@ impl<S> std::fmt::Debug for DelegateHandler<S> {
             .debug_struct("DelegateHandler")
             .field("notify", &self.inner.notify)
             .field("max_conversation", &self.inner.max_conversation)
+            .field("max_result_chars", &self.inner.max_result_chars)
             .finish_non_exhaustive()
     }
 }
@@ -236,6 +247,7 @@ impl<S: ConversationStore> DelegateHandler<S> {
             cache,
             serialize_per_room,
             max_conversation,
+            max_result_chars,
         } = options;
         if let Some(strategy) = delivery_strategy {
             *kit.inner
@@ -251,6 +263,7 @@ impl<S: ConversationStore> DelegateHandler<S> {
                 cache,
                 serialize_per_room,
                 max_conversation,
+                max_result_chars,
                 room_turns: Arc::default(),
             }),
         }
@@ -375,6 +388,7 @@ impl<S: ConversationStore> DelegateHandler<S> {
                     share_channels: Some(call.share_channels.clone()),
                     notify: Some(notified),
                     brief,
+                    max_result_chars: self.inner.max_result_chars,
                     ..DelegateOptions::default()
                 },
             )

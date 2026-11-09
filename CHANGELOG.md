@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `DelegateOptions` and `DelegateHandlerOptions` take `max_result_chars`, how much of a worker's output its relayed result carries, 4,000 by default.
+
 - A strategy cancelling its own turn leaves no inbound error, as Python does; transport failures remain reported (RFC §10.2, RMK-1614).
 
 - Timer transitions preserve concurrent activity, finish their reports after caller cancellation, and give both hooks the final room context; response passes on a deleted room report its refusal (RFC §5.1, RMK-1608).

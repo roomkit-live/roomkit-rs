@@ -498,6 +498,8 @@ fn delegate_options_defaults_as_python() {
     assert!(!defaults.require_structured_result);
     // roomkit.RoomKit.delegate(max_result_retries) = 3
     assert_eq!(defaults.max_result_retries, 3);
+    // roomkit.RoomKit.delegate(max_result_chars) = 4000
+    assert_eq!(defaults.max_result_chars.get(), 4_000);
     // roomkit.RoomKit.delegate(result_tool) = None
     assert!(defaults.result_tool.is_none());
     // roomkit.RoomKit.delegate(brief) = None
@@ -1673,6 +1675,8 @@ fn delegate_handler_options_defaults_as_python() {
     assert!(!defaults.serialize_per_room);
     // roomkit.tasks.DelegateHandler.__init__(max_conversation) = 0
     assert_eq!(defaults.max_conversation, 0);
+    // roomkit.tasks.DelegateHandler.__init__(max_result_chars) = 4000
+    assert_eq!(defaults.max_result_chars.get(), 4_000);
 }
 
 #[test]
