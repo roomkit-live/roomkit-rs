@@ -368,6 +368,10 @@ async fn a_host_s_delegation_refuses_an_inline_run_s_options() {
                     max_result_retries: 1,
                     ..roomkit::DelegateOptions::default()
                 },
+                roomkit::DelegateOptions {
+                    max_result_chars: std::num::NonZeroUsize::new(10).unwrap(),
+                    ..roomkit::DelegateOptions::default()
+                },
             ];
             for options in inline {
                 let delegated = turn
@@ -384,5 +388,5 @@ async fn a_host_s_delegation_refuses_an_inline_run_s_options() {
     asks(&kit, "What is it?").await;
     roomkit::testing::idle(&kit).await;
 
-    assert_eq!(read.lock().unwrap().clone(), vec![true, true, true]);
+    assert_eq!(read.lock().unwrap().clone(), vec![true, true, true, true]);
 }

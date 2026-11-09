@@ -323,9 +323,9 @@ impl TurnHost {
     /// [`wait_task`](Self::wait_task) waits for. Python's
     /// `TurnHost.delegate(room_id, agent_id, task, **options)`, its options
     /// those of a background delegation that are data: `wait`,
-    /// `on_complete`, `organization_id` and an inline run's
-    /// `require_structured_result`, `max_result_retries` and `result_tool`
-    /// are refused.
+    /// `on_complete`, `organization_id`, `max_result_chars` and an inline
+    /// run's `require_structured_result`, `max_result_retries` and
+    /// `result_tool` are refused.
     ///
     /// # Errors
     ///
@@ -346,6 +346,7 @@ impl TurnHost {
         if options.wait
             || options.on_complete.is_some()
             || options.organization_id.is_some()
+            || options.max_result_chars != defaults.max_result_chars
             || inline_only
         {
             return Err(RoomKitError::Value(
