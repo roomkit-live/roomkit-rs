@@ -100,10 +100,14 @@ mod tests {
     // Python: tests/test_providers/test_chat_request.py::test_a_configured_thinking_field_leaves_a_round_that_did_not_reason_without_it
     #[test]
     fn a_named_field_carries_reasoning_and_leaves_a_round_that_did_not_reason_without_it() {
-        let dialect = OPENAI_CHAT.with_thinking_field(Some("reasoning_content"));
+        let dialect = OPENAI_CHAT.with_thinking_field(Some("reasoning"));
         assert_eq!(
             dialect.field("why", true),
-            Some(("reasoning_content", "why".to_owned()))
+            Some(("reasoning", "why".to_owned()))
+        );
+        assert_eq!(
+            dialect.field("why", false),
+            Some(("reasoning", "why".to_owned()))
         );
         assert_eq!(dialect.field("", true), None);
         assert_eq!(OPENAI_CHAT.with_thinking_field(None), OPENAI_CHAT);

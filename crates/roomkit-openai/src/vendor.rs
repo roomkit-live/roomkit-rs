@@ -325,6 +325,14 @@ pub(crate) use macros::{into_openai, vendor_provider};
 #[cfg(test)]
 mod tests;
 
+/// The error a vendor's configuration naming a reasoning field is refused
+/// with, as Python's validator refuses it (RFC §6.4).
+pub(crate) fn refused_thinking_field(config: &str) -> roomkit_ai::ProviderError {
+    roomkit_ai::ProviderError::from(format!(
+        "{config} takes no thinking_field: its provider sends reasoning where its vendor reads it"
+    ))
+}
+
 /// The error a vendor's configuration is refused with: Python's validator
 /// on a field the vendor's provider would ignore, since it applies its
 /// vendor's own rule on a turn with tools (RFC §6.7).

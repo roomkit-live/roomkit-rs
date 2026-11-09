@@ -14,6 +14,7 @@ use roomkit_ai::{
 use roomkit_openai::deepseek::{DeepSeekAiProvider, DeepSeekConfig};
 use roomkit_openai::kimi::{KimiAiProvider, KimiConfig};
 use roomkit_openai::minimax::{MiniMaxAiProvider, MiniMaxConfig};
+use roomkit_openai::{OpenAiAiProvider, OpenAiConfig};
 use serde_json::{Value, json};
 
 use super::fake::{FakeOpenAi, Reply};
@@ -401,6 +402,53 @@ fn a_vendor_s_config_refuses_a_statement_of_its_tool_turns() {
         .is_err(),
     ];
     assert_eq!(refused, [true, true, true]);
+}
+
+// Python: tests/test_providers/test_chat_request.py::test_a_config_whose_vendor_names_the_field_refuses_another
+#[test]
+fn a_vendor_s_config_refuses_a_thinking_field() {
+    let field = || Some("reasoning_content".to_owned());
+    let refused = [
+        KimiAiProvider::new(KimiConfig {
+            thinking_field: field(),
+            ..KimiConfig::new(API_KEY, "kimi-k3")
+        })
+        .is_err(),
+        MiniMaxAiProvider::new(MiniMaxConfig {
+            thinking_field: field(),
+            ..MiniMaxConfig::new(API_KEY, "MiniMax-M3")
+        })
+        .is_err(),
+        DeepSeekAiProvider::new(DeepSeekConfig {
+            thinking_field: field(),
+            ..DeepSeekConfig::new(API_KEY, "deepseek-v4-pro")
+        })
+        .is_err(),
+    ];
+    assert_eq!(refused, [true, true, true]);
+}
+
+// Python: tests/test_providers/test_chat_request.py::test_a_configured_thinking_field_carries_a_round_s_reasoning_to_the_server
+/// A generic provider told the field a server reads: a round's reasoning goes
+/// back under that very name.
+#[tokio::test]
+async fn a_generic_provider_told_the_field_sends_reasoning_under_that_name() {
+    let bodies = two_turns(|url: &str| {
+        OpenAiAiProvider::new(OpenAiConfig {
+            base_url: Some(url.to_owned()),
+            thinking_field: Some("reasoning".to_owned()),
+            ..OpenAiConfig::new(API_KEY, "glm-5.3-flash")
+        })
+        .unwrap()
+    })
+    .await;
+    let messages = bodies[1]["messages"].as_array().unwrap();
+    let round = messages
+        .iter()
+        .find(|message| message["role"] == "assistant")
+        .unwrap();
+    assert_eq!(round["reasoning"], "WHY.");
+    assert!(round.get("reasoning_content").is_none());
 }
 
 // Python: tests/test_providers/test_minimax_kimi.py::test_a_server_decides_what_a_model_the_catalogue_does_not_name_reads

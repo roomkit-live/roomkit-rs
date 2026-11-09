@@ -45,6 +45,9 @@ pub struct DeepSeekConfig {
     /// Refused when set, as Python's config refuses it: the provider applies
     /// its vendor's own rule on a turn with tools (RFC §6.7).
     pub supports_reasoning_effort_with_tools: Option<bool>,
+    /// Refused when set, as Python's config refuses it: the provider sends
+    /// reasoning where its vendor reads it (RFC §6.4).
+    pub thinking_field: Option<String>,
     /// Whether the server honours a `json_schema` response format (RFC
     /// §6.7, Python's `supports_response_schema`): `None` leaves it to the
     /// provider's default, which a server behind a base URL may not keep.
@@ -85,6 +88,7 @@ impl DeepSeekConfig {
             supports_custom_temperature: true,
             reasoning_effort: None,
             supports_reasoning_effort_with_tools: None,
+            thinking_field: None,
             supports_response_schema: None,
             supports_response_schema_with_tools: None,
             default_headers: None,

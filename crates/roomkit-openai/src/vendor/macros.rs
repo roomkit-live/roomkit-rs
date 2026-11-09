@@ -19,11 +19,15 @@ macro_rules! vendor_provider {
             ///
             /// Fails, a [`roomkit_ai::ProviderError`] not retryable, for a
             /// configuration stating `supports_reasoning_effort_with_tools`,
-            /// which the vendor's own rule makes moot, and as
+            /// which the vendor's own rule makes moot, or `thinking_field`,
+            /// as the provider sends reasoning where its vendor reads it, and as
             /// [`crate::OpenAiAiProvider::new`] does.
             pub fn new(config: $config) -> Result<Self, roomkit_ai::ProviderError> {
                 if config.supports_reasoning_effort_with_tools.is_some() {
                     return Err($crate::vendor::refused_tool_turn_setting(stringify!($config)));
+                }
+                if config.thinking_field.is_some() {
+                    return Err($crate::vendor::refused_thinking_field(stringify!($config)));
                 }
                 let vendor = config.vendor();
                 let inner = $crate::OpenAiAiProvider::for_vendor(config.into_openai(), vendor)?;

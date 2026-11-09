@@ -59,7 +59,8 @@
 //! with a provider of its own, as Python's: [`deepseek::DeepSeekAiProvider`],
 //! [`minimax::MiniMaxAiProvider`] and [`kimi::KimiAiProvider`]. The class is
 //! the choice, on the vendor's API or behind a base URL; `OpenAiAiProvider`
-//! sends no reasoning back (RFC §6.4).
+//! sends no reasoning back unless its configuration names the field
+//! ([`OpenAiConfig::thinking_field`], RFC §6.4).
 //!
 //! ```
 //! use roomkit_openai::kimi::{KimiAiProvider, KimiConfig};
