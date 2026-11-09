@@ -981,12 +981,10 @@ mod tests {
         fn a_deleted_target_is_withheld_with_its_edits() {
             let mut edited = edit("evt_2", "");
             if let EventContent::Edit(content) = &mut edited.content {
-                content.new_content = Box::new(
-                    serde_json::from_value(json!({
-                        "type": "media", "url": "https://x.test/a.png", "mime_type": "image/png"
-                    }))
-                    .unwrap(),
-                );
+                *content.new_content = serde_json::from_value(json!({
+                    "type": "media", "url": "https://x.test/a.png", "mime_type": "image/png"
+                }))
+                .unwrap();
             }
             let timeline = vec![deleted(), edited, delete("evt_3")];
             let handed = history(timeline.clone());
