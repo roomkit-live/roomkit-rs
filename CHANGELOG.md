@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Closing or archiving a room clears its pause timestamp; archiving an open room records its close timestamp, preserving an existing one, as Python does. Shared conformance also checks all room transitions and runs named timer checks with their organization scope (RFC §5.1, RMK-1607).
+
 - rmcp 3.9: RUSTSEC-2026-0462, unbounded buffering of a Streamable HTTP response. The kit's own HTTP client already bounded a response at 4 MiB.
 - `OpenAiConfig::thinking_field` names the assistant message field a server reads a model's earlier reasoning from (`reasoning_content` on Z.ai's GLM), as Python's `OpenAIConfig.thinking_field`. Absent by default: strict servers refuse a field they do not know.
 - SYNC hooks outside BEFORE_BROADCAST reject injected events with a warning naming the hook and trigger, including verification and turn hooks, while preserving their decision (RFC §9.4, RMK-1604).

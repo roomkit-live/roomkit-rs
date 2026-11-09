@@ -1153,6 +1153,7 @@ mod check_timers {
         );
     }
 
+    // Python: tests/test_room_timers.py::test_a_late_check_pauses_then_closes_each_at_its_instant
     #[test]
     fn applies_both_transitions_of_a_late_check_at_the_instants_they_fell_due() {
         let mut sim = timed_room();
@@ -1176,7 +1177,7 @@ mod check_timers {
                         at: after_start(180),
                     },
                 ],
-                Some(after_start(60)),
+                None,
                 Some(after_start(180)),
                 vec!["room_paused".to_owned(), "room_closed".to_owned()]
             )

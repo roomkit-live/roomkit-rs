@@ -205,6 +205,7 @@ mod timers {
         assert_eq!(warnings.containing("NUL").len(), 1);
     }
 
+    // Python: tests/test_room_timers.py::test_a_late_check_pauses_then_closes_each_at_its_instant
     #[tokio::test]
     async fn a_late_check_closes_the_room_at_the_instant_its_close_fell_due() {
         let clock = Clock::new();
@@ -219,7 +220,7 @@ mod timers {
                 .iter()
                 .map(|room| (room.paused_at, room.closed_at))
                 .collect::<Vec<_>>(),
-            [(Some(after_start(60)), Some(after_start(180)))]
+            [(None, Some(after_start(180)))]
         );
     }
 

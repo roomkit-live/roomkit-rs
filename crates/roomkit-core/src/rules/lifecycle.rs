@@ -104,7 +104,9 @@ pub fn commit_activity(room: &mut Room, at: Timestamp) {
 /// Applies `transition` to `room` as of `at`, and says whether it applied.
 ///
 /// A pause records `paused_at`, which the close timer counts from; a close
-/// records `closed_at`. A resume and a reopen move `timers.last_activity_at`
+/// records `closed_at` and clears `paused_at`. An archive clears `paused_at`
+/// and keeps an existing `closed_at`, or records its own instant there.
+/// A resume and a reopen move `timers.last_activity_at`
 /// to `at`, which restarts the inactivity timer, and clear the instants of
 /// the state they leave (gap G-045). The room's `updated_at` is the caller's
 /// to write: a transition applied late takes the instant it fell due, while
@@ -125,8 +127,14 @@ pub(crate) fn apply(room: &mut Room, transition: Transition, at: Timestamp) -> b
             room.paused_at = None;
             room.timers.last_activity_at = Some(at);
         }
-        Transition::Close => room.closed_at = Some(at),
-        Transition::Archive => {}
+        Transition::Close => {
+            room.closed_at = Some(at);
+            room.paused_at = None;
+        }
+        Transition::Archive => {
+            room.closed_at.get_or_insert(at);
+            room.paused_at = None;
+        }
     }
     true
 }
@@ -255,10 +263,11 @@ mod tests {
     #[test]
     fn a_close_records_its_instant() {
         let mut closed = room(RoomStatus::Paused);
+        closed.paused_at = Some(Timestamp::UNIX_EPOCH);
         apply(&mut closed, Transition::Close, later());
         assert_eq!(
-            (closed.status, closed.closed_at),
-            (RoomStatus::Closed, Some(later()))
+            (closed.status, closed.closed_at, closed.paused_at),
+            (RoomStatus::Closed, Some(later()), None)
         );
     }
 
@@ -297,5 +306,20 @@ mod tests {
             (archived.status, archived.closed_at),
             (RoomStatus::Archived, Some(Timestamp::UNIX_EPOCH))
         );
+    }
+
+    #[test]
+    fn an_archive_of_an_open_room_records_its_close_and_clears_its_pause() {
+        for status in [RoomStatus::Active, RoomStatus::Paused] {
+            let mut archived = room(status);
+            if status == RoomStatus::Paused {
+                archived.paused_at = Some(Timestamp::UNIX_EPOCH);
+            }
+            apply(&mut archived, Transition::Archive, later());
+            assert_eq!(
+                (archived.status, archived.closed_at, archived.paused_at),
+                (RoomStatus::Archived, Some(later()), None)
+            );
+        }
     }
 }
