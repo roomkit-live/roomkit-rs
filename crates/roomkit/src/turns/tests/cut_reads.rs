@@ -424,6 +424,38 @@ fn cancel_controls(kit: &RoomKit) -> Arc<Mutex<Vec<Value>>> {
 async fn a_turn_submitted_after_its_delivery_was_cut_receives_the_reason() {
     let kit = kit_with(Streaming::scripted(ending())).await;
     let controls = cancel_controls(&kit);
+    let cancel = crate::delivery_keys::CancelRequest::default();
+    cancel.request("before_submission");
+    let (mut turn, _following) = submitted_turn(&kit, |turn| cancel.follows(&turn)).await;
+    let _outcome = turn.output(kit.inner.turns.cutting()).await;
+    kit.close().await.unwrap();
+    assert_eq!(*controls.lock().unwrap(), vec![json!("before_submission")]);
+}
+
+#[tokio::test]
+async fn a_cancelled_turn_s_end_is_not_an_executor_loss() {
+    let kit = kit_with(Streaming::scripted(holding())).await;
+    let (mut turn, ()) = submitted_turn(&kit, drop).await;
+    let (_, streams) = turn.output(kit.inner.turns.cutting()).await.unwrap();
+    assert!(streams);
+    assert!(turn.next_item().await.unwrap().is_ok());
+
+    // The control crosses and End arrives before the driver stops reading.
+    // This is the interleaving between the two branches of a biased select.
+    turn.canceller().cancel("requested_stop");
+    turn.ended().await;
+    let end = turn.next_item().await;
+    kit.close().await.unwrap();
+    assert!(
+        end.is_none(),
+        "a cancelled End is not executor_lost: {end:?}"
+    );
+}
+
+async fn submitted_turn<G>(
+    kit: &RoomKit,
+    submitted: impl FnOnce(crate::turns::Canceller) -> G,
+) -> (crate::turns::OwnerTurn, G) {
     let room = kit
         .get_room(&room_id(), crate::GetRoomOptions::default())
         .await
@@ -441,18 +473,11 @@ async fn a_turn_submitted_after_its_delivery_was_cut_receives_the_reason() {
         roomkit_core::model::EventSource::new(super::support::channel("sms"), ChannelType::SMS),
         TextContent::new("Hi"),
     );
-    let cancel = crate::delivery_keys::CancelRequest::default();
-    cancel.request("before_submission");
     let host: Arc<dyn crate::turn::TurnKit> = Arc::new(Arc::downgrade(&kit.inner));
-    let _outcome = kit
-        .inner
+    kit.inner
         .turns
-        .run(&host, &binding, event, RoomContext::new(room), |turn| {
-            cancel.follows(&turn)
-        })
-        .await;
-    kit.close().await.unwrap();
-    assert_eq!(*controls.lock().unwrap(), vec![json!("before_submission")],);
+        .submit(&host, &binding, event, RoomContext::new(room), submitted)
+        .unwrap()
 }
 
 /// Cuts `call`, an awaited call [`awaited`] spawned, by its key: how many

@@ -29,7 +29,7 @@ enum Stage {
     Output,
     /// It reads the stream: dropped, it closes it.
     Stream,
-    /// A steering cut ended it: the calls it left open end, cancelled.
+    /// A requested cut ended it: the calls it left open end, cancelled.
     Cut,
     /// It read all it will.
     Done,
@@ -153,9 +153,12 @@ impl OwnerTurn {
                 }
                 Some(Main::Error(error)) => Read::Failed(Box::new(RemoteError(error))),
                 Some(Main::Failed(error)) => Read::Failed(Box::new(error)),
-                // Cut by a steering `Cancel`: the calls it left open end
-                // cancelled, one per read, then the stream (RFC §10.6.4).
-                Some(Main::End) if self.state.steer_cut.load(Ordering::Acquire) => {
+                // A cancel can reach the executor before the driver stops
+                // reading: its End is expected, never a lost executor.
+                Some(Main::End)
+                    if self.state.steer_cut.load(Ordering::Acquire)
+                        || self.state.cancel_claimed.load(Ordering::Acquire) =>
+                {
                     self.stage = Stage::Cut;
                     return self.cut_end();
                 }
@@ -181,7 +184,7 @@ impl OwnerTurn {
         }
     }
 
-    /// The next end of a call a steering cut left open, cancelled unless it
+    /// The next end of a call a cut left open, cancelled unless it
     /// ended before the cut; `None` once none is left, the stream over.
     fn cut_end(&mut self) -> Option<Result<RemoteItem, ChannelError>> {
         if self.open.is_empty() {

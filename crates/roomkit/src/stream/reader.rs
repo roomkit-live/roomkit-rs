@@ -420,6 +420,22 @@ pub(crate) struct Stops {
 }
 
 impl Stops {
+    /// The stop already published, even between two polls of a select.
+    fn requested(&self) -> Option<&'static str> {
+        if *self.kit.borrow() {
+            Some(KIT_CLOSED)
+        } else if *self.read.borrow()
+            || self
+                .delivery
+                .as_ref()
+                .is_some_and(|cancel| cancel.reason().is_some())
+        {
+            Some(CALLER_CANCELLED)
+        } else {
+            self.task.as_ref().and_then(|task| *task.borrow())
+        }
+    }
+
     /// Joins the read to its delivery's cancellation and cleanup record.
     fn reading(
         &self,
@@ -463,18 +479,12 @@ impl Stops {
     /// Returns once the read is stopped, with the reason its turn is cut
     /// with.
     pub(crate) async fn stopped(&mut self) -> &'static str {
-        if *self.kit.borrow() {
-            return KIT_CLOSED;
-        }
-        if self
-            .delivery
-            .as_ref()
-            .is_some_and(|cancel| cancel.reason().is_some())
-        {
-            return CALLER_CANCELLED;
-        }
         let read = async { self.read.wait_for(|stopped| *stopped).await.is_ok() };
         let kit = async { self.kit.wait_for(|cut| *cut).await.is_ok() };
+        let delivery = async {
+            self.delivery.as_ref()?.cancelled().await;
+            Some(())
+        };
         let task = async {
             let task = self.task.as_mut()?;
             task.wait_for(Option::is_some)
@@ -486,6 +496,7 @@ impl Stops {
         tokio::select! {
             biased;
             true = kit => KIT_CLOSED,
+            Some(()) = delivery => CALLER_CANCELLED,
             true = read => CALLER_CANCELLED,
             Some(reason) = task => reason,
             else => std::future::pending().await,
@@ -813,7 +824,7 @@ impl Producer {
             return true;
         }
         let reason = stops.stopped().await;
-        self.stop(reason);
+        self.stop(reason, stops);
         false
     }
 
@@ -845,10 +856,15 @@ impl Producer {
     /// The read is stopped from outside, for `reason`: `cancel` crosses at
     /// once, so that the turn's cut waits for nothing the reader does (RFC
     /// §10.6.8).
-    fn stop(&mut self, reason: &'static str) {
+    fn stop(&mut self, reason: &'static str, stops: &Stops) {
         self.cut = Some(reason);
         if let Some(turn) = self.stream.as_mut() {
-            turn.cancel(reason);
+            let detail = if reason == CALLER_CANCELLED {
+                stops.delivery.as_ref().and_then(|cancel| cancel.reason())
+            } else {
+                None
+            };
+            turn.cancel(detail.as_deref().unwrap_or(reason));
         }
     }
 
@@ -867,7 +883,7 @@ impl Producer {
                 biased;
                 _ = &mut reader_done => return,
                 reason = stops.stopped() => {
-                    self.stop(reason);
+                    self.stop(reason, stops);
                     return;
                 }
                 pull = pulls.recv() => match pull {
@@ -896,11 +912,18 @@ impl Producer {
             let read = tokio::select! {
                 biased;
                 reason = stops.stopped() => {
-                    self.stop(reason);
+                    self.stop(reason, stops);
                     return false;
                 }
                 read = self.pull_turn() => read,
             };
+            // Another worker can cut the turn between the select's polls.
+            // Settle that read as cancelled before handing anything on.
+            if let Some(reason) = stops.requested() {
+                self.stop(reason, stops);
+                self.in_flight = Some(read);
+                return false;
+            }
             if pull.is_closed() {
                 // The reader stopped while the read was in flight.
                 self.in_flight = Some(read);

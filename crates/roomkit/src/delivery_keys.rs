@@ -20,13 +20,15 @@
 //! held event, for a release another process runs.
 
 use std::collections::HashMap;
+use std::future::{Future, poll_fn};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
-use std::task::{Context, Waker};
+use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use roomkit_core::model::{EventId, RoomId};
 use roomkit_core::ops::InboundResult;
 use roomkit_core::rules::verification::HELD_KEY;
+use tokio::sync::Notify;
 use tokio::time::Instant;
 
 use crate::turns::{Canceller, WeakCanceller};
@@ -35,7 +37,10 @@ use crate::turns::{Canceller, WeakCanceller};
 /// cancellation by key, or a handle's `cancel`, asks of the run that
 /// delivers (RFC §10.1 "Explicit delivery cancellation").
 #[derive(Debug, Default)]
-pub(crate) struct CancelRequest(Mutex<Requested>);
+pub(crate) struct CancelRequest {
+    state: Mutex<Requested>,
+    changed: Notify,
+}
 
 #[derive(Debug, Default)]
 struct Requested {
@@ -73,7 +78,7 @@ impl CancelRequest {
     /// Asks for the cut, for `reason`: whether this call asked first.
     pub(crate) fn request(&self, reason: &str) -> bool {
         let (turns, waker) = {
-            let mut state = locked(&self.0);
+            let mut state = locked(&self.state);
             if state.reason.is_some() {
                 return false;
             }
@@ -85,6 +90,7 @@ impl CancelRequest {
         for turn in turns {
             turn.cancel(reason);
         }
+        self.changed.notify_waiters();
         if let Some(waker) = waker {
             waker.wake();
         }
@@ -96,7 +102,7 @@ impl CancelRequest {
     pub(crate) fn follows(&self, turn: &Canceller) -> Following {
         let turn = turn.downgrade();
         let active = Arc::new(());
-        let mut state = locked(&self.0);
+        let mut state = locked(&self.state);
         if let Some(reason) = state.reason.clone() {
             drop(state);
             turn.cancel(&reason);
@@ -112,12 +118,30 @@ impl CancelRequest {
 
     /// Why the cut was asked for, once it was.
     pub(crate) fn reason(&self) -> Option<String> {
-        locked(&self.0).reason.clone()
+        locked(&self.state).reason.clone()
+    }
+
+    /// Wakes every active reader independently of the driver's next poll.
+    /// Register before checking the reason so no request falls between them.
+    pub(crate) async fn cancelled(&self) {
+        let changed = self.changed.notified();
+        tokio::pin!(changed);
+        changed.as_mut().enable();
+        poll_fn(|cx| {
+            // A turn's end can wake the read while request is still sending
+            // other controls, before its notification: the reason wins.
+            if self.reason().is_some() {
+                Poll::Ready(())
+            } else {
+                changed.as_mut().poll(cx)
+            }
+        })
+        .await;
     }
 
     /// Whether the cut was asked for; `cx` is woken once it is otherwise.
     pub(crate) fn poll(&self, cx: &Context<'_>) -> bool {
-        let mut state = locked(&self.0);
+        let mut state = locked(&self.state);
         if state.reason.is_some() {
             state.waker = None;
             return true;
@@ -548,6 +572,22 @@ fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reader_woken_by_its_turn_sees_the_cut_before_notification() {
+        use std::future::Future;
+        use std::task::{Context, Waker};
+
+        let cancel = CancelRequest::default();
+        let mut waiting = std::pin::pin!(cancel.cancelled());
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(waiting.as_mut().poll(&mut cx).is_pending());
+
+        // request publishes the reason before sending controls. A turn's
+        // end can wake the reader before request reaches notify_waiters.
+        locked(&cancel.state).reason = Some("requested_stop".to_owned());
+        assert!(waiting.as_mut().poll(&mut cx).is_ready());
+    }
 
     fn held(event: &str) -> HeldEvent {
         (RoomId::new("room-1").unwrap(), EventId::new(event).unwrap())
