@@ -69,7 +69,11 @@ pub(super) async fn read<S: ConversationStore>(
         next = (then.0)(pass) => next,
     };
     match next {
-        Ok(Next::FirstStands) => ChannelOutcome::Output(Box::new(first)).into(),
+        // Cancelling the strategy stops its answer, without turning the
+        // first pass's committed side effects into a delivery failure.
+        Ok(Next::FirstStands) | Err(RoomKitError::Cancelled) => {
+            ChannelOutcome::Output(Box::new(first)).into()
+        }
         Ok(Next::Fallback(text, record)) => {
             commit_fallback(&read, &text, record).await;
             ChannelOutcome::Output(Box::new(first)).into()
