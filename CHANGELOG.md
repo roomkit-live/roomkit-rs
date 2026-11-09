@@ -6,6 +6,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- rmcp 3.9: RUSTSEC-2026-0462, unbounded buffering of a Streamable HTTP response. The kit's own HTTP client already bounded a response at 4 MiB.
 - A BEFORE_DELIVER hook that returns injected events now logs their rejection, naming the hook and trigger, as Python does (RFC §9.4, RMK-1603).
 
 - Cancelling a delivery reaches its active turn before the caller resumes; a reentrant delivery keeps its cancellation when adopted, and a cut tool round stays out of the next turn’s history (RFC §10.1, RMK-1549, RMK-1601, RMK-1602).

@@ -31,7 +31,7 @@ agent-client-protocol-schema = { version = "~1.15", default-features = false }
 # with no default features: the trait alone.
 # MCP's client over stdio (step 4, decisions 11 and 12), for roomkit-mcp
 # alone: its minor version pinned, and moved on purpose.
-rmcp = { version = "~3.8", default-features = false, features = ["client", "transport-async-rw"] }
+rmcp = { version = "~3.9", default-features = false, features = ["client", "transport-async-rw"] }
 # The signal roomkit-mcp stops an MCP server's process group with, on Unix
 # (killpg, without unsafe code here): its minor version pinned.
 nix = { version = "~0.31", default-features = false, features = ["signal"] }
