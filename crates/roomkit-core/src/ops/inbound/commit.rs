@@ -305,6 +305,20 @@ mod tests {
             .collect()
     }
 
+    // Python: tests/test_context_visibility.py::TestCommittedVisibility::test_a_detached_source_leaves_the_event_speaking_for_itself
+    #[test]
+    fn a_detached_source_leaves_the_event_speaking_for_itself() {
+        let mut event = events(1).remove(0);
+        let context = RoomContext::new(crate::model::Room::at(
+            event.room_id.clone(),
+            Timestamp::UNIX_EPOCH,
+        ));
+        for visibility in [Visibility::Transport, Visibility::Internal] {
+            event.visibility = visibility.clone();
+            assert_eq!(stored_visibility(&event, &context), visibility);
+        }
+    }
+
     fn ids(history: &[RoomEvent]) -> (usize, Option<String>, Option<String>) {
         (
             history.len(),

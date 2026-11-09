@@ -364,6 +364,7 @@ mod an_accepted_delete {
     }
 
     /// Gap G-062: hooks, which are the host's code, read the room whole.
+    // Python: tests/test_context_visibility.py::TestDeletedContentStaysDeleted::test_hooks_still_read_what_was_deleted
     #[test]
     fn leaves_the_hooks_the_deleted_text() {
         let mut sim = room();

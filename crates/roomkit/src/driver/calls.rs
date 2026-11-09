@@ -715,8 +715,8 @@ async fn run_turn<S: ConversationStore>(
     let outcome = match answered {
         Ok(Answer::Output(output)) => checked_output(output),
         // Muting silences the voice, a streaming one included: its stream is
-        // closed unread, so its reply is never generated (RFC §7.5, §10.6.4).
-        Ok(Answer::Streamed(output, mut turn)) if binding.muted => {
+        // closed unread unless read-only takes precedence (RFC §7.5, §10.6.4).
+        Ok(Answer::Streamed(output, mut turn)) if binding.muted && binding.access.writes() => {
             turn.close_stream().await;
             checked_output(stream::muted_answer(output))
         }
@@ -825,10 +825,10 @@ async fn first_pass<S: ConversationStore>(
 
 /// Whether `channel`'s turn waits its place in the room (RFC §6.4): an
 /// intelligence channel that takes a room's turns one at a time, unless
-/// muted, which reacts to each event as it comes, its answer not
-/// delivered (RFC §7.2).
+/// mute closes its stream unread. Read-only takes precedence over mute
+/// and its stream is still consumed (RFC §7.5 rule 2).
 fn serializes(channel: &dyn DynChannel, binding: &ChannelBinding) -> bool {
-    channel.serializes_room_turns() && !binding.muted
+    channel.serializes_room_turns() && !(binding.muted && binding.access.writes())
 }
 
 /// The turn of a channel that takes a room's turns one at a time (RFC

@@ -897,6 +897,7 @@ mod tests {
 
         /// The event keeps its place: the delete that follows names it, and
         /// the reader tells it from an event that said nothing.
+        // Python: tests/test_context_visibility.py::TestDeletedContentStaysDeleted::test_the_deleted_event_keeps_its_place_in_the_history
         #[test]
         fn a_deleted_event_keeps_its_id_index_thread_and_mark() {
             let handed = history(vec![deleted()]).remove(0);
@@ -973,6 +974,39 @@ mod tests {
                 .insert("Body".to_owned(), json!("I need 50000$"));
             let handed = history(vec![deleted(), edited]).remove(1);
             assert_eq!(handed.source.raw_payload, Metadata::new());
+        }
+
+        // Python: tests/test_context_visibility.py::TestWithheldContent::test_a_deleted_target_is_withheld_with_its_edits
+        #[test]
+        fn a_deleted_target_is_withheld_with_its_edits() {
+            let mut edited = edit("evt_2", "");
+            if let EventContent::Edit(content) = &mut edited.content {
+                content.new_content = Box::new(
+                    serde_json::from_value(json!({
+                        "type": "media", "url": "https://x.test/a.png", "mime_type": "image/png"
+                    }))
+                    .unwrap(),
+                );
+            }
+            let timeline = vec![deleted(), edited, delete("evt_3")];
+            let handed = history(timeline.clone());
+            assert_eq!(
+                handed.iter().map(|event| &event.id).collect::<Vec<_>>(),
+                timeline.iter().map(|event| &event.id).collect::<Vec<_>>()
+            );
+            assert_eq!(handed[0].content, TextContent::new("").into());
+            assert_eq!(handed[1].content, edit("evt_2", "").content);
+            assert_eq!(handed[2].content, timeline[2].content);
+        }
+
+        // Python: tests/test_context_visibility.py::TestWithheldContent::test_a_delete_row_alone_withholds_nothing
+        #[test]
+        fn a_delete_row_alone_withholds_nothing() {
+            for status in [EventStatus::Blocked, EventStatus::Delivered] {
+                let mut row = delete("evt_3");
+                row.status = status;
+                assert_eq!(history(vec![message(), row])[0], message());
+            }
         }
 
         /// An edit the store marked deleted with its target, as both
@@ -1132,12 +1166,24 @@ mod tests {
             assert_eq!(known(transport("reader"), &[ws1], events), ["shown"]);
         }
 
+        // Python: tests/test_context_visibility.py::TestVisibleEvents::test_an_unbound_reader_is_handed_no_event
         #[test]
         fn a_channel_the_room_does_not_bind_knows_none_of_its_events() {
             assert_eq!(
                 visible_events(&context(vec![transport("sms")], page()), &channel("ws")),
                 Vec::<RoomEvent>::new()
             );
+        }
+
+        // Python: tests/test_context_visibility.py::TestVisibleEvents::test_a_blocked_event_reaches_no_reader
+        #[test]
+        fn a_blocked_event_reaches_no_reader() {
+            let reader = transport("reader");
+            let mut own = said("own", &reader, "refused own", Visibility::All);
+            let mut other = said("other", &transport("sms"), "refused other", Visibility::All);
+            own.status = EventStatus::Blocked;
+            other.status = EventStatus::Blocked;
+            assert_eq!(known(reader, &[], vec![own, other]), Vec::<String>::new());
         }
 
         /// The Python implementation's `visibility_allows` reads the

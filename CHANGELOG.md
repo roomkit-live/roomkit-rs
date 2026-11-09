@@ -7,6 +7,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 - A streamed answer reads up to 256 MiB, envelopes included, where it was cut at 4 MiB: a model that wraps each token of its reasoning in some 200 bytes of JSON failed the turn after about 20,000 tokens (`the provider's answer is longer than 4194304 bytes`). An answer read whole keeps its 4 MiB.
+- A record replacing an agent answer at the depth limit keeps the trigger's response scope, including `none`, as Python does (RFC §8.5, RMK-1600).
+
+- A read-only, muted agent consumes its stream and audits its answers as `source_read_only`, as RFC §7.5 requires; its turns still run in order (RMK-1600).
+
 - A refused call under a name vendors do not take is not replayed, as Python's (RFC §6.4, RMK-1592): a model's invented call named `multi_tool_use.parallel`, or with an empty name, made every later request of the room a 400 until the round left the memory's window.
 - `testing::idle` waits for scheduled status publications and the work their hooks start, so conformance reads no longer race a background worker's terminal status (RMK-1548); the bus's posting and close behavior stay unchanged.
 - A hook returning a MODIFY without a payload keeps its tasks, observations and metadata, drops its injections, and follows its fail-open or fail-closed policy; a fail-closed result names `hook_invalid_result`, as Python's (RFC §9.3, RMK-1591).

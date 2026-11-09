@@ -5,8 +5,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::model::{
     ChannelBinding, EventDirection, EventId, EventSource, EventStatus, EventType, Observation,
-    ObservationId, RoomEvent, TextContent, Timestamp,
+    ObservationId, RoomEvent, TextContent, Timestamp, Visibility,
 };
+
+use super::permissions;
 
 /// The default `max_chain_depth` (RFC §8.3).
 pub(crate) const DEFAULT_MAX_CHAIN_DEPTH: u32 = 5;
@@ -58,6 +60,10 @@ pub(crate) fn not_asked_record(
     record.blocked_by = Some(CHAIN_DEPTH_LIMIT.to_owned());
     record.chain_depth = response_depth(trigger);
     record.responds_to = Some(trigger.id.clone());
+    // A refused answer remains inside its trigger's response scope (RFC §8.5).
+    record.visibility =
+        permissions::narrower_scope(None, trigger.response_visibility.as_ref(), &[])
+            .unwrap_or(Visibility::All);
     record
 }
 

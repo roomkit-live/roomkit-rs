@@ -170,8 +170,8 @@ async fn second_pass<S: ConversationStore>(
         ..read
     };
     match inner.turns.run(&kit, &binding, event, context, drop).await {
-        // A muted supervisor's answer is never generated (RFC §7.5, §10.6.4).
-        Ok(Answer::Streamed(output, mut turn)) if binding.muted => {
+        // Mute closes the answer unread unless read-only takes precedence (RFC §7.5).
+        Ok(Answer::Streamed(output, mut turn)) if binding.muted && binding.access.writes() => {
             turn.close_stream().await;
             ChannelOutcome::Output(super::muted_answer(output)).into()
         }

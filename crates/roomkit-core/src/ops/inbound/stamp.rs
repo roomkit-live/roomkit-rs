@@ -756,6 +756,7 @@ mod tests {
     /// Gap G-041: an event the framework marked `internal` stays so,
     /// whatever visibility a hook's modify writes, as a modify writing
     /// `internal` gets the original's back.
+    // Python: tests/test_visibility_rules.py::TestOnlyTheFrameworkWritesInternal::test_a_hook_cannot_widen_the_framework_s_own_record
     #[test]
     fn an_internal_event_stays_internal_whatever_a_modify_writes() {
         let mut internal = trigger();

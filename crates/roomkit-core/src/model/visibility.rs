@@ -320,16 +320,24 @@ mod tests {
         assert!(!Visibility::None.admits(&channel("ws"), ChannelCategory::Transport));
     }
 
+    // Python: tests/test_inbound_visibility.py::TestVisibilityAllows::test_internal_reaches_nothing
     #[test]
     fn internal_admits_no_channel() {
-        assert!(!Visibility::Internal.admits(&channel("ai"), ChannelCategory::Intelligence));
+        for category in [ChannelCategory::Intelligence, ChannelCategory::Transport] {
+            assert!(!Visibility::Internal.admits(&channel("reader"), category));
+        }
     }
 
+    // Python: tests/test_context_visibility.py::TestCommittedVisibility::test_internal_absorbs_and_keeps_its_mark
     #[test]
     fn internal_absorbs_an_intersection_and_keeps_its_mark() {
         assert_eq!(
-            [intersect("internal", "all"), intersect("none", "internal")],
-            ["internal", "internal"]
+            [
+                intersect("internal", "all"),
+                intersect("none", "internal"),
+                intersect("internal", "transport")
+            ],
+            ["internal", "internal", "internal"]
         );
     }
 
@@ -386,9 +394,12 @@ mod tests {
         );
     }
 
+    // Python: tests/test_visibility_rules.py::TestTheGrammar::test_a_keyword_is_kept_as_written
     #[test]
     fn whitespace_around_a_keyword_is_ignored() {
-        assert_eq!(parse(" none ").unwrap(), Visibility::None);
+        for keyword in ["all", "none", "internal", "transport", "intelligence"] {
+            assert_eq!(parse(&format!(" {keyword} ")).unwrap().to_string(), keyword);
+        }
     }
 
     #[test]
