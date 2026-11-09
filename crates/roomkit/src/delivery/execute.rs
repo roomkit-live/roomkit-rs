@@ -383,6 +383,7 @@ async fn run_chain<S: ConversationStore>(
         )
         .await;
         end_hook_span(span, &ran);
+        warn_dropped_injections(&ran, &spec);
         let problem = match ran {
             HookOutcome::Returned(result) => match (result.action, result.event) {
                 (HookAction::Block, _) => {
@@ -418,6 +419,19 @@ async fn run_chain<S: ConversationStore>(
     ChainEnd {
         event: current,
         blocked: None,
+    }
+}
+
+/// Only BEFORE_BROADCAST commits a hook result's injections (RFC §9.4).
+/// BEFORE_DELIVER keeps the decision but must not discard injections silently.
+fn warn_dropped_injections(outcome: &HookOutcome<RoomEvent>, spec: &HookSpec) {
+    let HookOutcome::Returned(result) = outcome else {
+        return;
+    };
+    if !result.injected_events.is_empty() {
+        tracing::warn!(target: "roomkit::hooks", hook = %spec.name,
+            trigger = "before_deliver", count = result.injected_events.len(),
+            "hook injections dropped: only BEFORE_BROADCAST commits injected events");
     }
 }
 

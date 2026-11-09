@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A BEFORE_DELIVER hook that returns injected events now logs their rejection, naming the hook and trigger, as Python does (RFC §9.4, RMK-1603).
+
 - Cancelling a delivery reaches its active turn before the caller resumes; a reentrant delivery keeps its cancellation when adopted, and a cut tool round stays out of the next turn’s history (RFC §10.1, RMK-1549, RMK-1601, RMK-1602).
 
 - Observer hooks outside the inbound driver start in firing order on every runtime, while their bodies still finish independently (RFC §9.2, RMK-1550, RMK-1563).
