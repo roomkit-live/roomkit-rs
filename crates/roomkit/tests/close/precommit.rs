@@ -22,7 +22,7 @@ const BUDGET: Duration = Duration::from_secs(1);
 async fn bounded<T>(work: impl Future<Output = T>) -> T {
     tokio::time::timeout(Duration::from_secs(5), work)
         .await
-        .expect("pre-commit work never settled")
+        .unwrap()
 }
 
 async fn kit_with(router: Option<Arc<dyn InboundRoomRouter>>) -> RoomKit<StuckStore> {
@@ -134,7 +134,7 @@ async fn routing_that_hangs_is_refused_with_no_room() {
         assert_eq!(stored(&kit, "r").await, Vec::<String>::new());
         assert_eq!(
             kit.store()
-                .list_rooms(Default::default())
+                .list_rooms(roomkit::store::ListRoomsOptions::default())
                 .await
                 .unwrap()
                 .len(),
@@ -169,7 +169,7 @@ async fn routing_spends_the_budget_the_rest_of_the_call_has() {
         (true, Some("process_timeout"))
     );
     assert!(started.elapsed() < Duration::from_millis(1100));
-    assert!(stored(&kit, "r").await.is_empty());
+    assert_eq!(stored(&kit, "r").await, Vec::<String>::new());
     kit.close().await.unwrap();
 }
 
@@ -229,7 +229,7 @@ async fn a_direct_injection_past_its_deadline_raises_and_writes_nothing() {
 async fn an_attach_waiting_for_the_room_lock_times_out_without_a_binding() {
     let locks = Arc::new(InMemoryLockManager::default());
     let kit = RoomKit::new(RoomKitOptions {
-        lock_manager: Some(locks.clone()),
+        lock_manager: Some(Arc::<InMemoryLockManager>::clone(&locks)),
         process_timeout: BUDGET,
         ..Default::default()
     });
@@ -270,11 +270,11 @@ async fn an_attach_waiting_for_the_room_lock_times_out_without_a_binding() {
 async fn the_scope_read_before_a_room_s_own_message_draws_is_bounded() {
     let kit = kit_with(None).await;
     let results = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let (hook_kit, seen) = (kit.clone(), results.clone());
+    let (hook_kit, seen) = (kit.clone(), Arc::clone(&results));
     kit.hook(
         HookTrigger::AfterBroadcast,
         move |_: RoomEvent, _| {
-            let (kit, seen) = (hook_kit.clone(), seen.clone());
+            let (kit, seen) = (hook_kit.clone(), Arc::clone(&seen));
             async move {
                 *kit.store().held_read.lock().unwrap() = Some("room");
                 let result = kit
@@ -342,7 +342,7 @@ async fn a_scope_read_spends_the_budget_the_hook_has_left() {
     kit.hook(
         HookTrigger::AfterBroadcast,
         move |_: RoomEvent, _| {
-            let (kit, answer) = (nested.clone(), answer.clone());
+            let (kit, answer) = (nested.clone(), Arc::clone(&answer));
             async move {
                 let Some(answer) = answer.lock().unwrap().take() else {
                     return;
@@ -400,7 +400,7 @@ async fn an_adoptable_scope_read_keeps_the_locked_hooks_close_grace() {
     kit.hook(
         HookTrigger::BeforeBroadcast,
         move |event: RoomEvent, _| {
-            let (kit, answer) = (nested.clone(), answer.clone());
+            let (kit, answer) = (nested.clone(), Arc::clone(&answer));
             async move {
                 if roomkit_core::rules::transcoding::text_of(&event.content) == "hi" {
                     *kit.store().held_read.lock().unwrap() = Some("room");
@@ -448,11 +448,11 @@ async fn an_adopted_call_keeps_the_window_its_scope_read_spent() {
     let kit = kit_with(None).await;
     let timeouts = EventTap::on(&kit, &["process_timeout"]);
     let child = Arc::new(std::sync::Mutex::new(None));
-    let (hook_kit, started) = (kit.clone(), child.clone());
+    let (hook_kit, started) = (kit.clone(), Arc::clone(&child));
     kit.hook(
         HookTrigger::BeforeBroadcast,
         move |event: RoomEvent, _| {
-            let (kit, started) = (hook_kit.clone(), started.clone());
+            let (kit, started) = (hook_kit.clone(), Arc::clone(&started));
             async move {
                 if roomkit_core::rules::transcoding::text_of(&event.content) == "hi" {
                     *kit.store().delayed_read.lock().unwrap() =
@@ -501,7 +501,7 @@ async fn an_adopted_call_keeps_the_window_its_scope_read_spent() {
     let child = bounded(child).await.unwrap().unwrap();
     assert_eq!(parent.reason.as_deref(), Some("process_timeout"));
     assert_eq!(child.reason.as_deref(), Some("process_timeout"));
-    assert!(stored(&kit, "r").await.is_empty());
+    assert_eq!(stored(&kit, "r").await, Vec::<String>::new());
     assert_eq!(timeouts.events().len(), 2);
     kit.close().await.unwrap();
 }

@@ -35,7 +35,7 @@ impl Drop for Dropped {
 async fn a_pass_the_close_cuts_starts_no_before_broadcast_observer() {
     let kit = kit_of(StuckStore::hanging("slow", false), &[], &["r"]).await;
     let observed = Arc::new(Mutex::new(Vec::new()));
-    let seen = observed.clone();
+    let seen = Arc::clone(&observed);
     kit.hook(
         HookTrigger::BeforeBroadcast,
         move |event: RoomEvent, _| {
@@ -54,10 +54,11 @@ async fn a_pass_the_close_cuts_starts_no_before_broadcast_observer() {
     kit.store().committing.notified().await;
     closed(spawn_close(&kit)).await;
     let result = result_of(slow).await;
+    let observed = observed.lock().unwrap().clone();
     assert_eq!(
         (
             result.cancellation_reason.as_deref(),
-            observed.lock().unwrap().clone(),
+            observed,
             stored(&kit, "r").await
         ),
         (
@@ -81,7 +82,7 @@ async fn a_metadata_write_cut_by_the_close_never_lands() {
             kit.update_room_metadata(
                 &room("r"),
                 [("late".to_owned(), json!(true))].into_iter().collect(),
-                Default::default(),
+                roomkit::UpdateRoomMetadataOptions::default(),
             )
             .await
         }
@@ -102,11 +103,11 @@ async fn a_metadata_write_cut_by_the_close_never_lands() {
 async fn a_caller_waiting_for_an_injected_pass_keeps_its_committed_event() {
     let kit = kit_of(InMemoryStore::default(), &[&Holding::new("ws", [])], &["r"]).await;
     let entered = Arc::new(Notify::new());
-    let entering = entered.clone();
+    let entering = Arc::clone(&entered);
     kit.hook(
         HookTrigger::BeforeBroadcast,
         move |event: RoomEvent, _| {
-            let entered = entering.clone();
+            let entered = Arc::clone(&entering);
             async move {
                 let body = text_of(&event.content);
                 if body == "injected" {
@@ -119,10 +120,7 @@ async fn a_caller_waiting_for_an_injected_pass_keeps_its_committed_event() {
                         ..InjectedEvent::new(record("injected"))
                     }]
                 });
-                HookResult::allow(AllowOptions {
-                    injected,
-                    ..Default::default()
-                })
+                HookResult::allow(AllowOptions { injected })
             }
         },
         HookOptions {
@@ -152,17 +150,17 @@ async fn a_timer_check_keeps_its_pause_when_the_close_cuts_its_hook() {
             inactive_after_seconds: Some(0),
             ..Default::default()
         },
-        Default::default(),
+        roomkit::SetRoomTimersOptions::default(),
     )
     .await
     .unwrap();
     let entered = Arc::new(Notify::new());
     let steps = Arc::new(Mutex::new(Vec::new()));
-    let (entering, noting) = (entered.clone(), steps.clone());
+    let (entering, noting) = (Arc::clone(&entered), Arc::clone(&steps));
     kit.hook(
         HookTrigger::OnRoomPaused,
         move |_: RoomEvent, _| {
-            let (entering, note) = (entering.clone(), Dropped(noting.clone()));
+            let (entering, note) = (Arc::clone(&entering), Dropped(Arc::clone(&noting)));
             async move {
                 let _note = note;
                 entering.notify_one();
@@ -177,12 +175,15 @@ async fn a_timer_check_keeps_its_pause_when_the_close_cuts_its_hook() {
     )
     .unwrap();
     let checked = kit
-        .check_room_timers(&room("r"), Default::default())
+        .check_room_timers(&room("r"), roomkit::CheckRoomTimersOptions::default())
         .await
         .unwrap();
     entered.notified().await;
     closed(spawn_close(&kit)).await;
-    let stored = kit.get_room(&room("r"), Default::default()).await.unwrap();
+    let stored = kit
+        .get_room(&room("r"), roomkit::GetRoomOptions::default())
+        .await
+        .unwrap();
     assert_eq!(
         (checked.status, stored.status, steps.lock().unwrap().clone()),
         (RoomStatus::Paused, RoomStatus::Paused, vec!["cut"])
@@ -206,11 +207,11 @@ async fn an_observer_closing_on_a_completed_answer_keeps_its_end_without_warning
         )
         .await;
         let done = Arc::new(Notify::new());
-        let (closer, ended) = (kit.clone(), done.clone());
+        let (closer, ended) = (kit.clone(), Arc::clone(&done));
         kit.hook(
             HookTrigger::BeforeBroadcast,
             move |event: RoomEvent, _| {
-                let (kit, ended) = (closer.clone(), ended.clone());
+                let (kit, ended) = (closer.clone(), Arc::clone(&ended));
                 async move {
                     if event.source.channel_id == channel("agent") {
                         kit.close().await.unwrap();
@@ -264,11 +265,11 @@ async fn a_close_from_an_after_broadcast_hook_cuts_another_calls_send() {
     let held = Holding::new("ws", [("Two", Hold::ForEver)]);
     let kit = kit_of(InMemoryStore::default(), &[&held], &["r"]).await;
     let go = Arc::new(Notify::new());
-    let (closer, release) = (kit.clone(), go.clone());
+    let (closer, release) = (kit.clone(), Arc::clone(&go));
     kit.hook(
         HookTrigger::AfterBroadcast,
         move |event: RoomEvent, _| {
-            let (kit, go) = (closer.clone(), release.clone());
+            let (kit, go) = (closer.clone(), Arc::clone(&release));
             async move {
                 if text_of(&event.content) == "One" {
                     go.notified().await;

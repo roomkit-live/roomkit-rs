@@ -81,12 +81,17 @@ async fn reads<S: ConversationStore>(kit: &RoomKit<S>) -> Vec<String> {
         ),
         format!(
             "{:?}",
-            kit.is_member(&room_id, &"u1".parse().unwrap(), Default::default())
-                .await
+            kit.is_member(
+                &room_id,
+                &"u1".parse().unwrap(),
+                roomkit::IsMemberOptions::default()
+            )
+            .await
         ),
         format!(
             "{:?}",
-            kit.regenerate_target(&room_id, Default::default()).await
+            kit.regenerate_target(&room_id, roomkit::RegenerateTargetOptions::default())
+                .await
         ),
         format!(
             "{:?}",
@@ -98,7 +103,7 @@ async fn reads<S: ConversationStore>(kit: &RoomKit<S>) -> Vec<String> {
         format!(
             "{:?}",
             kit.hooks_for(HookTrigger::BeforeBroadcast)
-                .has_hooks(Default::default())
+                .has_hooks(roomkit::HasHooksOptions::default())
         ),
     ]
 }
