@@ -217,6 +217,10 @@ impl<S> TurnRunners<S> {
 }
 
 #[cfg(test)]
+#[path = "turn_runners_tests.rs"]
+mod contract_tests;
+
+#[cfg(test)]
 mod tests {
     use roomkit_core::model::{
         ChannelId, ChannelOutput, ChannelType, EventSource, MediaContent, RoomEvent, RoomId,

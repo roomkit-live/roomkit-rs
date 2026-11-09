@@ -766,7 +766,7 @@ async fn strategy_turn<S: ConversationStore>(
         inner: Arc::clone(inner),
     };
     match runner.take(kit, event, binding, context) {
-        Taken::Answered(answer) => channel_output(answer.await),
+        Taken::Answered(answer) => strategy_output(answer.await),
         Taken::Own(own) => {
             let (event, binding, context) = *own;
             take_turn(inner, shared, effect, binding, event, context, window).await
@@ -779,7 +779,7 @@ async fn strategy_turn<S: ConversationStore>(
             Ok(Next::FirstStands | Next::Fallback(..)) => {
                 ChannelOutcome::Output(Box::default()).into()
             }
-            Err(error) => channel_output(Err(error.into())),
+            Err(error) => strategy_output(Err(error.into())),
         },
     }
 }
@@ -829,7 +829,7 @@ async fn first_pass<S: ConversationStore>(
             answer_in_place(inner, shared, effect, *answering, window).await
         }
         Ok(Next::FirstStands | Next::Fallback(..)) => checked_output(output),
-        Err(error) => channel_output(Err(error.into())),
+        Err(error) => strategy_output(Err(error.into())),
     }
 }
 
@@ -1359,6 +1359,20 @@ fn channel_output(result: Result<ChannelOutput, ChannelError>) -> Outcome {
         Ok(output) => checked_output(Box::new(output)),
         Err(error) => channel_failed(&error),
     }
+}
+
+/// A strategy ending its own turn leaves no failure of the inbound call.
+/// Transport cancellations still go through `channel_output` (RFC §10.2).
+fn strategy_output(result: Result<ChannelOutput, ChannelError>) -> Outcome {
+    if result.as_ref().is_err_and(|error| {
+        matches!(
+            error.downcast_ref::<RoomKitError>(),
+            Some(RoomKitError::Cancelled)
+        )
+    }) {
+        return ChannelOutcome::Output(Box::default()).into();
+    }
+    channel_output(result)
 }
 
 /// What a channel's `on_event()` or `deliver()` failing with `error` reads

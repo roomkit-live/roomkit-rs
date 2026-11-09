@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A strategy cancelling its own turn leaves no inbound error, as Python does; transport failures remain reported (RFC §10.2, RMK-1614).
+
 - Timer transitions preserve concurrent activity, finish their reports after caller cancellation, and give both hooks the final room context; response passes on a deleted room report its refusal (RFC §5.1, RMK-1608).
 
 - Closing or archiving a room clears its pause timestamp; archiving an open room records its close timestamp, preserving an existing one, as Python does. Shared conformance also checks all room transitions and runs named timer checks with their organization scope (RFC §5.1, RMK-1607).
