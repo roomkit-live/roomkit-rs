@@ -23,8 +23,8 @@ use crate::request::{Request, push_end, push_text, push_thinking};
 
 use crate::config::OpenAiApi;
 use crate::error::OpenAiError;
-use crate::provider::{ANSWER_LIMIT, Answered, OpenAiAiProvider, read_body};
-use crate::sse::Events;
+use crate::provider::{Answered, OpenAiAiProvider, read_body};
+use crate::sse::{Events, STREAM_LIMIT};
 use crate::wire;
 
 mod folding;
@@ -190,7 +190,7 @@ impl<'a> Reading<'a> {
             Answered::Head(response) => {
                 self.phase = Phase::Streaming(Box::new(Streamed {
                     response,
-                    events: Events::new(ANSWER_LIMIT),
+                    events: Events::new(STREAM_LIMIT),
                     folding: Folding::new(
                         self.provider.api(),
                         self.provider.namespace(),

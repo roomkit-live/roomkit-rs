@@ -4,7 +4,7 @@
 //! A line ends at `\n`, a `\r` before it dropped; a blank line ends an
 //! event, whose `data` lines join with `\n`; a comment (`:`) and the other
 //! fields are skipped. Three bounds keep a broken or hostile server from
-//! growing the memory: a line, an event's data and the whole answer, each
+//! growing the memory: a line, an event's data and the whole stream, each
 //! failing the turn once passed, so that a line that never ends, or events
 //! that never stop, are cut.
 
@@ -15,6 +15,12 @@ pub(crate) const LINE_LIMIT: usize = 1024 * 1024;
 
 /// The most data one event may carry, in bytes.
 pub(crate) const EVENT_LIMIT: usize = 1024 * 1024;
+
+/// The most bytes a stream may send, envelopes included. A stream weighs far
+/// more than what it says: GLM wraps each token of its reasoning in about 200
+/// bytes of JSON, so that 4 MiB cut a turn after some 20,000 tokens. This
+/// keeps the bound on events that never stop, past any answer a model writes.
+pub(crate) const STREAM_LIMIT: usize = 256 * 1024 * 1024;
 
 /// The events of one streamed answer, as its bytes arrive.
 #[derive(Debug)]
@@ -45,7 +51,7 @@ impl Events {
     ///
     /// # Errors
     ///
-    /// [`OpenAiError::AnswerTooLong`] past the answer's bound,
+    /// [`OpenAiError::AnswerTooLong`] past the stream's bound,
     /// [`OpenAiError::StreamLineTooLong`] for a line past [`LINE_LIMIT`],
     /// [`OpenAiError::StreamEventTooLong`] for an event past
     /// [`EVENT_LIMIT`], [`OpenAiError::Malformed`] for a line that is no
@@ -178,9 +184,9 @@ mod tests {
         );
     }
 
-    /// Events that never stop are cut at the answer's bound.
+    /// Events that never stop are cut at the stream's bound.
     #[test]
-    fn events_that_never_stop_are_cut_at_the_answer_s_bound() {
+    fn events_that_never_stop_are_cut_at_the_stream_s_bound() {
         let mut events = Events::new(4096);
         let failed = (0..1024).find_map(|_| events.feed(b"data: {}\n\n").err());
         assert_eq!(failed, Some(OpenAiError::AnswerTooLong { limit: 4096 }));

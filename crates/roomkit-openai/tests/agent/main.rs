@@ -823,17 +823,17 @@ async fn a_stream_that_never_ends_a_line_is_cut_at_the_line_s_bound() {
     );
 }
 
-/// Security: a stream whose events never stop is cut at the answer's
-/// bound, 4 MiB, the turn failing.
+/// A stream weighs far more than what it says: past the 4 MiB an answer read
+/// whole may take, a long reasoning is still read to its end.
 #[tokio::test]
-async fn a_stream_of_endless_events_is_cut_at_the_answer_s_bound() {
-    let event = format!("data: {}\n\n", chunk(&json!({ "content": "" })));
-    let room = Room::new(vec![Reply::endless(&event, TOO_LONG)], API_KEY).await;
+async fn a_long_reasoning_streams_past_what_a_whole_answer_may_weigh() {
+    let mut chunks = vec![chunk(&json!({ "reasoning_content": "x" })); 50_000];
+    chunks.push(chunk(&json!({ "content": "Done." })));
+    chunks.extend(ending("stop", 10, 50_001));
+    let room = Room::new(vec![Reply::events(&chunks)], API_KEY).await;
     let result = room.says(&room.sms, "+15550001", "Alice", "Hi").await;
-    assert_eq!(
-        result.error.unwrap().message,
-        "openai: the provider's answer is longer than 4194304 bytes"
-    );
+    assert!(result.error.is_none(), "{:?}", result.error);
+    assert_eq!(room.sms.texts(), ["Done."]);
 }
 
 /// Security: a stream whose one event never ends, data line after data

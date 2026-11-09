@@ -20,8 +20,8 @@ use crate::stream;
 use crate::vendor::Vendor;
 use crate::wire::{self, CompletionRequest};
 
-/// The longest answer a generation reads, in bytes: far more than a
-/// completion's text and calls take.
+/// The longest answer read whole, in bytes: far more than a completion's
+/// text and calls take. A stream has its own bound (`sse::STREAM_LIMIT`).
 pub(crate) const ANSWER_LIMIT: usize = 4 * 1024 * 1024;
 
 /// Where an endpoint lists its models, under its base URL.
