@@ -176,9 +176,9 @@ impl WeakCanceller {
         self.0.upgrade().is_some_and(|state| !*state.over.borrow())
     }
 
-    pub(crate) fn cancel(&self) {
+    pub(crate) fn cancel(&self, reason: &str) {
         if let Some(state) = self.0.upgrade() {
-            cancel(&state, "cancelled");
+            cancel(&state, reason);
         }
     }
 }

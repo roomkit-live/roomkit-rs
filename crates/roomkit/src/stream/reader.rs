@@ -195,10 +195,7 @@ pub(super) async fn read_kept<S: ConversationStore>(
     read: StreamRead,
     first_pass: bool,
 ) -> (ChannelOutput, Option<FirstPass>) {
-    let _following = stops
-        .delivery
-        .as_ref()
-        .map(|delivery| delivery.follows(&kept.turn.canceller()));
+    let _following = stops.reading(&kept.turn, first_pass);
     let failing = Failing::of(&read);
     let StreamRead {
         responder,
@@ -209,15 +206,6 @@ pub(super) async fn read_kept<S: ConversationStore>(
     } = read;
     if as_trace {
         kept.turn.read_as_trace();
-    }
-    // A strategy's first pass is read as Python reads it, under a cascade of
-    // its own: its turn's end is not its caller's (RFC §10.6.8, §19.7.3).
-    if !first_pass {
-        let owed = kept.turn.canceller().owed_end();
-        if let Some(entry_turns) = &stops.entry_turns {
-            entry_turns.reads(owed.clone());
-        }
-        stops.read_turns.reads(owed);
     }
     let target = target.filter(|_| !first_pass);
     let (pulls, pulled) = mpsc::unbounded_channel();
@@ -432,6 +420,29 @@ pub(crate) struct Stops {
 }
 
 impl Stops {
+    /// Joins the read to its delivery's cancellation and cleanup record.
+    fn reading(
+        &self,
+        turn: &OwnerTurn,
+        first_pass: bool,
+    ) -> Option<crate::delivery_keys::Following> {
+        let turn = turn.canceller();
+        let following = self
+            .delivery
+            .as_ref()
+            .map(|delivery| delivery.follows(&turn));
+        // A strategy's first pass is read under a cascade of its own: its
+        // turn's end is not its caller's (RFC §10.6.8, §19.7.3).
+        if !first_pass {
+            let owed = turn.owed_end();
+            if let Some(entry_turns) = &self.entry_turns {
+                entry_turns.reads(owed.clone());
+            }
+            self.read_turns.reads(owed);
+        }
+        following
+    }
+
     /// Returns once what ends the wait for a reader a stop found reading
     /// comes: the kit's close, which gives it its grace, or the cut of the
     /// held task the read runs within, whose caller has no timeout to bound

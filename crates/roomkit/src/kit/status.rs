@@ -654,7 +654,7 @@ impl<S: ConversationStore> Inner<S> {
         let floor = ExecutionContext::current().turn_depth().unwrap_or(0);
         // Reserve every body's place as the trigger fires, before its
         // background coordinator can be scheduled after a later firing.
-        let bodies = self.ordered_observers(observers, payload, &context, started.clone());
+        let bodies = self.ordered_observers(observers, payload, &context, started.as_ref());
         let inner = Arc::clone(self);
         let observing = async move {
             // Dropped with the task the kit's close cuts, the set aborts
@@ -691,15 +691,16 @@ impl<S: ConversationStore> Inner<S> {
         observers: Observers,
         payload: P,
         context: &RoomContext,
-        started: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+        started: Option<&tokio::sync::mpsc::UnboundedSender<()>>,
     ) -> Vec<BoxFuture<'static, (HookSpec, HookOutcome<P>)>> {
+        let payloads = std::iter::repeat_n(payload, observers.len());
         observers
             .into_iter()
-            .filter_map(|(spec, kept)| {
+            .zip(payloads)
+            .filter_map(|((spec, kept), payload)| {
                 let handler = P::handler(&kept)?;
-                let body =
-                    hooks::observe_traced(spec.clone(), handler, payload.clone(), context.clone());
-                let started = started.clone();
+                let body = hooks::observe_traced(spec.clone(), handler, payload, context.clone());
+                let started = started.cloned();
                 let observing = async move {
                     let outcome = tell_after_start(body, started).await;
                     (spec, outcome)
@@ -751,8 +752,6 @@ impl<S: ConversationStore> Inner<S> {
     }
 }
 
-/// Waits on `future` once, with a waker that does nothing: whether it ended
-/// at once.
 /// Tells the publication waiting for a hook once the body has run to its
 /// first wait, not once the ordering gate or its task has been polled.
 async fn tell_after_start<T>(
@@ -770,6 +769,8 @@ async fn tell_after_start<T>(
     }
 }
 
+/// Waits on `future` once, with a waker that does nothing: whether it ended
+/// at once.
 #[cfg(test)]
 fn ready_at_once(future: impl Future<Output = ()>) -> bool {
     let mut future = std::pin::pin!(future);

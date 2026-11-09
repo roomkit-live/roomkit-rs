@@ -62,9 +62,9 @@ impl FollowedTurn {
         self.active.strong_count() > 0 && self.turn.live()
     }
 
-    fn cancel(&self) {
+    fn cancel(&self, reason: &str) {
         if let Some(_active) = self.active.upgrade() {
-            self.turn.cancel();
+            self.turn.cancel(reason);
         }
     }
 }
@@ -83,7 +83,7 @@ impl CancelRequest {
         // The cut crosses before the caller can release a target or a tool.
         // The driver still owns admission, records and cleanup of the cut.
         for turn in turns {
-            turn.cancel();
+            turn.cancel(reason);
         }
         if let Some(waker) = waker {
             waker.wake();
@@ -97,9 +97,9 @@ impl CancelRequest {
         let turn = turn.downgrade();
         let active = Arc::new(());
         let mut state = locked(&self.0);
-        if state.reason.is_some() {
+        if let Some(reason) = state.reason.clone() {
             drop(state);
-            turn.cancel();
+            turn.cancel(&reason);
         } else {
             state.turns.retain(FollowedTurn::live);
             state.turns.push(FollowedTurn {
@@ -243,12 +243,12 @@ impl Named {
 
     /// Makes `target` the cut of the run that delivers it: asked at once
     /// when the delivery was cancelled already.
-    fn attach(&self, target: Arc<CancelRequest>) {
+    fn attach(&self, target: &Arc<CancelRequest>) {
         let reason = {
             let mut state = locked(&self.state);
             let reason = state.cancelled();
             state.cancelled.clone_from(&reason);
-            state.target = Some(Arc::clone(&target));
+            state.target = Some(Arc::clone(target));
             reason
         };
         if let Some(reason) = reason {
@@ -379,7 +379,7 @@ impl NamedGuard {
     /// Makes `target` the cut of the run that delivers it, until the guard
     /// is dropped.
     pub(crate) fn attach(&mut self, target: Arc<CancelRequest>) {
-        self.named.attach(Arc::clone(&target));
+        self.named.attach(&target);
         self.target = Some(target);
     }
 }

@@ -371,24 +371,88 @@ fn awaited(kit: &RoomKit) -> tokio::task::JoinHandle<Result<InboundResult, RoomK
 // this current-thread runtime: no scheduler delay decides the assertion.
 #[tokio::test]
 async fn cancelling_by_key_signals_the_read_turn_before_the_driver_runs_again() {
+    for reason in ["caller_cancelled", "requested_stop"] {
+        cancellation_crosses_before_returning(reason).await;
+    }
+}
+
+async fn cancellation_crosses_before_returning(reason: &str) {
     let target = ReadingOn::flushing(Duration::ZERO);
     let kit = room(holding(), &target).await;
-    let timed = Timed::on(&kit, Instant::now());
+    let controls = cancel_controls(&kit);
     let call = awaited(&kit);
     target.read.notified().await;
 
     let count = kit
-        .cancel_delivery("key-1", crate::CancelDeliveryOptions::default())
+        .cancel_delivery(
+            "key-1",
+            crate::CancelDeliveryOptions {
+                reason: reason.to_owned(),
+                ..Default::default()
+            },
+        )
         .await;
-    let crossed = timed.count(Carried::Control, "cancel");
+    let crossed = controls.lock().unwrap().clone();
 
     call.await.unwrap().unwrap();
     kit.close().await.unwrap();
     assert_eq!(count, 1);
     assert_eq!(
-        crossed, 1,
-        "the cut must cross before cancel_delivery returns"
+        crossed,
+        vec![json!(reason)],
+        "the cut must cross with its reason before cancel_delivery returns"
     );
+}
+
+fn cancel_controls(kit: &RoomKit) -> Arc<Mutex<Vec<Value>>> {
+    let controls = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&controls);
+    kit.inner.turns.set_tap(Arc::new(move |carried, raw| {
+        if carried == Carried::Control && raw.contains(of_type("cancel")) {
+            let message: Value = serde_json::from_str(raw).unwrap();
+            seen.lock()
+                .unwrap()
+                .push(message["message"]["reason"].clone());
+        }
+    }));
+    controls
+}
+
+// Python: DeliveryCascade.cancel keeps its reason for work handed over
+// after the cut (test_a_turn_being_handed_over_is_cut_as_it_arrives).
+#[tokio::test]
+async fn a_turn_submitted_after_its_delivery_was_cut_receives_the_reason() {
+    let kit = kit_with(Streaming::scripted(ending())).await;
+    let controls = cancel_controls(&kit);
+    let room = kit
+        .get_room(&room_id(), crate::GetRoomOptions::default())
+        .await
+        .unwrap();
+    let binding = kit
+        .get_binding(
+            &room_id(),
+            &super::support::channel("ai"),
+            crate::GetBindingOptions::default(),
+        )
+        .await
+        .unwrap();
+    let event = RoomEvent::new(
+        room_id(),
+        roomkit_core::model::EventSource::new(super::support::channel("sms"), ChannelType::SMS),
+        TextContent::new("Hi"),
+    );
+    let cancel = crate::delivery_keys::CancelRequest::default();
+    cancel.request("before_submission");
+    let host: Arc<dyn crate::turn::TurnKit> = Arc::new(Arc::downgrade(&kit.inner));
+    let _outcome = kit
+        .inner
+        .turns
+        .run(&host, &binding, event, RoomContext::new(room), |turn| {
+            cancel.follows(&turn)
+        })
+        .await;
+    kit.close().await.unwrap();
+    assert_eq!(*controls.lock().unwrap(), vec![json!("before_submission")],);
 }
 
 /// Cuts `call`, an awaited call [`awaited`] spawned, by its key: how many

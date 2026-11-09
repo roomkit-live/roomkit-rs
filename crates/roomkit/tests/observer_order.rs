@@ -1,5 +1,7 @@
 //! Observers start in firing and registration order, but finish independently
-//! (RFC §9.2, §9.3; Python's HookEngine._start_async_hooks).
+//! (RFC §9.2, §9.3; Python's `HookEngine._start_async_hooks`).
+
+#![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
 use std::time::Duration;
 
@@ -105,7 +107,15 @@ async fn ordered(source: Source) {
         Source::Feedback => register(
             &kit,
             HookTrigger::OnFeedback,
-            |event: Observation| event.metadata["comment"].as_str().unwrap().to_owned(),
+            |event: Observation| {
+                event
+                    .metadata
+                    .get("comment")
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            },
             &seen,
             &released,
         ),
