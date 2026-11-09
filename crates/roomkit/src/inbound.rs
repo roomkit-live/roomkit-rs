@@ -314,7 +314,8 @@ impl DeliveryHandle {
     /// [`RoomKitError::Runtime`] when called, the delivery not done, from
     /// the room's own work where its cleanup would wait for this call, a
     /// turn or a delivery in the room, or a hook under its lock: nothing is
-    /// cancelled; what [`wait`](Self::wait) fails with.
+    /// cancelled. In that context, [`wait`](Self::wait) instead returns the
+    /// unwaited result.
     pub async fn cancel(&self, options: CancelOptions) -> Result<InboundResult, RoomKitError> {
         let CancelOptions { reason, timeout } = options;
         if self.done() {
