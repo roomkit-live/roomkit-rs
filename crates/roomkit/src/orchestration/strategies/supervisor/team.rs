@@ -572,6 +572,7 @@ mod tests {
             running: std::sync::Mutex::default(),
         });
         let call = OwnerCall {
+            room_metadata: Arc::default(),
             room_id: RoomId::new("r1::task-abc").unwrap_or_else(|error| panic!("{error}")),
             channel_id: ChannelId::new("sup").unwrap_or_else(|error| panic!("{error}")),
             tool_call_id: "c1".to_owned(),
