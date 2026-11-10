@@ -24,7 +24,7 @@ use crate::tasks::brief::{BACKGROUND_CONVERSATION, worker_brief};
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StartTaskOptions {
     /// Python `hand_back=None`: `relay` or `post`; the agent's background
-    /// setup's when `None`.
+    /// setup's when `None` or an empty string.
     pub hand_back: Option<String>,
     /// Python `organization_id=None`: the organization the caller acts for
     /// (RFC §17.2): the room is read with it before anything is started.
@@ -73,7 +73,9 @@ impl<S: ConversationStore> RoomKit<S> {
         }
         self.check_agent_of(room_id, agent_id).await?;
         let setup = self.background_setup(agent_id);
-        let mode = hand_back.unwrap_or(setup.hand_back);
+        let mode = hand_back
+            .filter(|mode| !mode.is_empty())
+            .unwrap_or(setup.hand_back);
         let worker = setup.worker.unwrap_or_else(|| agent_id.clone());
         // The agent as the room addresses it: a discussion's handle, else
         // its channel id (RFC §19.7.5 rule 4).

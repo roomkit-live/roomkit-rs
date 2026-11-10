@@ -321,10 +321,9 @@ async fn work_in_background<S: ConversationStore>(
     kit: RoomKit<S>,
     call: OwnerCall,
 ) -> Result<String, RoomKitError> {
-    let room = kit.store().get_room(&call.room_id).await?;
-    let in_a_task = room
-        .as_ref()
-        .and_then(|room| room.metadata.get("task_id"))
+    let in_a_task = call
+        .room_metadata
+        .get("task_id")
         .is_some_and(|task_id| !matches!(task_id, Value::Null) && task_id != "");
     if in_a_task {
         return Ok(error_answer(NESTED));
@@ -351,8 +350,10 @@ async fn work_in_background<S: ConversationStore>(
     };
     // The agent as the room addresses it: a discussion's handle, else its
     // channel id (RFC §19.7.5 rule 4).
-    let metadata = room.map(|room| room.metadata).unwrap_or_default();
-    let agent = identifier(agent_handle(&metadata, call.channel_id.as_str()), "agent");
+    let agent = identifier(
+        agent_handle(&call.room_metadata, call.channel_id.as_str()),
+        "agent",
+    );
     let back = if started.hand_back == "post" {
         format!("its result is posted as {agent}'s message")
     } else {

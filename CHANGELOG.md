@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `work_in_background` keeps the turn's agent name and task boundary when stored metadata changes; `start_task` with an empty `hand_back` uses the agent's configured mode, as Python does (RFC §21.4, §23.4; RMK-1568).
+
 - Task results and `task_status` name discussion agents by their handles; tool answers use the turn's room snapshot and leave status entries keyed by channel id (RFC §23.4; RMK-1567).
 
 - A channel's final observers may start during shutdown and are cut before the store is released, without reopening public admission or extending the rights of turns and writes (RFC §12.10.4; RMK-1616).
