@@ -809,7 +809,7 @@ async fn assert_refused_task_stays_failed(
         span.attributes.get(Attr::DELEGATION_STATUS),
         Some(&serde_json::json!("failed"))
     );
-    assert!(telemetry.get_active_spans().is_empty());
+    assert_eq!(telemetry.get_active_spans(), vec![]);
 }
 
 // Python: tests/tasks/test_task_turn_record.py::test_a_task_cut_mid_turn_carries_its_turn_cancelled[close-inline]

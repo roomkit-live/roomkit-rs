@@ -318,7 +318,7 @@ async fn a_task_failing_before_it_is_announced_fires_no_completion() {
         assert_eq!(span.status, "error");
         assert_eq!(span.room_id.as_deref(), Some("r"));
         assert_eq!(span.channel_id.as_deref(), Some("worker"));
-        assert!(telemetry.get_active_spans().is_empty());
+        assert_eq!(telemetry.get_active_spans(), vec![]);
         kit.close().await.unwrap();
         assert_eq!(telemetry.get_spans(SpanKind::Delegation).len(), 1);
     }
