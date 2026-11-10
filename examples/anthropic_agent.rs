@@ -29,7 +29,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let model = std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-sonnet-5-5".into());
     let provider = AnthropicAiProvider::new(AnthropicConfig::new(key, model))?;
     assert!(provider.supports_streaming() && provider.supports_response_schema());
-    assert!(!AnthropicAiProvider::available_models().is_empty());
+    assert_ne!(AnthropicAiProvider::available_models().len(), 0);
     if !live {
         println!(
             "Anthropic provider constructed. Pass --live with ANTHROPIC_API_KEY to run paid turns."
@@ -102,9 +102,12 @@ async fn run_room(provider: AnthropicAiProvider) -> Result<(), Box<dyn Error>> {
     let answers: Vec<_> = timeline
         .iter()
         .filter(|event| event.source.channel_id == agent_id)
-        .filter_map(|event| match &event.content {
-            roomkit::model::EventContent::Text(text) => Some(&text.body),
-            _ => None,
+        .filter_map(|event| {
+            if let roomkit::model::EventContent::Text(text) = &event.content {
+                Some(&text.body)
+            } else {
+                None
+            }
         })
         .collect();
     assert!(
