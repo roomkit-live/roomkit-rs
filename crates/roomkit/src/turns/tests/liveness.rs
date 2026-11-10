@@ -12,6 +12,7 @@ use crate::turns::TurnTimeouts;
 use crate::turns::observe::{Carried, Fate};
 
 const UNSENT: Fate = Fate {
+    refused: false,
     unsent: true,
     lost: false,
     duplicated: false,
@@ -142,11 +143,13 @@ async fn an_unanswered_cancel_is_given_up_at_the_cancel_timeout_and_late_frames_
 #[tokio::test(start_paused = true)]
 async fn a_lost_frame_fails_the_turn_frame_lost_and_a_duplicate_is_dropped() {
     let lost = Fate {
+        refused: false,
         unsent: false,
         lost: true,
         duplicated: false,
     };
     let duplicated = Fate {
+        refused: false,
         unsent: false,
         lost: false,
         duplicated: true,

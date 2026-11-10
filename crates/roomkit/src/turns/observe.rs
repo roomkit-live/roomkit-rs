@@ -43,6 +43,9 @@ pub(crate) type Tap = Arc<dyn Fn(Carried, &str) + Send + Sync>;
 /// What becomes of a message a fault meets.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Fate {
+    /// Refused with an error before numbering, unlike a silently unsent frame.
+    #[cfg(test)]
+    pub(crate) refused: bool,
     /// Never sent: it takes no number.
     pub(crate) unsent: bool,
     /// Numbered, then lost on its way.
@@ -95,6 +98,10 @@ impl Observers {
     /// tap is told one that is queued.
     pub(crate) fn carry(&self, carried: Carried, raw: &str) -> Fate {
         let fate = self.fate(carried, raw);
+        #[cfg(test)]
+        if fate.refused {
+            return fate;
+        }
         if let Some(tap) = &self.tap
             && !fate.unsent
             && !fate.lost

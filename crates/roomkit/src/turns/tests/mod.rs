@@ -4,6 +4,7 @@
 mod cross_read;
 mod cut_reads;
 mod liveness;
+mod never_started;
 mod records;
 mod support;
 mod trace;
