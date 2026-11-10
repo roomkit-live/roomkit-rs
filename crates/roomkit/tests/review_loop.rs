@@ -37,7 +37,7 @@ fn agent(name: &str, role: &str, responses: &[&str]) -> Agent<MockAiProvider> {
 
 /// A kit holding an SMS transport, and room `r1` binding it, installed
 /// with `review`.
-async fn room(review: Loop) -> RoomKit {
+async fn room(review: Arc<Loop>) -> RoomKit {
     let kit = RoomKit::new(RoomKitOptions::default());
     let sms = RecordingTransport::new(
         id("sms"),
@@ -45,7 +45,7 @@ async fn room(review: Loop) -> RoomKit {
         RecordingTransportOptions::default(),
     );
     kit.register_channel(sms).unwrap();
-    let review: Arc<dyn Orchestration> = Arc::new(review);
+    let review: Arc<dyn Orchestration> = review;
     let options = CreateRoomOptions {
         room_id: Some(RoomId::new("r1").unwrap()),
         orchestration: Some(Some(review)),
@@ -79,6 +79,7 @@ async fn messages(kit: &RoomKit) -> Vec<(String, String)> {
 
 // Python: tests/orchestration/test_loop_strategy.py::TestExecuteLoop::test_revision_cycle,
 // with the agents given live, as the integrator gives them.
+// Python: tests/orchestration/test_room_installs.py::test_installing_a_strategy_again_in_its_room_replaces_its_own[loop]
 #[tokio::test]
 async fn a_loop_of_live_agents_revises_until_its_reviewer_approves() {
     let writer = agent("writer", "Writer", &["Draft one.", "Draft two."]);
@@ -87,7 +88,11 @@ async fn a_loop_of_live_agents_revises_until_its_reviewer_approves() {
         reviewer: Some(StrategyAgent::channel(editor)),
         ..LoopOptions::default()
     };
-    let kit = room(Loop::new(StrategyAgent::channel(writer), options).unwrap()).await;
+    let review = Arc::new(Loop::new(StrategyAgent::channel(writer), options).unwrap());
+    let kit = room(Arc::clone(&review)).await;
+    Orchestration::install(review.as_ref(), &kit, &RoomId::new("r1").unwrap())
+        .await
+        .unwrap();
 
     let message = InboundMessage::new(id("sms"), "u1", TextContent::new("Write it."));
     let result = kit

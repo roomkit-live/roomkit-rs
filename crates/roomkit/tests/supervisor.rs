@@ -190,13 +190,56 @@ async fn a_supervisor_given_live_agents_delegates_and_answers() {
 
 // Python: tests/test_supervisor.py::TestSupervisorInstall::test_double_install_strategy_tool_no_duplicate
 // Python: tests/orchestration/test_strategy_supervisor.py::TestSupervisorInstall::test_double_install_skips_tools
+// Python: tests/orchestration/test_room_installs.py::test_installing_a_strategy_again_in_its_room_replaces_its_own[supervisor-per-worker,supervisor-team,supervisor-auto]
 #[tokio::test]
 async fn a_supervisor_installed_again_in_its_room_serves_its_tool_once() {
-    let lead_model = model(vec![says("Hello.")]);
+    for (strategy, auto, tool) in [
+        (None, false, Some("delegate_to_analyst")),
+        (
+            Some(WorkerStrategy::Parallel),
+            false,
+            Some("delegate_workers"),
+        ),
+        (Some(WorkerStrategy::Parallel), true, None),
+    ] {
+        let (lead, analyst) = reinstall_supervisor(strategy, auto).await;
+        let requests = lead.calls();
+        if let Some(tool) = tool {
+            assert_eq!(requests.len(), 1);
+            assert_eq!(declared(&requests[0]), [tool, "read_stored_result"]);
+            assert_eq!(analyst.calls().len(), 0);
+        } else {
+            // Reinstalling its runner causes neither a second pass nor an
+            // extra worker run, and declares no delegation tool.
+            assert_eq!(requests.len(), 2);
+            assert_eq!(analyst.calls().len(), 1);
+            for request in &requests {
+                assert!(
+                    !declared(request)
+                        .iter()
+                        .any(|name| name.starts_with("delegate_"))
+                );
+            }
+        }
+    }
+}
+
+async fn reinstall_supervisor(
+    strategy: Option<WorkerStrategy>,
+    auto_delegate: bool,
+) -> (MockAiProvider, MockAiProvider) {
+    let answers = if auto_delegate {
+        vec![says("Research it."), says("Hello.")]
+    } else {
+        vec![says("Hello.")]
+    };
+    let lead_model = model(answers);
+    let analyst_model = model(vec![says("The research.")]);
     let lead = agent("sup", "Coordinator", lead_model.clone());
-    let analyst = agent("analyst", "Analyst", model(vec![]));
+    let analyst = agent("analyst", "Analyst", analyst_model.clone());
     let options = SupervisorOptions {
-        strategy: Some(WorkerStrategy::Parallel),
+        strategy,
+        auto_delegate,
         ..SupervisorOptions::default()
     };
     let team = Arc::new(
@@ -217,11 +260,8 @@ async fn a_supervisor_installed_again_in_its_room_serves_its_tool_once() {
         .unwrap();
     ask(&kit, "Hi.").await;
 
-    assert_eq!(
-        declared(&lead_model.calls()[0]),
-        ["delegate_workers", "read_stored_result"]
-    );
     kit.close().await.unwrap();
+    (lead_model, analyst_model)
 }
 
 // Python: tests/test_supervisor.py::TestPerWorkerDelegation::test_delegation_exception_returns_error

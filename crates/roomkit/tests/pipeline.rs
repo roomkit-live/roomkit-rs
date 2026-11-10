@@ -9,14 +9,15 @@ use std::sync::Arc;
 use roomkit::model::{ChannelId, ChannelType, InboundMessage, RoomId, TextContent};
 use roomkit::orchestration::pipeline::InstallOptions;
 use roomkit::orchestration::{
-    ConversationPipelineOptions, ConversationRouterOptions, InstallOptions as RouterInstallOptions,
-    PipelineOptions, StrategyAgent,
+    ConversationPipelineOptions, ConversationRouterOptions, ConversationState,
+    InstallOptions as RouterInstallOptions, PipelineOptions, StrategyAgent,
+    save_conversation_state,
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, ConversationPipeline, ConversationRouter, CreateRoomOptions,
     InstallStrategyOptions, Orchestration, Pipeline, PipelineStage, ProcessInboundOptions, RoomKit,
-    RoomKitError, RoomKitOptions,
+    RoomKitError, RoomKitOptions, Swarm,
 };
 use roomkit_ai::{
     Agent, AgentOptions, AiChannelOptions, AiTool, MockAiProvider, MockAiProviderOptions,
@@ -242,7 +243,7 @@ async fn a_pipeline_with_no_agent_is_refused_at_its_install() {
 
 /// A kit holding room `r1` and an SMS transport bound to it, with the agents
 /// `a` and `b`, whose models it returns.
-async fn kit_with_room() -> (RoomKit, MockAiProvider) {
+async fn kit_with_room() -> (RoomKit, [MockAiProvider; 2]) {
     let kit = RoomKit::new(RoomKitOptions::default());
     let sms = RecordingTransport::new(
         id("sms"),
@@ -254,7 +255,9 @@ async fn kit_with_room() -> (RoomKit, MockAiProvider) {
     let options = AgentOptions::default();
     kit.register_channel(Agent::new(id("a"), first.clone(), options).unwrap())
         .unwrap();
-    kit.register_channel(agent("b", None)).unwrap();
+    let second = model();
+    kit.register_channel(Agent::new(id("b"), second.clone(), AgentOptions::default()).unwrap())
+        .unwrap();
     let options = CreateRoomOptions {
         room_id: Some(room()),
         ..CreateRoomOptions::default()
@@ -263,38 +266,53 @@ async fn kit_with_room() -> (RoomKit, MockAiProvider) {
     kit.attach_channel(&room(), &id("sms"), AttachChannelOptions::default())
         .await
         .unwrap();
-    (kit, first)
+    (kit, [first, second])
 }
 
 // Python: tests/orchestration/test_room_installs.py::test_installing_a_strategy_again_in_its_room_replaces_its_own[pipeline]
+// Python: tests/orchestration/test_room_installs.py::test_installing_a_strategy_again_in_its_room_replaces_its_own[swarm]
 #[tokio::test]
 async fn installing_it_again_in_its_room_replaces_its_own() {
-    let (kit, first) = kit_with_room().await;
-    let pipeline = Arc::new(Pipeline::new(
-        vec![id("a").into(), id("b").into()],
-        PipelineOptions::default(),
-    ));
-    let same = Arc::clone(&pipeline);
+    let agents = vec![id("a").into(), id("b").into()];
+    let pipeline = Pipeline::new(agents.clone(), PipelineOptions::default());
+    let swarm = Swarm::new(agents, None);
+    let strategies: [Arc<dyn Orchestration>; 2] = [Arc::new(pipeline), Arc::new(swarm)];
+    for strategy in strategies {
+        reinstall_without_another_handoff(strategy).await;
+    }
+}
+
+async fn reinstall_without_another_handoff(strategy: Arc<dyn Orchestration>) {
+    let (kit, providers) = kit_with_room().await;
+    let same = Arc::clone(&strategy);
     kit.install_strategy(&room(), same, InstallStrategyOptions::default())
         .await
         .unwrap();
 
-    Orchestration::install(&*pipeline, &kit, &room())
+    Orchestration::install(&*strategy, &kit, &room())
         .await
         .unwrap();
 
-    let message = InboundMessage::new(id("sms"), "u1", TextContent::new("Hi."));
-    kit.process_inbound(message, ProcessInboundOptions::default())
-        .await
-        .unwrap();
+    for (name, provider) in ["a", "b"].into_iter().zip(providers) {
+        let state = ConversationState {
+            active_agent_id: Some(id(name)),
+            ..ConversationState::default()
+        };
+        save_conversation_state(kit.store(), &room(), &state)
+            .await
+            .unwrap();
+        let message = InboundMessage::new(id("sms"), "u1", TextContent::new("Hi."));
+        kit.process_inbound(message, ProcessInboundOptions::default())
+            .await
+            .unwrap();
+        let calls = provider.calls();
+        assert_eq!(calls.len(), 1, "one turn of {name}");
+        let turn = calls.first().unwrap();
+        let handoffs = turn
+            .tools
+            .iter()
+            .filter(|tool| tool.name == "handoff_conversation");
+        assert_eq!(handoffs.count(), 1, "one handoff for {name}");
+    }
     kit.close().await.unwrap();
-    let calls = first.calls();
-    let [turn] = calls.as_slice() else {
-        panic!("one turn of a, got {}", calls.len());
-    };
-    let handoffs = turn
-        .tools
-        .iter()
-        .filter(|tool| tool.name == "handoff_conversation");
-    assert_eq!(handoffs.count(), 1);
 }
