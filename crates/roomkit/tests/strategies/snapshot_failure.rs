@@ -52,7 +52,7 @@ async fn uninstall_and_retry(kit: &RoomKit<Faulty>, retry: Arc<dyn Orchestration
         kit.uninstall_strategy(&r1(), UninstallStrategyOptions::default()),
     )
     .await
-    .expect("a failed install must not leave an uninstall waiting forever")
+    .unwrap()
     .unwrap();
     assert!(uninstalled, "the failed claim is released explicitly");
     assert!(
@@ -80,11 +80,11 @@ async fn an_uninstall_after_an_install_the_store_cut_short_frees_the_room() {
         kit.room_strategy(&r1(), RoomStrategyOptions::default())
             .is_none()
     );
-    assert!(
+    assert_eq!(
         kit.list_bindings(&r1(), ListBindingsOptions::default())
             .await
-            .unwrap()
-            .is_empty()
+            .unwrap(),
+        Vec::new()
     );
     failed_snapshot(&kit, Arc::new(Plain)).await;
     let refused = kit
