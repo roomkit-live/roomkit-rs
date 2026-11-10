@@ -652,7 +652,9 @@ impl<S: ConversationStore> RoomKit<S> {
             .is_some_and(|channel| channel.channel_type == ChannelType::HOST);
         let channel = self.inner.channel(&message.channel_id);
         let (Some(channel), false) = (channel, is_host) else {
-            return Box::pin(self.traced_message(message, options, publication, deadline)).await;
+            return self
+                .message_without_channel_span(message, options, publication, deadline)
+                .await;
         };
         let sender = channel.normalize_address(&message.sender_id);
         let deferred = options.defer_delivery;
@@ -662,6 +664,32 @@ impl<S: ConversationStore> RoomKit<S> {
         let work = Box::pin(self.traced_message(message, options, publication, deadline));
         let result = span.within(work).await;
         telemetry::end_inbound_span(span, &result, deferred);
+        result
+    }
+
+    /// An unknown or host channel normally opens no inbound span. A named
+    /// call the reentry cap refused before that lookup is still traced,
+    /// as Python's `_charge_named_room` refusal is (RFC §9.5.1).
+    async fn message_without_channel_span(
+        &self,
+        message: InboundMessage,
+        options: ProcessInboundOptions,
+        publication: Option<String>,
+        deadline: crate::deadline::CallDeadline,
+    ) -> Result<InboundResult, RoomKitError> {
+        let result =
+            Box::pin(self.traced_message(message.clone(), options.clone(), publication, deadline))
+                .await;
+        if options.room_id.is_some()
+            && result.as_ref().is_ok_and(|answer| {
+                answer.blocked && answer.reason.as_deref() == Some("reentry_loop_cap")
+            })
+        {
+            let span =
+                self.inner
+                    .inbound_span(&message, &message.sender_id, options.room_id.as_ref());
+            telemetry::end_inbound_span(span, &result, options.defer_delivery);
+        }
         result
     }
 

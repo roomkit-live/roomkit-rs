@@ -80,6 +80,7 @@
 //! still holds, and its calls are new arrivals (RFC §9.5.1).
 
 mod adoption;
+mod floors;
 mod run;
 mod section;
 
@@ -141,7 +142,7 @@ pub(crate) struct Work {
 pub(crate) struct ExecutionContext {
     frames: Arc<[Frame]>,
     body: Option<HookBody>,
-    floor: Option<u32>,
+    floor: Option<floors::Floor>,
     hand: Option<Hand>,
 }
 
@@ -344,7 +345,7 @@ impl ExecutionContext {
         Self {
             frames: frames.into(),
             body: self.body.clone(),
-            floor: self.floor,
+            floor: self.floor.clone(),
             hand: None,
         }
     }
@@ -354,7 +355,12 @@ impl ExecutionContext {
     /// call's observers, which keep the depth of the turn that made the call
     /// (RFC §8.3, "The hook calls of a cascade").
     pub(crate) fn at_least(mut self, floor: u32) -> Self {
-        self.floor = Some(self.floor.map_or(floor, |kept| kept.max(floor)));
+        self.floor = Some(floors::Floor::fixed(
+            self.floor
+                .as_ref()
+                .and_then(floors::Floor::depth)
+                .map_or(floor, |kept| kept.max(floor)),
+        ));
         self
     }
 
@@ -515,7 +521,10 @@ impl ExecutionContext {
             .filter(|frame| frame.runs())
             .filter_map(|frame| frame.work.response_depth);
         let body = self.running_body().map(|body| body.floor);
-        turns.chain(body).chain(self.floor).max()
+        turns
+            .chain(body)
+            .chain(self.floor.as_ref().and_then(floors::Floor::depth))
+            .max()
     }
 
     /// What a call into `room_id` made in this context draws, and on which

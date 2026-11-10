@@ -810,6 +810,7 @@ impl TurnHost {
                 event.clone(),
                 self.shared.context.clone(),
             );
+            let observing = execution.clone().observing(floor, observing);
             let (host, spec) = (self.clone(), spec.clone());
             let bounded = async move {
                 let observed = observing.await;

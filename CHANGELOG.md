@@ -6,6 +6,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A named inbound call refused at the reentry cap keeps its blocked trace even when its channel is unregistered (RFC §9.5.1, RMK-1616).
+
+- Each turn observer lends its depth only while its own body runs: a task it leaves starts a new chain once that body ends, even while a sibling observer keeps the parent turn alive (RFC §8.3, §9.5.1, RMK-1616).
+
 - A delivery lane retries its completed indexes' failed cursor writes before waiting on another worker, preventing a completed message from being reported as skipped and unblocking the next worker's delivery (RFC §13.5, RMK-1616).
 
 - `DelegateOptions` and `DelegateHandlerOptions` take `max_result_chars`, how much of a worker's output its relayed result carries, 4,000 by default.

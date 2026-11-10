@@ -171,6 +171,7 @@ impl TurnHost {
                 payload.clone(),
                 self.shared.context.clone(),
             );
+            let observing = ExecutionContext::current().observing(0, observing);
             let (host, spec, done) = (self.clone(), spec.clone(), Arc::clone(&ended));
             let bounded = async move {
                 let observed = observing.await;

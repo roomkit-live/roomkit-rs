@@ -34,8 +34,16 @@ use roomkit::{
 use roomkit_core::ops::ChannelConfig;
 use roomkit_core::rules::transcoding::text_of;
 
+#[path = "hook_bodies/direct_changes.rs"]
+mod direct_changes;
+#[path = "hook_bodies/lifetimes.rs"]
+mod lifetimes;
 #[path = "hook_bodies/streamed_budget.rs"]
 mod streamed_budget;
+#[path = "hook_bodies/warning.rs"]
+mod warning;
+#[path = "support/warnings.rs"]
+mod warnings;
 
 /// `max_chain_depth` 1: ten passes and ten hook calls per cascade.
 const BUDGET: usize = 10;
@@ -456,11 +464,12 @@ async fn a_hook_opening_a_room_after_every_event_stops_at_the_cap() {
         .list_rooms(roomkit::store::ListRoomsOptions::default())
         .await
         .unwrap();
-    let refused = taken(&answers)
-        .iter()
-        .filter(|reason| reason.as_deref() == Some("reentry_loop_cap"))
-        .count();
-    assert_eq!((refused, rooms.len()), (1, 1 + BUDGET));
+    let mut reasons = taken(&answers);
+    reasons.sort();
+    let mut expected = vec![None; BUDGET];
+    expected.push(Some("reentry_loop_cap".to_owned()));
+    assert_eq!(reasons, expected);
+    assert_eq!(rooms.len(), 1 + BUDGET);
 }
 
 /// RFC §8.3: a hook that awaits each answer and posts back to the agent:
@@ -678,71 +687,10 @@ enum Ends {
 /// the room's work.
 #[tokio::test]
 async fn a_task_the_hook_starts_calls_as_work_of_its_own() {
-    for ends in [Ends::Returns, Ends::Raises, Ends::TimesOut] {
-        let kit = room(1).await;
-        let sent: Kept<(u32, Option<String>)> = kept();
-        let over = Arc::new(tokio::sync::Notify::new());
-        let (hook_kit, hook_sent, hook_over) = (kit.clone(), Arc::clone(&sent), Arc::clone(&over));
-        let spec = HookOptions {
-            execution: HookExecution::Async,
-            name: "start".to_owned(),
-            timeout: Duration::from_millis(10),
-            ..Default::default()
-        };
-        kit.hook(
-            HookTrigger::BeforeBroadcast,
-            move |event: RoomEvent, _| {
-                let (kit, sent, over) = (
-                    hook_kit.clone(),
-                    Arc::clone(&hook_sent),
-                    Arc::clone(&hook_over),
-                );
-                async move {
-                    if text_of(&event.content) != "hi" {
-                        return Ok(HookResult::allow(AllowOptions::default()));
-                    }
-                    tokio::spawn(keep_context(async move {
-                        over.notified().await;
-                        for n in 0..=2 * BUDGET {
-                            let later = SendEventOptions::default();
-                            let event = kit
-                                .send_event(
-                                    &room_id(),
-                                    &channel("sms"),
-                                    TextContent::new(format!("later {n}")),
-                                    later,
-                                )
-                                .await
-                                .unwrap();
-                            push(&sent, (event.chain_depth, event.blocked_by));
-                        }
-                    }));
-                    match ends {
-                        Ends::Returns => Ok(HookResult::allow(AllowOptions::default())),
-                        Ends::Raises => Err("the hook's body fails".into()),
-                        Ends::TimesOut => std::future::pending().await,
-                    }
-                }
-            },
-            spec,
-        )
-        .unwrap();
-        kit.process_inbound(
-            message("hi"),
-            ProcessInboundOptions {
-                room_id: Some(room_id()),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        tokio::time::sleep(Duration::from_millis(30)).await;
-        over.notify_one();
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        while len(&sent) <= 2 * BUDGET && tokio::time::Instant::now() < deadline {
-            tokio::time::sleep(Duration::from_millis(5)).await;
+    for trigger in [HookTrigger::BeforeBroadcast, HookTrigger::AfterBroadcast] {
+        for ends in [Ends::Returns, Ends::Raises, Ends::TimesOut] {
+            lifetimes::after_its_body(trigger, ends).await;
         }
-        assert_eq!(taken(&sent), vec![(0, None); 2 * BUDGET + 1], "{ends:?}");
     }
 }
 
@@ -1018,98 +966,12 @@ async fn a_hook_changing_its_room_on_every_change_stops_at_the_cap() {
 /// agent answered: refused once, the message kept, the agent asked once.
 #[tokio::test]
 async fn a_direct_change_past_the_cap_writes_nothing() {
-    for deleting in [false, true] {
-        let kit = room(3).await;
-        let agent = Answering::new("ai");
-        kit.register_channel(agent.clone()).unwrap();
-        kit.attach_channel(&room_id(), &channel("ai"), AttachChannelOptions::default())
-            .await
-            .unwrap();
-        let spare = SendEventOptions {
-            addressed_to: Some(Vec::new()),
-            ..Default::default()
-        };
-        let spare = kit
-            .send_event(
-                &room_id(),
-                &channel("sms"),
-                TextContent::new("spare"),
-                spare,
-            )
-            .await
-            .unwrap();
-        let refused: Kept<RoomKitError> = kept();
-        let (hook_kit, hook_refused) = (kit.clone(), Arc::clone(&refused));
-        kit.hook(
-            HookTrigger::AfterBroadcast,
-            move |event: RoomEvent, _| {
-                let (kit, refused, spare) = (
-                    hook_kit.clone(),
-                    Arc::clone(&hook_refused),
-                    spare.id.clone(),
-                );
-                async move {
-                    if text_of(&event.content) != "hi" {
-                        return;
-                    }
-                    for n in 0..30 {
-                        let mut metadata = roomkit::model::Metadata::new();
-                        metadata.insert("n".to_owned(), n.into());
-                        let updates = UpdateEventOptions {
-                            metadata: Some(metadata),
-                            ..UpdateEventOptions::default()
-                        };
-                        kit.update_event(&room_id(), &spare, updates).await.unwrap();
-                    }
-                    let one_more = if deleting {
-                        kit.delete_event(&room_id(), &event.id, DeleteEventOptions::default())
-                            .await
-                            .map(|_| ())
-                    } else {
-                        let updates = UpdateEventOptions {
-                            content: Some(TextContent::new("changed").into()),
-                            ..UpdateEventOptions::default()
-                        };
-                        kit.update_event(&room_id(), &event.id, updates)
-                            .await
-                            .map(|_| ())
-                    };
-                    if let Err(error) = one_more {
-                        push(&refused, error);
-                    }
-                }
-            },
-            HookOptions {
-                execution: HookExecution::Async,
-                name: "bulk".to_owned(),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let hi = kit
-            .send_event(
-                &room_id(),
-                &channel("sms"),
-                TextContent::new("hi"),
-                SendEventOptions::default(),
-            )
-            .await
-            .unwrap();
-        roomkit::testing::idle(&kit).await;
-        let stored = kit.store().get_event(&hi.id).await.unwrap();
-        assert_eq!(
-            (
-                taken(&refused),
-                stored.map(|event| text_of(&event.content)),
-                len(&agent.asked)
-            ),
-            (
-                vec![RoomKitError::ReentryLoopCap(room_id())],
-                Some("hi".to_owned()),
-                1
-            ),
-            "deleting {deleting}"
-        );
+    for change in [
+        direct_changes::Change::Update,
+        direct_changes::Change::Delete,
+        direct_changes::Change::Regenerate,
+    ] {
+        direct_changes::check(change).await;
     }
 }
 

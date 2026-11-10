@@ -176,6 +176,7 @@ impl InputNotification {
                 event.clone(),
                 context.clone(),
             );
+            let observing = ExecutionContext::current().observing(0, observing);
             let (kit, ids, spec) = (Arc::clone(&self.kit), self.ids.clone(), spec.clone());
             let bounded = async move {
                 let observed = observing.await;

@@ -8,6 +8,9 @@
     reason = "a test fails on a broken fixture"
 )]
 
+#[path = "support/clock.rs"]
+mod clock;
+
 use std::future::{Future, pending, ready};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -21,7 +24,7 @@ use roomkit::model::{
     RoomEvent, RoomId, TextContent,
 };
 use roomkit::telemetry::{MockTelemetryProvider, TelemetryConfig};
-use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions, kit_with_environment};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelError, ConversationStore, CreateRoomOptions, HookOptions,
     HookTrigger, InMemoryLockManager, InboundRoomRouter, ProcessInboundOptions, RoomKit,
@@ -69,10 +72,13 @@ impl InboundRoomRouter for Stuck {
 /// A kit reporting to a mock with `options`, with a registered `sms`.
 fn kit_of(options: RoomKitOptions) -> (RoomKit, Arc<MockTelemetryProvider>) {
     let mock = Arc::new(MockTelemetryProvider::default());
-    let kit = RoomKit::new(RoomKitOptions {
-        telemetry: Some(TelemetryConfig::from(Arc::clone(&mock))),
-        ..options
-    });
+    let kit = kit_with_environment(
+        RoomKitOptions {
+            telemetry: Some(TelemetryConfig::from(Arc::clone(&mock))),
+            ..options
+        },
+        clock::TokioClock::new(),
+    );
     let sms = RecordingTransport::new(
         id("sms"),
         ChannelType::SMS,
@@ -435,7 +441,7 @@ impl InboundRoomRouter for Fresh {
 // `_still_within` raises _RoutingTimeoutError before the last new room, the
 // deadline passed in the second new room's creation hooks, each room bound by
 // a hook to another number (RMK-1396).
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_deadline_passed_before_the_last_new_room_reads_its_timeout() {
     let (kit, mock) = kit_of(RoomKitOptions {
         inbound_router: Some(Arc::new(Fresh(Arc::default()))),

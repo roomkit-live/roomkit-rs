@@ -12,8 +12,14 @@
     reason = "a test fails on a broken fixture"
 )]
 
+#[path = "reentrancy/awaited_task.rs"]
+mod awaited_task;
+#[path = "reentrancy/caller_deadline.rs"]
+mod caller_deadline;
 #[path = "support/clock.rs"]
 mod clock;
+#[path = "reentrancy/named_budget.rs"]
+mod named_budget;
 use clock::TokioClock;
 
 use std::future::{Future, ready};
@@ -1878,11 +1884,12 @@ async fn a_task_a_locked_hook_spawns_in_its_context_acts_for_it_while_it_runs() 
 /// still holds the room's lock for its next hook: its injection is a new
 /// arrival, committed after the message, where it was refused as a call
 /// waiting for itself.
-#[tokio::test]
-async fn a_task_a_locked_hook_left_running_calls_as_a_new_arrival_once_it_is_over() {
+async fn task_left_running_is_a_new_arrival(needs_lock: bool) {
     let (kit, _) = room().await;
     let (hook_over, calling) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
     let sent = Arc::new(Mutex::new(None));
+    let committed = Arc::new(Notify::new());
+    let task_committed = Arc::clone(&committed);
     let (hook_kit, notify_over, notify_calling, task_sent) = (
         kit.clone(),
         Arc::clone(&hook_over),
@@ -1898,6 +1905,7 @@ async fn a_task_a_locked_hook_left_running_calls_as_a_new_arrival_once_it_is_ove
                 Arc::clone(&notify_calling),
                 Arc::clone(&task_sent),
             );
+            let committed = Arc::clone(&task_committed);
             async move {
                 if event.source.channel_id == channel("sms") {
                     let task_over = Arc::clone(&over);
@@ -1917,29 +1925,33 @@ async fn a_task_a_locked_hook_left_running_calls_as_a_new_arrival_once_it_is_ove
                                 .map(|event| event.index)
                                 .map_err(|error| error.to_string()),
                         );
+                        committed.notify_one();
                     })));
                     over.notify_one();
                 }
                 Ok(HookResult::allow(AllowOptions::default()))
             }
         },
-        before_broadcast("notifier", true),
+        before_broadcast("notifier", needs_lock),
     )
     .unwrap();
-    // The pass's next hook, under the same lock, runs once the task calls.
+    // The pass's next hook keeps the lock or ticket while the task calls.
+    // An adopted call could commit here; a fresh arrival must wait.
     let next = HookOptions {
         priority: 10,
-        ..before_broadcast("next", true)
+        ..before_broadcast("next", needs_lock)
     };
     let next_calling = Arc::clone(&calling);
     kit.hook(
         HookTrigger::BeforeBroadcast,
         move |event: RoomEvent, _| {
             let calling = Arc::clone(&next_calling);
+            let committed = Arc::clone(&committed);
             async move {
                 if event.source.channel_id == channel("sms") {
                     calling.notified().await;
-                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    let _ =
+                        tokio::time::timeout(Duration::from_millis(20), committed.notified()).await;
                 }
                 Ok(HookResult::allow(AllowOptions::default()))
             }
@@ -1956,6 +1968,17 @@ async fn a_task_a_locked_hook_left_running_calls_as_a_new_arrival_once_it_is_ove
         (sent, messages(&kit).await),
         (Some(Ok(4)), vec!["#3 sms".to_owned(), "#4 ws".to_owned()])
     );
+}
+
+// Python: tests/test_reentrance.py::TestACallFromATaskALockedHookStarted::test_once_the_hook_is_over_its_call_is_a_new_arrival
+#[tokio::test]
+async fn a_task_a_locked_hook_left_running_calls_as_a_new_arrival_once_it_is_over() {
+    task_left_running_is_a_new_arrival(true).await;
+}
+
+#[tokio::test]
+async fn a_task_an_off_lock_hook_left_running_calls_as_a_new_arrival_once_it_is_over() {
+    task_left_running_is_a_new_arrival(false).await;
 }
 
 /// Decided for step 3 milestone 2 (the review's probe
@@ -2421,6 +2444,7 @@ async fn a_call_a_hook_s_task_makes_outlives_the_event_s_caller_gone() {
         (sent.map(|event| event.index), timeline(&kit).await.pop()),
         (Ok(3), Some("#3 ws delivered Heads up".to_owned()))
     );
+    assert_eq!(message_texts(&kit).await, ["Heads up"]);
 }
 
 /// RFC §13.6, §9.5.1 Reentrance: a task an off-lock hook starts and never
@@ -2804,12 +2828,12 @@ async fn a_call_a_locked_hook_s_task_nests_outlives_the_hook_s_timeout() {
                 sent.map(|event| event.index).ok(),
                 result.event.map(|event| event.index)
             ),
-            tap.events().len()
+            timeout_names(&tap)
         ),
         (
             vec!["#3 ws".to_owned(), "#4 sms".to_owned()],
             (Some(3), Some(4)),
-            1
+            vec!["notifier".to_owned()]
         )
     );
 }
@@ -3003,90 +3027,11 @@ async fn a_call_a_locked_hook_s_task_nests_goes_on_past_the_event_s_caller_gone(
 /// `tests/test_reentrance.py`, the test of the same name.
 #[tokio::test(start_paused = true)]
 async fn a_call_a_locked_hook_s_task_nests_ends_by_the_event_s_deadline_past_its_caller() {
-    let (kit, _) = room_on(kit_with_environment(
-        RoomKitOptions {
-            process_timeout: Duration::from_millis(50),
-            ..Default::default()
-        },
-        TokioClock::new(),
-    ))
-    .await;
-    let tap = EventTap::on(&kit, &["process_timeout"]);
-    let entered = Arc::new(Notify::new());
-    let slow_entered = Arc::clone(&entered);
-    kit.hook(
-        HookTrigger::BeforeBroadcast,
-        move |event: RoomEvent, _| {
-            let entered = Arc::clone(&slow_entered);
-            async move {
-                if text_of(&event.content) == "Heads up" {
-                    entered.notify_one();
-                    std::future::pending::<()>().await;
-                }
-                Ok(HookResult::allow(AllowOptions::default()))
-            }
-        },
-        before_broadcast("slow", true),
-    )
-    .unwrap();
-    let hook_kit = kit.clone();
-    let started: Started = Arc::new(Mutex::new(Vec::new()));
-    let tasks = Arc::clone(&started);
-    let notifier_entered = Arc::clone(&entered);
-    kit.hook(
-        HookTrigger::BeforeBroadcast,
-        move |event: RoomEvent, _| {
-            let (kit, tasks) = (hook_kit.clone(), Arc::clone(&tasks));
-            let entered = Arc::clone(&notifier_entered);
-            async move {
-                if text_of(&event.content) == "hello" {
-                    // Its own deadline then falls well after the event's.
-                    tokio::time::sleep(Duration::from_millis(20)).await;
-                    // Started in the hook's context and never awaited.
-                    let task = tokio::spawn(keep_context(async move {
-                        kit.send_event(
-                            &room_id(),
-                            &channel("ws"),
-                            TextContent::new("Heads up"),
-                            SendEventOptions::default(),
-                        )
-                        .await
-                    }));
-                    tasks.lock().unwrap().push(task);
-                    entered.notified().await;
-                    entered.notify_one();
-                }
-                Ok(HookResult::allow(AllowOptions::default()))
-            }
-        },
-        before_broadcast("notifier", true),
-    )
-    .unwrap();
-    let caller_kit = kit.clone();
-    // Scheduling must not consume the parent's deadline before the nested
-    // hook starts. Virtual time also distinguishes its 50 ms deadline from
-    // the nested call's own, which starts 20 ms later.
-    let began = tokio::time::Instant::now();
-    let caller = tokio::spawn(async move { send(&caller_kit, "hello").await });
-    tokio::time::timeout(BOUND, entered.notified())
-        .await
-        .unwrap();
-    caller.abort();
-    drop(caller.await);
-    let task = started.lock().unwrap().pop().unwrap();
-    let sent = tokio::time::timeout(BOUND, task).await.unwrap().unwrap();
-    // Allow timer tick rounding, but never reach the nested call's deadline.
-    assert!((Duration::from_millis(50)..Duration::from_millis(70)).contains(&began.elapsed()));
-    let other = send(&kit, "other").await.unwrap();
-    assert_eq!(
-        (sent.err(), messages(&kit).await, other.blocked, tap.types()),
-        (
-            Some(RoomKitError::ProcessTimeout { room_id: room_id() }),
-            vec!["#3 sms".to_owned()],
-            false,
-            Vec::<String>::new()
-        )
-    );
+    for body_returned in [false, true] {
+        for cancels in [1, 2] {
+            caller_deadline::nested_call_keeps_deadline(body_returned, cancels).await;
+        }
+    }
 }
 
 /// A locked hook on `trigger`, timing out at 10 ms, whose task, spawned
@@ -3241,6 +3186,7 @@ async fn a_task_s_call_that_never_ends_holds_an_injected_pass_to_its_own_deadlin
 #[tokio::test]
 async fn a_hook_that_times_out_while_its_entry_works_is_heard_after_it() {
     let (kit, audit) = room().await;
+    let tap = EventTap::on(&kit, &["hook_timeout"]);
     kit.hook(
         HookTrigger::BeforeBroadcast,
         |event: RoomEvent, _| async move {
@@ -3285,6 +3231,8 @@ async fn a_hook_that_times_out_while_its_entry_works_is_heard_after_it() {
         ),
         (Some((3, EventStatus::Delivered)), vec!["hello".to_owned()])
     );
+    assert_eq!(message_texts(&kit).await, ["hello"]);
+    assert_eq!(timeout_names(&tap), ["notifier"]);
 }
 
 /// RFC §13.6 "A caller that stops waiting", §9.5.1 Reentrance: an off-lock
@@ -3438,6 +3386,7 @@ async fn a_call_a_hook_s_task_makes_keeps_its_own_deadline() {
             Some("#3 ws delivered Heads up".to_owned())
         )
     );
+    assert_eq!(message_texts(&kit).await, ["Heads up"]);
 }
 
 /// Routes every message to `room_1`.
@@ -4776,4 +4725,31 @@ fn every_row() -> roomkit::store::ListEventsOptions {
         }),
         ..roomkit::store::ListEventsOptions::default()
     }
+}
+
+/// Every stored message's text, including blocked rows.
+async fn message_texts(kit: &RoomKit) -> Vec<String> {
+    kit.store()
+        .list_events(&room_id(), every_row())
+        .await
+        .unwrap()
+        .iter()
+        .filter(|event| event.r#type == EventType::Message)
+        .map(|event| text_of(&event.content))
+        .collect()
+}
+
+fn timeout_names(tap: &EventTap) -> Vec<String> {
+    tap.events()
+        .iter()
+        .map(|event| {
+            event
+                .data
+                .get("hook_name")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect()
 }
