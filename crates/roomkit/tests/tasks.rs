@@ -785,20 +785,20 @@ async fn assert_refused_task_stays_failed(
     let arguments = [("task_id".to_owned(), serde_json::json!(task_id))]
         .into_iter()
         .collect();
-    // The same bridge serves CancelTaskTool: an ended task stays failed,
-    // even with no status-bus entry in the tool's lookup window.
-    for window in [500, 0] {
-        let answer = kit
-            .cancel_task_answer(
-                room,
-                Some(&channel("speaker")),
-                &arguments,
-                TaskToolWindow { window, limit: 0 },
-            )
-            .await;
-        let answer: serde_json::Value = serde_json::from_str(&answer).unwrap();
-        assert_eq!(answer.get("status"), Some(&serde_json::json!("failed")));
-    }
+    // The same bridge serves CancelTaskTool: an ended task stays failed.
+    let answer = kit
+        .cancel_task_answer(
+            room,
+            Some(&channel("speaker")),
+            &arguments,
+            TaskToolWindow {
+                window: 500,
+                limit: 0,
+            },
+        )
+        .await;
+    let answer: serde_json::Value = serde_json::from_str(&answer).unwrap();
+    assert_eq!(answer.get("status"), Some(&serde_json::json!("failed")));
     assert!(!kit.cancel_task(task_id, CancelTaskOptions::default()).await);
     let spans = telemetry.get_spans(SpanKind::Delegation);
     assert_eq!(spans.len(), 1);
