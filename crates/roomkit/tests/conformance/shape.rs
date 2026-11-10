@@ -188,6 +188,7 @@ const MODEL: &[&str] = &[
     "name",
     "provider",
     "chat_dialect",
+    "deferred_tools",
     "response_schema",
     "response_schema_with_tools",
 ];

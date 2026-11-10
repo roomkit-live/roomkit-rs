@@ -121,7 +121,9 @@ impl<P: AiProvider> Loop<P> {
         // its tries and its fallback share (Python's `note_received`).
         let mut received = false;
         let last = loop {
-            let stream = self.provider.generate_structured_stream(&context);
+            let sending =
+                super::deferred::declared_for(self.provider.supports_deferred_tools(), &context);
+            let stream = self.provider.generate_structured_stream(&sending);
             let reading = (steering, out, prefix, &mut *window, limits);
             let held = context.response_schema.is_some();
             let failure = match Generation::read(stream, reading, held).await {
@@ -190,7 +192,8 @@ async fn fall_back(
     reading: Reading<'_>,
 ) -> Result<Generation, Failed> {
     tracing::warn!(target: "roomkit::ai", provider = fallback.dyn_name(), "trying the fallback provider");
-    let stream = fallback.dyn_generate_structured_stream(context);
+    let context = super::deferred::declared_for(fallback.dyn_supports_deferred_tools(), context);
+    let stream = fallback.dyn_generate_structured_stream(&context);
     let held = context.response_schema.is_some();
     let (steering, out, prefix, window, limits) = reading;
     let read = Generation::read(stream, (steering, out, prefix, &mut *window, limits), held).await;

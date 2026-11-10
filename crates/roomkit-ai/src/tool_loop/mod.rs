@@ -29,6 +29,8 @@
 mod between_rounds;
 mod calls;
 mod compaction;
+mod deferred;
+pub(crate) use deferred::DeferredTools;
 mod footprint;
 mod generation;
 mod hooks;
@@ -69,7 +71,6 @@ pub(crate) use self::thinking::ThinkingPublication;
 use self::thinking::ThinkingWindow;
 use self::tool_events::{Ended, Running, ToolEvents};
 use crate::author_images::refuses_content;
-use crate::loop_events::DeclaredTool;
 use crate::memory::{MemoryProvider, after_memory};
 use crate::provider::{
     AiContentPart, AiContext, AiMessage, AiProvider, AiToolResultPart, ProviderError,
@@ -125,6 +126,7 @@ pub(crate) struct ToolEnd {
     /// The structured copy a surface renders of its result, which the model
     /// never reads: what the kit's hooks left of it (RFC §9.3).
     pub(crate) structured_content: Option<Value>,
+    pub(crate) references: Vec<String>,
 }
 
 /// The items of a turn's loop, or the provider's error that ended it.
@@ -213,6 +215,7 @@ pub(crate) struct Loop<P> {
     pub(crate) loops: Arc<Loops>,
     /// What the turn's hooks left of its context (RFC §6.4).
     pub(crate) adopted: Adopted,
+    pub(crate) deferred: DeferredTools,
     /// The author images the turn's requests send, which a refusal of its
     /// first request marks refused in the room (RFC §6.4).
     pub(crate) sent_images: Option<crate::author_images::SentImages>,
@@ -318,7 +321,7 @@ impl<P: AiProvider> Loop<P> {
         let mut prefix = String::new();
         let mut limits = Limits::starting(&self.bounds, self.budget.clone());
         let mut nudged = false;
-        self.find_turn_input(&messages, system_prompt.clone());
+        self.open_declaration(&messages);
         if steering.read(&mut messages, &mut system_prompt) {
             let ending = (&limits, &steering, &out);
             return self.end(LoopEndReason::Cancelled, 0, spent, ending).await;
@@ -334,7 +337,7 @@ impl<P: AiProvider> Loop<P> {
             nudged = nudged || self.tell_it_to_stop(round, &mut messages);
             // Declared as the provider is about to be asked, nothing reported
             // of a round a cancel kept from running (RFC §6.4).
-            let asked = (self.round_tools(&mut spent), system_prompt.clone());
+            let asked = (self.round_tools(), system_prompt.clone());
             let reading = (&steering, &out, prefix.as_str(), round, &limits);
             let read = self.read_round(&messages, asked, reading).await;
             let read = read.and_then(|read| self.counted(read, &mut spent, &mut limits));
@@ -394,7 +397,7 @@ impl<P: AiProvider> Loop<P> {
                 .extend(generation.said().map(|said| (messages.len(), said)));
             let usage = generation.done.usage.clone();
             let (read, ran) = self.run_calls(generation, (&steering, round), &out).await;
-            self.media.keep_results(messages.len(), &ran.results);
+            self.keep_round_results(messages.len(), &ran.results);
             messages.extend(read);
             // A round counts once its calls ran (Python's `_run_announced_calls`).
             self.count_calls(&mut spent, ran.calls.len());
@@ -808,6 +811,7 @@ impl<P: AiProvider> Loop<P> {
                     name: end.call.name.clone(),
                     result: end.result.clone(),
                     is_error: result.is_error,
+                    references: end.references.clone(),
                 });
             }
             read.push(result);
@@ -861,6 +865,7 @@ impl<P: AiProvider> Loop<P> {
             result: ToolResult::Text("cancelled".to_owned()),
             duration: Duration::ZERO,
             structured_content: None,
+            references: Vec::new(),
         }
     }
 }
@@ -896,7 +901,6 @@ struct Spent {
     complete: bool,
     segments: Vec<String>,
     calls: u32,
-    declared: Vec<DeclaredTool>,
     started: Instant,
     /// Each round's reasoning, those that reasoned.
     thinking: Vec<String>,
@@ -912,7 +916,6 @@ impl Spent {
             complete: true,
             segments: Vec::new(),
             calls: 0,
-            declared: Vec::new(),
             started: Instant::now(),
             thinking: Vec::new(),
         }
@@ -922,17 +925,6 @@ impl Spent {
     fn add_thinking(&mut self, thinking: String) {
         if !thinking.is_empty() {
             self.thinking.push(thinking);
-        }
-    }
-
-    /// Adds what a round declared to the turn's declaration: one entry per
-    /// name, in first-declaration order, a later round's reveal kept once a
-    /// search dropped it (RFC §6.4).
-    fn declare(&mut self, round: impl Iterator<Item = DeclaredTool>) {
-        for tool in round {
-            if !self.declared.iter().any(|known| known.name == tool.name) {
-                self.declared.push(tool);
-            }
         }
     }
 

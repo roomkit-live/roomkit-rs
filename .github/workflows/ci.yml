@@ -62,9 +62,9 @@ jobs:
       # The pinned Python snapshot's copies match their fingerprint; their
       # roomkit commit's check needs a roomkit checkout, and is skipped here.
       - run: make api-check-pin
-      # The embedded OpenAI catalogue matches its fingerprint; its export
+      # The embedded provider catalogues match their fingerprints; their export
       # from the pinned roomkit commit needs a roomkit checkout, skipped here.
-      - run: make models-check
+      - run: make models-check anthropic-models-check
       # The tests of the rustdoc reader and of the parity report.
       - run: make api-test
 

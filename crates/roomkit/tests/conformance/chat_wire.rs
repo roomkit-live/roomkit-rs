@@ -25,12 +25,20 @@ pub(crate) async fn chat_messages(dialect: &str, context: &AiContext) -> Result<
         .map_err(|e| e.to_string())?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let base_url = format!("http://127.0.0.1:{port}/v1");
+    let (answer, content_type) = if dialect == "anthropic" {
+        (
+            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"scripted\",\"usage\":{}}}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            "text/event-stream",
+        )
+    } else {
+        (ANSWER, "application/json")
+    };
     let server = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.map_err(|e| e.to_string())?;
         let body = read_request(&mut stream).await?;
         let head = format!(
-            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{ANSWER}",
-            ANSWER.len()
+            "HTTP/1.1 200 OK\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{answer}",
+            answer.len()
         );
         stream
             .write_all(head.as_bytes())
@@ -40,6 +48,18 @@ pub(crate) async fn chat_messages(dialect: &str, context: &AiContext) -> Result<
     });
     let failed = |error: roomkit_ai::ProviderError| error.to_string();
     match dialect {
+        "anthropic" => {
+            let config = roomkit_anthropic::AnthropicConfig {
+                base_url: Some(base_url),
+                enable_prompt_caching: false,
+                ..roomkit_anthropic::AnthropicConfig::new("scripted", "scripted")
+            };
+            roomkit_anthropic::AnthropicAiProvider::new(config)
+                .map_err(failed)?
+                .generate(context)
+                .await
+                .map_err(failed)?;
+        }
         "openai" => {
             let config = OpenAiConfig {
                 base_url: Some(base_url),

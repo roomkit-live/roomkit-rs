@@ -248,6 +248,7 @@ fn definition(tool: &Value) -> Result<AiTool, ChannelError> {
         parameters: parameters.cloned().unwrap_or_else(|| json!({})),
         tags,
         changes_state: false,
+        defer_loading: false,
     })
 }
 
@@ -360,6 +361,7 @@ mod tests {
                 parameters: json!({}),
                 tags: Vec::new(),
                 changes_state: false,
+                defer_loading: false,
             }]
         );
         for falsy in [
@@ -460,6 +462,7 @@ mod tests {
                 parameters: json!({}),
                 tags: Vec::new(),
                 changes_state: false,
+                defer_loading: false,
             }]),
             ..AiChannelTurnConfig::default()
         };

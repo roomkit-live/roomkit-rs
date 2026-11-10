@@ -29,6 +29,8 @@ enum Gated {
     Runs { call: ToolCall, asked: Metadata },
     /// It was refused, and ends so.
     Refused(ToolCallReport),
+    /// Model arguments rejected after retaining the tool schema.
+    InvalidArguments(ToolCallReport),
 }
 
 impl<P: AiProvider> Loop<P> {
@@ -40,7 +42,7 @@ impl<P: AiProvider> Loop<P> {
     pub(super) async fn serve(&self, called: &Called, nth: usize) -> ToolEnd {
         let started = Instant::now();
         let mut span = None;
-        let (ended, asked) = match self.gate(called).await {
+        let (ended, asked, invalid_arguments) = match self.gate(called).await {
             Gated::Runs { call, asked } => {
                 span = self
                     .turn_span
@@ -49,9 +51,10 @@ impl<P: AiProvider> Loop<P> {
                 // The arguments the guard counts it on, which its hooks may
                 // rewrite once it ran.
                 let ran_with = call.arguments.clone();
-                (self.guarded(call).await, Some((asked, ran_with)))
+                (self.guarded(call).await, Some((asked, ran_with)), false)
             }
-            Gated::Refused(refused) => (self.refused_again(called, refused), None),
+            Gated::Refused(refused) => (self.refused_again(called, refused), None, false),
+            Gated::InvalidArguments(refused) => (self.refused_again(called, refused), None, true),
         };
         let (ended, parts) = self.shaped(ended);
         // A skill's activation the hooks left as it served it is read whole.
@@ -86,7 +89,13 @@ impl<P: AiProvider> Loop<P> {
         } else {
             shown
         };
+        let references = if outcome == ToolCallOutcome::Served || invalid_arguments {
+            self.reference_shown()
+        } else {
+            Vec::new()
+        };
         let end = ToolEnd {
+            references,
             outcome,
             call: reported.call.clone(),
             result,
@@ -299,7 +308,7 @@ impl<P: AiProvider> Loop<P> {
             Err(refused) => {
                 // Its next attempt needs the schema on the wire (RFC §6.4).
                 self.search.retain(&model_call.name);
-                return Gated::Refused(*refused);
+                return Gated::InvalidArguments(*refused);
             }
         };
         let asked = call.arguments.clone();

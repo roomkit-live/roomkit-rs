@@ -20,6 +20,8 @@ roomkit-ai = { path = "crates/roomkit-ai" }
 roomkit-core = { path = "crates/roomkit-core" }
 roomkit-mcp = { path = "crates/roomkit-mcp" }
 roomkit-openai = { path = "crates/roomkit-openai" }
+roomkit-anthropic = { path = "crates/roomkit-anthropic" }
+roomkit-provider-http = { path = "crates/roomkit-provider-http" }
 roomkit-postgres = { path = "crates/roomkit-postgres" }
 roomkit-sqlite = { path = "crates/roomkit-sqlite" }
 

@@ -26,9 +26,9 @@ use roomkit_ai::{
     AiContext, AiImagePart, AiMessage, AiMessageContent, AiProvider, AiResponse, AiRole,
     AiTextPart, AiThinkingPart, AiTool, AiToolCall, HumanInputToolHandler,
     HumanInputToolHandlerOptions, ModelInfo, ModelPricing, ProviderError, ProviderStream,
-    StreamDone, StreamEvent, StreamTextDelta, StreamThinkingDelta, Tool, ToolContext, ToolEntry,
-    ToolError, ToolHandler, ToolPolicy, ToolResult, ToolResultPart, Tools, check_schema_answer,
-    checked_stream, schema_for_generate,
+    StreamDone, StreamEvent, StreamTextDelta, StreamThinkingDelta, StreamToolCallDelta, Tool,
+    ToolContext, ToolEntry, ToolError, ToolHandler, ToolPolicy, ToolResult, ToolResultPart, Tools,
+    check_schema_answer, checked_stream, schema_for_generate,
 };
 use serde_json::{Value, json};
 
@@ -48,6 +48,7 @@ pub(crate) struct Paced {
     run: Weak<Run>,
     /// Whether the model sees images (README: `model.vision`).
     vision: bool,
+    deferred_tools: bool,
     /// The model's catalogue price (README: `model.pricing`).
     pricing: Option<ModelPricing>,
     /// The model's context window (README: `model.context_window`).
@@ -68,6 +69,10 @@ impl AiProvider for Paced {
 
     fn model_name(&self) -> &str {
         &self.model_name
+    }
+
+    fn supports_deferred_tools(&self) -> bool {
+        self.deferred_tools
     }
 
     fn supports_vision(&self) -> bool {
@@ -423,6 +428,7 @@ fn scripted_model(
         gates,
         run: Arc::downgrade(run),
         vision: spec["vision"] == true,
+        deferred_tools: spec["deferred_tools"] == true,
         pricing,
         context_window: spec["context_window"].as_u64(),
         model_name: spec["name"].as_str().unwrap_or("scripted").to_owned(),
@@ -543,6 +549,19 @@ fn streaming_round(spec: &Value, events: &[Value]) -> Result<ScriptedRound, Stri
             StreamEvent::ToolCall(tool_call(call)?.into())
         } else if let Some(text) = event["text"].as_str() {
             StreamEvent::TextDelta(StreamTextDelta::new(text))
+        } else if let Some(delta) = event.get("tool_call_delta") {
+            StreamEvent::ToolCallDelta(StreamToolCallDelta {
+                id: delta["id"].as_str().ok_or("tool_call_delta: no id")?.into(),
+                name: delta["name"]
+                    .as_str()
+                    .ok_or("tool_call_delta: no name")?
+                    .into(),
+                index: delta["index"]
+                    .as_u64()
+                    .and_then(|n| u32::try_from(n).ok())
+                    .unwrap_or(0),
+                arguments_delta: delta["arguments_delta"].as_str().unwrap_or_default().into(),
+            })
         } else {
             let text = |key: &str| event[key].as_str().map(str::to_owned);
             StreamEvent::ThinkingDelta(StreamThinkingDelta {
@@ -558,7 +577,7 @@ fn streaming_round(spec: &Value, events: &[Value]) -> Result<ScriptedRound, Stri
         usage: usage(spec)?,
         ..StreamDone::default()
     }));
-    Ok(ScriptedRound::streaming(read))
+    with_failure(ScriptedRound::streaming(read), spec)
 }
 
 /// A round read whole, its reasoning as `whole` reads (README:
@@ -667,37 +686,7 @@ pub(crate) fn round(spec: &Value) -> Result<ScriptedRound, String> {
         let thinking = thinking.as_array().ok_or("thinking: not a list")?;
         round = round.reasoning(thinking.iter().filter_map(Value::as_str));
     }
-    if let Some(failure) = spec.get("fails") {
-        round = round.failing(failure.as_str().ok_or("fails: not a text")?);
-    }
-    if let Some(refusal) = spec.get("refuses") {
-        let status = refusal["status"]
-            .as_u64()
-            .and_then(|status| u16::try_from(status).ok());
-        let message = refusal["message"].as_str();
-        let (Some(status), Some(message)) = (status, message) else {
-            return Err("refuses: no status and message".into());
-        };
-        round = round.refusing(status, message);
-        if let Some(overflow) = refusal["context_overflow"].as_bool() {
-            round = round.with_context_overflow(overflow);
-        }
-        if let Some(provider) = refusal["provider"].as_str() {
-            round = round.refused_by(provider);
-        }
-        if refusal["retryable"] == true {
-            round = round.retrying();
-        }
-    }
-    if spec.get("done") == Some(&Value::Bool(false)) {
-        round = round.without_done();
-    }
-    if spec.get("failure_after_calls") == Some(&Value::Bool(true)) {
-        round = round.failing_after_calls();
-    }
-    if spec.get("failure_after_done") == Some(&Value::Bool(true)) {
-        round = round.failing_after_done();
-    }
+    round = with_failure(round, spec)?;
     for call in spec["calls"].as_array().into_iter().flatten() {
         if let (Some(id), Some(metadata)) = (call["id"].as_str(), call.get("metadata")) {
             let metadata = serde_json::from_value(metadata.clone()).map_err(|e| e.to_string())?;
@@ -892,6 +881,7 @@ fn turn_config(spec: &Value, run: &Arc<Run>) -> Result<AiChannelTurnConfig, Stri
                 parameters: tool.get("parameters").cloned().unwrap_or_else(|| json!({})),
                 tags: Vec::new(),
                 changes_state: false,
+                defer_loading: false,
             })
             .collect()
     });
@@ -1140,6 +1130,7 @@ fn request(request: &AiContext) -> Value {
                 "name": result.name,
                 "content": result_content(&result.result),
                 "is_error": result.is_error,
+                "references": result.references,
             })),
             AiContentPart::Text(_)
             | AiContentPart::Image(_)
@@ -1164,6 +1155,8 @@ fn request(request: &AiContext) -> Value {
         "enable_thinking": request.enable_thinking,
         "response_schema": request.response_schema,
         "tools": tools,
+        "deferred_tools": request.tools.iter().filter(|tool| tool.defer_loading).map(|tool| &tool.name).collect::<Vec<_>>(),
+        "reopened_tools": request.messages.iter().filter(|message| message.metadata.get("reopening") == Some(&Value::Bool(true))).flat_map(AiMessage::tool_results).flat_map(|result| result.references.iter()).collect::<Vec<_>>(),
     })
 }
 
@@ -1326,4 +1319,40 @@ fn tool_call_record(event: &ToolCallEvent) -> Value {
         "cancelled": event.cancelled,
         "error_detail": event.error_detail,
     })
+}
+
+/// Attach the scripted refusal after an explicit stream or a conventional round.
+fn with_failure(mut round: ScriptedRound, spec: &Value) -> Result<ScriptedRound, String> {
+    if let Some(failure) = spec.get("fails") {
+        round = round.failing(failure.as_str().ok_or("fails: not a text")?);
+    }
+    if let Some(refusal) = spec.get("refuses") {
+        let status = refusal["status"]
+            .as_u64()
+            .and_then(|status| u16::try_from(status).ok());
+        let message = refusal["message"].as_str();
+        let (Some(status), Some(message)) = (status, message) else {
+            return Err("refuses: no status and message".into());
+        };
+        round = round.refusing(status, message);
+        if let Some(overflow) = refusal["context_overflow"].as_bool() {
+            round = round.with_context_overflow(overflow);
+        }
+        if let Some(provider) = refusal["provider"].as_str() {
+            round = round.refused_by(provider);
+        }
+        if refusal["retryable"] == true {
+            round = round.retrying();
+        }
+    }
+    if spec.get("done") == Some(&Value::Bool(false)) {
+        round = round.without_done();
+    }
+    if spec.get("failure_after_calls") == Some(&Value::Bool(true)) {
+        round = round.failing_after_calls();
+    }
+    if spec.get("failure_after_done") == Some(&Value::Bool(true)) {
+        round = round.failing_after_done();
+    }
+    Ok(round)
 }

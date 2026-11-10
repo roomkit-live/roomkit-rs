@@ -1588,6 +1588,7 @@ impl<P: AiProvider> AiChannel<P> {
             memory: Arc::clone(&self.memory),
             loops: Arc::clone(&self.loops),
             adopted: Adopted::default(),
+            deferred: crate::tool_loop::DeferredTools::default(),
             sent_images: None,
             tool_usage: Arc::clone(&self.media.tool_usage),
             media: TurnMedia::replaying(self.turn_images(&context.room.id, stands_alone)),

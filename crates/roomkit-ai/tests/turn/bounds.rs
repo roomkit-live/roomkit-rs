@@ -611,6 +611,7 @@ fn a_channel_refuses_in_python_s_order() {
         parameters: json!({}),
         tags: Vec::new(),
         changes_state: false,
+        defer_loading: false,
     };
     let name = refused(AiChannelOptions {
         tools: vec![named.clone().into()],

@@ -21,6 +21,9 @@ pub trait DynAiProvider: Send + Sync + 'static {
     /// [`AiProvider::catalog_entry`].
     fn dyn_catalog_entry(&self) -> Option<ModelInfo>;
 
+    /// [`AiProvider::supports_deferred_tools`].
+    fn dyn_supports_deferred_tools(&self) -> bool;
+
     /// [`AiProvider::generate_structured_stream`].
     fn dyn_generate_structured_stream<'a>(&'a self, context: &'a AiContext) -> ProviderStream<'a>;
 }
@@ -36,6 +39,10 @@ impl<P: AiProvider> DynAiProvider for P {
 
     fn dyn_catalog_entry(&self) -> Option<ModelInfo> {
         self.catalog_entry()
+    }
+
+    fn dyn_supports_deferred_tools(&self) -> bool {
+        self.supports_deferred_tools()
     }
 
     fn dyn_generate_structured_stream<'a>(&'a self, context: &'a AiContext) -> ProviderStream<'a> {

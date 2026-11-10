@@ -38,7 +38,7 @@ pub use self::model_tags::{
 };
 pub use self::response::{
     AiResponse, AiToolCall, CallIds, StreamDone, StreamEvent, StreamTextDelta, StreamThinkingDelta,
-    StreamToolCall, read_tool_calls, thinking_parts_of, tool_arguments,
+    StreamToolCall, StreamToolCallDelta, read_tool_calls, thinking_parts_of, tool_arguments,
 };
 pub(crate) use self::response::{is_malformed_call, ran_out_of_room, response_events};
 pub use self::response_schema::{
@@ -49,6 +49,9 @@ pub use self::response_schema::{check_schema_answer, checked_stream, schema_for_
 pub use self::round_parts::{RoundTranscript, round_parts};
 pub use self::thinking_blocks::ThinkingBlocks;
 use crate::stream::{Yielder, items, next};
+
+/// The metadata key for a credential lent to one generation.
+pub const API_KEY_METADATA_KEY: &str = "api_key";
 
 /// The events of one generation, as a structured stream reads them: text
 /// as it comes, the calls, then the end.
@@ -147,6 +150,12 @@ pub trait AiProvider: Send + Sync + 'static {
     /// the constraint is a decoding grammar, which keeps the model from
     /// calling a tool.
     fn supports_response_schema_with_tools(&self) -> bool {
+        false
+    }
+
+    /// Whether the provider holds deferred tool definitions and accepts
+    /// references that make them callable. False for gateways by default.
+    fn supports_deferred_tools(&self) -> bool {
         false
     }
 

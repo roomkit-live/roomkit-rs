@@ -134,6 +134,7 @@ fn check(requests: &[AiContext]) {
             result: r#"{"error": "Tool 'fail' failed (RuntimeError)"}"#.into(),
             // A failed call reads as one, in its turn and replayed (RMK-1075).
             is_error: true,
+            references: Vec::new(),
         })
     );
 }

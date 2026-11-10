@@ -266,6 +266,7 @@ fn definition(written: &Value) -> AiTool {
         parameters: written.get("parameters").cloned().unwrap_or(Value::Null),
         tags: Vec::new(),
         changes_state: false,
+        defer_loading: false,
     }
 }
 

@@ -662,20 +662,7 @@ fn joined(base_url: &str, path: &str) -> Result<reqwest::Url, OpenAiError> {
 /// the same trust on every host, and no system TLS library. HTTP/1.1 is
 /// offered by ALPN, as reqwest's own rustls configuration does.
 fn tls_config() -> Result<rustls::ClientConfig, OpenAiError> {
-    let roots = rustls::RootCertStore {
-        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
-    };
-    let mut config = rustls::ClientConfig::builder_with_provider(Arc::new(
-        rustls::crypto::ring::default_provider(),
-    ))
-    .with_safe_default_protocol_versions()
-    .map_err(|error| OpenAiError::Client {
-        reason: error.to_string(),
-    })?
-    .with_root_certificates(roots)
-    .with_no_client_auth();
-    config.alpn_protocols = vec![b"http/1.1".to_vec()];
-    Ok(config)
+    roomkit_provider_http::tls_config().map_err(|reason| OpenAiError::Client { reason })
 }
 
 #[cfg(test)]

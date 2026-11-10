@@ -1,0 +1,629 @@
+[
+  {
+    "id": "claude-opus-5-5",
+    "display_name": "Claude Opus 5.5",
+    "context_window": 1000000,
+    "supports_vision": true,
+    "deprecated": false,
+    "capabilities": [
+      "thinking",
+      "deferred_tools",
+      "reasoning_floor_low"
+    ],
+    "pricing": {
+      "input_per_million": 4.0,
+      "output_per_million": 20.0,
+      "cache_read_per_million": 0.2,
+      "cache_write_per_million": 5.0,
+      "image_input_per_million": null,
+      "image_output_per_million": null,
+      "long_context_threshold_tokens": null,
+      "long_context_input_multiplier": 1.0,
+      "long_context_output_multiplier": 1.0,
+      "currency": "USD",
+      "verified": "2026-09-22"
+    }
+  },
+  {
+    "id": "claude-opus-5",
+    "display_name": "Claude Opus 5",
+    "context_window": 1000000,
+    "supports_vision": true,
+    "deprecated": false,
+    "capabilities": [
+      "thinking",
+      "deferred_tools",
+      "thinking_off_disabled",
+      "thinking_off_effort_high"
+    ],
+    "pricing": {
+      "input_per_million": 5.0,
+      "output_per_million": 25.0,
+      "cache_read_per_million": 0.5,
+      "cache_write_per_million": 6.25,
+      "image_input_per_million": null,
+      "image_output_per_million": null,
+      "long_context_threshold_tokens": null,
+      "long_context_input_multiplier": 1.0,
+      "long_context_output_multiplier": 1.0,
+      "currency": "USD",
+      "verified": "2026-09-03"
+    }
+  },
+  {
+    "id": "claude-fable-5-2",
+    "display_name": "Claude Fable 5.2",
+    "context_window": 1000000,
+    "supports_vision": true,
+    "deprecated": false,
+    "capabilities": [
+      "thinking",
+      "deferred_tools",
+      "reasoning_floor_low"
+    ],
+    "pricing": {
+      "input_per_million": 8.0,
+      "output_per_million": 40.0,
+      "cache_read_per_million": 0.2,
+      "cache_write_per_million": 10.0,
+      "image_input_per_million": null,
+      "image_output_per_million": null,
+      "long_context_threshold_tokens": null,
+      "long_context_input_multiplier": 1.0,
+      "long_context_output_multiplier": 1.0,
+      "currency": "USD",
+      "verified": "2026-11-09"
+    }
+  },
+  {
+    "id": "claude-fable-5-1",
+    "display_name": "Claude Fable 5.1",
+    "context_window": 1000000,
+    "supports_vision": true,
+    "deprecated": false,
+    "capabilities": [
+      "thinking",
+      "deferred_tools",
+      "reasoning_floor_low"
+    ],
+    "pricing": {
+      "input_per_million": 10.0,
+      "output_per_million": 50.0,
+      "cache_read_per_million": 0.25,
+      "cache_write_per_million": 12.5,
+      "image_input_per_million": null,
+      "image_output_per_million": null,
+      "long_context_threshold_tokens": null,
+      "long_context_input_multiplier": 1.0,
+      "long_context_output_multiplier": 1.0,
+      "currency": "USD",
+      "verified": "2026-09-03"
+    }
+  },
+  {
+    "id": "claude-fable-5",
+    "display_name": "Claude Fable 5",
+    "context_window": 1000000,
+    "supports_vision": true,
+    "deprecated": false,
+    "capabilities": [
+      "thinking",
+      "deferred_tools",
+      "reasoning_floor_low"
+    ],
+    "pricing": {
+      "input_per_million": 10.0,
+      "output_per_million": 50.0,
+      "cache_read_per_million": 1.0,
+      "cache_write_per_million": 12.5,
+      "image_input_per_million": null,
+      "image_output_per_million": null,
+      "long_context_threshold_tokens": null,
+      "long_context_input_multiplier": 1.0,
+      "long_context_output_multiplier": 1.0,
+      "currency": "USD",
+      "verified": "2026-09-03"
+    }
+  },
+  {
+    "id": "claude-mythos-5-1",
+    "display_name": "Claude Mythos 5.1",
+    "context_window": 1000000,
+    "supports_vision": true,
+    "deprecated": false,
+    "capabilities": [
+      "thinking",
+      "deferred_tools",
+      "reasoning_floor_low"
+    ],
+    "pricing": {
+      "input_per_million": 10.0,
+      "output_per_million": 50.0,
+      "cache_read_per_million": 0.25,
+      "cache_write_per_million": 12.5,
+      "image_input_per_million": null,
+      "image_output_per_million": null,
+      "long_context_threshold_tokens": null,
+      "long_context_input_multiplier": 1.0,
+      "long_context_output_multiplier": 1.0,
+      "currency": "USD",
+      "verified": "2026-09-03"
+    }
+  },
+  {
+    "id": "claude-mythos-5",
+    "display_name": "Claude Mythos 5",
+    "context_window": 1000000,
+    "supports_vision": true,
+    "deprecated": false,
+    "capabilities": [
+      "thinking",
+      "deferred_tools",
+      "reasoning_floor_low"
+    ],
+    "pricing": {
+      "input_per_million": 10.0,
+      "output_per_million": 50.0,
+      "cache_read_per_million": 1.0,
+      "cache_write_per_million": 12.5,
+      "image_input_per_million": null,
+      "image_output_per_million": null,
+      "long_context_threshold_tokens": null,
+      "long_context_input_multiplier": 1.0,
+      "long_context_output_multiplier": 1.0,
+      "currency": "USD",
+      "verified": "2026-09-03"
+    }
+  },
+  {
+    "id": "claude-opus-4-8",
+    "display_name": "Claude Opus 4.8",
+    "context_window": 1000000,
+    "supports_vision": true,
+    "deprecated": false,
+    "capabilities": [
+      "thinking",
+      "deferred_tools"
+    ],
+    "pricing": {
+      "input_per_million": 5.0,
+      "output_per_million": 25.0,
+      "cache_read_per_million": 0.5,
+      "cache_write_per_million": 6.25,
+      "image_input_per_million": null,
+      "image_output_per_million": null,
+      "long_context_threshold_tokens": null,
+      "long_context_input_multiplier": 1.0,
+      "long_context_output_multiplier": 1.0,
+      "currency": "USD",
+      "verified": "2026-09-03"
+    }
+  },
+  {
+    "id": "claude-sonnet-5-5",
+    "display_name": "Claude Sonnet 5.5",
+    "context_window": 1000000,
+    "supports_vision": true,
+    "deprecated": false,
+    "capabilities": [
+      "thinking",
+      "deferred_tools",
+      "thinking_off_between_tools",
+      "thinking_off_effort_high"
+    ],
+    "pricing": {
+      "input_per_million": 2.0,
+      "output_per_million": 10.0,
+      "cache_read_per_million": 0.1,
+      "cache_write_per_million": 2.5,
+      "image_input_per_million": null,
+      "image_output_per_million": null,
+      "long_context_threshold_tokens": null,
+      "long_context_input_multiplier": 1.0,
+      "long_context_output_multiplier": 1.0,
+      "currency": "USD",
+      "verified": "2026-10-09"
+    }
+  },
+  {
+    "id": "claude-sonnet-5",
+    "display_name": "Claude Sonnet 5",
+    "context_window": 1000000,
+    "supports_vision": true,
+    "deprecated": false,
+    "capabilities": [
+      "thinking",
+      "deferred_tools",
+      "thinking_off_disabled"
+    ],
+    "pricing": {
+      "input_per_million": 2.0,
+      "output_per_million": 10.0,
+      "cache_read_per_million": 0.2,
+      "cache_write_per_million": 2.5,
+      "image_input_per_million": null,
+      "image_output_per_million": null,
+      "long_context_threshold_tokens": null,
+      "long_context_input_multiplier": 1.0,
+      "long_context_output_multiplier": 1.0,
+      "currency": "USD",
+      "verified": "2026-09-03"
+    }
+  },
+  {
+    "id": "claude-sonnet-4-6",
+    "display_name": "Claude Sonnet 4.6",
+    "context_window": 1000000,
+    "supports_vision": true,
+    "deprecated": false,
+    "capabilities": [
+      "thinking",
+      "deferred_tools",
+      "effort_no_xhigh"
+    ],
+    "pricing": {
+      "input_per_million": 3.0,
+      "output_per_million": 15.0,
+      "cache_read_per_million": 0.3,
+      "cache_write_per_million": 3.75,
+      "image_input_per_million": null,
+      "image_output_per_million": null,
+      "long_context_threshold_tokens": null,
+      "long_context_input_multiplier": 1.0,
+      "long_context_output_multiplier": 1.0,
+      "currency": "USD",
+      "verified": "2026-09-03"
+    }
+  },
+  {
+    "id": "claude-haiku-5-5",
+    "display_name": "Claude Haiku 5.5",
+    "context_window": 1000000,
+    "supports_vision": true,
+    "deprecated": false,
+    "capabilities": [
+      "thinking",
+      "deferred_tools",
+      "thinking_off_disabled",
+      "thinking_off_effort_high"
+    ],
+    "pricing": {
+      "input_per_million": 0.1,
+      "output_per_million": 0.5,
+      "cache_read_per_million": 0.01,
+      "cache_write_per_million": 0.125,
+      "image_input_per_million": null,
+      "image_output_per_million": null,
+      "long_context_threshold_tokens": 100000,
+      "long_context_input_multiplier": 5.0,
+      "long_context_output_multiplier": 5.0,
+      "currency": "USD",
+      "verified": "2026-10-07"
+    }
+  },
+  {
+    "id": "claude-haiku-4-5-20251001",
+    "display_name": "Claude Haiku 4.5",
+    "context_window": 200000,
+    "supports_vision": true,
+    "deprecated": false,
+    "capabilities": [
+      "thinking",
+      "deferred_tools",
+      "effort_refused"
+    ],
+    "pricing": {
+      "input_per_million": 1.0,
+      "output_per_million": 5.0,
+      "cache_read_per_million": 0.1,
+      "cache_write_per_million": 1.25,
+      "image_input_per_million": null,
+      "image_output_per_million": null,
+      "long_context_threshold_tokens": null,
+      "long_context_input_multiplier": 1.0,
+      "long_context_output_multiplier": 1.0,
+      "currency": "USD",
+      "verified": "2026-09-03"
+    }
+  },
+  {
+    "id": "claude-haiku-4-5",
+    "display_name": "Claude Haiku 4.5",
+    "context_window": 200000,
+    "supports_vision": true,
+    "deprecated": false,
+    "capabilities": [
+      "thinking",
+      "deferred_tools",
+      "effort_refused"
+    ],
+    "pricing": {
+      "input_per_million": 1.0,
+      "output_per_million": 5.0,
+      "cache_read_per_million": 0.1,
+      "cache_write_per_million": 1.25,
+      "image_input_per_million": null,
+      "image_output_per_million": null,
+      "long_context_threshold_tokens": null,
+      "long_context_input_multiplier": 1.0,
+      "long_context_output_multiplier": 1.0,
+      "currency": "USD",
+      "verified": "2026-09-03"
+    }
+  },
+  {
+    "id": "claude-opus-4-7",
+    "display_name": "Claude Opus 4.7",
+    "context_window": 1000000,
+    "supports_vision": true,
+    "deprecated": false,
+    "capabilities": [
+      "thinking",
+      "deferred_tools"
+    ],
+    "pricing": {
+      "input_per_million": 5.0,
+      "output_per_million": 25.0,
+      "cache_read_per_million": 0.5,
+      "cache_write_per_million": 6.25,
+      "image_input_per_million": null,
+      "image_output_per_million": null,
+      "long_context_threshold_tokens": null,
+      "long_context_input_multiplier": 1.0,
+      "long_context_output_multiplier": 1.0,
+      "currency": "USD",
+      "verified": "2026-09-03"
+    }
+  },
+  {
+    "id": "claude-opus-4-6",
+    "display_name": "Claude Opus 4.6",
+    "context_window": 1000000,
+    "supports_vision": true,
+    "deprecated": false,
+    "capabilities": [
+      "thinking",
+      "deferred_tools",
+      "effort_no_xhigh"
+    ],
+    "pricing": {
+      "input_per_million": 5.0,
+      "output_per_million": 25.0,
+      "cache_read_per_million": 0.5,
+      "cache_write_per_million": 6.25,
+      "image_input_per_million": null,
+      "image_output_per_million": null,
+      "long_context_threshold_tokens": null,
+      "long_context_input_multiplier": 1.0,
+      "long_context_output_multiplier": 1.0,
+      "currency": "USD",
+      "verified": "2026-09-03"
+    }
+  },
+  {
+    "id": "claude-sonnet-4-5-20250929",
+    "display_name": "Claude Sonnet 4.5",
+    "context_window": 200000,
+    "supports_vision": true,
+    "deprecated": true,
+    "capabilities": [
+      "thinking",
+      "deferred_tools",
+      "effort_refused"
+    ],
+    "pricing": {
+      "input_per_million": 3.0,
+      "output_per_million": 15.0,
+      "cache_read_per_million": 0.3,
+      "cache_write_per_million": 3.75,
+      "image_input_per_million": null,
+      "image_output_per_million": null,
+      "long_context_threshold_tokens": null,
+      "long_context_input_multiplier": 1.0,
+      "long_context_output_multiplier": 1.0,
+      "currency": "USD",
+      "verified": "2026-09-03"
+    }
+  },
+  {
+    "id": "claude-sonnet-4-5",
+    "display_name": "Claude Sonnet 4.5",
+    "context_window": 200000,
+    "supports_vision": true,
+    "deprecated": true,
+    "capabilities": [
+      "thinking",
+      "deferred_tools",
+      "effort_refused"
+    ],
+    "pricing": {
+      "input_per_million": 3.0,
+      "output_per_million": 15.0,
+      "cache_read_per_million": 0.3,
+      "cache_write_per_million": 3.75,
+      "image_input_per_million": null,
+      "image_output_per_million": null,
+      "long_context_threshold_tokens": null,
+      "long_context_input_multiplier": 1.0,
+      "long_context_output_multiplier": 1.0,
+      "currency": "USD",
+      "verified": "2026-09-03"
+    }
+  },
+  {
+    "id": "claude-opus-4-5-20251101",
+    "display_name": "Claude Opus 4.5",
+    "context_window": 200000,
+    "supports_vision": true,
+    "deprecated": false,
+    "capabilities": [
+      "thinking",
+      "deferred_tools",
+      "effort_up_to_high"
+    ],
+    "pricing": {
+      "input_per_million": 5.0,
+      "output_per_million": 25.0,
+      "cache_read_per_million": 0.5,
+      "cache_write_per_million": 6.25,
+      "image_input_per_million": null,
+      "image_output_per_million": null,
+      "long_context_threshold_tokens": null,
+      "long_context_input_multiplier": 1.0,
+      "long_context_output_multiplier": 1.0,
+      "currency": "USD",
+      "verified": "2026-09-03"
+    }
+  },
+  {
+    "id": "claude-opus-4-5",
+    "display_name": "Claude Opus 4.5",
+    "context_window": 200000,
+    "supports_vision": true,
+    "deprecated": false,
+    "capabilities": [
+      "thinking",
+      "deferred_tools",
+      "effort_up_to_high"
+    ],
+    "pricing": {
+      "input_per_million": 5.0,
+      "output_per_million": 25.0,
+      "cache_read_per_million": 0.5,
+      "cache_write_per_million": 6.25,
+      "image_input_per_million": null,
+      "image_output_per_million": null,
+      "long_context_threshold_tokens": null,
+      "long_context_input_multiplier": 1.0,
+      "long_context_output_multiplier": 1.0,
+      "currency": "USD",
+      "verified": "2026-09-03"
+    }
+  },
+  {
+    "id": "claude-opus-4-1-20250805",
+    "display_name": "Claude Opus 4.1",
+    "context_window": 200000,
+    "supports_vision": true,
+    "deprecated": true,
+    "capabilities": [],
+    "pricing": {
+      "input_per_million": 15.0,
+      "output_per_million": 75.0,
+      "cache_read_per_million": 1.5,
+      "cache_write_per_million": 18.75,
+      "image_input_per_million": null,
+      "image_output_per_million": null,
+      "long_context_threshold_tokens": null,
+      "long_context_input_multiplier": 1.0,
+      "long_context_output_multiplier": 1.0,
+      "currency": "USD",
+      "verified": "2026-09-03"
+    }
+  },
+  {
+    "id": "claude-opus-4-1",
+    "display_name": "Claude Opus 4.1",
+    "context_window": 200000,
+    "supports_vision": true,
+    "deprecated": true,
+    "capabilities": [],
+    "pricing": {
+      "input_per_million": 15.0,
+      "output_per_million": 75.0,
+      "cache_read_per_million": 1.5,
+      "cache_write_per_million": 18.75,
+      "image_input_per_million": null,
+      "image_output_per_million": null,
+      "long_context_threshold_tokens": null,
+      "long_context_input_multiplier": 1.0,
+      "long_context_output_multiplier": 1.0,
+      "currency": "USD",
+      "verified": "2026-09-03"
+    }
+  },
+  {
+    "id": "claude-sonnet-4-20250514",
+    "display_name": "Claude Sonnet 4",
+    "context_window": 200000,
+    "supports_vision": true,
+    "deprecated": true,
+    "capabilities": [],
+    "pricing": {
+      "input_per_million": 3.0,
+      "output_per_million": 15.0,
+      "cache_read_per_million": 0.3,
+      "cache_write_per_million": 3.75,
+      "image_input_per_million": null,
+      "image_output_per_million": null,
+      "long_context_threshold_tokens": null,
+      "long_context_input_multiplier": 1.0,
+      "long_context_output_multiplier": 1.0,
+      "currency": "USD",
+      "verified": "2026-09-03"
+    }
+  },
+  {
+    "id": "claude-sonnet-4-0",
+    "display_name": "Claude Sonnet 4",
+    "context_window": 200000,
+    "supports_vision": true,
+    "deprecated": true,
+    "capabilities": [],
+    "pricing": {
+      "input_per_million": 3.0,
+      "output_per_million": 15.0,
+      "cache_read_per_million": 0.3,
+      "cache_write_per_million": 3.75,
+      "image_input_per_million": null,
+      "image_output_per_million": null,
+      "long_context_threshold_tokens": null,
+      "long_context_input_multiplier": 1.0,
+      "long_context_output_multiplier": 1.0,
+      "currency": "USD",
+      "verified": "2026-09-03"
+    }
+  },
+  {
+    "id": "claude-opus-4-20250514",
+    "display_name": "Claude Opus 4",
+    "context_window": 200000,
+    "supports_vision": true,
+    "deprecated": true,
+    "capabilities": [],
+    "pricing": {
+      "input_per_million": 15.0,
+      "output_per_million": 75.0,
+      "cache_read_per_million": 1.5,
+      "cache_write_per_million": 18.75,
+      "image_input_per_million": null,
+      "image_output_per_million": null,
+      "long_context_threshold_tokens": null,
+      "long_context_input_multiplier": 1.0,
+      "long_context_output_multiplier": 1.0,
+      "currency": "USD",
+      "verified": "2026-09-03"
+    }
+  },
+  {
+    "id": "claude-opus-4-0",
+    "display_name": "Claude Opus 4",
+    "context_window": 200000,
+    "supports_vision": true,
+    "deprecated": true,
+    "capabilities": [],
+    "pricing": {
+      "input_per_million": 15.0,
+      "output_per_million": 75.0,
+      "cache_read_per_million": 1.5,
+      "cache_write_per_million": 18.75,
+      "image_input_per_million": null,
+      "image_output_per_million": null,
+      "long_context_threshold_tokens": null,
+      "long_context_input_multiplier": 1.0,
+      "long_context_output_multiplier": 1.0,
+      "currency": "USD",
+      "verified": "2026-09-03"
+    }
+  }
+]

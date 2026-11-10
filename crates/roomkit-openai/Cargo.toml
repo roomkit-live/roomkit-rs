@@ -9,6 +9,7 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+roomkit-provider-http.workspace = true
 roomkit.workspace = true
 # The transcript the wire is written from (`transcript::Message`), which
 # roomkit keeps private as Python does (step 5, decision 16) until lot 5

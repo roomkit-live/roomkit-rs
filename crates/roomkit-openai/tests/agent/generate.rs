@@ -120,7 +120,9 @@ async fn handed(replies: Vec<Reply>, streamed: bool) -> (Vec<String>, Value, Val
                     Value::Object(done.metadata),
                 );
             }
-            StreamEvent::TextDelta(_) | StreamEvent::ThinkingDelta(_) => {}
+            StreamEvent::TextDelta(_)
+            | StreamEvent::ThinkingDelta(_)
+            | StreamEvent::ToolCallDelta(_) => {}
         }
     }
     unreachable!("the stream ended without its end");

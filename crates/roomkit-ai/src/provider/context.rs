@@ -11,7 +11,7 @@ use crate::tools::{AiTool, ToolResult};
 /// What one generation is asked (RFC §6.7): Python's `AIContext(*,
 /// messages=[], system_prompt=None, temperature=0.7, max_tokens=None,
 /// tools=[], response_schema=None, metadata={}, response_metadata=...)`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct AiContext {
     /// The conversation, oldest first, the turn's rounds so far included.
     pub messages: Vec<AiMessage>,
@@ -49,6 +49,28 @@ pub struct AiContext {
     /// The turn's one record (RFC §6.7), shared by every writer of the turn:
     /// a generation hook writes it here.
     pub response_metadata: ResponseMetadata,
+}
+
+impl std::fmt::Debug for AiContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut metadata = self.metadata.clone();
+        if metadata.contains_key("api_key") {
+            metadata.insert("api_key".into(), "[REDACTED]".into());
+        }
+        f.debug_struct("AiContext")
+            .field("messages", &self.messages)
+            .field("system_prompt", &self.system_prompt)
+            .field("temperature", &self.temperature)
+            .field("max_tokens", &self.max_tokens)
+            .field("thinking_budget", &self.thinking_budget)
+            .field("enable_thinking", &self.enable_thinking)
+            .field("reasoning_effort", &self.reasoning_effort)
+            .field("tools", &self.tools)
+            .field("response_schema", &self.response_schema)
+            .field("metadata", &metadata)
+            .field("response_metadata", &self.response_metadata)
+            .finish()
+    }
 }
 
 impl Default for AiContext {
@@ -349,6 +371,8 @@ pub struct AiToolResultPart {
     pub result: ToolResult,
     /// Whether the call failed.
     pub is_error: bool,
+    /// Deferred tools made callable by this result, in declaration order.
+    pub references: Vec<String>,
 }
 
 impl AiToolResultPart {
@@ -364,6 +388,7 @@ impl AiToolResultPart {
             name: name.into(),
             result: result.into(),
             is_error: false,
+            references: Vec::new(),
         }
     }
 
@@ -473,6 +498,7 @@ fn content(message: &Message, name: &str, kept: Option<&ToolResult>) -> AiMessag
                 .cloned()
                 .unwrap_or_else(|| ToolResult::Text(message.text.clone())),
             is_error: message.is_error,
+            references: Vec::new(),
         })]);
     }
     if message.parts.is_empty() && message.images.is_empty() && message.tool_calls.is_empty() {

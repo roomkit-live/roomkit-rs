@@ -16,7 +16,7 @@
 //! memory: a process that starts again replays none, as Python replays
 //! none of the results it reads back from the store.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Mutex, PoisonError};
 
 use roomkit::model::{EventContent, EventType, Metadata, RoomEvent, RoomId, ToolCallOutcome};
@@ -72,6 +72,8 @@ struct RoomMemory {
     tools: Vec<String>,
     /// Whether its stored rows were read, once per room.
     hydrated: bool,
+    /// The room's ordinary declarations, kept stable across turns.
+    declaration: Option<HashSet<String>>,
 }
 
 impl RoomMemory {
@@ -114,6 +116,19 @@ impl ToolUsageMemory {
             .unwrap_or_default();
         write(&mut memory);
         keep_latest(&mut by_room, room.clone(), memory);
+    }
+
+    pub(crate) fn declaration(&self, room: &RoomId) -> Option<HashSet<String>> {
+        self.by_room
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .find(|(id, _)| id == room)
+            .and_then(|(_, memory)| memory.declaration.clone())
+    }
+
+    pub(crate) fn keep_declaration(&self, room: &RoomId, names: HashSet<String>) {
+        self.writing(room, |memory| memory.declaration = Some(names));
     }
 
     /// Records the call of `name` with the model's `arguments` in `room`,

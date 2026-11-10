@@ -169,16 +169,21 @@ impl Generation {
             // a response schema holds: a failure after either is tried again
             // (RFC §6.4).
             streamed = streamed
-                || !(matches!(event, StreamEvent::ThinkingDelta(_))
-                    || held && matches!(event, StreamEvent::TextDelta(_)));
+                || !(matches!(
+                    event,
+                    StreamEvent::ThinkingDelta(_) | StreamEvent::ToolCallDelta(_)
+                ) || held && matches!(event, StreamEvent::TextDelta(_)));
             let read = (&mut transcript, &mut replayed, &mut delivered);
             match event {
                 StreamEvent::TextDelta(delta) if held => holding.push(delta.text),
                 StreamEvent::TextDelta(delta) => {
                     read_text(vec![delta.text], read, window, out).await;
                 }
-                // A whole call closes no reasoning window: a fragment would (Python's
-                // `StreamToolCallDelta`), which no provider here hands.
+                StreamEvent::ToolCallDelta(_) => {
+                    window.thinking.end();
+                    window.text.flush();
+                }
+                // A whole call alone does not close the reasoning window.
                 StreamEvent::ToolCall(call) => {
                     read_text(std::mem::take(&mut holding), read, window, out).await;
                     window.text.flush();

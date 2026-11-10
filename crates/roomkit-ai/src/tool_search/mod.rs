@@ -169,3 +169,5 @@ impl ToolSearch {
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) use catalogue::render_find_payload;

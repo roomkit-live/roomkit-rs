@@ -68,6 +68,7 @@ fn result(id: &str) -> AiMessage {
         name: "echo".to_owned(),
         result: "ok".into(),
         is_error: false,
+        references: Vec::new(),
     };
     AiMessage::new(
         AiRole::Tool,

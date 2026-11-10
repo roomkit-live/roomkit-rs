@@ -49,6 +49,7 @@ fn tool_of(definition: &Value) -> AiTool {
         parameters: definition["parameters"].clone(),
         tags: Vec::new(),
         changes_state: false,
+        defer_loading: false,
     }
 }
 

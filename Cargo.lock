@@ -1948,6 +1948,7 @@ dependencies = [
  "pretty_assertions",
  "roomkit-acp",
  "roomkit-ai",
+ "roomkit-anthropic",
  "roomkit-core",
  "roomkit-openai",
  "scrypt",
@@ -1995,6 +1996,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "roomkit-anthropic"
+version = "0.1.0"
+dependencies = [
+ "futures-core",
+ "jiff",
+ "pretty_assertions",
+ "reqwest",
+ "roomkit",
+ "roomkit-ai",
+ "roomkit-core",
+ "roomkit-provider-http",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "roomkit-core"
 version = "0.1.0"
 dependencies = [
@@ -2017,6 +2034,7 @@ dependencies = [
  "futures-util",
  "roomkit",
  "roomkit-ai",
+ "roomkit-anthropic",
  "roomkit-mcp",
  "roomkit-openai",
  "roomkit-sqlite",
@@ -2059,6 +2077,7 @@ dependencies = [
  "roomkit",
  "roomkit-ai",
  "roomkit-core",
+ "roomkit-provider-http",
  "rustls",
  "serde",
  "serde_json",
@@ -2094,6 +2113,17 @@ dependencies = [
  "tracing",
  "uuid",
  "whoami",
+]
+
+[[package]]
+name = "roomkit-provider-http"
+version = "0.1.0"
+dependencies = [
+ "pretty_assertions",
+ "reqwest",
+ "rustls",
+ "thiserror",
+ "webpki-roots",
 ]
 
 [[package]]

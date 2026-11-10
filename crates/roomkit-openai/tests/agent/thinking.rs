@@ -73,7 +73,7 @@ async fn streamed(api: OpenAiApi, reply: Reply) -> Vec<Piece> {
         match event.unwrap() {
             StreamEvent::ThinkingDelta(delta) => pieces.push(Piece::Thinking(delta.thinking)),
             StreamEvent::TextDelta(delta) => pieces.push(Piece::Text(delta.text)),
-            StreamEvent::ToolCall(_) | StreamEvent::Done(_) => {}
+            StreamEvent::ToolCall(_) | StreamEvent::ToolCallDelta(_) | StreamEvent::Done(_) => {}
         }
     }
     pieces

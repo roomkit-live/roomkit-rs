@@ -291,6 +291,32 @@ pub enum StreamEvent {
     Done(StreamDone),
     /// A piece of the model's reasoning, before its text (RFC §6.7).
     ThinkingDelta(StreamThinkingDelta),
+    /// The opening or an argument fragment of a call, before its whole value.
+    ToolCallDelta(StreamToolCallDelta),
+}
+
+/// A streaming call fragment: Python's `StreamToolCallDelta`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StreamToolCallDelta {
+    /// The stable identity of the call throughout this response.
+    pub id: String,
+    /// The tool being called.
+    pub name: String,
+    /// The provider's content block index.
+    pub index: u32,
+    /// An incremental fragment of the JSON arguments; empty at opening.
+    pub arguments_delta: String,
+}
+
+impl StreamToolCallDelta {
+    /// Open a call with no arguments received yet.
+    pub fn new(id: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            ..Self::default()
+        }
+    }
 }
 
 /// A piece of a model's reasoning: Python's `StreamThinkingDelta(*, thinking,

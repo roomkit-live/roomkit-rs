@@ -20,10 +20,7 @@ use roomkit_core::rules::transcript::{Message, Role, without_mark_copies};
 use serde_json::Value;
 
 use super::{Loop, Spent};
-use crate::loop_events::{
-    AiGenerationEvent, AiResponseEvent, DeclaredTool, FromToolOptions, ToolRoundEvent,
-    response_transcript,
-};
+use crate::loop_events::{AiGenerationEvent, AiResponseEvent, ToolRoundEvent, response_transcript};
 use crate::provider::{AiContext, AiMessage, AiProvider, AiToolCall, AiToolResultPart};
 use crate::tool_eviction::REREAD_TOOL;
 use crate::tools::AiTool;
@@ -31,7 +28,7 @@ use crate::tools::AiTool;
 /// What `BEFORE_AI_GENERATION`'s hooks and `AFTER_TOOL_ROUND`'s left of the
 /// turn's context beside its prompt and sampling, which the loop holds
 /// itself (RFC §6.4).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub(crate) struct Adopted {
     /// The messages the hooks gave, or a compaction made (RFC §6.4),
     /// standing for the memory's and for the conversation's first
@@ -193,7 +190,7 @@ impl<P: AiProvider> Loop<P> {
             latency_ms,
             streaming: true,
             segments,
-            declared_tools: spent.declared.clone(),
+            declared_tools: self.reported_tools(),
             thinking: spent.thinking.join("\n\n"),
             ..AiResponseEvent::new(self.context.channel_id.clone(), content)
         };
@@ -258,7 +255,7 @@ impl<P: AiProvider> Loop<P> {
     /// What this round's request shows, each tool's schema with the intent
     /// property when the agent asks for one, the round's declaration joining
     /// what the turn reports (RFC §6.4).
-    pub(super) fn round_tools(&self, spent: &mut Spent) -> Vec<AiTool> {
+    pub(super) fn round_tools(&self) -> Vec<AiTool> {
         let round = self.with_reread(self.search.round_declaration(self.declared()));
         // What Tool Search lists is the turn's offer: the toolset, then the
         // re-read of stored results once the round declares it (Python's
@@ -266,10 +263,8 @@ impl<P: AiProvider> Loop<P> {
         if let Some(reread) = round.iter().find(|tool| tool.name == REREAD_TOOL) {
             self.search.offer(reread.clone());
         }
-        spent.declare(round.iter().map(|tool| {
-            let origin = self.search.origin(&tool.name);
-            DeclaredTool::from_tool(tool, FromToolOptions { origin })
-        }));
+        let round = self.held_declaration(round);
+        self.record_tools(&round);
         self.shown_tools(round)
     }
 }

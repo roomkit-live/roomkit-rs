@@ -18,6 +18,7 @@ path = "shared/lib.rs"
 roomkit.workspace = true
 roomkit-ai.workspace = true
 roomkit-openai.workspace = true
+roomkit-anthropic.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 # The fake of the OpenAI wire (shared/openai.rs) is a local HTTP server.
@@ -205,3 +206,7 @@ path = "server_agent.rs"
 [[example]]
 name = "web_chat"
 path = "web_chat.rs"
+
+[[example]]
+name = "anthropic_agent"
+path = "anthropic_agent.rs"

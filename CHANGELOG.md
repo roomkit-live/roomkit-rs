@@ -9,6 +9,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A delegated task's turn no longer overflows a 2 MB stack in a debug build: the kit boxes a call's run, a spawned task and a turn's observer before wrapping them, so each layer moves a pointer rather than the whole future (RMK-1616).
 
 - A queued delivery cut by close returns without waiting on the active set’s cursor read or advancing past an undelivered index (RFC §12.10.4; RMK-1616).
+- `roomkit-anthropic` adds the native Messages provider: streamed text, images, signed reasoning, tools, structured answers, prompt caching, model discovery and per-turn credentials. Anthropic's deferred tools keep declarations stable across rounds and later turns; a fallback receives the tools already revealed (RMK-1633, RMK-1306).
 
 - A call whose model writes the intent property without its leading underscore, `roomkit_intent`, has it taken as its intent instead of refused as an unknown argument; a tool that declares that name keeps it (RFC §6.4, `tool_intent::INTENT_ALIAS`). `tool_intent::take_intent` takes whether the tool owns that name.
 

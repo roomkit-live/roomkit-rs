@@ -46,6 +46,7 @@ roomkit_ai = ["roomkit.providers.ai", "roomkit", "roomkit.tools", "roomkit.skill
 "roomkit_ai::memory" = ["roomkit.memory", "roomkit"]
 "roomkit_ai::knowledge" = ["roomkit.knowledge"]
 roomkit_openai = ["roomkit.providers.openai"]
+roomkit_anthropic = ["roomkit.providers.anthropic"]
 "roomkit_openai::deepseek" = ["roomkit.providers.deepseek"]
 "roomkit_openai::minimax" = ["roomkit.providers.minimax"]
 "roomkit_openai::kimi" = ["roomkit.providers.kimi"]
@@ -870,13 +871,8 @@ reason = "not in 0.x: owner-served tools"
 
 [[missing]]
 python = "roomkit.providers.ai.AIToolResultPart.__init__"
-params = ["structured_content", "outcome", "references"]
-reason = "not in 0.x: MCP structured results, a call's outcome and result references"
-
-[[missing]]
-python = "roomkit.providers.ai.AITool.__init__"
-params = ["defer_loading"]
-reason = "not in 0.x: a tool held unseen, for a provider that holds one (RFC §6.4); no provider here does"
+params = ["structured_content", "outcome"]
+reason = "not in 0.x: MCP structured results and a call's outcome"
 
 [[missing]]
 python = "roomkit.providers.ai.AITextPart.__init__"
@@ -902,11 +898,6 @@ reason = "language: a part's `type` tag is the AiContentPart variant that holds 
 python = "roomkit.providers.ai.AIToolResultPart.__init__"
 params = ["type"]
 reason = "language: a part's `type` tag is the AiContentPart variant that holds it, a union no Python name exports"
-
-[[missing]]
-python = "roomkit.providers.ai.AIProvider"
-members = ["supports_deferred_tools"]
-reason = "not in 0.x: deferred tools"
 
 [[missing]]
 python = "roomkit.TransportChannel.__init__"

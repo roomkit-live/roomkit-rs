@@ -12,7 +12,8 @@ for conversations between humans, AI agents and programs.
 > runtime; where it differs from the Python implementation is recorded in
 > [docs/rfc-gaps.md](docs/rfc-gaps.md). Beside it, an AI agent with tools,
 > streamed answers, skills and MCP servers over stdio or Streamable HTTP (`roomkit-ai`,
-> `roomkit-mcp`), on an OpenAI-compatible endpoint (`roomkit-openai`), and
+> `roomkit-mcp`), on an OpenAI-compatible endpoint (`roomkit-openai`) or native
+> Anthropic Messages (`roomkit-anthropic`), and
 > a SQLite store on the Python implementation's schema (`roomkit-sqlite`).
 > The API will change before 1.0 ([the roadmap](docs/roadmap.md)).
 
@@ -48,6 +49,35 @@ websocat 'ws://127.0.0.1:8080/conversations/bakery?user=alice&name=Alice'
 Its WebSocket channel is the example's own, a `Channel` in
 [`examples/shared/websocket.rs`](examples/shared/websocket.rs) for a
 service to copy and adapt; axum is a dependency of the examples only.
+
+### Anthropic
+
+`roomkit-anthropic` implements the same `AiProvider` trait as OpenAI:
+
+```rust,ignore
+use roomkit_anthropic::{AnthropicAiProvider, AnthropicConfig};
+
+let provider = AnthropicAiProvider::new(AnthropicConfig::new(
+    std::env::var("ANTHROPIC_API_KEY")?,
+    "claude-sonnet-5-5",
+))?;
+// Pass provider to AiChannel::new, as with OpenAiAiProvider.
+```
+
+[`examples/anthropic_agent.rs`](examples/anthropic_agent.rs) runs two room
+turns with tool discovery, including reopening a deferred tool in the second
+turn. Its default run checks construction offline; paid calls are explicit:
+
+```sh
+cargo run --example anthropic_agent
+ANTHROPIC_API_KEY=... cargo run --example anthropic_agent -- --live
+```
+
+Text, image inputs, structured JSON, signed and redacted reasoning, tool
+results and prompt caching use the native Messages API. `list_models()` reads
+the account's available models; `available_models()` reads the pinned offline
+catalogue. `AiContext.metadata["api_key"]` can lend a key to one generation.
+Keys come from the application; the provider reads no secret file.
 
 ### In a service
 

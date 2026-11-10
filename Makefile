@@ -9,7 +9,7 @@ EXAMPLES := $(sort $(basename $(notdir $(wildcard examples/*.rs))))
 
 .PHONY: all fmt fmt-check clippy test test-core doc deny check-core-deps examples msrv postgres-test msrv-toolchain hooks conformance-sync conformance-check sqlite-fixture postgres-fixture turns-fixture api-sync api-check-pin api-test api-parity models-sync models-check
 
-all: conformance-check api-check-pin models-check api-test fmt-check clippy test test-core doc api-parity deny check-core-deps examples
+all: conformance-check api-check-pin models-check anthropic-models-check api-test fmt-check clippy test test-core doc api-parity deny check-core-deps examples
 
 fmt:
 	$(CARGO) fmt --all
@@ -373,3 +373,10 @@ api-parity: doc
 		--architecture docs/architecture.md \
 		> $(API_REPORT)/report.txt || status=$$?; \
 	cat $(API_REPORT)/report.txt; exit $$status
+
+# Anthropic uses the same pinned catalogue export contract as OpenAI.
+.PHONY: anthropic-models-sync anthropic-models-check
+anthropic-models-sync:
+	$(MAKE) models-sync MODELS=crates/roomkit-anthropic/catalog
+anthropic-models-check:
+	$(MAKE) models-check MODELS=crates/roomkit-anthropic/catalog

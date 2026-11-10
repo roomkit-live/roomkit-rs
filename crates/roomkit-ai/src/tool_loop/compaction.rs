@@ -77,6 +77,7 @@ impl<P: AiProvider> Loop<P> {
         let shown = self.shown(messages).len();
         self.adopted.messages = Some((compacted.clone(), shown));
         self.adopted.turn_input = turn_input;
+        self.show_lost_references(&context.messages, &compacted, &mut context.tools);
         context.messages = compacted;
         Ok(())
     }

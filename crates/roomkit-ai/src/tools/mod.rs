@@ -68,6 +68,8 @@ pub struct AiTool {
     /// test rerun after an edit is no loop (RFC §6.4, the anti-loop guard).
     /// False by default.
     pub changes_state: bool,
+    /// Declare this tool unseen until a result references it.
+    pub defer_loading: bool,
 }
 
 impl AiTool {
@@ -101,6 +103,7 @@ impl AiTool {
             parameters: Value::Object(serde_json::Map::new()),
             tags: Vec::new(),
             changes_state: false,
+            defer_loading: false,
         })
     }
 
@@ -128,6 +131,7 @@ impl AiTool {
             parameters,
             tags: Vec::new(),
             changes_state: false,
+            defer_loading: false,
         }
     }
 }

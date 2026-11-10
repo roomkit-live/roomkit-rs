@@ -148,6 +148,11 @@ impl TurnSearch {
         self.window().never_hidden.extend(names);
     }
 
+    /// Tools outside Tool Search's held catalogue, including hook additions.
+    pub(crate) fn never_held(&self) -> HashSet<String> {
+        self.window().never_hidden.clone()
+    }
+
     /// Why `name` is in the declaration, the earliest reason winning (RFC
     /// §6.4). Python's `_declaration_origin`.
     pub(crate) fn origin(&self, name: &str) -> ToolDeclarationOrigin {

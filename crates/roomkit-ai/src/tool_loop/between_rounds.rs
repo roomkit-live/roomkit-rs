@@ -71,6 +71,7 @@ impl<P: AiProvider> Loop<P> {
         let input = placed.len() - (asked.len() - at);
         // Counted as the provider reads them: a round's results are one message.
         let shown = self.shown(messages).len();
+        self.show_lost_references(&asked, &placed, &mut []);
         self.adopted.messages = Some((placed, shown));
         self.adopted.turn_input = Some(input);
     }

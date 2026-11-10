@@ -371,8 +371,18 @@ impl AiProvider for ScriptedProvider {
                     .clone()
                     .or_else(|| round.whole.clone().map(response_events));
                 if let Some(events) = events {
+                    let mut failure = round.failure();
                     for event in events {
+                        if matches!(event, StreamEvent::Done(_))
+                            && round.failure_at != FailureAt::Done
+                            && let Some(error) = failure.take()
+                        {
+                            return out.give(Err(error)).await;
+                        }
                         out.give(Ok(event)).await;
+                    }
+                    if let Some(error) = failure {
+                        out.give(Err(error)).await;
                     }
                     return;
                 }
@@ -447,6 +457,7 @@ fn response_of(events: Vec<StreamEvent>) -> AiResponse {
     let mut thinking = String::new();
     for event in events {
         match event {
+            StreamEvent::ToolCallDelta(_) => {}
             StreamEvent::TextDelta(delta) => response.content.push_str(&delta.text),
             StreamEvent::ThinkingDelta(delta) => thinking.push_str(&delta.thinking),
             StreamEvent::ToolCall(call) => response.tool_calls.push(AiToolCall::from(call)),

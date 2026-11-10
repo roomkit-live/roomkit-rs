@@ -1,0 +1,27 @@
+[package]
+name = "roomkit-anthropic"
+description = "RoomKit's native Anthropic Messages provider"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+roomkit.workspace = true
+roomkit-ai.workspace = true
+roomkit-core.workspace = true
+roomkit-provider-http.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
+futures-core.workspace = true
+jiff.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["net", "io-util"] }
+pretty_assertions.workspace = true
+
+[lints]
+workspace = true

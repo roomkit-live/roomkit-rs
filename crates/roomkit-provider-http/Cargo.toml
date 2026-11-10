@@ -1,0 +1,21 @@
+[package]
+name = "roomkit-provider-http"
+description = "Internal bounded HTTP and SSE primitives for RoomKit model providers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+reqwest.workspace = true
+rustls.workspace = true
+webpki-roots.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+
+[lints]
+workspace = true
