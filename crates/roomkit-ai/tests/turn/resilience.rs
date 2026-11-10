@@ -188,14 +188,15 @@ async fn a_cancel_past_a_done_event_keeps_what_it_reported() {
     let room = room_over(model.clone()).await;
     let kit = room.kit.downgrade();
     let cancel = Box::pin(async move {
-        let options = SteerOptions {
-            room_id: Some(room_id()),
-            ..SteerOptions::default()
-        };
         let kit = kit.upgrade().unwrap();
-        kit.steer(Cancel::default(), &channel("assistant"), options)
-            .await
-            .unwrap();
+        kit.steer(
+            &room_id(),
+            &channel("assistant"),
+            Cancel::default(),
+            SteerOptions::default(),
+        )
+        .await
+        .unwrap();
     });
     model.set(vec![
         text("Voici"),

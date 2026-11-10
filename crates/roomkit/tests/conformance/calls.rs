@@ -339,14 +339,14 @@ async fn cancel_or_steer(
     spec: &Value,
 ) -> Result<Called, Unreadable> {
     if name == "steer" {
-        let directive = field::<roomkit::model::SteeringDirective>(spec, "directive")?;
+        let room = field::<RoomId>(spec, "room_id")?;
         let channel = field::<ChannelId>(spec, "channel_id")?;
+        let directive = field::<roomkit::model::SteeringDirective>(spec, "directive")?;
         let options = roomkit::SteerOptions {
-            room_id: optional::<RoomId>(spec, "room_id")?,
             organization_id: organization_id(spec),
             ..roomkit::SteerOptions::default()
         };
-        let reached = run.kit().steer(directive, &channel, options).await;
+        let reached = run.kit().steer(&room, &channel, directive, options).await;
         return Ok(finish(run, name, reached, |reached| json!(reached)));
     }
     let key = field::<String>(spec, "key")?;

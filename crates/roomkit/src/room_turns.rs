@@ -323,7 +323,7 @@ pub(crate) async fn steered<S: ConversationStore>(
     let directive = SteeringDirective::from(InjectMessage::new(text));
     let address = SteerAddress {
         channel: channel_id,
-        room: Some(room_id),
+        room: room_id,
         turn: None,
         organization: None,
     };

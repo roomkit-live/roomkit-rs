@@ -339,12 +339,10 @@ async fn a_steering_cut_s_last_record_reaches_its_reader() {
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     let reached = kit
         .steer(
-            crate::steering::Cancel::default(),
+            &room_id(),
             &roomkit_core::model::ChannelId::new("ai").unwrap(),
-            crate::SteerOptions {
-                room_id: Some(room_id()),
-                ..Default::default()
-            },
+            crate::steering::Cancel::default(),
+            crate::SteerOptions::default(),
         )
         .await
         .unwrap();

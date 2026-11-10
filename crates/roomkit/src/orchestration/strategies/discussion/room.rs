@@ -569,11 +569,8 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             let cancel = Cancel {
                 reason: reason.to_owned(),
             };
-            let options = SteerOptions {
-                room_id: Some(self.room_id.clone()),
-                ..SteerOptions::default()
-            };
-            kit.steer(cancel, agent, options).await?
+            kit.steer(&self.room_id, agent, cancel, SteerOptions::default())
+                .await?
         } else {
             0
         };

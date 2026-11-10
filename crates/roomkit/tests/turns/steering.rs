@@ -233,14 +233,9 @@ async fn steer(
     directive: impl Into<SteeringDirective>,
     options: SteerOptions,
 ) -> usize {
-    kit.steer(directive, &channel("ai"), options).await.unwrap()
-}
-
-fn in_room() -> SteerOptions {
-    SteerOptions {
-        room_id: Some(room()),
-        ..SteerOptions::default()
-    }
+    kit.steer(&room(), &channel("ai"), directive, options)
+        .await
+        .unwrap()
 }
 
 /// The agent's rows: each MESSAGE's text, each call's end.
@@ -295,7 +290,7 @@ async fn a_cancel_for_a_channel_without_steering_cuts_its_turn() {
     let turn = asked(&kit, "hello");
     agent.started(1).await;
 
-    let reached = steer(&kit, Cancel::default(), in_room()).await;
+    let reached = steer(&kit, Cancel::default(), SteerOptions::default()).await;
     // The turn ends as a closed stream would: its reader reads no error.
     turn.await.unwrap();
 
@@ -315,7 +310,10 @@ async fn a_close_after_a_cut_drops_the_channel_s_stream_once() {
     let turn = asked(&kit, "hello");
     agent.started(1).await;
 
-    assert_eq!(steer(&kit, Cancel::default(), in_room()).await, 1);
+    assert_eq!(
+        steer(&kit, Cancel::default(), SteerOptions::default()).await,
+        1
+    );
     turn.await.unwrap();
     kit.close().await.unwrap();
 
@@ -403,7 +401,10 @@ async fn a_cut_after_a_reader_stopped_reaches_no_turn_and_the_stream_is_dropped_
 
     asked(&kit, "hello").await.unwrap();
     assert_eq!(agent.cleaned.load(Ordering::SeqCst), 1);
-    assert_eq!(steer(&kit, Cancel::default(), in_room()).await, 0);
+    assert_eq!(
+        steer(&kit, Cancel::default(), SteerOptions::default()).await,
+        0
+    );
     kit.close().await.unwrap();
 
     assert_eq!(agent.cleaned.load(Ordering::SeqCst), 1);
@@ -417,7 +418,7 @@ async fn a_directive_other_than_cancel_reaches_no_channel_without_steering() {
     let turn = asked(&kit, "hello");
     agent.started(1).await;
 
-    let reached = steer(&kit, InjectMessage::new("x"), in_room()).await;
+    let reached = steer(&kit, InjectMessage::new("x"), SteerOptions::default()).await;
     agent.release();
     turn.await.unwrap();
 
@@ -435,9 +436,9 @@ async fn a_cancel_reaches_every_turn_of_the_room_another_directive_the_latest() 
     agent.started(2).await;
     let turn_ids = agent.turn_ids();
 
-    let one = steer(&kit, InjectMessage::new("x"), in_room()).await;
+    let one = steer(&kit, InjectMessage::new("x"), SteerOptions::default()).await;
     let latest = agent.steered.lock().unwrap().last().unwrap().1.clone();
-    let every = steer(&kit, Cancel::default(), in_room()).await;
+    let every = steer(&kit, Cancel::default(), SteerOptions::default()).await;
     agent.release();
     for turn in turns {
         turn.await.unwrap();
@@ -457,7 +458,7 @@ async fn a_call_a_steering_cancel_left_open_ends_cancelled() {
     let turn = asked(&kit, "hello");
     agent.started(1).await;
 
-    let reached = steer(&kit, Cancel::default(), in_room()).await;
+    let reached = steer(&kit, Cancel::default(), SteerOptions::default()).await;
     turn.await.unwrap();
 
     let (_, ends) = agent_rows(&kit).await;

@@ -371,7 +371,11 @@ async fn an_inline_delegation_cut_while_its_tool_runs_leaves_no_call_open() {
         .find(|listed| listed.id != room())
         .unwrap();
     let rows = rows_of(&kit, &child.id, "worker").await;
-    let loops = worker.steer(Cancel::default(), SteerOptions::default());
+    let in_child = SteerOptions {
+        room_id: Some(child.id.clone()),
+        ..SteerOptions::default()
+    };
+    let loops = worker.steer(Cancel::default(), in_child);
     assert_eq!(
         (rows, loops.unwrap()),
         (

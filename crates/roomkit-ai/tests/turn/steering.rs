@@ -173,13 +173,6 @@ fn call() -> ScriptedRound {
     )
 }
 
-fn in_room() -> SteerOptions {
-    SteerOptions {
-        room_id: Some(room_id()),
-        ..SteerOptions::default()
-    }
-}
-
 /// Whether `request` carries a message holding `text`.
 fn read(request: &AiContext, text: &str) -> bool {
     request
@@ -224,9 +217,14 @@ fn first_turn(room: &Arc<Room>) -> tokio::task::JoinHandle<()> {
 }
 
 async fn steer(kit: &RoomKit, directive: impl Into<SteeringDirective>) -> usize {
-    kit.steer(directive, &channel("assistant"), in_room())
-        .await
-        .unwrap()
+    kit.steer(
+        &room_id(),
+        &channel("assistant"),
+        directive,
+        SteerOptions::default(),
+    )
+    .await
+    .unwrap()
 }
 
 // Python: tests/test_steering_during_turn.py::test_a_message_steered_while_the_model_answers_asks_it_again
@@ -431,9 +429,14 @@ async fn a_cancel_while_the_calls_are_announced_stops_them() {
                 let kit = kit.upgrade();
                 async move {
                     if let (Some(kit), EventType::ToolCallStart) = (kit, &event.r#type) {
-                        kit.steer(Cancel::default(), &channel("assistant"), in_room())
-                            .await
-                            .unwrap();
+                        kit.steer(
+                            &room_id(),
+                            &channel("assistant"),
+                            Cancel::default(),
+                            SteerOptions::default(),
+                        )
+                        .await
+                        .unwrap();
                     }
                 }
             },
@@ -478,19 +481,20 @@ async fn a_directive_for_a_room_with_no_turn_reaches_nothing() {
     let room = with_tools(model, Paused::new().tools()).await;
 
     assert_eq!(steer(&room.kit, Cancel::default()).await, 0);
-    let both = SteerOptions {
-        room_id: Some(room_id()),
+    let one_turn = SteerOptions {
         turn_id: Some("t1".to_owned()),
         ..SteerOptions::default()
     };
-    let refused = room
+    let reached = room
         .kit
-        .steer(Cancel::default(), &channel("assistant"), both)
+        .steer(
+            &room_id(),
+            &channel("assistant"),
+            Cancel::default(),
+            one_turn,
+        )
         .await;
-    assert!(
-        matches!(refused, Err(RoomKitError::Value(_))),
-        "{refused:?}"
-    );
+    assert_eq!(reached.unwrap(), 0);
     room.kit.close().await.unwrap();
 }
 
@@ -514,11 +518,25 @@ async fn a_turn_addressed_by_the_id_its_tool_reads() {
         turn_id: Some(turn_id),
         ..SteerOptions::default()
     };
+    // A turn is addressed within its room: named with another, it is not
+    // reached.
+    let elsewhere = room
+        .kit
+        .steer(
+            &roomkit::model::RoomId::new("room_2").unwrap(),
+            &channel("assistant"),
+            InjectMessage::new("For r2."),
+            options.clone(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(elsewhere, 0);
     let reached = room
         .kit
         .steer(
-            InjectMessage::new("Mind the budget."),
+            &room_id(),
             &channel("assistant"),
+            InjectMessage::new("Mind the budget."),
             options,
         )
         .await
@@ -538,13 +556,17 @@ async fn a_directive_for_another_organization_s_room_is_refused() {
     let model = Gated::new([], usize::MAX);
     let room = with_tools(model, Paused::new().tools()).await;
     let options = SteerOptions {
-        room_id: Some(room_id()),
         organization_id: Some("org_b".to_owned()),
         ..SteerOptions::default()
     };
     let refused = room
         .kit
-        .steer(Cancel::default(), &channel("assistant"), options)
+        .steer(
+            &room_id(),
+            &channel("assistant"),
+            Cancel::default(),
+            options,
+        )
         .await;
     assert!(
         matches!(refused, Err(RoomKitError::RoomNotFound { .. })),

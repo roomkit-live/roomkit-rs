@@ -780,11 +780,11 @@ impl<P: AiProvider> AiChannel<P> {
     /// also stops the loop's generation at its next event, and its round's
     /// calls announced but not run.
     ///
-    /// One channel serves every room it is bound to, so a host acting for
-    /// one room addresses that room: a `Cancel` reaches every loop of the
-    /// room (or of the turn `turn_id`), any other directive the most recent
-    /// one, never a loop of another room. With no address, the directive
-    /// reaches the channel's most recent loop, whatever its room. A loop is
+    /// One channel serves every room it is bound to, so a host names
+    /// exactly one of the loop, the room or the turn it acts for: a
+    /// `Cancel` reaches every loop of the room (or of the turn `turn_id`),
+    /// any other directive the most recent one, never a loop of another
+    /// room. A loop is
     /// reachable once its turn's stream is read, until it has read its
     /// queue for the last time: at its end, or once the model answered
     /// with no message steered in meanwhile.
@@ -793,8 +793,8 @@ impl<P: AiProvider> AiChannel<P> {
     ///
     /// # Errors
     ///
-    /// Returns [`AiError::SteerAddress`], Python's `ValueError`, when more
-    /// than one of `loop_id`, `room_id` and `turn_id` is given.
+    /// Returns [`AiError::SteerAddress`], Python's `ValueError`, when not
+    /// exactly one of `loop_id`, `room_id` and `turn_id` is given.
     pub fn steer(
         &self,
         directive: impl Into<SteeringDirective>,

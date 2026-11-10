@@ -54,9 +54,9 @@ pub enum AiError {
         /// How many were given.
         given: usize,
     },
-    /// A steering directive addressed to more than one of a loop, a room
-    /// and a turn (RFC §21.3). Python's `ValueError`.
-    #[error("steer() addresses a loop_id, a room_id or a turn_id, not several")]
+    /// A steering directive addressed to none or more than one of a loop,
+    /// a room and a turn (RFC §21.3). Python's `ValueError`.
+    #[error("steer() addresses exactly one of a loop_id, a room_id or a turn_id")]
     SteerAddress,
     /// A human-input tool handler given no tool name to serve. Python's
     /// `ValueError`.

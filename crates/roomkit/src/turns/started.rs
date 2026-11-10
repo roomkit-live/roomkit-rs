@@ -23,13 +23,13 @@ pub(crate) struct StartedTurns {
     turns: Vec<Started>,
 }
 
-/// Which turns of the channel `channel` a directive is for: the turn
-/// `turn`, else the turns of `room`, else the channel's most recent; only
-/// those of rooms of `organization` when it is given (RFC §17.2).
+/// Which turns of the channel `channel` a directive is for: those of
+/// `room`, its turn `turn` alone when given; only those of rooms of
+/// `organization` when it is given (RFC §17.2).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SteerAddress<'a> {
     pub(crate) channel: &'a ChannelId,
-    pub(crate) room: Option<&'a RoomId>,
+    pub(crate) room: &'a RoomId,
     pub(crate) turn: Option<&'a str>,
     pub(crate) organization: Option<&'a str>,
 }
@@ -53,34 +53,26 @@ impl StartedTurns {
         });
     }
 
-    /// The turns `directive` reaches at `address` (RFC §10.6.8): the turn
-    /// named; else the room's turns still running, all of them for a
-    /// `Cancel` and the most recent for any other directive; else the
-    /// channel's most recent turn, whatever its room.
+    /// The turns `directive` reaches at `address` (RFC §10.6.8): the
+    /// room's turn named, else the room's turns still running, all of them
+    /// for a `Cancel` and the most recent for any other directive.
     pub(crate) fn targets(
         &self,
         directive: &SteeringDirective,
         address: SteerAddress<'_>,
     ) -> Vec<Steerable> {
-        let mut running = self.turns.iter().filter(|turn| {
+        let in_room = self.turns.iter().filter(|turn| {
             !turn.steerable.over()
                 && &turn.channel_id == address.channel
+                && &turn.room_id == address.room
                 && address.organization.is_none_or(|organization| {
                     turn.organization_id.as_deref() == Some(organization)
                 })
         });
-        let addressed: Vec<&Started> = match (address.turn, address.room) {
-            (Some(turn_id), _) => running.filter(|turn| turn.turn_id == turn_id).collect(),
-            (None, Some(room_id)) => {
-                let in_room: Vec<&Started> =
-                    running.filter(|turn| &turn.room_id == room_id).collect();
-                if directive.is_cancel() {
-                    in_room
-                } else {
-                    in_room.into_iter().last().into_iter().collect()
-                }
-            }
-            (None, None) => running.next_back().into_iter().collect(),
+        let addressed: Vec<&Started> = match address.turn {
+            Some(turn_id) => in_room.filter(|turn| turn.turn_id == turn_id).collect(),
+            None if directive.is_cancel() => in_room.collect(),
+            None => in_room.last().into_iter().collect(),
         };
         addressed
             .into_iter()
