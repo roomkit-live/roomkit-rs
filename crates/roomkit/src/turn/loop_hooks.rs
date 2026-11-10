@@ -171,7 +171,10 @@ impl TurnHost {
                 payload.clone(),
                 self.shared.context.clone(),
             );
-            let observing = ExecutionContext::current().observing(0, observing);
+            // Boxed at once: each layer below moves its future by value, and
+            // a debug build copies this one at every move, past a 2 MB stack
+            // in a task's nested turn.
+            let observing = Box::pin(ExecutionContext::current().observing(0, observing));
             let (host, spec, done) = (self.clone(), spec.clone(), Arc::clone(&ended));
             let bounded = async move {
                 let observed = observing.await;

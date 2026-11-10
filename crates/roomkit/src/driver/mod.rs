@@ -310,14 +310,16 @@ where
     let lifetime = Arc::new(CallLifetime::default());
     let running = Arc::clone(&lifetime);
     let (kit, noting) = (Arc::clone(inner), Arc::clone(&in_flight));
-    let run = async move {
+    // Boxed: the operation and its drive make this future large, and each
+    // layer that wraps it below would hold it whole on a debug build's stack.
+    let run = Box::pin(async move {
         let how = Driven::Call {
             own,
             in_flight: noting,
             lifetime: running,
         };
         drive(&kit, environment, call, operation, Leases::Granted, how).await
-    };
+    });
     let context = ExecutionContext::current();
     let Some(task) = inner.tasks.spawn(Kind::Call, context.scope(run)) else {
         return Err(Stop::Failed(RoomKitError::KitClosed));

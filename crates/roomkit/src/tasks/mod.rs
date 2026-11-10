@@ -254,7 +254,10 @@ impl Tasks {
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
-        self.spawn_alone(Kind::Observer, self.observer_starts.in_turn(future))
+        self.spawn_alone(
+            Kind::Observer,
+            self.observer_starts.in_turn(Box::pin(future)),
+        )
     }
 
     /// Runs `future` as a task of `kind` the kit tracks, in a unit of its
@@ -331,7 +334,9 @@ impl Tasks {
         F::Output: Send + 'static,
     {
         // Under the current span, as a task Python creates copies its context.
-        let future = within_current_span(future);
+        // Boxed first: every layer below moves the future by value, which a
+        // debug build copies whole onto the stack at each one.
+        let future = within_current_span(Box::pin(future));
         let key = {
             let mut state = self.state();
             let phase = *self.phase.borrow();
