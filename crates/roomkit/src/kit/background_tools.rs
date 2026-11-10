@@ -868,12 +868,12 @@ mod tests {
             metadata,
             ..CreateRoomOptions::default()
         };
-        kit.create_room(options).await.unwrap();
+        let room = kit.create_room(options).await.unwrap();
         let mut arguments = Metadata::new();
         arguments.insert("task".to_owned(), json!("More work."));
         let call = OwnerCall {
             room_id: child,
-            room_metadata: Arc::default(),
+            room_metadata: Arc::new(room.metadata),
             channel_id: channel("speaker"),
             tool_call_id: "c1".to_owned(),
             arguments,
