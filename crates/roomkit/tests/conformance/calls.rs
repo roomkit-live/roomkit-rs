@@ -256,7 +256,7 @@ async fn regenerate_call(
         trigger_id: optional(spec, "trigger_id")?,
         organization_id,
     };
-    let outcome = run.kit().regenerate_response(&room, options).await;
+    let outcome = run.kit_of(spec)?.regenerate_response(&room, options).await;
     let id = outcome
         .as_ref()
         .ok()

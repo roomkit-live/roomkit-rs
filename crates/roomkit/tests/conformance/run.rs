@@ -922,6 +922,7 @@ impl Run {
 /// The calls a call's `kit` may run on another process (README, "Calls").
 const KIT_CALLS: &[&str] = &[
     "process_inbound",
+    "regenerate_response",
     "install_strategy",
     "uninstall_strategy",
     "claim_room_strategy",
