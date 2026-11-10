@@ -12,7 +12,7 @@ use roomkit::model::{EventContent, EventType, RoomEvent, TextContent, ToolCallSt
 use roomkit::{
     AttachChannelOptions, ConversationStore, HookExecution, HookOptions, HookTrigger,
     InMemoryStore, ProcessInboundOptions, RegenerateResponseOptions, RoomKit, SendEventOptions,
-    TurnTimeouts, keep_context,
+    TurnTimeouts,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{AiChannelOptions, AiResponseEvent, AiTool, ToolResult, Tools};
@@ -145,7 +145,9 @@ fn response_count(kit: &RoomKit) -> Arc<AtomicUsize> {
 }
 
 /// The tool-call end rows `r` stores, each with its status and error.
-async fn ends<S: ConversationStore>(kit: &RoomKit<S>) -> Vec<(ToolCallStatus, Option<String>)> {
+pub(super) async fn ends<S: ConversationStore>(
+    kit: &RoomKit<S>,
+) -> Vec<(ToolCallStatus, Option<String>)> {
     let query = roomkit::store::ListEventsOptions {
         limit: u64::MAX,
         ..roomkit::store::ListEventsOptions::default()
@@ -161,136 +163,6 @@ async fn ends<S: ConversationStore>(kit: &RoomKit<S>) -> Vec<(ToolCallStatus, Op
             Some((call.status, call.error))
         })
         .collect()
-}
-
-/// How a tool closes the kit.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum How {
-    /// It awaits `close()` itself.
-    Itself,
-    /// It awaits a task of its own, spawned with `keep_context`, that
-    /// closes the kit.
-    FromATask,
-}
-
-/// Notes a tool call dropped before it ended.
-struct ToolNote(Arc<Mutex<Vec<String>>>);
-
-impl Drop for ToolNote {
-    fn drop(&mut self) {
-        self.0.lock().unwrap().push("cut".to_owned());
-    }
-}
-
-/// An agent in `r` whose one tool closes the kit as `how` says, noting in
-/// `steps` how its close ended and, once it returned, the end rows the
-/// room stores then.
-async fn closing_agent(kit: &RoomKit, how: How, steps: &Arc<Mutex<Vec<String>>>) {
-    let (weak, steps) = (kit.downgrade(), Arc::clone(steps));
-    let tools = Tools::new().tool(
-        AiTool {
-            parameters: json!({ "type": "object" }),
-            ..AiTool::new("shut_down", "Shut down.").unwrap()
-        },
-        move |_call, _context| {
-            let (weak, steps) = (weak.clone(), Arc::clone(&steps));
-            async move {
-                let Some(kit) = weak.upgrade() else {
-                    return Ok(ToolResult::Text("gone".to_owned()));
-                };
-                let mut note = Some(ToolNote(Arc::clone(&steps)));
-                let closed = match how {
-                    How::Itself => kit.close().await,
-                    How::FromATask => {
-                        let kit = kit.clone();
-                        tokio::spawn(keep_context(async move { kit.close().await }))
-                            .await
-                            .unwrap()
-                    }
-                };
-                std::mem::forget(note.take());
-                let rows = ends(&kit).await;
-                steps
-                    .lock()
-                    .unwrap()
-                    .push(format!("closed {:?} {rows:?}", closed.is_ok()));
-                Ok(ToolResult::Text("closed".to_owned()))
-            }
-        },
-    );
-    let model = ScriptedProvider::new([
-        ScriptedRound::calling("", [("c1", "shut_down", "{}")]),
-        ScriptedRound::answering("Done."),
-    ]);
-    attach_agent(kit, model, tools).await;
-}
-
-/// RFC §12.10.4: a tool closes the kit from its own turn, or from a task
-/// it starts and awaits: the close cuts that turn as any other, the open
-/// call's end row is stored before the close returns, `failed` with the
-/// error `kit_closed`, no warning is logged, and the call reads its cut,
-/// `kit_closed`, never that cut as its error. The tool's own close
-/// returns and the tool runs on; a tool awaiting a close it started on a
-/// task of its own is cut with its turn, the close running on (Python's
-/// `test_a_tool_closing_the_kit_gets_its_end_row_before_the_close_returns`).
-/// On fefbfac the turn was spared, its end row refused once the kit was
-/// sealed.
-#[tokio::test(start_paused = true)]
-async fn a_tool_closing_the_kit_gets_its_end_row_before_the_close_returns() {
-    let mut rows = Vec::new();
-    for how in [How::Itself, How::FromATask] {
-        let (logs, logging) = Warnings::capture();
-        let kit = kit_of(InMemoryStore::default(), &[&Holding::new("ws", [])], &["r"]).await;
-        let steps = Arc::new(Mutex::new(Vec::new()));
-        closing_agent(&kit, how, &steps).await;
-
-        let result = tokio::time::timeout(
-            Duration::from_secs(10),
-            kit.process_inbound(said("Go."), into("r")),
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        tokio::time::timeout(Duration::from_secs(10), kit.close())
-            .await
-            .unwrap()
-            .unwrap();
-        roomkit::testing::idle(&kit).await;
-        drop(logging);
-        let steps = steps.lock().unwrap().clone();
-
-        rows.push((
-            how,
-            steps,
-            (
-                result.cancellation_reason,
-                result.error.map(|error| error.error_type),
-            ),
-            ends(&kit).await,
-            warned(&logs),
-        ));
-    }
-    let end = || vec![(ToolCallStatus::Failed, Some("kit_closed".to_owned()))];
-    let kit_closed = || (Some("kit_closed".to_owned()), None);
-    assert_eq!(
-        rows,
-        [
-            (
-                How::Itself,
-                vec![format!("closed true {:?}", end())],
-                kit_closed(),
-                end(),
-                vec![],
-            ),
-            (
-                How::FromATask,
-                vec!["cut".to_owned()],
-                kit_closed(),
-                end(),
-                vec![]
-            ),
-        ]
-    );
 }
 
 /// RFC §12.10.4: a tool awaits `close()` in its own turn, then runs on:

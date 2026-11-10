@@ -183,10 +183,7 @@ impl<S: ConversationStore> RoomKit<S> {
         // as the Python implementation's turn backend's close.
         turns.close();
         self.unwind_turns().await;
-        let failures = self.inner.close_channels().await;
-        // Its subscriptions end with the channels, as the Python
-        // implementation's close releases its realtime backend.
-        self.inner.realtime.close().await;
+        let failures = self.close_channels_with_observers().await;
         // What the channels' closes started is cut, its grace over.
         tasks.cut();
         self.unwind().await;
@@ -212,6 +209,17 @@ impl<S: ConversationStore> RoomKit<S> {
         // Then the telemetry, which ends its active spans and exports them,
         // as the Python implementation's close.
         self.inner.close_telemetry().await;
+        failures
+    }
+
+    /// A channel may wait for its final observer to start. Admission
+    /// gives that observer no exemption from the last cut and ends here,
+    /// before the cut. The usual rule still spares an observer's own close.
+    async fn close_channels_with_observers(&self) -> shutdown::Ended {
+        let _observers = self.inner.tasks.closing_observers();
+        let failures = self.inner.close_channels().await;
+        // Subscriptions end with the channels, as in Python's close.
+        self.inner.realtime.close().await;
         failures
     }
 
@@ -241,6 +249,14 @@ impl<S: ConversationStore> RoomKit<S> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/shutdown_contracts.rs"]
+mod shutdown_contracts;
+
+#[cfg(test)]
+#[path = "tests/closing_observers.rs"]
+mod closing_observers;
 
 #[cfg(test)]
 mod tests {

@@ -34,8 +34,8 @@ use crate::model::{
     EventSource, EventType, RoomContext, RoomEvent, TextContent, Visibility,
 };
 use crate::ops::protocol::{
-    ChannelOutcome, ChannelRequest, EffectId, EntryId, Outcome, ROW_HIDDEN, ROW_WITHHELD, Raised,
-    StoreRequest, StreamTarget, TURN_CUT,
+    ChannelOutcome, ChannelRequest, EffectId, EntryId, KIT_CLOSED, Outcome, ROW_HIDDEN,
+    ROW_WITHHELD, Raised, StoreRequest, StreamTarget, TURN_CUT,
 };
 use crate::ops::{Cx, Environment};
 use crate::rules::chain_depth::{self, ReentryBudget};
@@ -230,6 +230,9 @@ impl StreamRead {
         outcome: Outcome,
         cut: bool,
     ) -> Read {
+        if matches!(&outcome, Outcome::Failed(error) if error.error_type == KIT_CLOSED) {
+            return self.closed();
+        }
         match self.state {
             ReadStage::Loading(_) | ReadStage::Asking(_) if cut => {
                 self.unread("its cascade's turns are cut")
@@ -334,6 +337,11 @@ impl StreamRead {
             why,
             "the room could not be read for a turn's stream: it is closed unread"
         );
+        self.no_output()
+    }
+
+    /// Ends without inventing output or a stream failure.
+    fn no_output(self) -> Read {
         Read::Over(Box::new(StreamEnd {
             job: self.job,
             context: None,
@@ -341,6 +349,18 @@ impl StreamRead {
             target: None,
             raised: None,
         }))
+    }
+
+    /// The driver can end a query or read before the cascade records its
+    /// cut. This is shutdown, not a failed provider or target.
+    fn closed(self) -> Read {
+        tracing::debug!(
+            target: "roomkit::core::delivery",
+            room_id = %self.job.answers.room_id,
+            channel_id = %self.job.responder.channel_id,
+            "the turn's stream ended as the kit closed"
+        );
+        self.no_output()
     }
 
     /// Whether the stream is the call's own, neither an answer's nor an

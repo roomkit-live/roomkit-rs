@@ -139,7 +139,7 @@ async fn attach_scripted<S: ConversationStore>(kit: &RoomKit<S>, left: Left) {
 
 /// How a [`Receiving`] target reads its stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Pace {
+pub(super) enum Pace {
     /// It reads the first item, then stalls 30 s before it reads the rest.
     Stall,
     /// It reads the next item 10 ms after the last one.
@@ -152,7 +152,7 @@ enum Pace {
 /// at its pace, and says whether it read its stream's end, and whether its
 /// `deliver_stream()` was dropped before it ended.
 #[derive(Clone)]
-struct Receiving {
+pub(super) struct Receiving {
     pace: Pace,
     received: Arc<Mutex<Vec<String>>>,
     ended: Arc<AtomicBool>,
@@ -174,7 +174,7 @@ impl Drop for DropNote {
 }
 
 impl Receiving {
-    fn new(pace: Pace) -> Self {
+    pub(super) fn new(pace: Pace) -> Self {
         Self {
             pace,
             received: Arc::default(),
@@ -184,7 +184,7 @@ impl Receiving {
     }
 
     /// The texts it received, joined.
-    fn received(&self) -> String {
+    pub(super) fn received(&self) -> String {
         self.received.lock().unwrap().concat()
     }
 }
@@ -298,7 +298,7 @@ async fn answers(kit: &RoomKit) -> Vec<(String, bool)> {
 }
 
 /// Waits until `target` received something of its stream.
-async fn first_received(target: &Receiving) {
+pub(super) async fn first_received(target: &Receiving) {
     let received = async {
         while target.received.lock().unwrap().is_empty() {
             tokio::time::sleep(Duration::from_millis(1)).await;

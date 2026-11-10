@@ -70,6 +70,10 @@ const LOOP_END_REASON: &str = "loop_end_reason";
 /// (RFC §23.3 step 6): Python's `error_reported`.
 const ERROR_REPORTED: &str = "error_reported";
 
+#[cfg(test)]
+#[path = "tests/post_shutdown.rs"]
+mod post_shutdown;
+
 /// What [`RoomKit::delegate`] takes beside the room, the agent and the
 /// task: Python's `delegate(..., *, wait=False, context=None,
 /// share_channels=None, notify=None, on_complete=None,
@@ -929,7 +933,11 @@ impl<S: ConversationStore> RoomKit<S> {
         let metadata = hand_back_metadata(result, task);
         let room_id = &result.parent_room_id;
         if let Err(error) = hand_back(self, room_id, notify, text, chain_depth, metadata).await {
-            tracing::warn!(target: "roomkit::tasks", task = %result.task_id, %error, "the result was not handed back");
+            if error == RoomKitError::KitClosed && self.inner.tasks.is_closing() {
+                tracing::info!(target: "roomkit::tasks", task = %result.task_id, "Result not handed back: the framework closed");
+            } else {
+                tracing::warn!(target: "roomkit::tasks", task = %result.task_id, %error, "the result was not handed back");
+            }
         }
     }
 

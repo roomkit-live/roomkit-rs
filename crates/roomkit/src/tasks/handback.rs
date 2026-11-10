@@ -106,7 +106,7 @@ pub(crate) async fn hand_back<S: ConversationStore>(
         (text, options)
     };
     let outcome = kit.deliver(room_id, text, options).await?;
-    log_not_delivered(notify, room_id, &outcome);
+    log_not_delivered(notify, room_id, &outcome, kit.inner.tasks.is_closing());
     Ok(Some(outcome))
 }
 
@@ -136,12 +136,22 @@ fn not_delivered(outcome: &DeliveryOutcome) -> Option<&'static str> {
 
 /// Logs a hand-back that reached nobody, as Python's `_log_not_delivered`:
 /// a warning, unless the notified agent's turn failed, which was logged
-/// where it failed and is only noted here (RFC §15.2).
-fn log_not_delivered(notify: &ChannelId, room_id: &RoomId, outcome: &DeliveryOutcome) {
+/// where it failed and is only noted here (RFC §15.2). A hand-back cut by
+/// the kit's close is expected (RFC §12.10.4), recorded at INFO instead.
+fn log_not_delivered(
+    notify: &ChannelId,
+    room_id: &RoomId,
+    outcome: &DeliveryOutcome,
+    closing: bool,
+) {
     let Some(status) = not_delivered(outcome) else {
         return;
     };
     let reason = outcome.reason.as_deref().unwrap_or("None");
+    if closing && reason == roomkit_core::ops::KIT_CLOSED {
+        tracing::info!(target: "roomkit::tasks", "Result for {notify} in room {room_id} not handed back: the framework closed");
+        return;
+    }
     let turn_failed = outcome
         .inbound
         .as_ref()

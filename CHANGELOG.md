@@ -6,6 +6,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A channel's final observers may start during shutdown and are cut before the store is released, without reopening public admission or extending the rights of turns and writes (RFC §12.10.4; RMK-1616).
+- Shutdown no longer reports a cut streaming-capability query as a provider failure, or a cut task hand-back as a delivery warning. Completed task results and the recipient's partial answer are retained (RFC §12.10.4; RMK-1616).
+
 - A closing observer drops its own answer still awaiting a cursor claim, so the answer leaves no run suspended after the store closes (RFC §12.10.4; RMK-1616).
 
 - A delegated task's turn no longer overflows a 2 MB stack in a debug build: the kit boxes a call's run, a spawned task and a turn's observer before wrapping them, so each layer moves a pointer rather than the whole future (RMK-1616).

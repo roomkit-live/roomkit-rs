@@ -166,8 +166,21 @@ impl Default for Tasks {
     }
 }
 
+/// The channel teardown's bounded observer admission window.
+#[derive(Debug)]
+pub(crate) struct ClosingObservers<'tasks>(&'tasks Tasks);
+
+impl Drop for ClosingObservers<'_> {
+    fn drop(&mut self) {
+        self.0.state().closing_observers = false;
+    }
+}
+
 #[derive(Debug, Default)]
 struct State {
+    /// Channel/realtime teardown may emit its final observers after the
+    /// first cut. They stay tracked, without an extra exemption from the last cut.
+    closing_observers: bool,
     /// The key the next task is tracked under.
     next: u64,
     /// The tasks running, by their key.
@@ -247,6 +260,14 @@ pub(crate) struct Tracked {
 }
 
 impl Tasks {
+    /// Admits the channels' final observers, without reopening calls or
+    /// admitting new turns/writes. The guard closes admission before the
+    /// last cut, including when teardown unwinds (RFC §12.10.4).
+    pub(crate) fn closing_observers(&self) -> ClosingObservers<'_> {
+        self.state().closing_observers = true;
+        ClosingObservers(self)
+    }
+
     /// Starts an observer in firing order, without waiting for earlier
     /// observers to finish. Its close unit is its own, as in `spawn_alone`.
     pub(crate) fn spawn_observer<F>(self: &Arc<Self>, future: F) -> Option<JoinHandle<F::Output>>
@@ -263,7 +284,8 @@ impl Tasks {
     /// Runs `future` as a task of `kind` the kit tracks, in a unit of its
     /// own within the units of the current code; `None`, nothing spawned,
     /// once the close's grace ran out, but for work the close spares, and
-    /// once the kit is sealed.
+    /// once the kit is sealed. Only final observers are also admitted
+    /// during channel/realtime teardown, until its admission guard ends.
     pub(crate) fn spawn<F>(self: &Arc<Self>, kind: Kind, future: F) -> Option<JoinHandle<F::Output>>
     where
         F: Future + Send + 'static,
@@ -340,7 +362,10 @@ impl Tasks {
         let key = {
             let mut state = self.state();
             let phase = *self.phase.borrow();
-            if phase == Phase::Sealed || (phase == Phase::Cut && !state.spares_any(&marks)) {
+            let final_observer = kind == Kind::Observer && state.closing_observers;
+            if phase == Phase::Sealed
+                || (phase == Phase::Cut && !state.spares_any(&marks) && !final_observer)
+            {
                 return None;
             }
             track(&mut state, kind, marks.units().into())

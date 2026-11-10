@@ -5,13 +5,21 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use roomkit::model::{
-    ChannelBinding, ChannelId, ChannelType, EventId, Identity, IdentityId, Metadata, Observation,
-    Participant, ParticipantId, Room, RoomEvent, RoomId, Task,
+    ChannelBinding, ChannelId, ChannelType, EventContent, EventId, EventType, Identity, IdentityId,
+    Metadata, Observation, Participant, ParticipantId, Room, RoomEvent, RoomId, Task,
 };
 use roomkit::store;
 use roomkit::{ConversationStore, InMemoryStore, StoreError};
 use roomkit_core::rules::transcoding::text_of;
 use tokio::sync::Notify;
+
+/// A committed row and whether the store was already released then.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CommittedRow {
+    pub(crate) kind: EventType,
+    pub(crate) after_close: bool,
+    pub(crate) error: Option<String>,
+}
 
 /// An in-memory store whose commit of a text, or whose writes of a room,
 /// may never end, telling `committing` they started, and whose reads of an
@@ -19,6 +27,12 @@ use tokio::sync::Notify;
 #[derive(Debug, Default)]
 pub(crate) struct StuckStore {
     store: InMemoryStore,
+    pub(crate) commits: Mutex<Vec<CommittedRow>>,
+    pub(crate) yield_commits: AtomicBool,
+    pub(crate) commit_steps: Arc<Mutex<Vec<String>>>,
+    /// Suspend each cursor read, including those of a turn's terminal rows.
+    pub(crate) cursor_delay: Mutex<Option<std::time::Duration>>,
+    pub(crate) delayed_cursors: AtomicUsize,
     pub(crate) committing: Arc<Notify>,
     /// A read held at the store boundary until `release_read` is notified.
     pub(crate) held_read: Mutex<Option<&'static str>>,
@@ -66,6 +80,35 @@ impl Drop for CutNote {
 }
 
 impl StuckStore {
+    async fn commit(
+        &self,
+        room_id: &RoomId,
+        event: RoomEvent,
+        options: store::CommitEventOptions,
+    ) -> Result<RoomEvent, StoreError> {
+        if self.yield_commits.load(Ordering::SeqCst) {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        let stored = self.store.commit_event(room_id, event, options).await?;
+        if self.yield_commits.load(Ordering::SeqCst) {
+            self.commit_steps
+                .lock()
+                .unwrap()
+                .push(format!("committed {}", text_of(&stored.content)));
+        }
+        let error = if let EventContent::ToolCall(call) = &stored.content {
+            call.error.clone()
+        } else {
+            None
+        };
+        self.commits.lock().unwrap().push(CommittedRow {
+            kind: stored.r#type,
+            after_close: !self.closes.lock().unwrap().is_empty(),
+            error,
+        });
+        Ok(stored)
+    }
+
     async fn read(&self, name: &str) {
         if !self.closes.lock().unwrap().is_empty() {
             self.reads_after_close.fetch_add(1, Ordering::SeqCst);
@@ -224,6 +267,11 @@ impl ConversationStore for StuckStore {
     }
 
     async fn get_delivered_index(&self, room_id: &RoomId) -> Result<i64, StoreError> {
+        let delay = *self.cursor_delay.lock().unwrap();
+        if let Some(delay) = delay {
+            self.delayed_cursors.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(delay).await;
+        }
         self.read("cursor").await;
         self.store.get_delivered_index(room_id).await
     }
@@ -405,14 +453,14 @@ impl ConversationStore for StuckStore {
             && text == hangs
         {
             let committed = if written {
-                Some(self.store.commit_event(room_id, event, options).await?)
+                Some(self.commit(room_id, event, options).await?)
             } else {
                 None
             };
             self.hang("commit").await;
             return committed.ok_or_else(|| StoreError::Value("never reached".to_owned()));
         }
-        self.store.commit_event(room_id, event, options).await
+        self.commit(room_id, event, options).await
     }
 
     async fn get_event(&self, event_id: &EventId) -> Result<Option<RoomEvent>, StoreError> {
