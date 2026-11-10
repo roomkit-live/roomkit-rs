@@ -126,6 +126,7 @@ const CHANNEL: &[&str] = &[
     "text_coalesce_ms",
     "text_coalesce_chars",
     "publish_text_deltas",
+    "tool_call_intents",
     "retry_policy",
     "fallback_model",
     "max_author_images",
