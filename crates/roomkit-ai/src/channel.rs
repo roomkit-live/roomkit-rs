@@ -1559,6 +1559,7 @@ impl<P: AiProvider> AiChannel<P> {
             (stands_alone, search.active()),
         );
         let tools = ToolContext::new(context.room.id.clone(), self.channel_id.clone())
+            .reading_room(&context.room.metadata)
             .within(turn.clone())
             .standing_alone(stands_alone)
             .acting_for(turn_actor(&event, &context.participants));

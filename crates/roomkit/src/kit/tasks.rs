@@ -19,6 +19,7 @@ use roomkit_core::model::{
 };
 use roomkit_core::ops::failure_log::{self, Log};
 use roomkit_core::ops::{DelegatedAnswer, DelegatedTurn};
+use roomkit_core::rules::discussion::agent_handle;
 use roomkit_core::rules::transcript::fence;
 use serde_json::{Value, json};
 
@@ -929,16 +930,38 @@ impl<S: ConversationStore> RoomKit<S> {
         {
             return;
         }
-        let text = delegation_result_text(result, task, max_result_chars);
-        let metadata = hand_back_metadata(result, task);
-        let room_id = &result.parent_room_id;
-        if let Err(error) = hand_back(self, room_id, notify, text, chain_depth, metadata).await {
+        if let Err(error) = self
+            .relay_result(result, notify, chain_depth, task, max_result_chars)
+            .await
+        {
             if error == RoomKitError::KitClosed && self.inner.tasks.is_closing() {
                 tracing::info!(target: "roomkit::tasks", task = %result.task_id, "Result not handed back: the framework closed");
             } else {
                 tracing::warn!(target: "roomkit::tasks", task = %result.task_id, %error, "the result was not handed back");
             }
         }
+    }
+
+    /// Names the worker as the parent room addresses it (RFC §23.4),
+    /// keeping its channel id in the result's metadata.
+    async fn relay_result(
+        &self,
+        result: &DelegatedTaskResult,
+        notify: &ChannelId,
+        chain_depth: u32,
+        task: &str,
+        max_result_chars: std::num::NonZeroUsize,
+    ) -> Result<(), RoomKitError> {
+        let room_id = &result.parent_room_id;
+        let room = self.store().get_room(room_id).await?;
+        let worker = room.as_ref().map_or(result.agent_id.as_str(), |room| {
+            agent_handle(&room.metadata, result.agent_id.as_str())
+        });
+        let text = delegation_result_text(result, task, worker, max_result_chars);
+        let metadata = hand_back_metadata(result, task);
+        hand_back(self, room_id, notify, text, chain_depth, metadata)
+            .await
+            .map(|_| ())
     }
 
     /// Posts a background task's result as `agent_id`'s message (RFC §23.3
@@ -1070,6 +1093,7 @@ fn hand_back_metadata(result: &DelegatedTaskResult, task: &str) -> Metadata {
 fn delegation_result_text(
     result: &DelegatedTaskResult,
     task: &str,
+    worker: &str,
     max_result_chars: std::num::NonZeroUsize,
 ) -> String {
     let outcome = if result.status == TaskStatus::Completed {
@@ -1084,7 +1108,7 @@ fn delegation_result_text(
     } else {
         format!(" Task: {}.", quoted(task, TASK_NAME_CHARS))
     };
-    let named = identifier(result.agent_id.as_str(), "worker");
+    let named = identifier(worker, "worker");
     let work = task_work(result);
     let work = if work.is_empty() { "No output" } else { work };
     let body = bounded_to(work, max_result_chars);

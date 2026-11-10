@@ -292,6 +292,7 @@ impl Pump {
         let floor = context.chain_depth.max(state.facts.response_depth);
         let call = crate::turn::OwnerCall {
             room_id: state.facts.room_id.clone(),
+            room_metadata: Arc::clone(&state.facts.room_metadata),
             channel_id: state.facts.channel_id.clone(),
             tool_call_id: context.tool_call_id.clone(),
             arguments,
@@ -512,6 +513,7 @@ mod tests {
     fn a_turn_emits_only_its_kinds_about_its_own_room_and_channel() {
         let facts = Facts {
             room_id: RoomId::new("r1").unwrap(),
+            room_metadata: Arc::default(),
             channel_id: ChannelId::new("ai").unwrap(),
             response_depth: 1,
             organization_id: None,

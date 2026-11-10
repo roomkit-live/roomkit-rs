@@ -385,7 +385,12 @@ async fn task_status<S: ConversationStore>(
         limit: TASK_STATUS_LIMIT,
     };
     Ok(kit
-        .task_status_answer(&call.room_id, &call.arguments, window)
+        .task_status_answer(
+            &call.room_id,
+            &call.arguments,
+            window,
+            Some(&call.room_metadata),
+        )
         .await)
 }
 
@@ -425,16 +430,18 @@ impl<S: ConversationStore> RoomKit<S> {
     /// `task_status`'s answer in `room_id`, the room of the call: the
     /// tasks the bus lists for it, the latest `window.limit`, or the one
     /// the call's `task_id` names (RFC §23.4). What Python's
-    /// `TaskStatusTool.handler` answers once it read the room of the call;
-    /// for roomkit-ai's `TaskStatusTool`, outside the public API.
+    /// `TaskStatusTool.handler` answers once it read the room of the call.
+    /// `room_metadata` is that turn's snapshot, absent outside a turn.
+    /// This bridge serves roomkit-ai's `TaskStatusTool`, outside the public API.
     #[doc(hidden)]
     pub async fn task_status_answer(
         &self,
         room_id: &RoomId,
         arguments: &Metadata,
         window: TaskToolWindow,
+        room_metadata: Option<&Metadata>,
     ) -> String {
-        task_status_lines(self, room_id, arguments, window).await
+        task_status_lines(self, room_id, arguments, window, room_metadata).await
     }
 
     /// `cancel_task`'s answer in `room_id`, the room of the call, for
@@ -460,8 +467,14 @@ async fn task_status_lines<S: ConversationStore>(
     room_id: &RoomId,
     arguments: &Metadata,
     window: TaskToolWindow,
+    room_metadata: Option<&Metadata>,
 ) -> String {
-    let lines = room_lines(kit.status_bus(), room_id.as_str(), window.window).await;
+    let mut lines = room_lines(kit.status_bus(), room_id.as_str(), window.window).await;
+    if let Some(metadata) = room_metadata {
+        for line in &mut lines {
+            line.name_agent(metadata);
+        }
+    }
     let wanted = wanted_task(arguments);
     let mut tasks: Vec<&Line> = lines.iter().collect();
     if !wanted.is_empty() {
@@ -859,6 +872,7 @@ mod tests {
         arguments.insert("task".to_owned(), json!("More work."));
         let call = OwnerCall {
             room_id: child,
+            room_metadata: Arc::default(),
             channel_id: channel("speaker"),
             tool_call_id: "c1".to_owned(),
             arguments,

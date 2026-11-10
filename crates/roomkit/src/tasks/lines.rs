@@ -3,6 +3,7 @@
 //! a turn's host's `room_tasks` read.
 
 use roomkit_core::model::Metadata;
+use roomkit_core::rules::discussion::agent_handle;
 use serde_json::{Value, json};
 
 use crate::orchestration::{RecentOptions, StatusBus, StatusEntry, StatusLevel};
@@ -24,6 +25,14 @@ pub(crate) struct Line {
 }
 
 impl Line {
+    /// A model reads an agent by the room's handle (RFC §23.4); this
+    /// changes only its tool answer, never the entries held by the bus.
+    pub(crate) fn name_agent(&mut self, metadata: &Metadata) {
+        if let Some(agent) = self.get("agent").and_then(Value::as_str) {
+            self.insert("agent", json!(agent_handle(metadata, agent)));
+        }
+    }
+
     fn insert(&mut self, key: &str, value: Value) {
         match self.members.iter_mut().find(|(name, _)| name == key) {
             Some((_, held)) => *held = value,

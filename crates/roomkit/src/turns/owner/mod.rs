@@ -46,6 +46,8 @@ use crate::turn::TurnKit;
 #[derive(Clone, Debug)]
 pub(crate) struct Facts {
     pub(crate) room_id: RoomId,
+    /// The room as the turn read it, for tools that name its agents.
+    pub(crate) room_metadata: Arc<Metadata>,
     pub(crate) channel_id: ChannelId,
     /// The depth of the turn's response (RFC §8.3): what the turn sends is
     /// at least that deep.
@@ -58,6 +60,7 @@ impl Facts {
     pub(crate) fn of(binding: &ChannelBinding, event: &RoomEvent, room: &Room) -> Self {
         Self {
             room_id: event.room_id.clone(),
+            room_metadata: Arc::new(room.metadata.clone()),
             channel_id: binding.channel_id.clone(),
             response_depth: roomkit_core::rules::chain_depth::response_depth(event),
             organization_id: room.organization_id.clone(),

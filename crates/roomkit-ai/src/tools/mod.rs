@@ -29,17 +29,17 @@ use std::future::Future;
 use std::sync::Arc;
 
 use roomkit::TurnHost;
-use roomkit::model::{ChannelId, RoomId, ToolCall, ToolCallOutcome};
+use roomkit::model::{ChannelId, Metadata, RoomId, ToolCall, ToolCallOutcome};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 #[doc(hidden)]
 pub use self::builder::Tools;
-pub(crate) use self::handler::served_by;
 pub use self::handler::{
     Tool, ToolCallContext, ToolEntry, ToolFuture, ToolHandler, compose_tool_handlers,
     current_response_metadata, current_tool_actor_id, current_tool_call,
 };
+pub(crate) use self::handler::{current_tool_room_metadata, served_by};
 pub use self::policy::ToolPolicy;
 #[doc(hidden)]
 pub use self::policy::{alias_server, served_tool_name};
@@ -247,6 +247,8 @@ pub struct ToolContext {
     pub room_id: RoomId,
     /// The agent whose turn calls.
     pub channel_id: ChannelId,
+    /// The room snapshot the turn read, for names in tool answers.
+    pub(crate) room_metadata: Option<Arc<Metadata>>,
     turn: Option<TurnHost>,
     /// Whether the turn is an instruction that stands alone, which reads
     /// none of the room's working state (RFC §10.1.1 rule 7).
@@ -270,12 +272,19 @@ impl ToolContext {
         Self {
             room_id,
             channel_id,
+            room_metadata: None,
             turn: None,
             stands_alone: false,
             actor_id: None,
             hintable: Vec::new(),
             search: None,
         }
+    }
+
+    /// The room as it stood when the turn began (RFC §21.4).
+    pub(crate) fn reading_room(mut self, metadata: &Metadata) -> Self {
+        self.room_metadata = Some(Arc::new(metadata.clone()));
+        self
     }
 
     /// The same context, its turn woken by `actor_id`'s event.

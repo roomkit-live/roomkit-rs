@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Task results and `task_status` name discussion agents by their handles; tool answers use the turn's room snapshot and leave status entries keyed by channel id (RFC §23.4; RMK-1567).
+
 - A channel's final observers may start during shutdown and are cut before the store is released, without reopening public admission or extending the rights of turns and writes (RFC §12.10.4; RMK-1616).
 - Shutdown no longer reports a cut streaming-capability query as a provider failure, or a cut task hand-back as a delivery warning. Completed task results and the recipient's partial answer are retained (RFC §12.10.4; RMK-1616).
 

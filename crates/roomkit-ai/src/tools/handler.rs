@@ -227,6 +227,13 @@ pub fn current_response_metadata() -> Option<ResponseMetadata> {
 struct CallScope {
     call: ToolCallContext,
     actor_id: Option<String>,
+    room_metadata: Option<Arc<Metadata>>,
+}
+
+/// The room snapshot this tool's turn read, not a fresh store read.
+pub(crate) fn current_tool_room_metadata() -> Option<Arc<Metadata>> {
+    let scope = roomkit::current_tool_call_scope()?;
+    scope.downcast_ref::<CallScope>()?.room_metadata.clone()
 }
 
 /// Runs `work`, a tool's call, within `context`, for the turn `actor_id`
@@ -235,11 +242,13 @@ struct CallScope {
 pub(crate) async fn within_call<T>(
     context: ToolCallContext,
     actor_id: Option<String>,
+    room_metadata: Option<Arc<Metadata>>,
     work: impl Future<Output = T>,
 ) -> T {
     let scope = CallScope {
         call: context,
         actor_id,
+        room_metadata,
     };
     roomkit::within_tool_call_scope(Arc::new(scope), work).await
 }
@@ -308,15 +317,19 @@ impl DynToolset for ServedBy {
         // call, as Python's `declined_answer` reads it (RFC §21.4).
         let handler = self.handler.clone();
         let actor_id = context.actor_id.clone();
-        Box::pin(within_call(within, actor_id, async move {
-            match handler.call(call.name.clone(), call.arguments).await {
-                Ok(answer) if is_unknown_tool_answer(&answer) => Err(ToolError::unserved(format!(
-                    "tool {} is not served here",
-                    python_repr(&call.name)
-                ))),
-                answered => answered,
-            }
-        }))
+        Box::pin(within_call(
+            within,
+            actor_id,
+            context.room_metadata,
+            async move {
+                match handler.call(call.name.clone(), call.arguments).await {
+                    Ok(answer) if is_unknown_tool_answer(&answer) => Err(ToolError::unserved(
+                        format!("tool {} is not served here", python_repr(&call.name)),
+                    )),
+                    answered => answered,
+                }
+            },
+        ))
     }
 }
 

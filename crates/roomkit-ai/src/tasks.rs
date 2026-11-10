@@ -17,13 +17,19 @@ use roomkit::{ConversationStore, RoomKit, RoomKitError, WeakRoomKit};
 use roomkit_core::rules::python_repr;
 use serde_json::{Value, json};
 
-use crate::tools::{AiTool, Tool, ToolError, ToolFuture, ToolResult, current_tool_call};
+use crate::tools::{
+    AiTool, Tool, ToolError, ToolFuture, ToolResult, current_tool_call, current_tool_room_metadata,
+};
 
 /// The tool [`TaskStatusTool`] serves: Python's `TASK_STATUS_TOOL`.
 const TASK_STATUS_TOOL: &str = "task_status";
 
 /// The tool [`CancelTaskTool`] serves: Python's `CANCEL_TASK_TOOL`.
 const CANCEL_TASK_TOOL: &str = "cancel_task";
+
+#[cfg(test)]
+#[path = "tasks/names.rs"]
+mod names;
 
 /// The generic delegate tool, its worker free: Python's `DELEGATE_TOOL`.
 pub static DELEGATE_TOOL: LazyLock<AiTool> =
@@ -159,7 +165,10 @@ impl<S: ConversationStore> Tool for TaskStatusTool<S> {
                 return Ok(outside(TASK_STATUS_TOOL));
             };
             let kit = kit.upgrade().ok_or_else(kit_gone)?;
-            let answer = kit.task_status_answer(&room_id, &arguments, window).await;
+            let metadata = current_tool_room_metadata();
+            let answer = kit
+                .task_status_answer(&room_id, &arguments, window, metadata.as_deref())
+                .await;
             Ok(ToolResult::Text(answer))
         })
     }

@@ -1190,6 +1190,7 @@ pub enum OwnerToolAnswer {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct OwnerCall {
     pub(crate) room_id: RoomId,
+    pub(crate) room_metadata: Arc<Metadata>,
     pub(crate) channel_id: ChannelId,
     pub(crate) tool_call_id: String,
     pub(crate) arguments: Metadata,
