@@ -21,12 +21,13 @@ mod handler;
 mod model;
 mod notifications;
 mod options;
+mod outcome;
 #[cfg(test)]
 mod tests;
 
 pub use self::handler::HumanInputHandler;
 pub use self::model::{PendingInput, PendingInputEvent, PendingInputStatus};
 pub use self::options::{
-    CloseOptions, CreateDetachedOptions, CreateOptions, HumanInputHandlerOptions, RejectOptions,
-    WaitOptions,
+    CloseOptions, CreateDetachedOptions, CreateOptions, HumanInputHandlerOptions,
+    PendingInputOptions, RejectOptions, WaitOptions,
 };

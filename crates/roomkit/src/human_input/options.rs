@@ -3,7 +3,27 @@
 
 use std::time::Duration;
 
-use roomkit_core::model::ChannelType;
+use roomkit_core::model::{ChannelType, Timestamp};
+
+use super::model::PendingInputStatus;
+
+/// Python `PendingInput` constructor defaults. Outcome fields become live
+/// readings on the constructed request (RMK-1637).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PendingInputOptions {
+    /// The initial status; pending by default.
+    pub status: PendingInputStatus,
+    /// The initial answer, if any.
+    pub result: Option<String>,
+    /// The initial rejection reason, if any.
+    pub reject_reason: Option<String>,
+    /// Whether its creator releases it instead of waiting.
+    pub detached: bool,
+    /// When it was created; None reads the system clock.
+    pub created_at: Option<Timestamp>,
+    /// The person whose turn asked, when known.
+    pub actor_id: Option<String>,
+}
 
 /// What [`HumanInputHandler::new`](super::HumanInputHandler::new) takes: Python's `HumanInputHandler(*,
 /// retention=128)`.

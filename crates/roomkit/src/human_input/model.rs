@@ -5,6 +5,9 @@ use roomkit_core::model::{ChannelType, Metadata, Timestamp};
 use roomkit_core::ops::{Environment, SystemEnvironment};
 use serde::{Deserialize, Serialize};
 
+use super::options::PendingInputOptions;
+use super::outcome::{Outcome, SharedOutcome};
+
 /// Where a human-input request stands: Python's `PendingInputStatus`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -34,7 +37,8 @@ impl PendingInputStatus {
 
 /// A human-input request, as its handler records it: Python's
 /// `PendingInput`. It goes from `Pending` to `Resolved`, `Rejected` or
-/// `TimedOut` once, first come first served (RFC §9.3).
+/// `TimedOut` once, first come first served (RFC §9.3). Clones share the
+/// outcome: a handle returned by create keeps observing its transitions.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PendingInput {
     /// The handler's id of the request, which answers it.
@@ -49,12 +53,8 @@ pub struct PendingInput {
     pub tool_call_id: String,
     /// The channel whose model made the call, empty when unknown.
     pub channel_id: String,
-    /// Where the request stands.
-    pub status: PendingInputStatus,
-    /// The answer, once resolved.
-    pub result: Option<String>,
-    /// Why it was rejected, once rejected.
-    pub reject_reason: Option<String>,
+    #[serde(flatten)]
+    outcome: SharedOutcome,
     /// Whether no one waits on it: its creator releases it
     /// ([`HumanInputHandler::create_detached`](super::HumanInputHandler::create_detached)).
     pub detached: bool,
@@ -75,6 +75,7 @@ impl PendingInput {
         room_id: impl Into<String>,
         tool_call_id: impl Into<String>,
         channel_id: impl Into<String>,
+        options: PendingInputOptions,
     ) -> Self {
         Self {
             pending_id: pending_id.into(),
@@ -83,13 +84,45 @@ impl PendingInput {
             room_id: room_id.into(),
             tool_call_id: tool_call_id.into(),
             channel_id: channel_id.into(),
-            status: PendingInputStatus::Pending,
-            result: None,
-            reject_reason: None,
-            detached: false,
-            created_at: SystemEnvironment.now(),
-            actor_id: None,
+            outcome: SharedOutcome::new(Outcome {
+                status: options.status,
+                result: options.result,
+                reject_reason: options.reject_reason,
+            }),
+            detached: options.detached,
+            created_at: options
+                .created_at
+                .unwrap_or_else(|| SystemEnvironment.now()),
+            actor_id: options.actor_id,
         }
+    }
+
+    /// The request's current status, including transitions after creation.
+    pub fn status(&self) -> PendingInputStatus {
+        self.outcome.read().status
+    }
+
+    /// The recorded answer, once resolved, even after the handler retires it.
+    pub fn result(&self) -> Option<String> {
+        self.outcome.read().result
+    }
+
+    /// The recorded reason, once rejected or withdrawn by its handler.
+    pub fn reject_reason(&self) -> Option<String> {
+        self.outcome.read().reject_reason
+    }
+
+    pub(super) fn settle(
+        &self,
+        status: PendingInputStatus,
+        result: Option<String>,
+        reject_reason: Option<String>,
+    ) {
+        self.outcome.set(Outcome {
+            status,
+            result,
+            reject_reason,
+        });
     }
 }
 

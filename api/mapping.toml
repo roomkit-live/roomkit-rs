@@ -1187,3 +1187,9 @@ reason = "not yet in Rust: a declared channel built anew, Python's RMK-1477, who
 python = "roomkit.AIChannelTurnConfig.__init__"
 params = ["tool_timeouts"]
 reason = "not yet in Rust: a turn's configuration bounds its calls with its tools, Python's RMK-1469, whose lot ports it and takes this entry off (HITL 40019981)"
+
+[[exception]]
+python = "roomkit.PendingInput.__init__"
+params = ["status", "result", "reject_reason"]
+approved = "2026-11-10"
+reason = "Live outcome fields are read through accessors, not copied public fields; PendingInputOptions still supplies their constructor values. Shared state is required to preserve Python's transitions on an already-returned object (HITL 8ab1e50e-a3b2-463c-89c8-36c5bd185afc, RMK-1637)."

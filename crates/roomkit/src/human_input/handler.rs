@@ -341,6 +341,7 @@ impl HumanInputHandler {
             options.room_id,
             options.tool_call_id,
             options.channel_id,
+            super::options::PendingInputOptions::default(),
         );
         record.detached = detached;
         record.actor_id = options.actor_id;
@@ -463,7 +464,7 @@ impl HumanInputHandler {
             let Some(entry) = state.pending.get(pending_id) else {
                 return;
             };
-            if entry.record.status != PendingInputStatus::Pending {
+            if entry.record.status() != PendingInputStatus::Pending {
                 return;
             }
             state.turn_of.get(pending_id).map(|inputs| {
@@ -542,9 +543,11 @@ impl HumanInputHandler {
         let (closed, waited) = {
             let mut state = self.state();
             if let Some(entry) = state.pending.get_mut(pending_id)
-                && entry.record.status == PendingInputStatus::Pending
+                && entry.record.status() == PendingInputStatus::Pending
             {
-                entry.record.status = PendingInputStatus::TimedOut;
+                entry
+                    .record
+                    .settle(PendingInputStatus::TimedOut, None, None);
                 let timed_out = Some((entry.record.clone(), entry.withdrawn));
                 entry.settled.send_replace(timed_out);
             }
@@ -601,8 +604,7 @@ impl HumanInputHandler {
     pub fn resolve(&self, pending_id: &str, result: impl Into<String>) -> bool {
         let result = result.into();
         self.settle_with(pending_id, |record| {
-            record.result = Some(result);
-            record.status = PendingInputStatus::Resolved;
+            record.settle(PendingInputStatus::Resolved, Some(result), None);
         })
     }
 
@@ -610,8 +612,7 @@ impl HumanInputHandler {
     /// `options.reason`: whether it was pending.
     pub fn reject(&self, pending_id: &str, options: RejectOptions) -> bool {
         self.settle_with(pending_id, |record| {
-            record.reject_reason = Some(options.reason);
-            record.status = PendingInputStatus::Rejected;
+            record.settle(PendingInputStatus::Rejected, None, Some(options.reason));
         })
     }
 
@@ -656,7 +657,7 @@ impl HumanInputHandler {
             let Some(entry) = state.pending.get_mut(pending_id) else {
                 return false;
             };
-            if entry.record.status != PendingInputStatus::Pending {
+            if entry.record.status() != PendingInputStatus::Pending {
                 return false;
             }
             change(&mut entry.record);
@@ -683,7 +684,7 @@ impl HumanInputHandler {
     fn retain(&self, state: &mut State, pending_id: &str) -> Closing {
         let entry = state.pending.get(pending_id)?;
         let kept = (entry.record.clone(), entry.withdrawn);
-        let status = entry.record.status;
+        let status = entry.record.status();
         let closed = state
             .turn_of
             .remove(pending_id)
@@ -778,10 +779,11 @@ fn announcer(state: &State, turn: Option<TurnHost>, channel_id: &str) -> Option<
 /// `reason`.
 fn give_up(state: &mut State, pending_id: &str, reason: &str) {
     if let Some(entry) = state.pending.get_mut(pending_id)
-        && entry.record.status == PendingInputStatus::Pending
+        && entry.record.status() == PendingInputStatus::Pending
     {
-        entry.record.reject_reason = Some(reason.to_owned());
-        entry.record.status = PendingInputStatus::Rejected;
+        entry
+            .record
+            .settle(PendingInputStatus::Rejected, None, Some(reason.to_owned()));
         entry.withdrawn = true;
         entry
             .settled
@@ -799,11 +801,10 @@ fn tell_owner(closed: Closing) {
 
 /// A terminal request as its result or its failure.
 fn outcome(record: &PendingInput, withdrawn: bool) -> Result<String, RoomKitError> {
-    match record.status {
+    match record.status() {
         PendingInputStatus::Rejected => {
             let reason = record
-                .reject_reason
-                .clone()
+                .reject_reason()
                 .filter(|reason| !reason.is_empty())
                 .unwrap_or_else(|| "Request rejected".to_owned());
             if withdrawn {
@@ -813,7 +814,7 @@ fn outcome(record: &PendingInput, withdrawn: bool) -> Result<String, RoomKitErro
                 Err(RoomKitError::HumanInputRejected(reason))
             }
         }
-        PendingInputStatus::Resolved => Ok(record.result.clone().unwrap_or_default()),
+        PendingInputStatus::Resolved => Ok(record.result().unwrap_or_default()),
         PendingInputStatus::TimedOut => Err(RoomKitError::Timeout),
         PendingInputStatus::Pending => {
             Err(runtime("Unexpected pending status: pending".to_owned()))

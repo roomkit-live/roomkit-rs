@@ -55,7 +55,7 @@ async fn create_returns_pending() {
         .unwrap();
     assert_eq!(
         (
-            pending.status,
+            pending.status(),
             pending.tool_name.as_str(),
             pending.room_id.as_str()
         ),
@@ -74,6 +74,7 @@ async fn create_returns_pending() {
 async fn resolve_unblocks_wait() {
     let handler = HumanInputHandler::default();
     let id = asked(&handler, "ai").await;
+    let live = handler.pending()[&id].clone();
     let waiting = tokio::spawn({
         let (handler, id) = (handler.clone(), id.clone());
         async move { handler.wait(&id, within(2000)).await }
@@ -82,6 +83,8 @@ async fn resolve_unblocks_wait() {
     assert!(handler.resolve(&id, "the answer"));
     assert_eq!(waiting.await.unwrap().unwrap(), "the answer");
     assert!(handler.pending().is_empty());
+    assert_eq!(live.status(), PendingInputStatus::Resolved);
+    assert_eq!(live.result().as_deref(), Some("the answer"));
 }
 
 // Python: tests/test_human_input.py::test_reject_raises_runtime_error
@@ -89,7 +92,10 @@ async fn resolve_unblocks_wait() {
 async fn a_rejection_is_human_input_rejected() {
     let handler = HumanInputHandler::default();
     let id = asked(&handler, "ai").await;
+    let live = handler.pending()[&id].clone();
     assert!(handler.reject(&id, rejected("User denied")));
+    assert_eq!(live.status(), PendingInputStatus::Rejected);
+    assert_eq!(live.reject_reason().as_deref(), Some("User denied"));
     assert_eq!(
         handler.wait(&id, within(1000)).await,
         Err(RoomKitError::HumanInputRejected("User denied".to_owned()))
@@ -100,12 +106,17 @@ async fn a_rejection_is_human_input_rejected() {
 #[tokio::test]
 async fn a_wait_past_its_bound_times_out_and_is_replayed() {
     let handler = HumanInputHandler::default();
-    let id = asked(&handler, "ai").await;
+    let live = handler
+        .create("AskUser", Metadata::new(), of_channel("ai"))
+        .await
+        .unwrap();
+    let id = live.pending_id.clone();
     assert_eq!(
         handler.wait(&id, within(20)).await,
         Err(RoomKitError::Timeout)
     );
     assert!(handler.pending().is_empty());
+    assert_eq!(live.status(), PendingInputStatus::TimedOut);
     assert_eq!(
         handler.wait(&id, within(20)).await,
         Err(RoomKitError::Timeout)
@@ -117,6 +128,7 @@ async fn a_wait_past_its_bound_times_out_and_is_replayed() {
 async fn an_answer_accepted_as_the_bound_passes_is_returned() {
     let handler = HumanInputHandler::default();
     let id = asked(&handler, "ai").await;
+    let live = handler.pending()[&id].clone();
     // The answer lands once the bound passed, before the wait reads the
     // request: another thread answering at the deadline.
     handler.at_bound({
@@ -124,6 +136,8 @@ async fn an_answer_accepted_as_the_bound_passes_is_returned() {
         move || assert!(handler.resolve(&id, "yes"))
     });
     assert_eq!(handler.wait(&id, within(20)).await, Ok("yes".to_owned()));
+    assert_eq!(live.status(), PendingInputStatus::Resolved);
+    assert_eq!(live.result().as_deref(), Some("yes"));
     // Recorded as answered, not timed out.
     assert_eq!(handler.wait(&id, within(20)).await, Ok("yes".to_owned()));
 }
@@ -289,7 +303,7 @@ async fn a_displaced_owner_s_close_spares_the_live_channel() {
     let id = asked(&handler, "ch1").await;
     handler.close(close(displaced)).await;
     assert_eq!(
-        handler.pending().get(&id).map(|pending| pending.status),
+        handler.pending().get(&id).map(super::PendingInput::status),
         Some(PendingInputStatus::Pending)
     );
     asked(&handler, "ch1").await;
@@ -452,4 +466,130 @@ async fn a_handler_closed_whole_takes_nothing_more() {
         .unwrap_err();
     assert_eq!(refused.to_string(), "Human input handler is closed");
     assert!(handler.register("ai").is_err());
+}
+
+// Python: tests/test_human_input.py::test_release_rejects_a_request_still_unanswered,
+// test_close_prevents_new_requests_in_the_closed_scope (RMK-1637: retained request handles)
+#[tokio::test]
+async fn returned_requests_keep_their_outcome_after_release_and_close() {
+    let handler = HumanInputHandler::default();
+    let released = handler
+        .create("AskUser", Metadata::new(), of_channel("ai"))
+        .await
+        .unwrap();
+    let closed = handler
+        .create("AskUser", Metadata::new(), of_channel("ai"))
+        .await
+        .unwrap();
+    let old_snapshot = handler.pending();
+    assert!(handler.release(&released.pending_id));
+    handler.close(CloseOptions::default()).await;
+    for (request, reason) in [
+        (&released, "Released before an answer arrived"),
+        (&closed, "Human input handler closed"),
+    ] {
+        assert_eq!(request.status(), PendingInputStatus::Rejected);
+        assert_eq!(request.reject_reason().as_deref(), Some(reason));
+        assert_eq!(
+            old_snapshot[&request.pending_id].status(),
+            PendingInputStatus::Rejected
+        );
+        assert_eq!(request.result(), None);
+    }
+}
+
+#[tokio::test]
+async fn a_live_outcome_keeps_its_flat_serialized_fields() {
+    let handler = HumanInputHandler::default();
+    let live = handler
+        .create("AskUser", Metadata::new(), of_channel("ai"))
+        .await
+        .unwrap();
+    let earlier = serde_json::to_value(&live).unwrap();
+    assert_eq!(earlier["status"], "pending");
+    assert!(handler.resolve(&live.pending_id, "yes"));
+    let written = serde_json::to_value(&live).unwrap();
+    assert_eq!(written["status"], "resolved");
+    assert_eq!(written["result"], "yes");
+    assert_eq!(written["reject_reason"], serde_json::Value::Null);
+    assert!(written.get("outcome").is_none());
+    let read: super::PendingInput = serde_json::from_value(written).unwrap();
+    assert_eq!(read, live);
+    assert_eq!(live.clone(), live);
+    // Serialized data is a value, independent of the live request.
+    let read_before: super::PendingInput = serde_json::from_value(earlier).unwrap();
+    assert_eq!(read_before.status(), PendingInputStatus::Pending);
+    assert_eq!(live.status(), PendingInputStatus::Resolved);
+}
+
+#[test]
+fn pending_input_constructor_keeps_python_defaults_and_given_outcomes() {
+    let record = super::PendingInput::new(
+        "p1",
+        "AskUser",
+        Metadata::new(),
+        "r1",
+        "c1",
+        "ai",
+        super::PendingInputOptions::default(),
+    );
+    assert_eq!(record.status(), PendingInputStatus::Pending);
+    assert_eq!(record.result(), None);
+    assert_eq!(record.reject_reason(), None);
+    assert!(!record.detached);
+    assert_eq!(record.actor_id, None);
+    let given = super::PendingInput::new(
+        "p1",
+        "AskUser",
+        Metadata::new(),
+        "r1",
+        "c1",
+        "ai",
+        super::PendingInputOptions {
+            status: PendingInputStatus::Rejected,
+            result: Some("earlier".to_owned()),
+            reject_reason: Some("no".to_owned()),
+            detached: true,
+            created_at: Some(record.created_at),
+            actor_id: Some("alice".to_owned()),
+        },
+    );
+    assert_eq!(given.status(), PendingInputStatus::Rejected);
+    assert_eq!(given.result().as_deref(), Some("earlier"));
+    assert_eq!(given.reject_reason().as_deref(), Some("no"));
+    assert!(given.detached);
+    assert_eq!(given.created_at, record.created_at);
+    assert_eq!(given.actor_id.as_deref(), Some("alice"));
+}
+
+// RMK-1637: two handles to the same live request stay equal as it settles.
+#[tokio::test]
+async fn a_clone_stays_equal_while_the_request_is_resolved() {
+    let handler = HumanInputHandler::default();
+    let mut requests = Vec::new();
+    for _ in 0..2048 {
+        requests.push(
+            handler
+                .create("AskUser", Metadata::new(), of_channel("ai"))
+                .await
+                .unwrap(),
+        );
+    }
+    let copies = requests.clone();
+    let start = std::sync::Barrier::new(2);
+    std::thread::scope(|scope| {
+        let writer = scope.spawn(|| {
+            start.wait();
+            for request in &requests {
+                assert!(handler.resolve(&request.pending_id, "yes"));
+            }
+        });
+        start.wait();
+        for _ in 0..8 {
+            for (request, copy) in requests.iter().zip(&copies) {
+                assert_eq!(request, copy);
+            }
+        }
+        writer.join().unwrap();
+    });
 }
