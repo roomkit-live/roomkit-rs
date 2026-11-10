@@ -304,6 +304,35 @@ mod tests {
         assert_eq!(seen.read(), ["Failed cancelled", "released false"]);
     }
 
+    // Python: tests/tasks/test_delegation_result_delivery.py::test_a_supervisor_s_failed_background_workers_hand_back_their_failure
+    // The shared failed-team scenario checks the supervisor's actual turn
+    // and status bus. This seam checks its on_done(success=False) callback.
+    #[tokio::test]
+    async fn a_failed_background_run_releases_its_caller_once_with_false() {
+        let kit = RoomKit::new(RoomKitOptions::default());
+        let seen = Seen::default();
+        let mut failed = run(&seen);
+        failed.work = Box::pin(async {
+            Err(RoomKitError::ChannelNotRegistered {
+                channel_id: ChannelId::new("worker").unwrap(),
+                message: "Agent channel 'worker' not registered".to_owned(),
+            })
+        });
+
+        start_background_run(&kit, failed, 0).unwrap();
+        crate::testing::idle(&kit).await;
+
+        assert_eq!(
+            seen.read(),
+            [
+                "Failed Agent channel 'worker' not registered",
+                "released false"
+            ]
+        );
+        kit.close().await.unwrap();
+        assert_eq!(seen.read().len(), 2);
+    }
+
     // Python: orchestration/_background.py background_failure_text, as
     // _inject_per_worker.py _worker_told reads it for a run that raised.
     #[test]

@@ -1,7 +1,7 @@
 //! How a scenario's expectation matches what a run produced: roomkit-specs
 //! `conformance/README.md`, "Matching". An object names the members it
 //! checks, a list matches element by element, and a few operators
-//! (`"$any"`, `$unordered`, `$absent`, `$present`, `$contains`, `$lacks`)
+//! (`"$any"`, `$unordered`, `$absent`, `$present`, `$contains`, `$starts_with`, `$lacks`)
 //! loosen a member. `$as` names a value, which every `$as` of that name in
 //! the scenario matches ([`Names`]).
 
@@ -128,6 +128,9 @@ fn object_mismatches(
             Vec::new()
         };
     }
+    if let Some(Value::String(prefix)) = expected.get("$starts_with") {
+        return starts_with(prefix, actual, path);
+    }
     if let Some(Value::String(needle)) = expected.get("$lacks") {
         return match actual {
             Some(Value::String(text)) if !text.contains(needle.as_str()) => Vec::new(),
@@ -179,6 +182,36 @@ fn list_mismatches(
             mismatches(want, Some(got), &format!("{path}[{position}]"), names)
         })
         .collect()
+}
+
+fn starts_with(prefix: &str, actual: Option<&Value>, path: &str) -> Vec<String> {
+    match actual {
+        Some(Value::String(text)) if text.starts_with(prefix) => Vec::new(),
+        other => vec![format!(
+            "{path}: {} does not start with {prefix:?}",
+            shown(other)
+        )],
+    }
+}
+
+#[test]
+fn starts_with_requires_text_at_the_start() {
+    let expected = serde_json::json!({"$starts_with": "Résultat"});
+    for (actual, matches) in [
+        (Some(serde_json::json!("Résultat")), true),
+        (Some(serde_json::json!("Résultat plus notes")), true),
+        (Some(serde_json::json!("prefix Résultat")), false),
+        (Some(serde_json::json!("")), false),
+        (Some(Value::Null), false),
+        (None, false),
+        (Some(serde_json::json!({"text": "Résultat"})), false),
+    ] {
+        assert_eq!(
+            mismatches(&expected, actual.as_ref(), "$", &mut Names::default()).is_empty(),
+            matches,
+            "{actual:?}"
+        );
+    }
 }
 
 fn unordered_mismatches(
