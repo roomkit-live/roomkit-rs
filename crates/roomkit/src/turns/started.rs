@@ -61,7 +61,7 @@ impl StartedTurns {
         directive: &SteeringDirective,
         address: SteerAddress<'_>,
     ) -> Vec<Steerable> {
-        let in_room = self.turns.iter().filter(|turn| {
+        let mut in_room = self.turns.iter().filter(|turn| {
             !turn.steerable.over()
                 && &turn.channel_id == address.channel
                 && &turn.room_id == address.room
@@ -72,7 +72,7 @@ impl StartedTurns {
         let addressed: Vec<&Started> = match address.turn {
             Some(turn_id) => in_room.filter(|turn| turn.turn_id == turn_id).collect(),
             None if directive.is_cancel() => in_room.collect(),
-            None => in_room.last().into_iter().collect(),
+            None => in_room.next_back().into_iter().collect(),
         };
         addressed
             .into_iter()
