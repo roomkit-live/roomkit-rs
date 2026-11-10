@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A delivery lane retries its completed indexes' failed cursor writes before waiting on another worker, preventing a completed message from being reported as skipped and unblocking the next worker's delivery (RFC §13.5, RMK-1616).
+
 - `DelegateOptions` and `DelegateHandlerOptions` take `max_result_chars`, how much of a worker's output its relayed result carries, 4,000 by default.
 
 - Calls into a room keep one pre-commit deadline across preparatory reads and adoption; a closing kit refuses `deliver` and `record_failed_attempt`, and `cancel_delivery` leaves its close reason intact (RFC §13.6, §12.10.4, RMK-1616).

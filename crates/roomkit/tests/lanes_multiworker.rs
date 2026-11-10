@@ -221,6 +221,40 @@ async fn a_set_whose_index_another_lane_skipped_is_dropped() {
     kit.close().await.unwrap();
 }
 
+// Python: tests/test_lanes_multiworker.py::test_ai_chain_completes_before_return_and_cursor_catches_up
+#[tokio::test]
+async fn an_ai_cascades_cursor_is_current_when_the_call_returns() {
+    let store = Arc::new(InMemoryStore::new());
+    let (kit, recorder) = worker(&store, Duration::from_secs(10));
+    kit.register_channel(EchoAgent::new(
+        channel("ai"),
+        "answer",
+        EchoAgentOptions::default(),
+    ))
+    .unwrap();
+    room(&kit).await;
+    kit.attach_channel(&room_id(), &channel("ai"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+
+    let result = kit
+        .process_inbound(message("src", "hi"), ProcessInboundOptions::default())
+        .await
+        .unwrap();
+    // These in-memory reads are ready immediately: no idle, sleep, spawn
+    // or scheduler yield may complete the delivery on the caller's behalf.
+    let room = store.get_room(&room_id()).await.unwrap().unwrap();
+    let cursor = store.get_delivered_index(&room_id()).await.unwrap();
+    let answer = result.response_events.last().unwrap();
+    assert_eq!(room.latest_index, Some(answer.index));
+    assert_eq!(cursor, i64::try_from(answer.index).unwrap());
+    assert_eq!(answer.source.channel_id, channel("ai"));
+    assert_eq!(recorder.texts(), ["hi", "answer"]);
+    assert_eq!(recorder.deliveries().last().unwrap().event.id, answer.id);
+    assert_eq!(result.cancellation_reason, None);
+    kit.close().await.unwrap();
+}
+
 /// Starts `text`'s inbound call into `r1` through `kit`, as an instruction
 /// to the agent `ai` when `instruction` is set.
 fn send(

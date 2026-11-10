@@ -249,6 +249,7 @@ pub(crate) async fn cursor_turn<S: ConversationStore>(
     let mut waited_since: Option<(i64, Instant)> = None;
     let mut backoff = GAP_BACKOFF_INITIAL;
     loop {
+        retry_owed_cursor(inner, room_id).await;
         let Some(cursor) = read_cursor(inner, room_id).await else {
             tokio::time::sleep(backoff).await;
             backoff = (backoff * 2).min(GAP_BACKOFF_MAX);
@@ -283,6 +284,18 @@ pub(crate) async fn cursor_turn<S: ConversationStore>(
         tokio::time::sleep(backoff).await;
         backoff = (backoff * 2).min(GAP_BACKOFF_MAX);
     }
+}
+
+/// Before waiting on another worker, finish any cursor write this worker
+/// owes. Otherwise its completed index holds that worker behind it, until
+/// the other worker mistakes the failed write for a lost delivery.
+async fn retry_owed_cursor<S: ConversationStore>(inner: &Inner<S>, room_id: &RoomId) {
+    if !inner.cursors.owes_write(room_id) {
+        return;
+    }
+    let claim = inner.claims.hold(room_id).await;
+    inner.cursors.catch_up(&*inner.store, room_id).await;
+    drop(claim);
 }
 
 /// Under the room's delivery claim, which a lane running the hole's set

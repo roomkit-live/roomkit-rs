@@ -35,6 +35,9 @@ use crate::error::RoomKitError;
 use crate::store::ConversationStore;
 use crate::testing::{RecordingTransport, RecordingTransportOptions};
 
+#[path = "tests/delivery_contracts.rs"]
+mod delivery_contracts;
+
 /// The kit's `process_timeout`.
 const TIMEOUT: Duration = Duration::from_millis(100);
 /// How long a call that should not wait may take before the test fails it.

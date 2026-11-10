@@ -33,6 +33,15 @@ use roomkit::{
 #[path = "support/warnings.rs"]
 mod warnings;
 
+#[path = "side_effects/claim_release.rs"]
+mod claim_release;
+#[path = "side_effects/cursor_recovery.rs"]
+mod cursor_recovery;
+#[path = "side_effects/execution_failure.rs"]
+mod execution_failure;
+#[path = "side_effects/stale_drain.rs"]
+mod stale_drain;
+
 use warnings::Warnings;
 
 fn channel(id: &str) -> ChannelId {
@@ -56,6 +65,8 @@ enum Failing {
     PanickingObservation,
     /// The room's delivery cursor's next write once `armed`, once.
     Cursor,
+    /// The next two ordinary cursor writes once `armed`.
+    CursorTwice,
     /// The room's delivery cursor's second write once `armed`, once.
     SecondCursor,
     /// None: the write of the task `tA` waits until the test opens it,
@@ -70,13 +81,26 @@ struct FailingWrites {
     failing: Failing,
     /// For [`Failing::Cursor`]: the next cursor write fails, then none.
     armed: AtomicBool,
-    /// For [`Failing::SecondCursor`]: the cursor writes made since `armed`,
+    /// For [`Failing::SecondCursor`] and [`Failing::CursorTwice`]: writes since `armed`,
     /// and the index of the one that failed.
     cursor_writes: AtomicUsize,
     failed_index: AtomicU64,
     /// For [`Failing::HeldTask`]: told once `tA`'s write started, and
     /// what lets it go on.
     held: (Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>),
+}
+
+impl FailingWrites {
+    fn new(failing: Failing) -> Self {
+        Self {
+            store: InMemoryStore::default(),
+            failing,
+            armed: AtomicBool::new(false),
+            cursor_writes: AtomicUsize::new(0),
+            failed_index: AtomicU64::new(0),
+            held: Default::default(),
+        }
+    }
 }
 
 /// The store's failure, as a database gone answers.
@@ -115,6 +139,7 @@ impl ConversationStore for FailingWrites {
                 Failing::Task
                 | Failing::Metadata
                 | Failing::Cursor
+                | Failing::CursorTwice
                 | Failing::SecondCursor
                 | Failing::HeldTask => {}
             }
@@ -143,6 +168,14 @@ impl ConversationStore for FailingWrites {
         options: store::AdvanceDeliveredIndexOptions,
     ) -> Result<bool, StoreError> {
         if self.failing == Failing::Cursor && self.armed.swap(false, Ordering::SeqCst) {
+            return Err(down());
+        }
+        if self.failing == Failing::CursorTwice
+            && self.armed.load(Ordering::SeqCst)
+            && !options.force
+            && self.cursor_writes.fetch_add(1, Ordering::SeqCst) < 2
+        {
+            self.failed_index.store(index, Ordering::SeqCst);
             return Err(down());
         }
         if self.failing == Failing::SecondCursor
@@ -360,14 +393,7 @@ fn triage(blocks: bool) -> HookResult {
 /// A kit on a store failing `failing`, binding `channels` in its room
 /// `r1`.
 async fn kit_on(failing: Failing, channels: &[&str]) -> RoomKit<FailingWrites> {
-    let store = FailingWrites {
-        store: InMemoryStore::default(),
-        failing,
-        armed: AtomicBool::new(false),
-        cursor_writes: AtomicUsize::new(0),
-        failed_index: AtomicU64::new(0),
-        held: Default::default(),
-    };
+    let store = FailingWrites::new(failing);
     let kit = RoomKit::new(RoomKitOptions::with_store(store));
     let sms = RecordingTransport::new(
         channel("sms1"),
@@ -479,7 +505,7 @@ async fn a_failed_side_effect_write_is_logged_and_the_call_goes_on() {
                 "Failed to persist observation o1"
             }
             Failing::Metadata => METADATA_LINE,
-            Failing::Cursor | Failing::SecondCursor | Failing::HeldTask => {
+            Failing::Cursor | Failing::CursorTwice | Failing::SecondCursor | Failing::HeldTask => {
                 unreachable!("no case fails the cursor or holds a write")
             }
         };
@@ -746,6 +772,29 @@ fn notes_created<S: ConversationStore>(kit: &RoomKit<S>) -> Arc<Mutex<Vec<String
     )
     .unwrap();
     created
+}
+
+/// The texts whose AFTER_BROADCAST observer ran.
+fn aftermath(kit: &RoomKit) -> Arc<Mutex<Vec<String>>> {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let after = Arc::clone(&seen);
+    kit.hook(
+        HookTrigger::AfterBroadcast,
+        move |event: RoomEvent, _| {
+            after
+                .lock()
+                .unwrap()
+                .extend(text_of(&event).map(str::to_owned));
+            async {}
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "after".to_owned(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    seen
 }
 
 /// `kit`'s call of the message `hello` into `r1`, started in a task.

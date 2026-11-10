@@ -109,10 +109,18 @@ impl RoomCursors {
         cursor.ready().extend(indexes);
     }
 
+    /// Whether a completed local index still waits to be written. A new
+    /// set retries these writes before deciding that another index is lost.
+    pub(crate) fn owes_write(&self, room_id: &RoomId) -> bool {
+        self.rooms()
+            .get(room_id)
+            .is_some_and(|cursor| !cursor.ready().is_empty())
+    }
+
     /// Moves `room_id`'s cursor in `store` past every index whose turn is
     /// over, one at a time from the index after it, and stops at the first
     /// whose turn is not. A store that fails is logged, and the cursor
-    /// waits for the room's next index whose turn is over.
+    /// is retried when a set next asks for its turn or finishes its own.
     pub(crate) async fn catch_up<S: ConversationStore>(&self, store: &S, room_id: &RoomId) {
         let Some(cursor) = self.rooms().get(room_id).cloned() else {
             return;
