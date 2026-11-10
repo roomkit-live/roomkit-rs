@@ -41,6 +41,8 @@ pub(crate) struct Adoption {
     /// The call.
     pub(crate) entry: Entry,
     pub(crate) deadline: CallDeadline,
+    /// The named message drew on its budget before its channel was asked.
+    pub(crate) precharged: bool,
     /// The effect whose call made it, in that run.
     pub(crate) origin: EffectId,
     /// Where its answer goes.
@@ -105,6 +107,7 @@ pub(crate) async fn adopt(
     entry: Entry,
     named: Option<Arc<Named>>,
     deadline: CallDeadline,
+    precharged: bool,
 ) -> Adopting {
     let context = ExecutionContext::current();
     if context.hands(entry.room_id()) {
@@ -113,7 +116,7 @@ pub(crate) async fn adopt(
     let Some(frame) = context.taker(entry.room_id()).cloned() else {
         return Adopting::Apart(entry);
     };
-    hand(&frame, entry, named, deadline).await
+    hand(&frame, entry, named, deadline, precharged).await
 }
 
 /// Hands `entry` to the run whose call the current task runs, the innermost
@@ -124,7 +127,7 @@ pub(crate) async fn adopt_by_own_run(entry: Entry) -> Adopting {
     let Some(frame) = context.frames.last().cloned() else {
         return Adopting::Apart(entry);
     };
-    hand(&frame, entry, None, CallDeadline::default()).await
+    hand(&frame, entry, None, CallDeadline::default(), false).await
 }
 
 /// Hands `entry`, named by `named`, to `frame`'s run, and waits for its
@@ -134,6 +137,7 @@ async fn hand(
     entry: Entry,
     named: Option<Arc<Named>>,
     deadline: CallDeadline,
+    precharged: bool,
 ) -> Adopting {
     let (reply, answer) = oneshot::channel();
     let (delivered, told) = watch::channel(None);
@@ -149,6 +153,7 @@ async fn hand(
     let adoption = Adoption {
         entry,
         deadline,
+        precharged,
         origin: frame.effect,
         reply,
         delivered,

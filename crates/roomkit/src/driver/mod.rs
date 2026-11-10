@@ -1601,6 +1601,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         let Adoption {
             entry,
             deadline,
+            precharged,
             origin,
             reply,
             delivered,
@@ -1614,6 +1615,9 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         } = adoption;
         match operation.adopt(entry, origin) {
             Ok(id) => {
+                if precharged {
+                    operation.entry_precharged(id);
+                }
                 if let Some(at) = deadline.0.and_then(|at| self.clocks.timestamp_of(at)) {
                     operation.entry_deadline(id, at);
                 }

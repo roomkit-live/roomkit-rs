@@ -45,6 +45,7 @@ mod cut;
 mod doors;
 mod held;
 mod precommit;
+mod preflight_scope;
 mod readers;
 mod record;
 mod shutdown;

@@ -75,7 +75,7 @@ impl Machine {
         answers: Option<MessageAnswers>,
     ) {
         self.call.channel_id = Some(message.channel_id.clone());
-        let draw = self.cascade.drawn_on();
+        let draw = self.cascade.drawn_on().filter(|_| !self.message_precharged);
         let (channel, message) = match arrival::admit(cx.config, message, draw) {
             Ok(Admitted::Message { channel, message }) => (*channel, *message),
             Ok(Admitted::Refused(refused)) => return self.end(cx, Ok(*refused)),

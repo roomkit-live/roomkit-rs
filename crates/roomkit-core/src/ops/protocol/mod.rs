@@ -410,6 +410,16 @@ pub trait Operation {
         let _ = (entry, deadline);
     }
 
+    /// The runtime already charged this named message before asking its
+    /// channel. Supplied after adoption, before the entry's first poll.
+    /// An operation adopting messages must retain this receipt, or forward
+    /// it to the nested operation that adopted the entry, to avoid charging
+    /// its admission again. Other entries keep their usual budget rules.
+    #[doc(hidden)]
+    fn entry_precharged(&mut self, entry: EntryId) {
+        let _ = entry;
+    }
+
     /// What the operation produces once it is over.
     type Output;
 

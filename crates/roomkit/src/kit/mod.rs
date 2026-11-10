@@ -41,6 +41,7 @@ mod inline;
 mod inputs;
 mod locks;
 mod members;
+mod message;
 mod options;
 mod output;
 mod post;
@@ -77,10 +78,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, PoisonError, RwLock, Weak};
 
 use roomkit_core::model::{ChannelId, ChannelType, InboundMessage, RoomId};
-use roomkit_core::ops::{
-    Entry, Environment, FrameworkEvent as CoreEvent, IdentityConfig, Inbound, InboundTarget,
-    KitConfig,
-};
+use roomkit_core::ops::{Environment, FrameworkEvent as CoreEvent, IdentityConfig, KitConfig};
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookId, HookSpec, HookSubject, HookTrigger, Removed};
 
@@ -96,7 +94,6 @@ pub use self::ephemeral::{
 pub use self::greeting::SendGreetingOptions;
 pub use self::identity::IdentityHookOptions;
 pub(crate) use self::identity::run_identity_hooks;
-use self::inject::Entered;
 pub use self::inputs::RejectInputOptions;
 pub use self::members::{
     AddMemberOptions, EnsureParticipantOptions, IsMemberOptions, RemoveMemberOptions,
@@ -135,9 +132,7 @@ pub use self::verification::{
 };
 pub use self::weak::WeakRoomKit;
 use crate::channel::DynChannel;
-use crate::context;
 use crate::cursors::RoomCursors;
-use crate::driver;
 use crate::environment::SystemEnvironment;
 use crate::error::RoomKitError;
 use crate::events::{FrameworkEvent, Handled, Handler, Handlers};
@@ -160,9 +155,6 @@ use crate::tasks::Tasks;
 use crate::tool_calls::ToolCallEvent;
 use crate::turns::Turns;
 use crate::unwind;
-
-/// The kit's call that runs a message, as an error names it.
-const PROCESS_INBOUND: &str = "process_inbound";
 
 /// A RoomKit deployment: its channels, its hooks and its store.
 ///
@@ -614,145 +606,6 @@ impl<S: ConversationStore> RoomKit<S> {
         options: ProcessInboundOptions,
     ) -> Result<InboundResult, RoomKitError> {
         self.run_message(message, options, None).await
-    }
-
-    /// [`process_inbound`](Self::process_inbound) of `message`, the
-    /// delivery path's publication when `publication` names the key it
-    /// publishes it under, the one key of the framework's publication
-    /// namespace its event keeps (RFC §22.1).
-    pub(crate) async fn run_message(
-        &self,
-        mut message: InboundMessage,
-        options: ProcessInboundOptions,
-        publication: Option<String>,
-    ) -> Result<InboundResult, RoomKitError> {
-        // A content a struct literal built past its model's check is refused
-        // before anything is read, as Python's model refuses it when built,
-        // and one kept is written as its constructor writes it.
-        let deadline = crate::deadline::CallDeadline::new(self.config().process_timeout);
-        message.content.check()?;
-        // A message past its channel's inbound rate is refused then, before
-        // anything else is read, written or traced (Python checks it once a
-        // call from a room's own work drew on that room's budget, which the
-        // core charges here after it).
-        if let Some(limit) = &self.inner.inbound_limit
-            && !limit.acquire(&message.channel_id)
-        {
-            return Ok(InboundResult {
-                blocked: true,
-                reason: Some(crate::sends::RATE_LIMITED.to_owned()),
-                ..InboundResult::default()
-            });
-        }
-        // A channel that refuses the call opens no span: Python opens it once
-        // the channel is known, for the sender as the channel writes it.
-        let is_host = self
-            .config()
-            .channel(&message.channel_id)
-            .is_some_and(|channel| channel.channel_type == ChannelType::HOST);
-        let channel = self.inner.channel(&message.channel_id);
-        let (Some(channel), false) = (channel, is_host) else {
-            return self
-                .message_without_channel_span(message, options, publication, deadline)
-                .await;
-        };
-        let sender = channel.normalize_address(&message.sender_id);
-        let deferred = options.defer_delivery;
-        let span = self
-            .inner
-            .inbound_span(&message, &sender, options.room_id.as_ref());
-        let work = Box::pin(self.traced_message(message, options, publication, deadline));
-        let result = span.within(work).await;
-        telemetry::end_inbound_span(span, &result, deferred);
-        result
-    }
-
-    /// An unknown or host channel normally opens no inbound span. A named
-    /// call the reentry cap refused before that lookup is still traced,
-    /// as Python's `_charge_named_room` refusal is (RFC §9.5.1).
-    async fn message_without_channel_span(
-        &self,
-        message: InboundMessage,
-        options: ProcessInboundOptions,
-        publication: Option<String>,
-        deadline: crate::deadline::CallDeadline,
-    ) -> Result<InboundResult, RoomKitError> {
-        let result =
-            Box::pin(self.traced_message(message.clone(), options.clone(), publication, deadline))
-                .await;
-        if options.room_id.is_some()
-            && result.as_ref().is_ok_and(|answer| {
-                answer.blocked && answer.reason.as_deref() == Some("reentry_loop_cap")
-            })
-        {
-            let span =
-                self.inner
-                    .inbound_span(&message, &message.sender_id, options.room_id.as_ref());
-            telemetry::end_inbound_span(span, &result, options.defer_delivery);
-        }
-        result
-    }
-
-    /// The inbound pipeline under its `framework.inbound` span.
-    async fn traced_message(
-        &self,
-        mut message: InboundMessage,
-        options: ProcessInboundOptions,
-        publication: Option<String>,
-        deadline: crate::deadline::CallDeadline,
-    ) -> Result<InboundResult, RoomKitError> {
-        let answers = self.inner.answer(&mut message).map(|mut answers| {
-            answers.publication = publication;
-            answers
-        });
-        let ProcessInboundOptions {
-            room_id,
-            defer_delivery,
-            organization_id,
-        } = options;
-        // The message's key names its delivery from the call's start (RFC
-        // §10.1 "Explicit delivery cancellation").
-        let named = self
-            .inner
-            .delivery_keys
-            .naming(message.delivery_key.as_deref(), organization_id.as_deref());
-        let entered = if let Some(room_id) = room_id {
-            let entry = Entry::Message {
-                room_id,
-                organization_id,
-                message: Box::new(message),
-                answers: answers.map(Box::new),
-            };
-            self.enter_named(
-                entry,
-                PROCESS_INBOUND,
-                defer_delivery,
-                Some(named),
-                deadline,
-            )
-            .await?
-        } else {
-            context::as_deep_as_its_turn(&mut message.chain_depth);
-            self.inner.open()?;
-            let target = InboundTarget::Routed;
-            let routed = match answers {
-                Some(answers) => {
-                    Inbound::answered(self.config(), target, organization_id, message, answers)
-                }
-                None => Inbound::new(self.config(), target, organization_id, message),
-            };
-            let ran = driver::run_inbound(
-                &self.inner,
-                PROCESS_INBOUND,
-                None,
-                (routed, deadline),
-                defer_delivery,
-                Some(named),
-            )
-            .await;
-            Entered::ran(ran, RoomKitError::from)?
-        };
-        Ok(entered.into_result(defer_delivery, &self.inner.tasks))
     }
 
     fn config(&self) -> Arc<KitConfig> {

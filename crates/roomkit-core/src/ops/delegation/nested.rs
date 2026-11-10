@@ -131,6 +131,11 @@ impl<O: Operation> Nested<O> {
         }
     }
 
+    /// Entry ids remain the inner operation's, unlike effect ids.
+    pub(super) fn entry_precharged(&mut self, entry: EntryId) {
+        self.op.entry_precharged(entry);
+    }
+
     /// Hands the inner operation the answer to its effect `id`; a turn
     /// answered by a stream is kept by its inner id until its read is
     /// issued.

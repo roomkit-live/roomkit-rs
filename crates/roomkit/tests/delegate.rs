@@ -8,6 +8,9 @@
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
+#[path = "delegate/preflight.rs"]
+mod preflight;
+
 use std::collections::{BTreeSet, VecDeque};
 use std::future::{Future, pending, ready};
 use std::pin::Pin;

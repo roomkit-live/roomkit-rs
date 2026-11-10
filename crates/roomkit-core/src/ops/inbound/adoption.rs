@@ -123,6 +123,8 @@ struct Pending {
 #[derive(Clone, Debug)]
 struct Adopted {
     id: EntryId,
+    /// Its named message already drew its pass before channel callbacks.
+    message_precharged: bool,
     /// The room the call names, the operation's.
     room_id: RoomId,
     /// The effect whose call made the entry.
@@ -563,6 +565,7 @@ impl Machine {
         }
         let adopted = Adopted {
             id,
+            message_precharged: false,
             room_id: entry.room_id().clone(),
             origin,
             nested,
@@ -576,6 +579,18 @@ impl Machine {
         };
         self.adopted.adopted.push((adopted, Box::new(entry)));
         Ok(id)
+    }
+
+    /// Marks the named message just adopted, before it can start arriving.
+    pub(super) fn entry_precharged(&mut self, id: EntryId) {
+        if let Some((adopted, _)) = self
+            .adopted
+            .adopted
+            .iter_mut()
+            .find(|(entry, _)| entry.id == id)
+        {
+            adopted.message_precharged = true;
+        }
     }
 
     /// Starts the entries adopted since the last poll, but an entry nested
@@ -724,7 +739,8 @@ impl Machine {
         answers: Option<MessageAnswers>,
     ) {
         let pass = Draw::Pass(self.cascade.budget.clone());
-        let (channel, message) = match arrival::admit(cx.config, message, Some(&pass)) {
+        let draw = (!adopted.message_precharged).then_some(&pass);
+        let (channel, message) = match arrival::admit(cx.config, message, draw) {
             Ok(arrival::Admitted::Message { channel, message }) => (*channel, *message),
             Ok(arrival::Admitted::Refused(refused)) => {
                 return self.settle_entry(cx, &adopted, Ok(*refused));

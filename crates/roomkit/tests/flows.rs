@@ -933,6 +933,55 @@ const JAVASCRIPT_REFUSED: &str = "URL must be a link (http://, https://), a data
      reference <scheme>://... (two letters of scheme at least, not file, ftp, javascript or \
      vbscript, no '..' segment and no backslash): \"javascript:alert(1)\"";
 
+/// Python rejects this content at construction, before `process_inbound` can
+/// spend a token. A Rust struct literal must not bypass that boundary.
+#[tokio::test]
+async fn invalid_content_spends_no_inbound_rate_token() {
+    let kit = RoomKit::new(RoomKitOptions {
+        inbound_rate_limit: Some(RateLimit {
+            max_per_hour: Some(1.0),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let sms = RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(sms.clone()).unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let target = ProcessInboundOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    };
+    let mut invalid = message(&sms, "invalid");
+    invalid.content = javascript_media();
+    let error = kit
+        .process_inbound(invalid, target.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(error.to_string(), JAVASCRIPT_REFUSED);
+    let accepted = kit
+        .process_inbound(message(&sms, "valid"), target.clone())
+        .await
+        .unwrap();
+    assert!(!accepted.blocked);
+    assert!(accepted.event.is_some());
+    let limited = kit
+        .process_inbound(message(&sms, "limited"), target)
+        .await
+        .unwrap();
+    assert!(limited.blocked);
+    assert_eq!(limited.reason.as_deref(), Some("rate_limited"));
+    kit.close().await.unwrap();
+}
+
 /// A content its model refuses, which a struct literal can hold, is
 /// refused by each of the kit's calls that would write it, as Python's
 /// `ValueError` when its model is built: before anything is read, so a

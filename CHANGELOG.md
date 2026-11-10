@@ -8,6 +8,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - A call whose model writes the intent property without its leading underscore, `roomkit_intent`, has it taken as its intent instead of refused as an unknown argument; a tool that declares that name keeps it (RFC §6.4, `tool_intent::INTENT_ALIAS`). `tool_intent::take_intent` takes whether the tool owns that name.
 
+- Named inbound calls check their organization and spend their current work budget before rate limiting or address callbacks, retaining that charge across adoption and scope reads (RFC §9.5.1, §10.1, RMK-1560, RMK-1616).
+
 - A named inbound call refused at the reentry cap keeps its blocked trace even when its channel is unregistered (RFC §9.5.1, RMK-1616).
 
 - Each turn observer lends its depth only while its own body runs: a task it leaves starts a new chain once that body ends, even while a sibling observer keeps the parent turn alive (RFC §8.3, §9.5.1, RMK-1616).

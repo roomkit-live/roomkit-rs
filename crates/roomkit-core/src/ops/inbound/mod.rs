@@ -397,7 +397,22 @@ impl Inbound {
     /// The call keeps its own admission ticket and `process_timeout`.
     #[must_use]
     pub fn drawing_on(mut self, draw: Draw) -> Self {
+        if !self.machine.message_precharged {
+            self.machine.cascade.draw_on(draw);
+        }
+        self
+    }
+
+    /// A named message the runtime already charged on `draw`, before its
+    /// channel callbacks. Its cascade keeps that budget, including when
+    /// the originating frame ends while the arrival is being prepared.
+    /// The caller must already have successfully taken exactly one unit
+    /// from `draw`; this only suppresses the message's initial charge.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn precharged_message(mut self, draw: Draw) -> Self {
         self.machine.cascade.draw_on(draw);
+        self.machine.message_precharged = true;
         self
     }
 
@@ -417,7 +432,9 @@ impl Inbound {
     /// it. A direct injection, which never creates a room, ignores it.
     #[must_use]
     pub fn drawing_on_from_delivery(mut self, room_id: RoomId, draw: Draw) -> Self {
-        self.machine.cascade.draw_on_from_delivery(room_id, draw);
+        if !self.machine.message_precharged {
+            self.machine.cascade.draw_on_from_delivery(room_id, draw);
+        }
         self
     }
 
@@ -463,6 +480,7 @@ impl Inbound {
                 stage: CallStage::new(call),
                 trigger: Trigger::default(),
                 cascade: Cascade::new(budget),
+                message_precharged: false,
                 adopted: Adoptions::default(),
                 adopted_deliveries: BTreeMap::new(),
                 side_effects: SideEffects::default(),
@@ -481,6 +499,10 @@ impl Operation for Inbound {
 
     fn entry_deadline(&mut self, entry: EntryId, deadline: Timestamp) {
         self.machine.entry_deadline(entry, deadline);
+    }
+
+    fn entry_precharged(&mut self, entry: EntryId) {
+        self.machine.entry_precharged(entry);
     }
 
     type Output = Result<InboundResult, InboundError>;
@@ -655,6 +677,8 @@ struct Machine {
     stage: CallStage,
     trigger: Trigger,
     cascade: Cascade,
+    /// Only the initial named message was charged by the runtime.
+    message_precharged: bool,
     /// The entries adopted from the operation's own work (gap G-070).
     adopted: Adoptions,
     /// What the delivery sets of adopted entries reported, each held until

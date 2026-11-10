@@ -642,6 +642,12 @@ impl DelegatedTurn {
 }
 
 impl Operation for DelegatedTurn {
+    fn entry_precharged(&mut self, entry: EntryId) {
+        if let Some(path) = self.room_path.as_mut() {
+            path.entry_precharged(entry);
+        }
+    }
+
     type Output = Result<Vec<DelegatedAnswer>, DelegationError>;
 
     fn poll(&mut self, environment: &dyn Environment) -> Step<Self::Output> {

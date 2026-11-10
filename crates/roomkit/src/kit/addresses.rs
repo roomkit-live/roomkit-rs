@@ -14,16 +14,15 @@ use crate::context::ExecutionContext;
 use crate::delivery::targets::SYSTEM_SENDER_ID;
 
 impl<S> Inner<S> {
-    /// Writes `message`'s sender in its channel's form by the channel's own
-    /// `normalize_address`, before anything reads it (RFC §10.1 step 1), and
-    /// what the channel answers of the message: the conversation it belongs
+    /// What the channel answers of the message, whose sender the inbound
+    /// path already normalized after its work charge (RFC §10.1 step 1):
+    /// the conversation it belongs
     /// to and where replies to it go (`conversation_address`,
     /// `reply_metadata`), which the core routes and records it by, and the
     /// depth of the turn the call runs within, which its event takes at
     /// least. `None` for a channel not registered, which the core fails.
-    pub(crate) fn answer(&self, message: &mut InboundMessage) -> Option<MessageAnswers> {
+    pub(crate) fn answer(&self, message: &InboundMessage) -> Option<MessageAnswers> {
         let channel = self.channel(&message.channel_id)?;
-        message.sender_id = channel.normalize_address(&message.sender_id);
         Some(MessageAnswers {
             conversation: channel.conversation_address(message),
             reply_metadata: channel.reply_metadata(message),

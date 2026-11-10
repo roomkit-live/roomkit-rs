@@ -9,6 +9,7 @@ use roomkit_core::model::{ChannelId, DirectEvent, EventContent, Metadata, RoomEv
 use roomkit_core::ops::{
     CommitRecord, Entry, Inbound, InboundError, InboundResult, InboundTarget, KIT_CLOSED,
 };
+use roomkit_core::rules::chain_depth::Draw;
 use tokio::task::JoinHandle;
 
 use super::RoomKit;
@@ -203,7 +204,8 @@ impl<S: ConversationStore> RoomKit<S> {
                 .process_timeout
                 .filter(|_| !matches!(entry, Entry::Greeting { .. })),
         );
-        self.enter_named(entry, call, defer, None, deadline).await
+        self.enter_named(entry, call, defer, None, deadline, None)
+            .await
     }
 
     /// [`enter`](Self::enter), the call's delivery named by `named`, a
@@ -218,6 +220,7 @@ impl<S: ConversationStore> RoomKit<S> {
         defer: bool,
         named: Option<NamedGuard>,
         deadline: CallDeadline,
+        charged: Option<Draw>,
     ) -> Result<Entered, RoomKitError> {
         let chain_depth = match &mut entry {
             Entry::Message { message, .. } => &mut message.chain_depth,
@@ -227,8 +230,16 @@ impl<S: ConversationStore> RoomKit<S> {
             Entry::Greeting { chain_depth, .. } => chain_depth,
         };
         context::as_deep_as_its_turn(chain_depth);
-        self.inner.open()?;
-        if let Some(ended) = self.prepare_entry(&entry, named.as_ref(), deadline).await? {
+        // A precharged message entered before its scope read. Rechecking
+        // admission here would cut the grace of a locked hook if close
+        // started during that read (RFC §12.10.4).
+        if charged.is_none() {
+            self.inner.open()?;
+        }
+        if let Some(ended) = self
+            .prepare_entry(&entry, named.as_ref(), deadline, charged.is_some())
+            .await?
+        {
             return Ok(ended);
         }
         let refused = refusal_of(&entry);
@@ -236,7 +247,7 @@ impl<S: ConversationStore> RoomKit<S> {
             .as_ref()
             .filter(|named| named.named().has_key())
             .map(|named| Arc::clone(named.named()));
-        let entry = match context::adopt(entry, adopted_named, deadline).await {
+        let entry = match context::adopt(entry, adopted_named, deadline, charged.is_some()).await {
             // The run that adopted it names its delivery until its set ran.
             Adopting::Settled(result, completion) => {
                 return Ok(Entered {
@@ -255,6 +266,10 @@ impl<S: ConversationStore> RoomKit<S> {
         };
         let room_id = entry.room_id().clone();
         let operation = self.operation(entry)?;
+        let operation = match charged {
+            Some(draw) => operation.precharged_message(draw),
+            None => operation,
+        };
         let ran = driver::run_inbound(
             &self.inner,
             call,

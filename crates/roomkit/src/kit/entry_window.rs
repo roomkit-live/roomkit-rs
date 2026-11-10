@@ -19,9 +19,12 @@ impl<S: ConversationStore> RoomKit<S> {
         entry: &Entry,
         named: Option<&NamedGuard>,
         deadline: CallDeadline,
+        scope_checked: bool,
     ) -> Result<Option<Entered>, RoomKitError> {
         let reads = async {
-            self.reached_from_its_work(entry).await?;
+            if !scope_checked {
+                self.reached_from_its_work(entry).await?;
+            }
             if let Some(named) = named.filter(|named| named.named().has_key())
                 && ExecutionContext::current().works_in_room(entry.room_id())
             {
@@ -39,7 +42,7 @@ impl<S: ConversationStore> RoomKit<S> {
         }
     }
 
-    async fn entry_timed_out(&self, entry: &Entry) -> Result<Entered, RoomKitError> {
+    pub(super) async fn entry_timed_out(&self, entry: &Entry) -> Result<Entered, RoomKitError> {
         let channel_id = match entry {
             Entry::Message { message, .. } => message.channel_id.clone(),
             Entry::Direct { event, .. } => event.channel_id.clone(),

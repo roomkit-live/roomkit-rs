@@ -20,6 +20,10 @@ mod caller_deadline;
 mod clock;
 #[path = "reentrancy/named_budget.rs"]
 mod named_budget;
+#[path = "reentrancy/preflight.rs"]
+mod preflight;
+#[path = "reentrancy/preflight_concurrent.rs"]
+mod preflight_concurrent;
 use clock::TokioClock;
 
 use std::future::{Future, ready};
@@ -858,7 +862,7 @@ impl Channel for UnregisteringAi {
         &self,
         message: InboundMessage,
         context: RoomContext,
-    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
         ready(Ok(default_inbound_event(self, &message, &context)))
     }
 
@@ -867,7 +871,7 @@ impl Channel for UnregisteringAi {
         _event: RoomEvent,
         _binding: ChannelBinding,
         _context: RoomContext,
-    ) -> impl std::future::Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
         ready(Ok(ChannelOutput::empty()))
     }
 }
