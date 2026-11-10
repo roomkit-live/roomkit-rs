@@ -1175,6 +1175,21 @@ reason = "not yet in Rust: a host verb a turn calls, Python's RMK-1470, whose lo
 
 [[missing]]
 python = "roomkit.RoomKit"
+members = ["agent_presence", "executors"]
+reason = "not yet in Rust: which executors serve a kit's agents and their presence in a room, Python's RMK-1626, whose lot ports it and takes this entry off"
+
+[[missing]]
+python = "roomkit.SpeakQueueChange"
+members = ["TURN_SKIPPED"]
+reason = "not yet in Rust: a discussion skipping the turns of an agent no executor serves, Python's RMK-1626, whose lot ports it and takes this entry off"
+
+[[missing]]
+python = "roomkit.TurnHost"
+members = ["room_context"]
+reason = "not yet in Rust: the room an executor's turn reads, sent by the room owner, Python's RMK-1619, whose lot ports it and takes this entry off"
+
+[[missing]]
+python = "roomkit.RoomKit"
 members = ["input_request"]
 reason = "not yet in Rust: the owner reads an open human-input request, Python's RMK-1467, whose lot ports it and takes this entry off (HITL 40019981)"
 
