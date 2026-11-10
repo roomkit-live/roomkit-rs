@@ -1030,12 +1030,11 @@ async fn a_task_that_ran_ends_as_it_stands_whatever_cancels_it() {
 
         let (runner, task_id) = (kit.task_runner(), task.id.clone());
         let mut asked = tokio::spawn(async move {
-            match door {
-                "cancel" => Some(runner.cancel(&task_id).await),
-                _ => {
-                    runner.close().await;
-                    Some(false)
-                }
+            if door == "cancel" {
+                Some(runner.cancel(&task_id).await)
+            } else {
+                runner.close().await;
+                Some(false)
             }
         });
         let waited = tokio::time::timeout(Duration::from_millis(50), &mut asked).await;

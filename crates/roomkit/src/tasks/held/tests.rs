@@ -1,7 +1,5 @@
 //! A cancel that owns the end keeps it even if the work returns afterward.
 
-#![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
-
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 

@@ -1,7 +1,5 @@
 //! The supervisor's bound ends the task and its delegation span together.
 
-#![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
-
 use std::future::ready;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
