@@ -774,7 +774,7 @@ fn notes_created<S: ConversationStore>(kit: &RoomKit<S>) -> Arc<Mutex<Vec<String
     created
 }
 
-/// The texts whose AFTER_BROADCAST observer ran.
+/// The texts whose `AFTER_BROADCAST` observer ran.
 fn aftermath(kit: &RoomKit) -> Arc<Mutex<Vec<String>>> {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let after = Arc::clone(&seen);

@@ -123,7 +123,7 @@ async fn an_executor_whose_accepted_is_refused_builds_no_turn_work() {
         if family == Carried::Frame && raw.contains(of_type("accepted")) {
             seen.fetch_add(1, Ordering::SeqCst);
             Fate {
-                refused: true,
+                refused: Some("the link refused the frame"),
                 ..Default::default()
             }
         } else {

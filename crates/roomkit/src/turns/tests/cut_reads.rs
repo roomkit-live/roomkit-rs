@@ -90,7 +90,7 @@ fn ending() -> Vec<Step> {
 
 /// A message that never leaves its side.
 const UNSENT: Fate = Fate {
-    refused: false,
+    refused: None,
     unsent: true,
     lost: false,
     duplicated: false,

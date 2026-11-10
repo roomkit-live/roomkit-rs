@@ -102,7 +102,7 @@ async fn a_stale_sets_retained_write_holds_its_handle_open() {
         Some("delivery_stale")
     );
     assert!(handle.done());
-    assert!(recorder.texts().is_empty());
+    assert_eq!(recorder.texts(), Vec::<String>::new());
     assert!(
         kit.store()
             .get_task(&TaskId::new("tA").unwrap())

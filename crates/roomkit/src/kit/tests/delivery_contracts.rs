@@ -152,7 +152,7 @@ async fn close_after_hole(filled_after_close: bool) {
         .unwrap();
     let handle = result.delivery.unwrap();
     assert!(!handle.done());
-    assert!(target.texts().is_empty());
+    assert_eq!(target.texts(), Vec::<String>::new());
     let closer = kit.clone();
     let closing = tokio::spawn(async move { closer.close().await });
     if filled_after_close {

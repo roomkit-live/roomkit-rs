@@ -92,7 +92,7 @@ async fn a_failed_agent_turn_advances_the_completed_sets_cursor() {
         roomkit::model::DeliveryResultStatus::Failed
     );
     assert_eq!(finished.cancellation_reason, None);
-    assert!(finished.response_events.is_empty());
+    assert_eq!(finished.response_events, Vec::<RoomEvent>::new());
     // Read before idle or another call can move the cursor for this set.
     assert_eq!(
         kit.store().get_delivered_index(&room_id()).await.unwrap(),

@@ -179,8 +179,8 @@ impl<M: Serialize> Pipe<M> {
         }
         let fate = self.observers.carry(self.carried, &raw);
         #[cfg(test)]
-        if fate.refused {
-            return Err(Uncarried("the link refused the frame".to_owned()));
+        if let Some(reason) = fate.refused {
+            return Err(Uncarried(reason.to_owned()));
         }
         if fate.unsent {
             return Ok(*sent);

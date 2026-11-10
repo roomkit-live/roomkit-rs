@@ -45,7 +45,7 @@ pub(crate) type Tap = Arc<dyn Fn(Carried, &str) + Send + Sync>;
 pub(crate) struct Fate {
     /// Refused with an error before numbering, unlike a silently unsent frame.
     #[cfg(test)]
-    pub(crate) refused: bool,
+    pub(crate) refused: Option<&'static str>,
     /// Never sent: it takes no number.
     pub(crate) unsent: bool,
     /// Numbered, then lost on its way.
@@ -99,7 +99,7 @@ impl Observers {
     pub(crate) fn carry(&self, carried: Carried, raw: &str) -> Fate {
         let fate = self.fate(carried, raw);
         #[cfg(test)]
-        if fate.refused {
+        if fate.refused.is_some() {
             return fate;
         }
         if let Some(tap) = &self.tap
