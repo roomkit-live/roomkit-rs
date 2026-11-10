@@ -430,21 +430,29 @@ impl HumanInputHandler {
             None => Some(tokio::spawn(task).abort_handle()),
         };
         if let Some(abort) = abort {
-            let mut state = self.state();
-            if state.closed || state.closed_channels.contains(&channel) {
-                abort.abort();
-                return;
-            }
-            state.notifying.insert(
+            self.start_notification(
                 number,
                 Notification {
                     channel,
                     abort,
                     finished,
                 },
+                start,
             );
-            let _ = start.send(());
         }
+    }
+
+    fn start_notification(&self, number: u64, task: Notification, start: oneshot::Sender<()>) {
+        let mut state = self.state();
+        if state.closed
+            || state.closed_channels.contains(&task.channel)
+            || task.finished.has_changed().is_err()
+        {
+            task.abort.abort();
+            return;
+        }
+        state.notifying.insert(number, task);
+        let _ = start.send(());
     }
 
     /// Tells the owner of the request's turn that it is open, when it is
@@ -861,5 +869,31 @@ mod retention_test {
                 .unwrap(),
             "Dark"
         );
+    }
+}
+
+#[cfg(test)]
+mod notification_test {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_notification_cancelled_before_registration_is_not_kept() {
+        let handler = HumanInputHandler::default();
+        let (work, finished) = tracked(Box::pin(std::future::pending()), || {});
+        let work = tokio::spawn(work);
+        let abort = work.abort_handle();
+        abort.abort();
+        assert!(work.await.unwrap_err().is_cancelled());
+        let (start, _) = oneshot::channel();
+        handler.start_notification(
+            1,
+            Notification {
+                channel: "ai".to_owned(),
+                abort,
+                finished,
+            },
+            start,
+        );
+        assert!(handler.state().notifying.is_empty());
     }
 }

@@ -17,12 +17,12 @@ pub(super) struct Notification {
 }
 
 /// The receiver closes only after the work and its cancellation guards
-/// are dropped and the handler no longer tracks it. Every concurrent close
+/// are dropped, before removing the handler's tracking entry. Every concurrent close
 /// gets a receiver; cancelling one close does not lose the running task.
 struct Tracked {
     work: Option<BoxFuture<'static, ()>>,
     cleanup: Option<Box<dyn FnOnce() + Send>>,
-    _finished: watch::Sender<()>,
+    finished: Option<watch::Sender<()>>,
 }
 
 impl Future for Tracked {
@@ -39,6 +39,9 @@ impl Future for Tracked {
 impl Drop for Tracked {
     fn drop(&mut self) {
         drop(self.work.take());
+        // Signal before cleanup takes the handler lock: registration can
+        // never miss a completed cleanup and retain an already-ended task.
+        drop(self.finished.take());
         if let Some(cleanup) = self.cleanup.take() {
             cleanup();
         }
@@ -54,7 +57,7 @@ pub(super) fn tracked(
         Box::pin(Tracked {
             work: Some(work),
             cleanup: Some(Box::new(cleanup)),
-            _finished: finished,
+            finished: Some(finished),
         }),
         receiver,
     )
