@@ -81,7 +81,7 @@ async fn bound(kit: &RoomKit, room: &str) -> Vec<String> {
     bound
 }
 
-// Python: tests/orchestration/test_framework_orchestration.py::TestFrameworkOrchestration::test_agents_registered_once
+// Python: tests/orchestration/test_framework_orchestration.py::TestCreateRoomOrchestration::test_agents_registered_once
 #[tokio::test]
 async fn agents_registered_once() {
     let kit = RoomKit::new(RoomKitOptions::default());
@@ -110,6 +110,9 @@ async fn agents_registered_once() {
 
 #[path = "strategies/faulty_store.rs"]
 mod faulty_store;
+
+#[path = "strategies/snapshot_failure.rs"]
+mod snapshot_failure;
 
 use std::sync::atomic::Ordering;
 use std::time::Duration;

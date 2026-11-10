@@ -112,12 +112,21 @@ struct Installed<S> {
     strategy: Arc<dyn Orchestration<S>>,
     organization_id: Option<String>,
     added: Added,
-    /// The record claims the room while the install runs.
-    installing: bool,
+    /// Running installs are waited for; failed initial reads must be uninstalled.
+    state: InstallState,
     /// The install takes the place of the discussion the room holds (RFC
     /// §19.7.5 rule 1), and this is the record of that discussion's
     /// strategy, when this process recorded one.
     replacing: Option<Replaced<S>>,
+}
+
+/// An install's progress is separate from its right to be replaced.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InstallState {
+    Running,
+    /// The initial snapshot failed: uninstall can run, but replacement cannot.
+    AwaitingUninstall,
+    Ready,
 }
 
 /// The record of a discussion's strategy another install takes the place
@@ -411,7 +420,7 @@ impl<S: ConversationStore> RoomKit<S> {
             .room_strategies
             .rooms()
             .get(room_id)
-            .is_some_and(|installed| installed.installing)
+            .is_some_and(|installed| installed.state == InstallState::Running)
     }
 
     /// Drops the record of `room_id`'s strategy when it is the discussion
@@ -468,7 +477,10 @@ impl<S: ConversationStore> RoomKit<S> {
             Ok(before) => before,
             Err(error) => {
                 guard.armed = false;
-                self.drop_claim(room_id, &strategy);
+                // Python ends the install but keeps its claim when the
+                // initial snapshot fails. An explicit uninstall releases
+                // it, and callers waiting for the install may now proceed.
+                self.settle(room_id, &strategy, InstallState::AwaitingUninstall);
                 return Err(error);
             }
         };
@@ -596,7 +608,7 @@ impl<S: ConversationStore> RoomKit<S> {
             let installing = strategies
                 .rooms()
                 .get(room_id)
-                .is_some_and(|installed| installed.installing);
+                .is_some_and(|installed| installed.state == InstallState::Running);
             if !installing {
                 return;
             }
@@ -707,7 +719,7 @@ impl<S: ConversationStore> RoomKit<S> {
             }
         } else if rooms
             .get(room_id)
-            .is_some_and(|installed| installed.installing)
+            .is_some_and(|installed| installed.state != InstallState::Ready)
         {
             return Err(RoomKitError::Value(format!(
                 "Room {room_id} holds a discussion another install is replacing"
@@ -730,7 +742,7 @@ impl<S: ConversationStore> RoomKit<S> {
                 strategy: Arc::clone(strategy),
                 organization_id,
                 added: Added::default(),
-                installing: true,
+                state: InstallState::Running,
                 replacing,
             },
         );
@@ -872,7 +884,7 @@ impl<S: ConversationStore> RoomKit<S> {
                     error = ?error,
                     "a failed install was not taken back whole: the room stays its strategy's"
                 );
-                self.settle(room_id, strategy);
+                self.settle(room_id, strategy, InstallState::Ready);
             }
         }
     }
@@ -927,7 +939,7 @@ impl<S: ConversationStore> RoomKit<S> {
                     strategy: held,
                     organization_id,
                     added,
-                    installing: false,
+                    state: InstallState::Ready,
                     replacing: None,
                 };
             }
@@ -1015,7 +1027,7 @@ impl<S: ConversationStore> RoomKit<S> {
         let rooms = self.inner.room_strategies.rooms();
         rooms
             .get(room_id)
-            .filter(|installed| !installed.installing)
+            .filter(|installed| installed.state != InstallState::Running)
             .map(|installed| Arc::clone(&installed.strategy))
     }
 
@@ -1038,7 +1050,7 @@ impl<S: ConversationStore> RoomKit<S> {
             .filter(|installed| Arc::ptr_eq(&installed.strategy, strategy))
         {
             installed.added = added;
-            installed.installing = false;
+            installed.state = InstallState::Ready;
             installed.replacing = None;
         }
         drop(rooms);
@@ -1047,13 +1059,13 @@ impl<S: ConversationStore> RoomKit<S> {
 
     /// Ends the install of the record of `strategy` in `room_id`, keeping
     /// what it holds: a failed install's, for what could not be taken back.
-    fn settle(&self, room_id: &RoomId, strategy: &Arc<dyn Orchestration<S>>) {
+    fn settle(&self, room_id: &RoomId, strategy: &Arc<dyn Orchestration<S>>, state: InstallState) {
         let mut rooms = self.inner.room_strategies.rooms();
         if let Some(installed) = rooms
             .get_mut(room_id)
             .filter(|installed| Arc::ptr_eq(&installed.strategy, strategy))
         {
-            installed.installing = false;
+            installed.state = state;
         }
         drop(rooms);
         self.inner.room_strategies.installs_ended.notify_waiters();

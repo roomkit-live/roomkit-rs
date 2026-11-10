@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- An install whose initial room snapshot fails keeps its claim until `uninstall_strategy` releases it, as Python does (RFC §19.7).
+
 - A returned `PendingInput` and its clones keep observing resolution, rejection and timeout through `status()`, `result()` and `reject_reason()`; `PendingInputOptions` preserves constructor defaults and serialized fields stay flat (RMK-1637).
 
 - Human-input close waits for its notifications to finish; AI channels warn once about human tools never offered to the model, as Python does (RFC §9.3).
