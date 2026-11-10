@@ -283,6 +283,7 @@ fn holding(name: &str) -> roomkit_ai::AiChannel<MockAiProvider> {
         parameters: json!({"type": "object"}),
         tags: Vec::new(),
         changes_state: false,
+        defer_loading: false,
     };
     let model = MockAiProvider::new(MockAiProviderOptions::default());
     roomkit_ai::AiChannel::new(
