@@ -138,6 +138,7 @@ pub(crate) struct Run {
     after_turn: Mutex<Vec<JoinHandle<()>>>,
     /// The scripted agents' models, by channel.
     pub(crate) models: Mutex<BTreeMap<String, ScriptedProvider>>,
+    pub(crate) model_methods: Mutex<BTreeMap<String, crate::agents::GenerationMethods>>,
     /// What each scripted ACP agent received, by its channel.
     pub(crate) acp_wires: Mutex<BTreeMap<String, crate::acp_agents::Wire>>,
     /// The Chat Completions rendering of a model that names one, by the
@@ -217,6 +218,7 @@ impl Run {
             handles: Mutex::default(),
             after_turn: Mutex::default(),
             models: Mutex::default(),
+            model_methods: Mutex::default(),
             acp_wires: Mutex::default(),
             chat_dialects: Mutex::default(),
             backend: Mutex::default(),

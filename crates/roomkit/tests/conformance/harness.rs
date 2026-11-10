@@ -462,7 +462,7 @@ async fn observe(run: &Arc<Run>, step_outcomes: Vec<Value>) -> Observed {
     let models = lock(&run.models).clone();
     let dialects = lock(&run.chat_dialects).clone();
     for (channel, model) in &models {
-        let requests = match dialects.get(channel) {
+        let mut requests = match dialects.get(channel) {
             None => crate::agents::requests(model),
             Some(dialect) => crate::agents::requests_on_the_wire(model, dialect)
                 .await
@@ -471,6 +471,11 @@ async fn observe(run: &Arc<Run>, step_outcomes: Vec<Value>) -> Observed {
                     Vec::new()
                 }),
         };
+        if let Some(methods) = lock(&run.model_methods).get(channel) {
+            for (request, method) in requests.iter_mut().zip(lock(methods).iter()) {
+                request["method"] = json!(method);
+            }
+        }
         observed.models.insert(channel.clone(), requests);
     }
     for (channel, wire) in lock(&run.acp_wires).iter() {

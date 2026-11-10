@@ -42,10 +42,8 @@ use crate::scripted::{Reactions, perform};
 /// §10.6.4; `conformance/README.md`, "Scripted agents"), and holding a
 /// round with a `gate` there, before it writes anything.
 pub(crate) struct Paced {
-    script: ScriptedProvider,
-    /// Each round's gate, by its place in the script.
-    gates: Vec<Option<String>>,
-    run: Weak<Run>,
+    whole: WholeModel,
+    streaming: bool,
     /// Whether the model sees images (README: `model.vision`).
     vision: bool,
     deferred_tools: bool,
@@ -53,22 +51,15 @@ pub(crate) struct Paced {
     pricing: Option<ModelPricing>,
     /// The model's context window (README: `model.context_window`).
     context_window: Option<u64>,
-    /// The model's name (README: `model.name`).
-    model_name: String,
-    /// The provider's name (README: `model.provider`).
-    provider_name: String,
-    /// Whether the model takes a response schema, and one beside tools
-    /// (README: `model.response_schema`, `model.response_schema_with_tools`).
-    schema: (bool, bool),
 }
 
 impl AiProvider for Paced {
     fn name(&self) -> &str {
-        &self.provider_name
+        &self.whole.provider_name
     }
 
     fn model_name(&self) -> &str {
-        &self.model_name
+        &self.whole.model_name
     }
 
     fn supports_deferred_tools(&self) -> bool {
@@ -80,11 +71,11 @@ impl AiProvider for Paced {
     }
 
     fn supports_response_schema(&self) -> bool {
-        self.schema.0
+        self.whole.schema.0
     }
 
     fn supports_response_schema_with_tools(&self) -> bool {
-        self.schema.1
+        self.whole.schema.1
     }
 
     /// The model's catalogue entry, with the price and the context window
@@ -101,9 +92,109 @@ impl AiProvider for Paced {
     }
 
     async fn generate(&self, context: &AiContext) -> Result<AiResponse, ProviderError> {
+        self.whole.generate(context).await
+    }
+
+    fn supports_structured_streaming(&self) -> bool {
+        self.streaming
+    }
+
+    /// The round's events, under a response schema refused before the
+    /// request is kept when the model takes none, and checked before its
+    /// done event (README, `model.response_schema`).
+    fn generate_structured_stream<'a>(&'a self, context: &'a AiContext) -> ProviderStream<'a> {
+        if !self.streaming {
+            // Use AiProvider's real default adapter over WholeModel::generate.
+            return self.whole.generate_structured_stream(context);
+        }
+        let (supported, with_tools) = self.whole.schema;
+        if let Err(error) =
+            schema_for_generate(context, supported, with_tools, &self.whole.provider_name)
+        {
+            return Box::pin(Refused(Some(error)));
+        }
+        let events = self.scripted_stream(context);
+        checked_stream(events, context, &self.whole.provider_name, refused)
+    }
+}
+
+impl Paced {
+    /// The script's events for `context`, held at its round's gate first.
+    fn scripted_stream<'a>(&'a self, context: &'a AiContext) -> ProviderStream<'a> {
+        let (inner, gate) = {
+            let mut methods = crate::run::lock(&self.whole.methods);
+            let position = self.whole.script.requests().len();
+            let gate = self.whole.gates.get(position).cloned().flatten();
+            let inner = self.whole.script.generate_structured_stream(context);
+            methods.push("generate_structured_stream");
+            (inner, gate)
+        };
+        let run = Weak::clone(&self.whole.run);
+        let holding: Option<Pin<Box<dyn Future<Output = ()> + Send>>> = gate.map(|gate| {
+            let held: Pin<Box<dyn Future<Output = ()> + Send>> = Box::pin(async move {
+                if let Some(run) = run.upgrade() {
+                    run.gates.hold(&gate).await;
+                }
+            });
+            held
+        });
+        Box::pin(PacedStream {
+            inner,
+            holding,
+            held: None,
+            after_text: false,
+            run: Weak::clone(&self.whole.run),
+        })
+    }
+}
+
+/// A whole-response provider. Its inherited structured stream is the real
+/// AiProvider adapter, so the non-streaming fixture cannot bypass generate().
+struct WholeModel {
+    script: ScriptedProvider,
+    gates: Vec<Option<String>>,
+    run: Weak<Run>,
+    model_name: String,
+    provider_name: String,
+    schema: (bool, bool),
+    methods: GenerationMethods,
+}
+
+pub(crate) type GenerationMethods = Arc<Mutex<Vec<&'static str>>>;
+
+impl AiProvider for WholeModel {
+    fn model_name(&self) -> &str {
+        &self.model_name
+    }
+
+    async fn generate(&self, context: &AiContext) -> Result<AiResponse, ProviderError> {
         let (supported, with_tools) = self.schema;
         schema_for_generate(context, supported, with_tools, &self.provider_name)?;
-        let mut response = self.script.generate(context).await?;
+        let (response, gate) = {
+            // The script reserves synchronously. Keep that reservation and its
+            // gate together, even when several rooms use the same provider.
+            let mut methods = crate::run::lock(&self.methods);
+            let position = self.script.requests().len();
+            let gate = self.gates.get(position).cloned().flatten();
+            let response = self.script.generate(context);
+            methods.push("generate");
+            (response, gate)
+        };
+        if let Some(gate) = gate
+            && let Some(run) = self.run.upgrade()
+        {
+            run.gates.hold(&gate).await;
+        }
+        self.checked_response(context, response.await?)
+    }
+}
+
+impl WholeModel {
+    fn checked_response(
+        &self,
+        context: &AiContext,
+        mut response: AiResponse,
+    ) -> Result<AiResponse, ProviderError> {
         for call in &mut response.tool_calls {
             labelled(&self.run, &mut call.arguments);
         }
@@ -122,43 +213,6 @@ impl AiProvider for Paced {
             )?;
         }
         Ok(response)
-    }
-
-    /// The round's events, under a response schema refused before the
-    /// request is kept when the model takes none, and checked before its
-    /// done event (README, `model.response_schema`).
-    fn generate_structured_stream<'a>(&'a self, context: &'a AiContext) -> ProviderStream<'a> {
-        let (supported, with_tools) = self.schema;
-        if let Err(error) = schema_for_generate(context, supported, with_tools, &self.provider_name)
-        {
-            return Box::pin(Refused(Some(error)));
-        }
-        let events = self.scripted_stream(context);
-        checked_stream(events, context, &self.provider_name, refused)
-    }
-}
-
-impl Paced {
-    /// The script's events for `context`, held at its round's gate first.
-    fn scripted_stream<'a>(&'a self, context: &'a AiContext) -> ProviderStream<'a> {
-        let position = self.script.requests().len();
-        let gate = self.gates.get(position).cloned().flatten();
-        let run = Weak::clone(&self.run);
-        let holding: Option<Pin<Box<dyn Future<Output = ()> + Send>>> = gate.map(|gate| {
-            let held: Pin<Box<dyn Future<Output = ()> + Send>> = Box::pin(async move {
-                if let Some(run) = run.upgrade() {
-                    run.gates.hold(&gate).await;
-                }
-            });
-            held
-        });
-        Box::pin(PacedStream {
-            inner: self.script.generate_structured_stream(context),
-            holding,
-            held: None,
-            after_text: false,
-            run: Weak::clone(&self.run),
-        })
     }
 }
 
@@ -261,7 +315,7 @@ pub(crate) fn scripted_agent_of(
             .then(|| crate::run::lock(&run.models).get(name).cloned())
             .flatten()
     };
-    let (model, paced) = scripted_model(&spec["model"], run, shared(id.as_str()))?;
+    let (model, paced) = scripted_model(&spec["model"], run, id.as_str(), shared(id.as_str()))?;
     let mut options = AiChannelOptions {
         tools: tools(spec, run).into(),
         serialize_room_turns: spec["serialize_room_turns"] == true,
@@ -311,7 +365,12 @@ pub(crate) fn scripted_agent_of(
     keep_chat_dialect(&spec["model"], id.to_string(), run);
     if let Some(fallback) = spec.get("fallback_model") {
         keep_chat_dialect(fallback, format!("{id}/fallback"), run);
-        let (fallback, paced) = scripted_model(fallback, run, shared(&format!("{id}/fallback")))?;
+        let (fallback, paced) = scripted_model(
+            fallback,
+            run,
+            &format!("{id}/fallback"),
+            shared(&format!("{id}/fallback")),
+        )?;
         models.push((format!("{id}/fallback"), fallback));
         options.fallback_provider = Some(Arc::new(paced));
     }
@@ -410,6 +469,7 @@ fn keep_chat_dialect(spec: &Value, model: String, run: &Arc<Run>) {
 fn scripted_model(
     spec: &Value,
     run: &Arc<Run>,
+    name: &str,
     shared: Option<ScriptedProvider>,
 ) -> Result<(ScriptedProvider, Paced), String> {
     let scripted = spec["rounds"].as_array().into_iter().flatten();
@@ -422,23 +482,39 @@ fn scripted_model(
         .map(|pricing| serde_json::from_value(pricing.clone()))
         .transpose()
         .map_err(|e| format!("model.pricing: {e}"))?;
+    let methods = generation_methods(run, name, shared.is_some());
     let model = shared.unwrap_or_else(|| ScriptedProvider::new(rounds));
     let paced = Paced {
-        script: model.clone(),
-        gates,
-        run: Arc::downgrade(run),
+        whole: WholeModel {
+            script: model.clone(),
+            gates,
+            run: Arc::downgrade(run),
+            model_name: spec["name"].as_str().unwrap_or("scripted").to_owned(),
+            provider_name: spec["provider"].as_str().unwrap_or("scripted").to_owned(),
+            schema: (
+                spec["response_schema"] == true,
+                spec["response_schema_with_tools"] == true,
+            ),
+            methods,
+        },
+        streaming: spec["streaming"] != false,
         vision: spec["vision"] == true,
         deferred_tools: spec["deferred_tools"] == true,
         pricing,
         context_window: spec["context_window"].as_u64(),
-        model_name: spec["name"].as_str().unwrap_or("scripted").to_owned(),
-        provider_name: spec["provider"].as_str().unwrap_or("scripted").to_owned(),
-        schema: (
-            spec["response_schema"] == true,
-            spec["response_schema_with_tools"] == true,
-        ),
     };
     Ok((model, paced))
+}
+
+/// A replacement starts a new log; another process shares the original's.
+fn generation_methods(run: &Arc<Run>, name: &str, shared: bool) -> GenerationMethods {
+    let mut models = crate::run::lock(&run.model_methods);
+    if shared {
+        return models.entry(name.to_owned()).or_default().clone();
+    }
+    let methods = GenerationMethods::default();
+    models.insert(name.to_owned(), methods.clone());
+    methods
 }
 
 /// A scripted agent's retry policy, its delays given in milliseconds
@@ -1356,3 +1432,7 @@ fn with_failure(mut round: ScriptedRound, spec: &Value) -> Result<ScriptedRound,
     }
     Ok(round)
 }
+
+#[cfg(test)]
+#[path = "agent_model_tests.rs"]
+mod model_tests;

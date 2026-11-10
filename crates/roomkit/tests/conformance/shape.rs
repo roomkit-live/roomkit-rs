@@ -182,6 +182,7 @@ const SKILL: &[&str] = &["name", "description", "instructions", "references"];
 const HUMAN_TOOL: &[&str] = &["name", "description", "parameters"];
 const MODEL: &[&str] = &[
     "rounds",
+    "streaming",
     "vision",
     "pricing",
     "context_window",
@@ -833,16 +834,7 @@ fn memory(memory: &Value, path: &str, found: &mut Vec<String>) {
             );
         }
     }
-    let summarizer = &memory["summarizer"];
-    optional(summarizer, MODEL, &format!("{path}.summarizer"), found);
-    for (index, round) in items(&summarizer["rounds"]) {
-        members(
-            round,
-            MODEL_ROUND,
-            &format!("{path}.summarizer.rounds[{index}]"),
-            found,
-        );
-    }
+    scripted_model(&memory["summarizer"], &format!("{path}.summarizer"), found);
 }
 
 fn hook(hook: &Value, path: &str, found: &mut Vec<String>) {
@@ -1014,9 +1006,34 @@ fn outcome(outcome: &Value, path: &str, found: &mut Vec<String>) {
 /// A scripted model's members, at `path`, and its rounds'.
 fn scripted_model(model: &Value, path: &str, found: &mut Vec<String>) {
     optional(model, MODEL, path, found);
+    if model
+        .get("streaming")
+        .is_some_and(|flag| !flag.is_boolean())
+    {
+        found.push(format!("{path}.streaming: expected a boolean"));
+    }
     for (index, round) in items(&model["rounds"]) {
         let round_path = format!("{path}.rounds[{index}]");
         members(round, MODEL_ROUND, &round_path, found);
+        if model["streaming"] == false {
+            for field in [
+                "deltas",
+                "thinking",
+                "stream",
+                "done",
+                "failure_after_calls",
+                "failure_after_done",
+            ] {
+                if round.get(field).is_some() {
+                    found.push(format!("{round_path}.{field}: requires streaming"));
+                }
+            }
+            if round.get("whole_response").is_some()
+                && (round.get("fails").is_some() || round.get("refuses").is_some())
+            {
+                found.push(format!("{round_path}: whole_response cannot also fail"));
+            }
+        }
         optional(
             &round["refuses"],
             REFUSES,
