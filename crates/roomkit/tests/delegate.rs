@@ -31,6 +31,7 @@ use roomkit::model::{
 };
 use roomkit::orchestration::RecentOptions;
 use roomkit::tasks::{DelegatedTask, DelegatedTaskResult, SubmitOptions, TaskRunner, WaitOptions};
+use roomkit::telemetry::{MockTelemetryProvider, SpanKind};
 use roomkit::testing::{
     EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions, idle,
 };
@@ -195,7 +196,11 @@ impl ConversationStore for RoomReadsFail {
 
 /// A kit holding the room `r` and the agent `worker`, its agent nowhere.
 async fn kit_with<S: ConversationStore>(store: S) -> RoomKit<S> {
-    let kit = RoomKit::new(RoomKitOptions::with_store(store));
+    kit_configured(RoomKitOptions::with_store(store)).await
+}
+
+async fn kit_configured<S: ConversationStore>(options: RoomKitOptions<S>) -> RoomKit<S> {
+    let kit = RoomKit::new(options);
     let worker = EchoAgent::new(channel("worker"), "Found it.", EchoAgentOptions::default());
     kit.register_channel(worker).unwrap();
     let create = CreateRoomOptions {
@@ -241,12 +246,16 @@ async fn a_parent_room_the_store_fails_to_read_fails_the_delegation_with_its_err
 // RFC §23.3: the parent room's context, read to announce the task, fails
 // once the room itself was read: the delegation fails with the store's
 // error before ON_TASK_DELEGATED fires, and nothing reports the end of a
-// task never announced. Its span is not asserted: roomkit-rs has no
-// telemetry.
+// task never announced. Its delegation span still ends in error.
 #[tokio::test]
 async fn a_task_failing_before_it_is_announced_fires_no_completion() {
     for wait in [true, false] {
-        let kit = kit_with(RoomReadsFail::default()).await;
+        let telemetry = Arc::new(MockTelemetryProvider::default());
+        let options = RoomKitOptions {
+            telemetry: Some(Arc::clone(&telemetry).into()),
+            ..RoomKitOptions::with_store(RoomReadsFail::default())
+        };
+        let kit = kit_configured(options).await;
         let heard: Arc<Mutex<Vec<&'static str>>> = Arc::default();
         for (trigger, name) in [
             (HookTrigger::OnTaskDelegated, "delegated"),
@@ -301,7 +310,17 @@ async fn a_task_failing_before_it_is_announced_fires_no_completion() {
             ),
             (wait, Some(true), Vec::new(), Vec::new(), 0)
         );
+        let spans = telemetry.get_spans(SpanKind::Delegation);
+        assert_eq!(spans.len(), 1);
+        let span = spans.first().unwrap();
+        let mode = if wait { "inline" } else { "background" };
+        assert_eq!(span.name, format!("delegation.{mode}"));
+        assert_eq!(span.status, "error");
+        assert_eq!(span.room_id.as_deref(), Some("r"));
+        assert_eq!(span.channel_id.as_deref(), Some("worker"));
+        assert!(telemetry.get_active_spans().is_empty());
         kit.close().await.unwrap();
+        assert_eq!(telemetry.get_spans(SpanKind::Delegation).len(), 1);
     }
 }
 

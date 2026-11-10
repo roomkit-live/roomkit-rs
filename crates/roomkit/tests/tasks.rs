@@ -21,8 +21,10 @@ use roomkit::model::{
 use roomkit::orchestration::{RecentOptions, StatusEntry};
 use roomkit::store::FindRoomsOptions;
 use roomkit::tasks::{
-    DelegatedTask, DelegatedTaskResult, OnCompleteCallback, SubmitOptions, TaskRunner, WaitOptions,
+    DelegatedTask, DelegatedTaskResult, OnCompleteCallback, SubmitOptions, TaskRunner,
+    TaskToolWindow, WaitOptions,
 };
+use roomkit::telemetry::{Attr, MockTelemetryProvider, SpanKind};
 use roomkit::testing::{
     EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions, idle,
 };
@@ -691,11 +693,12 @@ impl TaskRunner for Refuses {
 // RFC §23.3: the delegation fails with the runner's error and its task
 // ends failed wherever its end is read: ON_TASK_COMPLETED, its callback,
 // its child room's status and its line on the status bus, which
-// CancelTaskTool reads; nothing is handed back. Its span is not asserted:
-// roomkit-rs has no telemetry.
+// CancelTaskTool reads, and its delegation span; nothing is handed back.
 #[tokio::test]
 async fn a_task_its_runner_refuses_ends_failed() {
+    let telemetry = Arc::new(MockTelemetryProvider::default());
     let options = RoomKitOptions {
+        telemetry: Some(Arc::clone(&telemetry).into()),
         task_runner: Some(Arc::new(Refuses)),
         ..RoomKitOptions::default()
     };
@@ -764,7 +767,49 @@ async fn a_task_its_runner_refuses_ends_failed() {
             0
         )
     );
+    let task_id = child.metadata.get("task_id").unwrap().as_str().unwrap();
+    assert_refused_task_stays_failed(&kit, &room, task_id, &telemetry).await;
     kit.close().await.unwrap();
+    assert_eq!(telemetry.get_spans(SpanKind::Delegation).len(), 1);
+    assert_eq!(completed.lock().unwrap().len(), 1);
+    assert_eq!(ended.lock().unwrap().as_slice(), &[TaskStatus::Failed]);
+}
+
+/// The refused task's end stays visible to cancellation callers and telemetry.
+async fn assert_refused_task_stays_failed(
+    kit: &RoomKit,
+    room: &RoomId,
+    task_id: &str,
+    telemetry: &MockTelemetryProvider,
+) {
+    let arguments = [("task_id".to_owned(), serde_json::json!(task_id))]
+        .into_iter()
+        .collect();
+    // The same bridge serves CancelTaskTool: an ended task stays failed,
+    // even with no status-bus entry in the tool's lookup window.
+    for window in [500, 0] {
+        let answer = kit
+            .cancel_task_answer(
+                room,
+                Some(&channel("speaker")),
+                &arguments,
+                TaskToolWindow { window, limit: 0 },
+            )
+            .await;
+        let answer: serde_json::Value = serde_json::from_str(&answer).unwrap();
+        assert_eq!(answer.get("status"), Some(&serde_json::json!("failed")));
+    }
+    assert!(!kit.cancel_task(task_id, CancelTaskOptions::default()).await);
+    let spans = telemetry.get_spans(SpanKind::Delegation);
+    assert_eq!(spans.len(), 1);
+    let span = spans.first().unwrap();
+    assert_eq!(span.name, "delegation.background");
+    assert_eq!(span.status, "error");
+    assert_eq!(
+        span.attributes.get(Attr::DELEGATION_STATUS),
+        Some(&serde_json::json!("failed"))
+    );
+    assert!(telemetry.get_active_spans().is_empty());
 }
 
 // Python: tests/tasks/test_task_turn_record.py::test_a_task_cut_mid_turn_carries_its_turn_cancelled[close-inline]
