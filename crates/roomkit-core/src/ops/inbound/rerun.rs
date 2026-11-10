@@ -54,6 +54,8 @@ pub(super) enum Reran {
     /// A regeneration's caller named a trigger the choice under the lock
     /// is not (RFC §13.6): refused before any agent runs.
     Moved,
+    /// The stored discussion is over: no new turn (RFC §19.7.5 rule 15).
+    DiscussionOver,
     /// The read of the room under the lock passed the call's deadline (RFC
     /// §13.6): refused `process_timeout` before any agent runs.
     Expired,
@@ -198,6 +200,9 @@ impl RerunWork {
         let Some(trigger) = trigger else {
             return Progress::Done(Ok(Reran::Nothing));
         };
+        if discussion::is_over(&context.room.metadata) {
+            return Progress::Done(Ok(Reran::DiscussionOver));
+        }
         self.placing(cx, plan(cx, trigger, context, floor))
     }
 
@@ -486,6 +491,12 @@ impl Machine {
             Ok(Reran::Moved) => {
                 let moved = refused("trigger_moved");
                 self.end(cx, Ok(with_error(moved, ended.release_error)));
+            }
+            Ok(Reran::DiscussionOver) => {
+                self.end(
+                    cx,
+                    Ok(with_error(refused("discussion_over"), ended.release_error)),
+                );
             }
             Ok(Reran::Expired) => {
                 // The read passed the deadline under the lock, now released.

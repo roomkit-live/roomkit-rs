@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Regeneration on a kit's first call to a stored, completed Discussion is blocked with `discussion_over`, as Python does (RFC §19.7.5 rule 15).
+
 - An install whose initial room snapshot fails keeps its claim until `uninstall_strategy` releases it, as Python does (RFC §19.7).
 
 - A returned `PendingInput` and its clones keep observing resolution, rejection and timeout through `status()`, `result()` and `reject_reason()`; `PendingInputOptions` preserves constructor defaults and serialized fields stay flat (RMK-1637).
