@@ -1,7 +1,7 @@
 //! A store whose writes may never end, as a stuck database's, and whose
 //! reads by id may fail.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use roomkit::model::{
@@ -23,6 +23,12 @@ pub(crate) struct StuckStore {
     /// A read held at the store boundary until `release_read` is notified.
     pub(crate) held_read: Mutex<Option<&'static str>>,
     pub(crate) reading: Notify,
+    /// Context reads attempted after the store was released.
+    pub(crate) reads_after_close: AtomicUsize,
+    /// Hold tA after its delivery, keeping that call unfinished.
+    pub(crate) hold_task: AtomicBool,
+    pub(crate) task_started: Notify,
+    pub(crate) release_task: Notify,
     pub(crate) delayed_read: Mutex<Option<(&'static str, std::time::Duration)>>,
     pub(crate) release_read: Notify,
     /// The commit of this text never ends, its row written first when
@@ -61,6 +67,9 @@ impl Drop for CutNote {
 
 impl StuckStore {
     async fn read(&self, name: &str) {
+        if !self.closes.lock().unwrap().is_empty() {
+            self.reads_after_close.fetch_add(1, Ordering::SeqCst);
+        }
         let delay = {
             let mut delayed = self.delayed_read.lock().unwrap();
             if delayed.as_ref().is_some_and(|(at, _)| *at == name) {
@@ -215,6 +224,7 @@ impl ConversationStore for StuckStore {
     }
 
     async fn get_delivered_index(&self, room_id: &RoomId) -> Result<i64, StoreError> {
+        self.read("cursor").await;
         self.store.get_delivered_index(room_id).await
     }
 
@@ -445,6 +455,10 @@ impl ConversationStore for StuckStore {
     }
 
     async fn add_task(&self, task: Task) -> Result<Task, StoreError> {
+        if self.hold_task.load(Ordering::SeqCst) && task.id.as_str() == "tA" {
+            self.task_started.notify_one();
+            self.release_task.notified().await;
+        }
         self.store.add_task(task).await
     }
 

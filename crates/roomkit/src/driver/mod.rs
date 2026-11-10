@@ -1275,13 +1275,13 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             | HoldRequest::ReleaseTicket { .. }
             | HoldRequest::Expiry { .. } => Wait::Other,
         };
-        let over = self.turns_over(&request);
         let across = self.across_processes(&request);
         let turned = if let HoldRequest::LeaveLane { room_id, event_id } = &request {
             self.held.take_turn(room_id, event_id)
         } else {
             None
         };
+        let over = self.turns_over(&request, turned.is_some());
         match self.held.hold(rooms, &self.context, id, request, deadline) {
             Hold::Wait(_) if matches!(wait, Wait::Admission | Wait::Record) && self.cut_now => {
                 Some((id, Outcome::Failed(cut_by_close())))
@@ -1329,16 +1329,23 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     /// The room and the indexes whose turn `request` ends (gap G-091): a
     /// set's once it leaves its place, those the run committed and placed
     /// nowhere once it lets the room's lock go.
-    fn turns_over(&mut self, request: &HoldRequest) -> Option<(RoomId, Vec<u64>)> {
+    fn turns_over(&mut self, request: &HoldRequest, claimed: bool) -> Option<(RoomId, Vec<u64>)> {
         let (room_id, over) = match request {
             HoldRequest::EnterLane { room_id, event_id } => {
                 self.indexes.entered(room_id, event_id);
                 return None;
             }
-            HoldRequest::LeaveLane { room_id, event_id } => (
-                room_id,
-                self.indexes.left(room_id, event_id).into_iter().collect(),
-            ),
+            HoldRequest::LeaveLane { room_id, event_id } => {
+                let index = self.indexes.left(room_id, event_id);
+                // A queued set the close dropped never obtained its turn.
+                // Its index stays undelivered: reading or moving the cursor
+                // here would hold its result behind the active set's read
+                // and could credit a delivery that never ran (§12.10.4).
+                if self.inner.tasks.is_closing() && !claimed {
+                    return None;
+                }
+                (room_id, index.into_iter().collect())
+            }
             HoldRequest::ReleaseLock { room_id } => (room_id, self.indexes.released(room_id)),
             HoldRequest::AcquireLock { .. }
             | HoldRequest::AcquireLockForRecord { .. }

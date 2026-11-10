@@ -4,7 +4,7 @@
 //! `_REFUSED`, `_READS` and `_TEARDOWN` in `tests/test_kit_close.py`).
 
 use pretty_assertions::assert_eq;
-use roomkit::model::Metadata;
+use roomkit::model::{Metadata, Task, TaskId};
 use roomkit::{
     CancelTaskOptions, ConversationStore, DelegateOptions, InMemoryStore, ListObservationsOptions,
     ListTasksOptions, RejectInputOptions, RoomKit, RoomKitError, SetupBackgroundOptions,
@@ -99,6 +99,16 @@ async fn every_task_call_is_refused_once_the_close_started() {
 async fn the_task_reads_answer_and_a_cancel_does_nothing_once_the_close_started() {
     let held = Holding::new("ws", [("held", Hold::UntilReleased)]);
     let kit = kit_of(InMemoryStore::default(), &[&held], &["r"]).await;
+    let task = Task::new(TaskId::new("kept").unwrap(), room("r"), "Follow up");
+    kit.store().add_task(task.clone()).await.unwrap();
+    kit.submit_feedback(&room("r"), 0.75, SubmitFeedbackOptions::default())
+        .await
+        .unwrap();
+    let expected = kit
+        .list_observations(&room("r"), ListObservationsOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(expected.len(), 1);
     a_send_held(&kit, &held, "r").await;
     let close = closing(&kit).await;
 
@@ -112,12 +122,19 @@ async fn the_task_reads_answer_and_a_cancel_does_nothing_once_the_close_started(
     held.release.notify_one();
     closed(close).await;
 
+    assert_eq!(tasks.unwrap().as_slice(), std::slice::from_ref(&task));
+    assert_eq!(observations.unwrap(), expected);
+    assert!(!cancelled);
     assert_eq!(
-        (
-            tasks.map(|tasks| tasks.len()),
-            observations.map(|observations| observations.len()),
-            cancelled
-        ),
-        (Ok(0), Ok(0), false)
+        kit.list_tasks(&room("r"), ListTasksOptions::default())
+            .await
+            .unwrap(),
+        [task]
+    );
+    assert_eq!(
+        kit.list_observations(&room("r"), ListObservationsOptions::default())
+            .await
+            .unwrap(),
+        expected
     );
 }

@@ -1,6 +1,6 @@
 //! The indexes a run commits, and when the turn of each is over (RFC §13.5
 //! "Delivery lanes across processes", gap G-091): an event's once its
-//! delivery set left its place in the room's lane, an index with no set
+//! delivery set left its place after running in the room's lane, an index with no set
 //! once the run let the room's lock go.
 //!
 //! The protocol tells them apart: an event's place is taken under the
@@ -74,7 +74,8 @@ impl Indexes {
         self.placed.insert((room, event), index);
     }
 
-    /// The event's set left its place: its index's turn is over.
+    /// Remove the event's place, returning its index. The driver decides
+    /// whether it ran: a queued set dropped by close is not delivered.
     pub(super) fn left(&mut self, room_id: &RoomId, event_id: &EventId) -> Option<u64> {
         self.placed.remove(&(room_id.clone(), event_id.clone()))
     }

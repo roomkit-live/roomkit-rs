@@ -1,7 +1,6 @@
 //! The generic SYNC invocation contract, apart from each caller's payload type.
 
-#[path = "../../tests/support/warnings.rs"]
-mod warnings;
+use crate::test_warnings as warnings;
 
 use super::*;
 use roomkit_core::model::{EventSource, InjectedEvent, Room, Task, TaskId, TextContent};

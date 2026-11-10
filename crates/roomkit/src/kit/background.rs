@@ -258,17 +258,55 @@ mod tests {
         );
     }
 
-    /// RFC §12.10.4: work that ignores its cut holds the close its grace
-    /// plus two unwinds, the turn backend's close waiting for its turns
-    /// alone, as the Python implementation's `_turns._close` does
-    /// (`rmk1030-rs-review-B/py_probe.out`, stubborn send: grace plus two
-    /// unwinds). On 01c8420 it held it three unwinds, 8 s.
+    // Python: tests/test_kit_close.py::test_work_ignoring_its_cut_is_abandoned_once_the_unwind_ran_out
+    // These retained guards exercise the defensive tracker bound. Tokio
+    // destroys cooperative futures on abort; this does not simulate a
+    // Python coroutine catching cancellation or a remote executor.
     #[tokio::test(start_paused = true)]
-    async fn work_ignoring_its_cut_holds_the_close_its_grace_and_two_unwinds() {
-        let kit = RoomKit::new(RoomKitOptions::default());
-        let _stubborn = kit.inner.tasks.track_unabortable(Kind::Observer);
-        let started = Instant::now();
-        kit.close().await.unwrap();
-        assert_eq!(started.elapsed(), CLOSE_GRACE + CUT_UNWIND + CUT_UNWIND);
+    async fn retained_work_is_abandoned_once_and_named_after_its_unwinds() {
+        for turn in [false, true] {
+            let (logs, _capture) = crate::test_warnings::Warnings::capture();
+            let kit = RoomKit::new(RoomKitOptions::default());
+            let mut kinds = vec![
+                Kind::Observer,
+                Kind::Observer,
+                Kind::Write,
+                Kind::Run,
+                Kind::Call,
+            ];
+            if turn {
+                kinds.push(Kind::Turn);
+            }
+            let held: Vec<_> = kinds
+                .into_iter()
+                .map(|kind| kit.inner.tasks.track_unabortable(kind))
+                .collect();
+            let started = Instant::now();
+            kit.close().await.unwrap();
+            let unwinds = if turn { 3 } else { 2 };
+            assert_eq!(started.elapsed(), CLOSE_GRACE + CUT_UNWIND * unwinds);
+            let mut left = vec![
+                "a call",
+                "a store write",
+                "an inbound run",
+                "an observer hook",
+            ];
+            if turn {
+                left.insert(2, "a turn");
+            }
+            assert_eq!(kit.inner.tasks.left(), left);
+            let expected = format!("left={left:?}");
+            let warnings = logs.containing("");
+            assert_eq!(warnings.len(), 1, "{warnings:?}");
+            assert!(
+                warnings[0]
+                    .contains("closing with work still running after its cut: it is abandoned")
+            );
+            assert!(warnings[0].contains(&expected), "{warnings:?}");
+            kit.close().await.unwrap();
+            assert_eq!(logs.containing(""), warnings);
+            drop(held);
+            assert_eq!(kit.inner.tasks.left(), Vec::<&str>::new());
+        }
     }
 }

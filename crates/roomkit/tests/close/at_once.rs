@@ -58,7 +58,12 @@ async fn a_delivery_queued_as_the_kit_closes_is_never_sent() {
 /// A SYNC `BEFORE_BROADCAST` hook on "locker" that tells `entered` it
 /// began and waits for `release`: under the room's lock, or before it, in
 /// the room's admission order, when it does not need the lock.
-fn locking_hook(kit: &RoomKit, entered: &Arc<Notify>, release: &Arc<Notify>, needs_lock: bool) {
+pub(super) fn locking_hook(
+    kit: &RoomKit,
+    entered: &Arc<Notify>,
+    release: &Arc<Notify>,
+    needs_lock: bool,
+) {
     let (entered, release) = (Arc::clone(entered), Arc::clone(release));
     let spec = HookOptions {
         name: "locker".to_owned(),
