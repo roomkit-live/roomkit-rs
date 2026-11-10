@@ -39,6 +39,7 @@
 mod admission;
 mod answers;
 mod at_once;
+mod cancellation;
 mod core_contracts;
 mod cut;
 mod doors;

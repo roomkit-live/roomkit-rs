@@ -157,6 +157,7 @@ async fn a_cancel_past_its_timeout_leaves_the_target_working_and_wait_reads_the_
     let cancel = handle.cancel(with_timeout(Duration::from_millis(1))).await;
     let timed_out_at = start.elapsed();
     let kept_at_the_timeout = target.kept.lock().unwrap().clone();
+    wait_under_room_lock(&kit, &handle).await;
     let waited = handle.wait().await.unwrap();
     let elapsed = start.elapsed();
     let kept = target.kept.lock().unwrap().clone();
@@ -170,6 +171,37 @@ async fn a_cancel_past_its_timeout_leaves_the_target_working_and_wait_reads_the_
     assert!(at(elapsed, flush), "{elapsed:?}");
     assert_eq!(kept, ["cut", "flushed"]);
     assert_eq!(read(&waited), cited_and("cancelled"));
+    assert!(handle.done());
+}
+
+// Python: tests/test_delivery_cancellation.py::test_cancel_timeout_reports_incomplete_cleanup_and_can_be_joined
+async fn wait_under_room_lock(kit: &RoomKit, handle: &DeliveryHandle) {
+    let section = crate::context::Section::enter(&kit.inner.locks, &room_id())
+        .await
+        .unwrap();
+    section
+        .scope(async {
+            assert!(
+                crate::context::ExecutionContext::current()
+                    .lease(&room_id())
+                    .is_some()
+            );
+            let partial = tokio::time::timeout(Duration::from_millis(10), handle.wait())
+                .await
+                .unwrap()
+                .unwrap();
+            // Under the lock wait returns the original commit snapshot;
+            // the final cancellation reason is filled by the later join.
+            assert!(!partial.blocked);
+            assert_eq!(
+                partial
+                    .event
+                    .map(|event| roomkit_core::rules::transcoding::text_of(&event.content)),
+                Some("Hi".to_owned())
+            );
+            assert!(!handle.done());
+        })
+        .await;
 }
 
 // Python: tests/test_turns_cleanup.py::test_a_cancelled_cascade_reports_its_cleanup_incomplete_while_an_end_is_owed
@@ -423,12 +455,44 @@ fn cancel_controls(kit: &RoomKit) -> Arc<Mutex<Vec<Value>>> {
 // after the cut (test_a_turn_being_handed_over_is_cut_as_it_arrives).
 #[tokio::test]
 async fn a_turn_submitted_after_its_delivery_was_cut_receives_the_reason() {
-    let kit = kit_with(Streaming::scripted(ending())).await;
+    let agent = Waiting::new(Duration::ZERO);
+    let kit = kit_with(agent.clone()).await;
     let controls = cancel_controls(&kit);
     let cancel = crate::delivery_keys::CancelRequest::default();
     cancel.request("before_submission");
-    let (mut turn, _following) = submitted_turn(&kit, |turn| cancel.follows(&turn)).await;
-    let _outcome = turn.output(kit.inner.turns.cutting()).await;
+    let (turn, _following) = submitted_turn(&kit, |turn| cancel.follows(&turn)).await;
+    // The driver observes CancelRequest instead of reading an Output from
+    // this cut. Observe its actual end and unfinished work, not a reader
+    // invoked outside that delivery-cancellation context.
+    tokio::time::timeout(Duration::from_secs(5), turn.ended())
+        .await
+        .unwrap();
+    assert!(!turn.canceller().owed_end().is_owed());
+    assert!(
+        agent
+            .log
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(what, _)| *what != "answered")
+    );
+    // Late registration cuts only B. C is submitted without that request
+    // and must produce its response normally on the same executor.
+    let (mut independent, ()) = submitted_turn(&kit, drop).await;
+    let (answer, streams) = independent.output(kit.inner.turns.cutting()).await.unwrap();
+    assert!(answer.responded);
+    assert_eq!(answer.response_events.len(), 1);
+    assert!(!streams);
+    assert_eq!(
+        agent
+            .log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(what, _)| *what == "answered")
+            .count(),
+        1
+    );
     kit.close().await.unwrap();
     assert_eq!(*controls.lock().unwrap(), vec![json!("before_submission")]);
 }

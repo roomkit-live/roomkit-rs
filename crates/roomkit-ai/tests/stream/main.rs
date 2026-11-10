@@ -4,6 +4,7 @@
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
 mod access;
+mod cancellation;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
@@ -1029,6 +1030,7 @@ async fn a_caller_that_leaves_mid_answer_leaves_the_text_read_stored_cancelled()
     let dropped = Arc::clone(&model.dropped);
     let agent = AiChannel::new(channel("agent"), model, AiChannelOptions::default()).unwrap();
     let kit = RoomKit::new(RoomKitOptions::default());
+    let errors = cancellation::count_errors(&kit);
     let ws = Streaming::new(Stop::Never);
     kit.register_channel(RecordingTransport::new(
         channel("web"),
@@ -1105,6 +1107,7 @@ async fn a_caller_that_leaves_mid_answer_leaves_the_text_read_stored_cancelled()
             1
         )
     );
+    assert_eq!(errors.load(Ordering::SeqCst), 0);
     drop(feed);
     kit.close().await.unwrap();
 }

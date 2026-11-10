@@ -35,6 +35,9 @@ use roomkit_core::ops::ChannelConfig;
 use roomkit_core::rules::transcoding::text_of;
 use tokio::sync::{Barrier, Notify};
 
+#[path = "lanes/cancellation.rs"]
+mod cancellation;
+
 /// How long a call that should not wait may take before the test fails it.
 const BOUND: Duration = Duration::from_secs(5);
 
