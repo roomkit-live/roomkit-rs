@@ -6,7 +6,8 @@ use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
 use roomkit::tool_intent::{
-    as_written, declares_intent, presented_parameters_with_requirement, take_intent,
+    as_written, declares_intent, declares_intent_alias, presented_parameters_with_requirement,
+    take_intent,
 };
 use roomkit_core::rules::transcript::Message;
 
@@ -63,19 +64,24 @@ impl<P> Loop<P> {
 
     /// Takes each call's intent out of its arguments, before its start and
     /// its gate: not a call that never runs, nor one to a tool whose own
-    /// schema declares the property.
+    /// schema declares the property. A tool that declares the property's
+    /// name without its underscore keeps that one.
     pub(super) fn take_intents(&self, calls: &mut [Called]) {
         if !self.intents {
             return;
         }
         for called in calls.iter_mut().filter(|called| called.partial.is_none()) {
-            let owned = self
+            let parameters = self
                 .toolbox
                 .find(&called.call.name)
-                .is_some_and(|(tool, _)| declares_intent(&tool.parameters));
-            if !owned {
-                take_intent(&mut called.call);
+                .map(|(tool, _)| &tool.parameters);
+            if parameters.is_some_and(declares_intent) {
+                continue;
             }
+            take_intent(
+                &mut called.call,
+                parameters.is_some_and(declares_intent_alias),
+            );
         }
     }
 }

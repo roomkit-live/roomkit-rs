@@ -5,7 +5,9 @@
 //! with one property more, [`INTENT_PROPERTY`], optional by default. The tool loop takes
 //! it out of a call's arguments before anything reads them and carries its
 //! value, normalized, as the call's `intent`: the tool never receives it. A
-//! tool whose own schema declares the property keeps it as its argument. The
+//! tool whose own schema declares the property keeps it as its argument. A
+//! model that drops the property's leading underscore writes
+//! [`INTENT_ALIAS`], taken the same way unless the tool declares that name. The
 //! model reads its calls back with their intent, as normalized, among their
 //! arguments.
 
@@ -15,6 +17,10 @@ use crate::model::ToolCall;
 
 /// The reserved property a call's intent rides in.
 pub const INTENT_PROPERTY: &str = "_roomkit_intent";
+
+/// The reserved property as a model may write it, without its leading
+/// underscore: taken as the property, unless the tool declares that name.
+pub const INTENT_ALIAS: &str = "roomkit_intent";
 
 /// The longest intent kept, in characters (Unicode scalar values).
 pub const INTENT_MAX_CHARS: usize = 200;
@@ -107,16 +113,33 @@ pub fn presented_parameters_with_requirement(parameters: &Value, required: bool)
 /// Whether a tool's own schema declares the reserved property: its calls
 /// keep it as their argument.
 pub fn declares_intent(parameters: &Value) -> bool {
+    declares(parameters, INTENT_PROPERTY)
+}
+
+/// Whether a tool's own schema declares [`INTENT_ALIAS`]: its calls keep
+/// that name as their argument.
+pub fn declares_intent_alias(parameters: &Value) -> bool {
+    declares(parameters, INTENT_ALIAS)
+}
+
+fn declares(parameters: &Value, name: &str) -> bool {
     parameters
         .get("properties")
         .and_then(Value::as_object)
-        .is_some_and(|properties| properties.contains_key(INTENT_PROPERTY))
+        .is_some_and(|properties| properties.contains_key(name))
 }
 
-/// Takes the reserved property out of `call`'s arguments, its value
-/// normalized as the call's intent; leaves a call without it as it is.
-pub fn take_intent(call: &mut ToolCall) {
-    if let Some(value) = call.arguments.shift_remove(INTENT_PROPERTY) {
+/// Takes the reserved property out of `call`'s arguments, and
+/// [`INTENT_ALIAS`] too unless `alias_owned`, the value normalized as the
+/// call's intent (the property's when both come); leaves a call with neither
+/// as it is.
+pub fn take_intent(call: &mut ToolCall, alias_owned: bool) {
+    let written = if alias_owned {
+        None
+    } else {
+        call.arguments.shift_remove(INTENT_ALIAS)
+    };
+    if let Some(value) = call.arguments.shift_remove(INTENT_PROPERTY).or(written) {
         call.intent = normalized_intent(&value);
     }
 }
@@ -139,6 +162,49 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    // Python: tests/test_channels/test_tool_call_intents.py::test_the_property_written_without_its_underscore_is_taken_as_the_intent
+    // and ::test_the_property_wins_over_its_misspelling_and_neither_reaches_the_tool
+    #[test]
+    fn the_property_written_without_its_underscore_is_taken_the_exact_one_winning() {
+        let call = |arguments: Value| {
+            let Value::Object(arguments) = arguments else {
+                unreachable!("an object fixture");
+            };
+            ToolCall::new("c1", "shell", arguments.into_iter().collect())
+        };
+        let mut misspelled = call(json!({ "command": "ls", INTENT_ALIAS: " I list. " }));
+        take_intent(&mut misspelled, false);
+        assert_eq!(misspelled.intent.as_deref(), Some("I list."));
+        assert_eq!(
+            Value::Object(misspelled.arguments.into_iter().collect()),
+            json!({ "command": "ls" })
+        );
+
+        let mut both = call(json!({ INTENT_PROPERTY: "Exact.", INTENT_ALIAS: "Other." }));
+        take_intent(&mut both, false);
+        assert_eq!(both.intent.as_deref(), Some("Exact."));
+        assert!(both.arguments.is_empty());
+    }
+
+    // Python: tests/test_channels/test_tool_call_intents.py::test_a_tool_that_declares_the_misspelled_name_keeps_it_as_its_argument
+    #[test]
+    fn a_tool_that_declares_the_name_without_the_underscore_keeps_it() {
+        let parameters =
+            json!({ "type": "object", "properties": { INTENT_ALIAS: { "type": "string" } } });
+        assert!(declares_intent_alias(&parameters));
+        assert!(!declares_intent(&parameters));
+        let mut kept = ToolCall::new(
+            "c1",
+            "note",
+            [(INTENT_ALIAS.to_owned(), json!("keep"))]
+                .into_iter()
+                .collect(),
+        );
+        take_intent(&mut kept, true);
+        assert_eq!(kept.intent, None);
+        assert_eq!(kept.arguments.get(INTENT_ALIAS), Some(&json!("keep")));
+    }
 
     #[test]
     fn an_intent_is_normalized_or_none() {
@@ -255,7 +321,7 @@ mod tests {
         arguments.insert("command".to_owned(), json!("ls"));
         arguments.insert(INTENT_PROPERTY.to_owned(), json!(" I list. "));
         let mut call = ToolCall::new("c1", "shell", arguments);
-        take_intent(&mut call);
+        take_intent(&mut call, false);
         assert_eq!(
             (
                 Value::Object(call.arguments.clone()),
