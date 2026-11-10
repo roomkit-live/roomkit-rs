@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A closing observer drops its own answer still awaiting a cursor claim, so the answer leaves no run suspended after the store closes (RFC §12.10.4; RMK-1616).
+
 - A delegated task's turn no longer overflows a 2 MB stack in a debug build: the kit boxes a call's run, a spawned task and a turn's observer before wrapping them, so each layer moves a pointer rather than the whole future (RMK-1616).
 
 - A queued delivery cut by close returns without waiting on the active set’s cursor read or advancing past an undelivered index (RFC §12.10.4; RMK-1616).

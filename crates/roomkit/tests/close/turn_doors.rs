@@ -3,21 +3,24 @@
 //! the turn is cut, the call awaiting `close()` runs on, and the open
 //! call's end row is stored before the close returns. Python's
 //! `tests/test_kit_close_doors.py` and `tests/test_kit_close.py`.
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{EventContent, EventType, RoomEvent, TextContent, ToolCallStatus};
 use roomkit::{
-    AttachChannelOptions, ConversationStore, HookOptions, InMemoryStore, ProcessInboundOptions,
-    RoomKit, SendEventOptions, TurnTimeouts, keep_context,
+    AttachChannelOptions, ConversationStore, HookExecution, HookOptions, HookTrigger,
+    InMemoryStore, ProcessInboundOptions, RegenerateResponseOptions, RoomKit, SendEventOptions,
+    TurnTimeouts, keep_context,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
-use roomkit_ai::{AiChannelOptions, AiTool, ToolResult, Tools};
+use roomkit_ai::{AiChannelOptions, AiResponseEvent, AiTool, ToolResult, Tools};
 use serde_json::json;
 use tokio::sync::Notify;
 
-use crate::held::{Holding, Pausing, attach_agent, closed, into, kit_of, room, said, spawn_close};
+use crate::held::{Holding, attach_agent, closed, into, kit_of, room, said, spawn_close};
+use crate::stream_witness::WaitingModel;
 use crate::support::channel;
 use crate::warnings::Warnings;
 
@@ -46,14 +49,20 @@ fn warned(logs: &Warnings) -> Vec<String> {
 /// nothing is logged as a warning: a failure the close causes is no
 /// failure (Python's `test_a_room_turn_returns_cancelled_to_its_caller`,
 /// RMK-1037).
-/// The call is awaited, deferred, or a `send_event`.
+/// The call is awaited, deferred, a `send_event`, or `regenerate_response`.
 #[tokio::test(start_paused = true)]
 async fn a_room_turn_returns_cancelled_to_its_caller() {
     let mut rows = Vec::new();
-    for door in ["awaited", "deferred", "send_event"] {
+    for door in ["awaited", "deferred", "send_event", "regenerate_response"] {
         let (logs, logging) = Warnings::capture();
         let kit = kit_of(InMemoryStore::default(), &[&Holding::new("ws", [])], &["r"]).await;
-        attach_agent(&kit, Pausing { first: "The " }, Tools::new()).await;
+        let model = WaitingModel::new("The ", door == "regenerate_response");
+        attach_agent(&kit, model.clone(), Tools::new()).await;
+        if door == "regenerate_response" {
+            kit.process_inbound(said("Go."), into("r")).await.unwrap();
+            roomkit::testing::idle(&kit).await;
+        }
+        let responses = response_count(&kit);
         let call = tokio::spawn({
             let kit = kit.clone();
             async move {
@@ -67,7 +76,14 @@ async fn a_room_turn_returns_cancelled_to_its_caller() {
                     defer_delivery: door == "deferred",
                     ..into("r")
                 };
-                let mut result = kit.process_inbound(said("Go."), options).await.unwrap();
+                let mut result = if door == "regenerate_response" {
+                    kit.regenerate_response(&room("r"), RegenerateResponseOptions::default())
+                        .await
+                        .unwrap()
+                        .unwrap()
+                } else {
+                    kit.process_inbound(said("Go."), options).await.unwrap()
+                };
                 if let Some(delivery) = result.delivery.take() {
                     result = delivery.wait().await.unwrap();
                 }
@@ -78,7 +94,9 @@ async fn a_room_turn_returns_cancelled_to_its_caller() {
                 (true, result.error.map(|error| error.error_type), ended)
             }
         });
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::timeout(Duration::from_secs(1), model.started.notified())
+            .await
+            .unwrap();
 
         closed(spawn_close(&kit)).await;
 
@@ -88,6 +106,8 @@ async fn a_room_turn_returns_cancelled_to_its_caller() {
             .unwrap();
         drop(logging);
         let cancelled = cancelled(&kit).await;
+        assert!(model.dropped.load(Ordering::SeqCst));
+        assert_eq!(responses.load(Ordering::SeqCst), 0);
         rows.push((door, ended, cancelled, warned(&logs)));
     }
     let row =
@@ -97,9 +117,31 @@ async fn a_room_turn_returns_cancelled_to_its_caller() {
         [
             row("awaited", Some("cancelled")),
             row("deferred", Some("cancelled")),
-            row("send_event", None)
+            row("send_event", None),
+            row("regenerate_response", Some("cancelled"))
         ]
     );
+}
+
+/// Count only response hooks installed after any completed warmup turn.
+fn response_count(kit: &RoomKit) -> Arc<AtomicUsize> {
+    let count = Arc::new(AtomicUsize::new(0));
+    let heard = Arc::clone(&count);
+    kit.hook(
+        HookTrigger::OnAiResponse,
+        move |_event: AiResponseEvent, _| {
+            let heard = Arc::clone(&heard);
+            async move {
+                heard.fetch_add(1, Ordering::SeqCst);
+            }
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            ..HookOptions::default()
+        },
+    )
+    .unwrap();
+    count
 }
 
 /// The tool-call end rows `r` stores, each with its status and error.

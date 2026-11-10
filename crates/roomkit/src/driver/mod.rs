@@ -578,8 +578,9 @@ enum Wait {
     /// the kit's close drops at once.
     Lane,
     /// The turn of a place taken first in its room's lane, the lane idle:
-    /// a delivery that runs from its placement, which the close does not
-    /// drop (RFC §12.10.4).
+    /// a delivery that runs from its placement. The close drops it only
+    /// when its own work placed it and its cursor claim still waits
+    /// (RFC §12.10.4).
     Running,
     /// Anything else, a room's delivery cursor.
     Other,
@@ -778,7 +779,8 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     }
 
     /// Acts on the kit's close reaching `phase` (RFC §12.10.4), but for a
-    /// run the close spares, whose queued deliveries alone are dropped. As
+    /// run the close spares, whose queued deliveries and own answers still
+    /// awaiting their cursor claim are dropped. As
     /// the close starts, a delivery set queued in a room's lane is dropped,
     /// and a call waiting for its room's lock or admission ticket before
     /// its commit is cut. Once its grace ran out, a call before its commit
@@ -810,16 +812,22 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         self.cut_past_the_decision(operation)
     }
 
-    /// Answers the run's waits for a place's turn in a room's lane at once:
-    /// the kit's close drops the delivery sets queued (RFC §12.10.4).
+    /// Drops queued sets and the closing work's own placed answers whose
+    /// cursor claims still wait (RFC §12.10.4).
     fn drop_queued<O: Operation>(&mut self, operation: &mut O) -> Result<(), RoomKitError> {
+        // A closing observer also drops the answer it placed first in an
+        // idle lane but still holds before its cursor claim. That run
+        // inherits the observer's marks: sparing it must not leave this
+        // wait alive after the store closes (RFC §12.10.4).
+        let spared = self.inner.tasks.spares(&self.marks);
+        let dropped = |wait: Wait| wait == Wait::Lane || (spared && wait == Wait::Running);
         let queued: Vec<EffectId> = self
             .waits
             .iter()
-            .filter(|(_, wait, _)| *wait == Wait::Lane)
+            .filter(|(_, wait, _)| dropped(*wait))
             .map(|(effect, _, _)| *effect)
             .collect();
-        self.waits.retain(|(_, wait, _)| *wait != Wait::Lane);
+        self.waits.retain(|(_, wait, _)| !dropped(*wait));
         for effect in queued {
             operation.complete(effect, HoldOutcome::LaneClosed.into())?;
         }
@@ -1255,7 +1263,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             HoldRequest::AwaitLane { room_id, event_id } if self.held.runs(room_id, event_id)
         );
         if closing
-            && !runs
+            && (!runs || self.inner.tasks.spares(&self.marks))
             && matches!(
                 request,
                 HoldRequest::EnterLane { .. } | HoldRequest::AwaitLane { .. }
