@@ -16,8 +16,8 @@ use roomkit::testing::{
     EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
 };
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, DeliveryHandle, HookOptions,
-    HookTrigger, ProcessInboundOptions, RoomKit, RoomKitOptions,
+    AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, DeliveryHandle, HookExecution,
+    HookOptions, HookTrigger, ProcessInboundOptions, RoomKit, RoomKitOptions,
 };
 use roomkit_core::ops::ChannelConfig;
 use tokio::sync::Notify;
@@ -114,7 +114,8 @@ impl Channel for Stuck {
 /// A `BEFORE_BROADCAST` hook, under the lock or off it, makes the deferred
 /// call `side` when it sees `hello`, keeping its handle; an agent echoes
 /// every message, and a second one's turn on the echo of `side` never ends.
-/// Once that turn started, the kit closes, cutting it at once: the call
+/// Once that turn started and the parent's answer is committed, the kit
+/// closes, cutting it at once: the call
 /// `hello` reads the answer its cascade stored, `You said: hello`, and the
 /// adopted call's handle `You said: side`, each `kit_closed`, as Python's do
 /// (`close_while_held.out`).
@@ -160,6 +161,7 @@ fn said<const N: usize>(texts: [&str; N]) -> [Vec<String>; N] {
 async fn answers_under_the_close(needs_lock: bool) -> [(Vec<String>, Option<String>); 2] {
     let started = Arc::new(Notify::new());
     let kit = RoomKit::new(RoomKitOptions::default());
+    let parent_stored = observe_stored_parent(&kit);
     kit.register_channel(RecordingTransport::new(
         channel("sms"),
         ChannelType::SMS,
@@ -222,7 +224,11 @@ async fn answers_under_the_close(needs_lock: bool) -> [(Vec<String>, Option<Stri
     tokio::time::timeout(BOUND, started.notified())
         .await
         .unwrap();
+    tokio::time::timeout(BOUND, parent_stored.notified())
+        .await
+        .unwrap();
     let handle = handles.lock().unwrap().pop().unwrap();
+    let before_close = crate::support::stored(&kit).await;
     tokio::time::timeout(BOUND * 4, kit.close())
         .await
         .unwrap()
@@ -236,9 +242,41 @@ async fn answers_under_the_close(needs_lock: bool) -> [(Vec<String>, Option<Stri
         .await
         .unwrap()
         .unwrap();
+    assert!(
+        ["You said: hello", "You said: side"]
+            .iter()
+            .all(|answer| before_close.iter().any(|text| text == answer)),
+        "pre-close fixture needs_lock={needs_lock}: {before_close:?}"
+    );
     [outer, adopted].map(|result| {
         let texts = result.response_events.iter();
         let texts = texts.map(|event| text_of(&event.content)).collect();
         (texts, result.cancellation_reason)
     })
+}
+
+/// The adopted delivery can run before the parent's answer is committed.
+/// A `BEFORE_BROADCAST` observer starts after its commit, even when the
+/// delivery lane still waits on the adopted turn (RFC §9.2, §9.5.1).
+fn observe_stored_parent(kit: &RoomKit) -> Arc<Notify> {
+    let stored = Arc::new(Notify::new());
+    let signal = Arc::clone(&stored);
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _| {
+            let signal = Arc::clone(&signal);
+            async move {
+                if text_of(&event.content) == "You said: hello" {
+                    signal.notify_one();
+                }
+            }
+        },
+        HookOptions {
+            name: "parent-stored".to_owned(),
+            execution: HookExecution::Async,
+            ..HookOptions::default()
+        },
+    )
+    .unwrap();
+    stored
 }
