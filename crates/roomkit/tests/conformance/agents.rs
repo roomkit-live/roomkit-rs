@@ -149,7 +149,7 @@ impl Paced {
 }
 
 /// A whole-response provider. Its inherited structured stream is the real
-/// AiProvider adapter, so the non-streaming fixture cannot bypass generate().
+/// `AiProvider` adapter, so the non-streaming fixture cannot bypass `generate()`.
 struct WholeModel {
     script: ScriptedProvider,
     gates: Vec<Option<String>>,
@@ -466,7 +466,7 @@ fn keep_chat_dialect(spec: &Value, model: String, run: &Arc<Run>) {
 
 /// The scripted model `spec` describes, and the provider reading it, its
 /// gates `run`'s.
-fn scripted_model(
+pub(crate) fn scripted_model(
     spec: &Value,
     run: &Arc<Run>,
     name: &str,
@@ -510,10 +510,10 @@ fn scripted_model(
 fn generation_methods(run: &Arc<Run>, name: &str, shared: bool) -> GenerationMethods {
     let mut models = crate::run::lock(&run.model_methods);
     if shared {
-        return models.entry(name.to_owned()).or_default().clone();
+        return Arc::clone(models.entry(name.to_owned()).or_default());
     }
     let methods = GenerationMethods::default();
-    models.insert(name.to_owned(), methods.clone());
+    models.insert(name.to_owned(), Arc::clone(&methods));
     methods
 }
 
@@ -1432,7 +1432,3 @@ fn with_failure(mut round: ScriptedRound, spec: &Value) -> Result<ScriptedRound,
     }
     Ok(round)
 }
-
-#[cfg(test)]
-#[path = "agent_model_tests.rs"]
-mod model_tests;
