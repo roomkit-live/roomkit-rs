@@ -180,3 +180,52 @@ async fn the_last_handlers_decline_is_the_compositions() {
     let answer = composed.call("lookup".to_owned(), Metadata::new()).await;
     assert!(matches!(answer, Err(ToolError::UnservedToolCall(_))));
 }
+
+// Python: tests/test_human_input.py::test_compose_with_other_handler,
+// test_compose_human_input_matches_first, test_compose_unknown_tool_falls_through_all
+#[tokio::test]
+async fn human_input_composes_with_host_handlers() {
+    use roomkit_ai::{AskOptions, HumanInputToolHandler, HumanInputToolHandlerOptions};
+
+    let human =
+        HumanInputToolHandler::new(["AskUser"], HumanInputToolHandlerOptions::default()).unwrap();
+    let asked = human.clone();
+    let person = ToolHandler::new(move |name, arguments| {
+        let human = asked.clone();
+        async move {
+            human
+                .ask(&name, arguments, AskOptions::default())
+                .await
+                .map(ToolResult::Text)
+        }
+    });
+    let composed = compose_tool_handlers(vec![person.clone(), weather()]).unwrap();
+    assert_eq!(
+        call(&composed, "get_weather", json!({"city": "Montreal"})).await,
+        json!({"temp": 20, "city": "Montreal"})
+    );
+    assert_eq!(
+        call(&composed, "unknown", json!({})).await,
+        json!({"error": "Unknown tool: unknown"})
+    );
+    let first = compose_tool_handlers(vec![
+        person,
+        answering(ToolResult::Text("host answer".to_owned())),
+    ])
+    .unwrap();
+    let answer = async {
+        loop {
+            if let Some(id) = human.handler().pending().keys().next() {
+                assert!(human.handler().resolve(id, "person answer"));
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    };
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        tokio::join!(call(&first, "AskUser", json!({})), answer)
+    })
+    .await
+    .unwrap();
+    assert_eq!(result, json!("person answer"));
+}

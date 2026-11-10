@@ -19,6 +19,7 @@
 
 mod handler;
 mod model;
+mod notifications;
 mod options;
 #[cfg(test)]
 mod tests;

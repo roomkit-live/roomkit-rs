@@ -5,11 +5,11 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
 use roomkit_core::model::Metadata;
-use tokio::sync::watch;
-use tokio::task::AbortHandle;
+use tokio::sync::{oneshot, watch};
 use uuid::Uuid;
 
 use super::model::{PendingInput, PendingInputEvent, PendingInputStatus};
+use super::notifications::{Notification, tracked};
 use super::options::{
     CloseOptions, CreateDetachedOptions, CreateOptions, HumanInputHandlerOptions, RejectOptions,
     WaitOptions,
@@ -68,7 +68,7 @@ struct State {
     closed_channels: HashSet<String>,
     closed: bool,
     /// The notifications running, by their number, with their channel.
-    notifying: HashMap<u64, (AbortHandle, String)>,
+    notifying: HashMap<u64, Notification>,
     next_notification: u64,
     /// The requests opened in a turn the kit runs: their owner keeps the
     /// record that answers them (RFC §10.6.5).
@@ -212,11 +212,6 @@ impl HumanInputHandler {
     /// A channel's scope takes no request from then on, until it registers
     /// again; the whole handler's never again. A close naming a
     /// registration that is not the channel's current one closes nothing.
-    #[expect(
-        clippy::unused_async,
-        clippy::unused_async_trait_impl,
-        reason = "Python's method is a coroutine: the call is awaited"
-    )]
     pub async fn close(&self, options: CloseOptions) {
         let CloseOptions {
             channel_id,
@@ -259,20 +254,23 @@ impl HumanInputHandler {
             let stopped: Vec<u64> = state
                 .notifying
                 .iter()
-                .filter(|(_, (_, channel))| channel_id.as_ref().is_none_or(|id| id == channel))
+                .filter(|(_, task)| channel_id.as_ref().is_none_or(|id| id == &task.channel))
                 .map(|(number, _)| *number)
                 .collect();
-            let stopped: Vec<AbortHandle> = stopped
+            let stopped: Vec<Notification> = stopped
                 .into_iter()
-                .filter_map(|number| state.notifying.remove(&number).map(|(task, _)| task))
+                .filter_map(|number| state.notifying.get(&number).cloned())
                 .collect();
             (closing, stopped)
         };
-        for task in stopped {
-            task.abort();
+        for task in &stopped {
+            task.abort.abort();
         }
         for closed in closing {
             tell_owner(closed);
+        }
+        for mut task in stopped {
+            let _ = task.finished.changed().await;
         }
     }
 
@@ -397,6 +395,9 @@ impl HumanInputHandler {
         let channel = event.channel_id.clone();
         let number = {
             let mut state = self.state();
+            if state.closed || state.closed_channels.contains(&channel) {
+                return;
+            }
             state.next_notification = state.next_notification.saturating_add(1);
             state.next_notification
         };
@@ -404,20 +405,45 @@ impl HumanInputHandler {
             Some(Announcer::Turn(host)) => Some(host.clone()),
             Some(Announcer::Kit(_)) | None => None,
         };
-        let task = crate::keep_context(notification(Weak::clone(&weak), event, announcer, number));
+        let task = Box::pin(crate::keep_context(notification(weak, event, announcer)));
+        let cleanup = Arc::downgrade(&self.shared);
+        let (start, ready) = oneshot::channel::<()>();
+        // No callback may start until close can find its task. Spawning
+        // outside the lock also lets a refusing host drop it immediately.
+        let waiting = async move {
+            if ready.await.is_ok() {
+                task.await;
+            }
+        };
+        let (task, finished) = tracked(Box::pin(waiting), move || {
+            if let Some(shared) = cleanup.upgrade() {
+                shared
+                    .state
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .notifying
+                    .remove(&number);
+            }
+        });
         let abort = match spawner {
-            Some(host) => host.spawn(Box::pin(task)),
+            Some(host) => host.spawn(task),
             None => Some(tokio::spawn(task).abort_handle()),
         };
-        let Some(abort) = abort else {
-            return;
-        };
-        if let Some(shared) = weak.upgrade() {
-            let mut state = shared.state.lock().unwrap_or_else(PoisonError::into_inner);
-            // Ended before it was kept: nothing to stop.
-            if !abort.is_finished() {
-                state.notifying.insert(number, (abort, channel));
+        if let Some(abort) = abort {
+            let mut state = self.state();
+            if state.closed || state.closed_channels.contains(&channel) {
+                abort.abort();
+                return;
             }
+            state.notifying.insert(
+                number,
+                Notification {
+                    channel,
+                    abort,
+                    finished,
+                },
+            );
+            let _ = start.send(());
         }
     }
 
@@ -681,14 +707,13 @@ impl InputSettler for HumanInputHandler {
     }
 }
 
-/// The notification `number` of `event`: the turn's owner told, then
+/// The notification of `event`: the turn's owner told, then
 /// `announcer`'s `ON_USER_INPUT_REQUIRED` hooks, a block rejecting the
 /// request (RFC §9.3: they fail open).
 async fn notification(
     shared: Weak<Shared>,
     event: PendingInputEvent,
     announcer: Option<Announcer>,
-    number: u64,
 ) {
     let Some(handler) = shared.upgrade().map(|shared| HumanInputHandler { shared }) else {
         return;
@@ -711,7 +736,6 @@ async fn notification(
             }
         }
     }
-    handler.state().notifying.remove(&number);
 }
 
 /// Whether the hooks of a request of `channel_id` run: a channel the
@@ -812,5 +836,30 @@ impl Drop for ReleaseOnDrop<'_> {
         if let Some(pending_id) = self.pending_id.take() {
             self.handler.release(pending_id);
         }
+    }
+}
+
+#[cfg(test)]
+mod retention_test {
+    use super::*;
+
+    // Python: tests/test_human_input.py::test_wait_reads_an_answer_the_host_dropped
+    #[tokio::test]
+    async fn wait_reads_an_answer_the_host_dropped() {
+        let handler = HumanInputHandler::default();
+        let pending = handler
+            .create("AskUser", Metadata::new(), CreateOptions::default())
+            .await
+            .unwrap();
+        assert!(handler.resolve(&pending.pending_id, "Dark"));
+        // The host's private bookkeeping drops it before the first wait.
+        handler.state().pending.remove(&pending.pending_id);
+        assert_eq!(
+            handler
+                .wait(&pending.pending_id, WaitOptions::default())
+                .await
+                .unwrap(),
+            "Dark"
+        );
     }
 }

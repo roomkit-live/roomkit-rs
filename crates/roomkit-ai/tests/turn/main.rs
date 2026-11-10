@@ -8,6 +8,7 @@ mod author_images;
 mod bounds;
 mod config;
 mod history;
+mod human_input;
 mod inputs;
 mod intents;
 mod mock;

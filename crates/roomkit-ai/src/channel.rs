@@ -900,6 +900,14 @@ impl<P: AiProvider> AiChannel<P> {
         Ok((Arc::new(turn), skills))
     }
 
+    fn warn_unoffered_human_tools(&self, tools: &Toolbox) {
+        if let Some((human, _)) = &self.human_input {
+            self.turn_configs
+                .human_input_warnings()
+                .check(self.channel_id.as_str(), human, tools);
+        }
+    }
+
     /// The skills a turn `configured` reads (RFC §24.3), and `toolbox` with
     /// their tools: the registry its configuration gave it, under the channel's
     /// record of each room's active skills, else the channel's own. A channel
@@ -1547,6 +1555,7 @@ impl<P: AiProvider> AiChannel<P> {
         let configured = configured.as_ref();
         let mut settings = self.turn_settings(&binding, configured)?;
         let (toolbox, skills) = self.turn_toolbox(owned, configured, &binding)?;
+        self.warn_unoffered_human_tools(&toolbox);
         settings.read_budgets(&binding.metadata)?;
         let budget = self.budget_of(&settings)?;
         let stands_alone = stands_alone(&event);

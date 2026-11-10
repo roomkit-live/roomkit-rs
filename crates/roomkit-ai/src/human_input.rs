@@ -3,6 +3,8 @@
 //! [`human_input_handler`](crate::AiChannelOptions::human_input_handler)
 //! serves itself.
 
+pub(crate) mod warnings;
+
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;

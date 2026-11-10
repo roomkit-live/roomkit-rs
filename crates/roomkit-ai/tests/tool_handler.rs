@@ -236,3 +236,99 @@ async fn a_turn_with_no_message_records_on_its_last_row() {
         ]
     );
 }
+
+#[path = "../../roomkit/tests/support/warnings.rs"]
+mod warnings;
+
+// Python: tests/test_human_input.py::test_warns_once_when_a_human_input_tool_is_never_offered,
+// test_no_warning_when_the_handler_declares_the_tool
+#[tokio::test]
+async fn human_tools_missing_from_the_model_are_reported_once() {
+    use roomkit_ai::{HumanInputToolHandler, HumanInputToolHandlerOptions};
+
+    let (warnings, _capture) = warnings::Warnings::capture();
+    for declared in [false, true] {
+        let human = HumanInputToolHandler::new(
+            ["AskUser"],
+            HumanInputToolHandlerOptions {
+                tool_definitions: if declared {
+                    vec![AiTool::new("AskUser", "Ask").unwrap()]
+                } else {
+                    Vec::new()
+                },
+                ..HumanInputToolHandlerOptions::default()
+            },
+        )
+        .unwrap();
+        let model = ScriptedProvider::new([
+            ScriptedRound::answering("ok"),
+            ScriptedRound::answering("ok"),
+        ]);
+        let agent = AiChannel::new(
+            ChannelId::new("ai1").unwrap(),
+            model,
+            AiChannelOptions {
+                human_input_handler: Some(human),
+                ..AiChannelOptions::default()
+            },
+        )
+        .unwrap();
+        turn(&agent).await;
+        turn(&agent.clone()).await;
+        let lines = warnings.containing("never offers them");
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("AskUser"));
+        assert!(lines[0].contains("ai1"));
+    }
+}
+
+// Python: tests/test_human_input.py::test_tool_call_context_read_from_contextvar
+#[tokio::test]
+async fn a_plain_human_handler_reads_the_current_tool_call() {
+    use roomkit_ai::{AskOptions, HumanInputToolHandler, HumanInputToolHandlerOptions};
+
+    let human =
+        HumanInputToolHandler::new(["AskUser"], HumanInputToolHandlerOptions::default()).unwrap();
+    let served = human.clone();
+    let handler = ToolHandler::new(move |name, arguments| {
+        let human = served.clone();
+        async move {
+            human
+                .ask(&name, arguments, AskOptions::default())
+                .await
+                .map(ToolResult::Text)
+        }
+    });
+    let model = ScriptedProvider::new([
+        ScriptedRound::calling("", [("tc42", "AskUser", "{}")]),
+        ScriptedRound::answering("Done."),
+    ]);
+    let agent = AiChannel::new(
+        ChannelId::new("ai1").unwrap(),
+        model.clone(),
+        AiChannelOptions {
+            tools: vec![AiTool::new("AskUser", "Ask").unwrap().into()],
+            tool_handler: Some(handler),
+            ..AiChannelOptions::default()
+        },
+    )
+    .unwrap();
+    let answer = async {
+        loop {
+            if let Some(pending) = human.handler().pending().values().next() {
+                assert_eq!(pending.room_id, "r1");
+                assert_eq!(pending.tool_call_id, "tc42");
+                assert_eq!(pending.channel_id, "ai1");
+                assert!(human.handler().resolve(&pending.pending_id, "yes"));
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        tokio::join!(turn(&agent), answer)
+    })
+    .await
+    .unwrap();
+    assert_eq!(results(&model), ["yes"]);
+}

@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Human-input close waits for its notifications to finish; AI channels warn once about human tools never offered to the model, as Python does (RFC §9.3).
+
 - `work_in_background` keeps the turn's agent name and task boundary when stored metadata changes; `start_task` with an empty `hand_back` uses the agent's configured mode, as Python does (RFC §21.4, §23.4; RMK-1568).
 
 - Task results and `task_status` name discussion agents by their handles; tool answers use the turn's room snapshot and leave status entries keyed by channel id (RFC §23.4; RMK-1567).

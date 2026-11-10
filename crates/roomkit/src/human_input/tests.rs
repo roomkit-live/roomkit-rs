@@ -1,8 +1,10 @@
 //! The handler's own rules, outside any turn (RFC §9.3).
 
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use roomkit_core::model::Metadata;
+use roomkit_core::model::{ChannelType, Metadata};
+use serde_json::json;
 
 use super::{
     CloseOptions, CreateOptions, HumanInputHandler, HumanInputHandlerOptions, PendingInputStatus,
@@ -44,7 +46,11 @@ async fn asked(handler: &HumanInputHandler, channel_id: &str) -> String {
 async fn create_returns_pending() {
     let handler = HumanInputHandler::default();
     let pending = handler
-        .create("AskUser", Metadata::new(), of_channel("ai"))
+        .create(
+            "AskUser",
+            json!({"amount": 100}).as_object().unwrap().clone(),
+            of_channel("ai"),
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -55,6 +61,11 @@ async fn create_returns_pending() {
         ),
         (PendingInputStatus::Pending, "AskUser", "r1")
     );
+    assert_eq!(
+        pending.arguments,
+        json!({"amount": 100}).as_object().unwrap().clone()
+    );
+    assert!(!pending.detached);
     assert!(handler.pending().contains_key(&pending.pending_id));
 }
 
@@ -140,10 +151,12 @@ async fn an_unknown_or_settled_request_is_not_settled_again() {
 async fn concurrent_requests_settle_apart() {
     let handler = HumanInputHandler::default();
     let (first, second) = (asked(&handler, "ai").await, asked(&handler, "ai").await);
+    assert_eq!(handler.pending().len(), 2);
     assert!(handler.resolve(&second, "two"));
     assert!(handler.resolve(&first, "one"));
     assert_eq!(handler.wait(&first, within(100)).await.unwrap(), "one");
     assert_eq!(handler.wait(&second, within(100)).await.unwrap(), "two");
+    assert!(handler.pending().is_empty());
 }
 
 // Python: tests/test_human_input.py::test_close_cancels_only_one_channels_notifications_and_requests,
@@ -175,6 +188,70 @@ async fn a_channel_s_close_settles_its_requests_alone_and_takes_no_more() {
             .await
             .is_ok()
     );
+}
+
+// Python: tests/test_human_input.py::test_close_cancels_only_one_channels_notifications_and_requests
+#[tokio::test]
+async fn close_finishes_only_its_channels_notifications() {
+    struct Cancelled(Arc<Mutex<Vec<String>>>, String);
+    impl Drop for Cancelled {
+        fn drop(&mut self) {
+            self.0.lock().unwrap().push(self.1.clone());
+        }
+    }
+    let handler = HumanInputHandler::default();
+    let cancelled = Arc::new(Mutex::new(Vec::new()));
+    let (started, mut starts) = tokio::sync::mpsc::unbounded_channel();
+    for channel in ["a", "b"] {
+        handler.register(channel).unwrap();
+        let (cancelled, started) = (Arc::clone(&cancelled), started.clone());
+        handler.set_on_input_required(
+            channel,
+            Arc::new(move |event| {
+                let guard = Cancelled(Arc::clone(&cancelled), event.channel_id.clone());
+                let started = started.clone();
+                Box::pin(async move {
+                    let _guard = guard;
+                    started.send(event.channel_id).unwrap();
+                    std::future::pending().await
+                })
+            }),
+        );
+    }
+    let (mine, theirs) = (asked(&handler, "a").await, asked(&handler, "b").await);
+    starts.recv().await.unwrap();
+    starts.recv().await.unwrap();
+    let options = CloseOptions {
+        channel_id: Some("a".to_owned()),
+        registration: None,
+    };
+    let mut first_close = Box::pin(handler.close(options.clone()));
+    let mut second_close = Box::pin(handler.close(options));
+    std::future::poll_fn(|cx| {
+        use std::future::Future;
+        // Neither close returns until the callback has dropped. Abandoning
+        // the first close must not lose the task the second is joining.
+        assert!(first_close.as_mut().poll(cx).is_pending());
+        assert!(second_close.as_mut().poll(cx).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
+    drop(first_close);
+    second_close.await;
+    assert_eq!(cancelled.lock().unwrap().clone(), ["a"]);
+    assert_eq!(
+        handler
+            .wait(&mine, within(100))
+            .await
+            .unwrap_err()
+            .to_string(),
+        "Human input handler closed"
+    );
+    assert!(handler.pending().contains_key(&theirs));
+    assert!(handler.resolve(&theirs, "ok"));
+    assert_eq!(handler.wait(&theirs, within(100)).await.unwrap(), "ok");
+    handler.close(CloseOptions::default()).await;
+    assert_eq!(cancelled.lock().unwrap().clone(), ["a", "b"]);
 }
 
 // Python: tests/test_human_input.py::test_registering_reopens_a_closed_channel_scope
@@ -237,7 +314,7 @@ async fn pending_is_a_snapshot() {
 }
 
 // Python: tests/test_human_input.py::test_wait_replays_a_consumed_answer,
-// test_wait_reads_an_answer_the_host_dropped, test_wait_replays_a_rejection
+// test_wait_replays_a_rejection
 #[tokio::test]
 async fn a_settled_outcome_is_replayed() {
     let handler = HumanInputHandler::default();
@@ -258,19 +335,20 @@ async fn a_settled_outcome_is_replayed() {
 // Python: tests/test_human_input.py::test_retention_is_bounded, test_retention_can_be_switched_off
 #[tokio::test]
 async fn the_retention_is_bounded_and_may_be_none() {
-    let handler = HumanInputHandler::new(HumanInputHandlerOptions { retention: 2 });
-    let mut ids = Vec::new();
-    for answer in ["a", "b", "c"] {
-        let id = asked(&handler, "ai").await;
-        assert!(handler.resolve(&id, answer));
-        assert_eq!(handler.wait(&id, within(100)).await.unwrap(), answer);
-        ids.push(id);
-    }
+    let handler = HumanInputHandler::new(HumanInputHandlerOptions { retention: 1 });
+    let first = asked(&handler, "ai").await;
+    let second = asked(&handler, "ai").await;
+    assert!(handler.resolve(&first, "one"));
+    assert!(handler.resolve(&second, "two"));
+    // The first outcome is already out of retention, but remains active:
+    // the caller's first wait must still read the answer it was given.
+    assert_eq!(handler.wait(&first, within(100)).await.unwrap(), "one");
+    assert_eq!(handler.wait(&second, within(100)).await.unwrap(), "two");
+    assert_eq!(handler.wait(&second, within(100)).await.unwrap(), "two");
     assert!(matches!(
-        handler.wait(&ids[0], within(10)).await,
+        handler.wait(&first, within(10)).await,
         Err(RoomKitError::Value(_))
     ));
-    assert_eq!(handler.wait(&ids[2], within(10)).await.unwrap(), "c");
 
     let forgetful = HumanInputHandler::new(HumanInputHandlerOptions { retention: 0 });
     let id = asked(&forgetful, "ai").await;
@@ -294,6 +372,7 @@ async fn a_detached_request_is_released_by_its_creator_its_answer_kept() {
     assert!(pending.detached);
     assert!(handler.resolve(&pending.pending_id, "yes"));
     assert!(handler.release(&pending.pending_id));
+    assert!(!handler.release(&pending.pending_id));
     assert!(handler.pending().is_empty());
     assert_eq!(
         handler.wait(&pending.pending_id, within(10)).await.unwrap(),
@@ -329,6 +408,15 @@ async fn a_release_gives_an_unanswered_request_up_once() {
 #[tokio::test]
 async fn a_request_names_its_actor_when_one_is_given() {
     let handler = HumanInputHandler::default();
+    handler.register("ai").unwrap();
+    let (announced, mut events) = tokio::sync::mpsc::unbounded_channel();
+    handler.set_on_input_required(
+        "ai",
+        Arc::new(move |event| {
+            announced.send(event).unwrap();
+            Box::pin(async { true })
+        }),
+    );
     let named = CreateOptions {
         actor_id: Some("alice".to_owned()),
         ..of_channel("ai")
@@ -338,8 +426,16 @@ async fn a_request_names_its_actor_when_one_is_given() {
         .await
         .unwrap();
     assert_eq!(pending.actor_id.as_deref(), Some("alice"));
+    let event = events.recv().await.unwrap();
+    assert_eq!(event.actor_id.as_deref(), Some("alice"));
+    assert_eq!(event.pending_id, pending.pending_id);
+    assert_eq!(event.tool_name, "AskUser");
+    assert_eq!(event.room_id, "r1");
+    assert_eq!(event.tool_call_id, "tc1");
+    assert_eq!(event.channel_id, "ai");
+    assert_eq!(event.channel_type, ChannelType::AI);
     let nobody = handler
-        .create("AskUser", Metadata::new(), of_channel("ai"))
+        .create_detached("AskUser", Metadata::new(), of_channel("ai").into())
         .await
         .unwrap();
     assert_eq!(nobody.actor_id, None);

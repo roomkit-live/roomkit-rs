@@ -102,6 +102,7 @@ pub(crate) type ConfigProvider =
 pub(crate) struct TurnConfigs {
     provider: Option<ConfigProvider>,
     collisions: Arc<Collisions>,
+    human_input_warnings: Arc<crate::human_input::warnings::Warnings>,
 }
 
 impl TurnConfigs {
@@ -109,6 +110,7 @@ impl TurnConfigs {
         Self {
             provider,
             collisions: Arc::default(),
+            human_input_warnings: Arc::default(),
         }
     }
 
@@ -127,6 +129,10 @@ impl TurnConfigs {
             None => Ok(None),
             Some(provider) => provider(binding.clone(), context.clone()).await,
         }
+    }
+
+    pub(crate) fn human_input_warnings(&self) -> &crate::human_input::warnings::Warnings {
+        &self.human_input_warnings
     }
 
     pub(crate) fn collisions(&self) -> &Collisions {
