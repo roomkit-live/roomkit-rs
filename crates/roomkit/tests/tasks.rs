@@ -509,13 +509,42 @@ fn cancelled() -> Vec<(String, String)> {
     vec![("cancelled".to_owned(), "cancelled".to_owned())]
 }
 
+/// The existing kit fixture with observable delegation spans.
+fn traced(options: RoomKitOptions) -> (RoomKitOptions, Arc<MockTelemetryProvider>) {
+    let telemetry = Arc::new(MockTelemetryProvider::default());
+    let options = RoomKitOptions {
+        telemetry: Some(Arc::clone(&telemetry).into()),
+        ..options
+    };
+    (options, telemetry)
+}
+
+/// One delegation ended as expected, with none left open. Check before
+/// closing the kit, so shutdown cannot hide an unfinished delegation.
+fn assert_delegation_ended(telemetry: &MockTelemetryProvider, name: &str, status: &str) {
+    let spans = telemetry.get_spans(SpanKind::Delegation);
+    let ended: Vec<_> = spans
+        .iter()
+        .map(|span| (span.name.as_str(), span.status.as_str()))
+        .collect();
+    assert_eq!(ended, vec![(name, status)]);
+    assert!(
+        !telemetry
+            .get_active_spans()
+            .iter()
+            .any(|span| span.kind == SpanKind::Delegation),
+        "a delegation span is still active"
+    );
+}
+
 // Python: tests/tasks/test_cancelled_delegation.py::test_an_inline_delegation_its_caller_times_out_ends_cancelled
 // On 0931119 the task never ended: its turn and its end ran in its caller's future.
 // Python: tests/tasks/test_integration.py::TestDelegateIntegration::test_cancelled_inline_delegation_fires_completion_hook
 #[tokio::test]
 async fn an_inline_delegation_its_caller_times_out_ends_cancelled() {
     let worker = Agent::new("worker", true);
-    let (kit, completed, heard) = kit_with(worker.clone(), RoomKitOptions::default()).await;
+    let (options, telemetry) = traced(RoomKitOptions::default());
+    let (kit, completed, heard) = kit_with(worker.clone(), options).await;
     let ended: Arc<Mutex<Vec<TaskStatus>>> = Arc::default();
     let options = DelegateOptions {
         wait: true,
@@ -536,7 +565,42 @@ async fn an_inline_delegation_its_caller_times_out_ends_cancelled() {
         ),
         (cancelled(), vec![TaskStatus::Cancelled])
     );
+    assert_delegation_ended(&telemetry, "delegation.inline", "cancelled");
     kit.close().await.unwrap();
+    assert_delegation_ended(&telemetry, "delegation.inline", "cancelled");
+}
+
+// Python: tests/tasks/test_cancelled_delegation.py::test_a_background_delegation_the_runner_cancels_ends_cancelled
+#[tokio::test]
+async fn a_background_delegation_the_runner_cancels_ends_cancelled() {
+    let worker = Agent::new("worker", true);
+    let (options, telemetry) = traced(RoomKitOptions::default());
+    let (kit, completed, heard) = kit_with(worker.clone(), options).await;
+    let ended: Arc<Mutex<Vec<TaskStatus>>> = Arc::default();
+    let options = DelegateOptions {
+        on_complete: Some(recording(&ended)),
+        ..DelegateOptions::default()
+    };
+    let room = RoomId::new("p").unwrap();
+    let task = kit
+        .delegate(&room, &channel("worker"), "go", options)
+        .await
+        .unwrap();
+    tokio::time::timeout(BOUND, worker.started.notified())
+        .await
+        .unwrap();
+
+    assert!(kit.task_runner().cancel(&task.id).await);
+    settled(&heard).await;
+    let result = task.result().unwrap();
+    assert_eq!(result.status, TaskStatus::Cancelled);
+    assert_eq!(result.output, None);
+    assert_eq!(result.error.as_deref(), Some("cancelled"));
+    assert_eq!(completed.lock().unwrap().clone(), cancelled());
+    assert_eq!(*ended.lock().unwrap(), vec![TaskStatus::Cancelled]);
+    assert_delegation_ended(&telemetry, "delegation.background", "cancelled");
+    kit.close().await.unwrap();
+    assert_delegation_ended(&telemetry, "delegation.background", "cancelled");
 }
 
 /// What a task runner's calls return.
@@ -576,6 +640,7 @@ async fn a_delegation_cut_before_its_task_ran_ends_it() {
             task_runner: (!wait).then(|| -> Arc<dyn TaskRunner> { Arc::new(NeverTakes) }),
             ..RoomKitOptions::default()
         };
+        let (options, telemetry) = traced(options);
         let (kit, completed, heard) = kit_with(worker, options).await;
         let announced = Arc::new(Notify::new());
         let told = Arc::clone(&announced);
@@ -607,16 +672,23 @@ async fn a_delegation_cut_before_its_task_ran_ends_it() {
             (wait, completed.lock().unwrap().clone()),
             (wait, cancelled())
         );
+        let name = if wait {
+            "delegation.inline"
+        } else {
+            "delegation.background"
+        };
+        assert_delegation_ended(&telemetry, name, "cancelled");
         kit.close().await.unwrap();
+        assert_delegation_ended(&telemetry, name, "cancelled");
     }
 }
 
 // Python: tests/tasks/test_cancelled_delegation.py::test_a_task_cancelled_before_it_ran_a_line_still_ends
-// Its span is not asserted: roomkit-rs has no telemetry.
 #[tokio::test]
 async fn a_task_cancelled_before_it_ran_a_line_still_ends() {
     let worker = Agent::new("worker", true);
-    let (kit, completed, heard) = kit_with(worker.clone(), RoomKitOptions::default()).await;
+    let (options, telemetry) = traced(RoomKitOptions::default());
+    let (kit, completed, heard) = kit_with(worker.clone(), options).await;
     let room = RoomId::new("p").unwrap();
     let task = kit
         .delegate(&room, &channel("worker"), "go", DelegateOptions::default())
@@ -638,7 +710,9 @@ async fn a_task_cancelled_before_it_ran_a_line_still_ends() {
         ),
         (TaskStatus::Cancelled, 0, cancelled())
     );
+    assert_delegation_ended(&telemetry, "delegation.background", "cancelled");
     kit.close().await.unwrap();
+    assert_delegation_ended(&telemetry, "delegation.background", "cancelled");
 }
 
 // Python: tests/tasks/test_task_turn_record.py::test_a_task_cut_before_its_turn_began_carries_none
@@ -857,7 +931,8 @@ async fn an_inline_task_the_close_cuts_mid_turn_carries_its_turn_cancelled() {
 #[tokio::test]
 async fn a_cancel_cut_while_the_task_ends_still_ends_it() {
     let worker = Agent::new("worker", true);
-    let (kit, completed, heard) = kit_with(worker.clone(), RoomKitOptions::default()).await;
+    let (options, telemetry) = traced(RoomKitOptions::default());
+    let (kit, completed, heard) = kit_with(worker.clone(), options).await;
     let ending = Ending::default();
     let options = DelegateOptions {
         on_complete: Some(ending.on_complete()),
@@ -891,17 +966,19 @@ async fn a_cancel_cut_while_the_task_ends_still_ends_it() {
         (ended.status, completed.lock().unwrap().clone()),
         (TaskStatus::Cancelled, cancelled())
     );
+    assert_delegation_ended(&telemetry, "delegation.background", "cancelled");
     kit.close().await.unwrap();
+    assert_delegation_ended(&telemetry, "delegation.background", "cancelled");
 }
 
 // Python: tests/tasks/test_cancelled_delegation.py::test_the_runner_ends_a_task_whose_handle_was_cancelled
 // A handle's own cancel only lets its waiters go: the runner still ends
-// the task when it cancels it. Its span is not asserted: roomkit-rs has no
-// telemetry.
+// the task when it cancels it.
 #[tokio::test]
 async fn the_runner_ends_a_task_whose_handle_was_cancelled() {
     let worker = Agent::new("worker", true);
-    let (kit, completed, heard) = kit_with(worker.clone(), RoomKitOptions::default()).await;
+    let (options, telemetry) = traced(RoomKitOptions::default());
+    let (kit, completed, heard) = kit_with(worker.clone(), options).await;
     let room = RoomId::new("p").unwrap();
     let task = kit
         .delegate(&room, &channel("worker"), "go", DelegateOptions::default())
@@ -919,7 +996,9 @@ async fn the_runner_ends_a_task_whose_handle_was_cancelled() {
         (cancelled_it, completed.lock().unwrap().clone()),
         (true, cancelled())
     );
+    assert_delegation_ended(&telemetry, "delegation.background", "cancelled");
     kit.close().await.unwrap();
+    assert_delegation_ended(&telemetry, "delegation.background", "cancelled");
 }
 
 // Python: tests/tasks/test_cancelled_delegation.py::test_a_task_that_ran_ends_as_it_stands_whatever_cancels_it[cancel], [close]
@@ -933,7 +1012,8 @@ async fn the_runner_ends_a_task_whose_handle_was_cancelled() {
 async fn a_task_that_ran_ends_as_it_stands_whatever_cancels_it() {
     for door in ["cancel", "close"] {
         let worker = EchoAgent::new(channel("worker"), "Done.", EchoAgentOptions::default());
-        let (kit, completed, _) = kit_with(worker, RoomKitOptions::default()).await;
+        let (options, telemetry) = traced(RoomKitOptions::default());
+        let (kit, completed, _) = kit_with(worker, options).await;
         let ending = Ending::default();
         let options = DelegateOptions {
             on_complete: Some(ending.on_complete()),
@@ -948,11 +1028,14 @@ async fn a_task_that_ran_ends_as_it_stands_whatever_cancels_it() {
             .await
             .unwrap();
 
-        let (runner, task_id, closing) = (kit.task_runner(), task.id.clone(), kit.clone());
+        let (runner, task_id) = (kit.task_runner(), task.id.clone());
         let mut asked = tokio::spawn(async move {
             match door {
                 "cancel" => Some(runner.cancel(&task_id).await),
-                _ => closing.close().await.ok().map(|()| false),
+                _ => {
+                    runner.close().await;
+                    Some(false)
+                }
             }
         });
         let waited = tokio::time::timeout(Duration::from_millis(50), &mut asked).await;
@@ -988,7 +1071,9 @@ async fn a_task_that_ran_ends_as_it_stands_whatever_cancels_it() {
                 ]
             )
         );
+        assert_delegation_ended(&telemetry, "delegation.background", "ok");
         kit.close().await.unwrap();
+        assert_delegation_ended(&telemetry, "delegation.background", "ok");
     }
 }
 
@@ -997,7 +1082,8 @@ async fn a_task_that_ran_ends_as_it_stands_whatever_cancels_it() {
 #[tokio::test]
 async fn an_inline_caller_timing_out_while_the_task_ends_leaves_its_end_whole() {
     let worker = EchoAgent::new(channel("worker"), "Done.", EchoAgentOptions::default());
-    let (kit, completed, heard) = kit_with(worker, RoomKitOptions::default()).await;
+    let (options, telemetry) = traced(RoomKitOptions::default());
+    let (kit, completed, heard) = kit_with(worker, options).await;
     let ending = Ending::default();
     let options = DelegateOptions {
         wait: true,
@@ -1030,7 +1116,9 @@ async fn an_inline_caller_timing_out_while_the_task_ends_leaves_its_end_whole() 
             vec![("completed".to_owned(), String::new())]
         )
     );
+    assert_delegation_ended(&telemetry, "delegation.inline", "ok");
     kit.close().await.unwrap();
+    assert_delegation_ended(&telemetry, "delegation.inline", "ok");
 }
 
 // Python: tests/tasks/test_cancelled_delegation.py::test_an_inline_task_whose_turn_ended_before_its_caller_was_cut_ends_completed
@@ -1039,7 +1127,8 @@ async fn an_inline_caller_timing_out_while_the_task_ends_leaves_its_end_whole() 
 #[tokio::test]
 async fn an_inline_task_whose_turn_ended_before_its_caller_was_cut_ends_completed() {
     let worker = Agent::new("w1", false).saying("The findings.");
-    let (kit, _, _) = kit_with(worker.clone(), RoomKitOptions::default()).await;
+    let (options, telemetry) = traced(RoomKitOptions::default());
+    let (kit, _, _) = kit_with(worker.clone(), options).await;
     let ends: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
     let heard = Arc::clone(&ends);
     let observer = HookOptions {
@@ -1082,7 +1171,9 @@ async fn an_inline_task_whose_turn_ended_before_its_caller_was_cut_ends_complete
         ends.lock().unwrap().clone(),
         vec![("completed".to_owned(), "The findings.".to_owned())]
     );
+    assert_delegation_ended(&telemetry, "delegation.inline", "ok");
     kit.close().await.unwrap();
+    assert_delegation_ended(&telemetry, "delegation.inline", "ok");
 }
 
 // RMK-1186, the light review: a cancel waiting for a task ending as it

@@ -24,6 +24,9 @@ use super::{Kind, Marks, TaskCut, Tasks, Unit};
 use crate::channel::BoxFuture;
 use crate::stream::{CALLER_CANCELLED, KIT_CLOSED};
 
+#[cfg(test)]
+mod tests;
+
 /// The task runs the kit holds, by task id.
 #[derive(Clone, Default)]
 pub(crate) struct HeldTasks {

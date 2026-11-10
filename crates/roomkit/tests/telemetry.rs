@@ -530,6 +530,13 @@ async fn a_delegation_span_ends_with_its_task_status() {
             delegations(&mock),
             vec![("delegation.inline".to_owned(), status.to_owned())]
         );
+        assert!(
+            !mock
+                .get_active_spans()
+                .iter()
+                .any(|span| span.kind == SpanKind::Delegation),
+            "a delegation span is still active"
+        );
         let [span] = mock.get_spans(SpanKind::Delegation).try_into().unwrap();
         assert_eq!(span.room_id.as_deref(), Some("r1"));
         assert_eq!(span.channel_id.as_deref(), Some("worker"));

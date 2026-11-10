@@ -12,7 +12,7 @@
 mod preflight;
 
 use std::collections::{BTreeSet, VecDeque};
-use std::future::{Future, pending, ready};
+use std::future::{Future, pending, poll_fn, ready};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -983,16 +983,51 @@ impl roomkit::Channel for Looker {
 }
 
 // Python: tests/tasks/test_child_room_trace.py::TestAChildTraceCutShort::test_a_delegation_cancelled_mid_write_closes_its_response
-// RFC §12.2 step 13s: nothing else reads a delegated response, so a task
-// cancelled while its trace stores a row closes it, the rows it began kept
-// and its open call ended.
+// Python: tests/tasks/test_cancelled_delegation.py::test_a_cancel_cut_while_the_worker_unwinds_still_ends_the_task
+// A trace write is the Rust task's asynchronous cleanup: cancellation
+// waits for it, and dropping the cancel's caller must not cut that cleanup.
 #[tokio::test]
 async fn a_task_cancelled_while_its_trace_stores_a_row_closes_its_response() {
+    for cut_caller in [false, true] {
+        cancellation_during_trace_write(cut_caller).await;
+    }
+}
+
+async fn trace_kit(
+    telemetry: &Arc<MockTelemetryProvider>,
+    completed: &Arc<Mutex<Vec<String>>>,
+) -> RoomKit<RecordsEventWrites> {
     let store = RecordsEventWrites {
         held: Mutex::new(Some("Looking. ")),
         ..RecordsEventWrites::default()
     };
-    let kit = kit_with(store).await;
+    let mut options = RoomKitOptions::with_store(store);
+    options.telemetry = Some(Arc::clone(telemetry).into());
+    let kit = kit_configured(options).await;
+    let heard = Arc::clone(completed);
+    kit.hook(
+        HookTrigger::OnTaskCompleted,
+        move |event: RoomEvent, _| {
+            let status = event.metadata.get("task_status").and_then(|s| s.as_str());
+            heard
+                .lock()
+                .unwrap()
+                .push(status.unwrap_or_default().to_owned());
+            ready(())
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            ..HookOptions::default()
+        },
+    )
+    .unwrap();
+    kit
+}
+
+async fn cancellation_during_trace_write(cut_caller: bool) {
+    let telemetry = Arc::new(MockTelemetryProvider::default());
+    let completed = Arc::new(Mutex::new(Vec::new()));
+    let kit = trace_kit(&telemetry, &completed).await;
     let looker = Looker::default();
     kit.register_channel(looker.clone()).unwrap();
     let task = kit
@@ -1008,20 +1043,74 @@ async fn a_task_cancelled_while_its_trace_stores_a_row_closes_its_response() {
         .await
         .unwrap();
 
-    let cancelling = {
-        let (kit, task_id) = (kit.clone(), task.id.clone());
-        tokio::spawn(async move {
-            kit.cancel_task(&task_id, CancelTaskOptions::default())
-                .await
+    cancel_during_trace_write(&kit, &task, cut_caller).await;
+    let result = task
+        .wait(WaitOptions {
+            timeout: Some(BOUND),
         })
-    };
-    tokio::task::yield_now().await;
-    kit.store().go.notify_one();
-    let cancelled = tokio::time::timeout(BOUND, cancelling)
         .await
-        .unwrap()
         .unwrap();
+    tokio::time::timeout(BOUND, idle(&kit)).await.unwrap();
 
+    assert_eq!(result.status, TaskStatus::Cancelled);
+    assert_eq!(result.output, None);
+    assert_eq!(result.error.as_deref(), Some("cancelled"));
+    assert_eq!(
+        completed.lock().unwrap().clone(),
+        vec!["cancelled".to_owned()]
+    );
+    assert_cancelled_trace(&kit, &task, &looker, &telemetry).await;
+    kit.close().await.unwrap();
+    assert_eq!(
+        completed.lock().unwrap().clone(),
+        vec!["cancelled".to_owned()]
+    );
+    assert_eq!(telemetry.get_spans(SpanKind::Delegation).len(), 1);
+}
+
+async fn cancel_during_trace_write(
+    kit: &RoomKit<RecordsEventWrites>,
+    task: &DelegatedTask,
+    cut_caller: bool,
+) {
+    if cut_caller {
+        let runner = kit.task_runner();
+        let mut cancelling = runner.cancel(&task.id);
+        // Poll the real runner cancel through its first wait: it has taken
+        // the end and cut the work, which is still draining its trace write.
+        poll_fn(|cx| {
+            assert!(cancelling.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        assert!(task.result().is_none());
+        drop(cancelling);
+        kit.store().go.notify_one();
+    } else {
+        let cancelling = {
+            let (kit, task_id) = (kit.clone(), task.id.clone());
+            tokio::spawn(async move {
+                kit.cancel_task(&task_id, CancelTaskOptions::default())
+                    .await
+            })
+        };
+        tokio::task::yield_now().await;
+        kit.store().go.notify_one();
+        assert!(
+            tokio::time::timeout(BOUND, cancelling)
+                .await
+                .unwrap()
+                .unwrap()
+        );
+    }
+}
+
+async fn assert_cancelled_trace(
+    kit: &RoomKit<RecordsEventWrites>,
+    task: &DelegatedTask,
+    looker: &Looker,
+    telemetry: &MockTelemetryProvider,
+) {
     let rows: Vec<EventType> = kit
         .store()
         .list_events(&task.child_room_id, store::ListEventsOptions::default())
@@ -1032,9 +1121,8 @@ async fn a_task_cancelled_while_its_trace_stores_a_row_closes_its_response() {
         .map(|event| event.r#type)
         .collect();
     assert_eq!(
-        (cancelled, looker.closed.load(Ordering::SeqCst), rows),
+        (looker.closed.load(Ordering::SeqCst), rows),
         (
-            true,
             true,
             vec![
                 EventType::Message,
@@ -1043,7 +1131,19 @@ async fn a_task_cancelled_while_its_trace_stores_a_row_closes_its_response() {
             ]
         )
     );
-    kit.close().await.unwrap();
+    let spans = telemetry.get_spans(SpanKind::Delegation);
+    assert_eq!(spans.len(), 1);
+    let span = spans.first().unwrap();
+    assert_eq!(
+        (span.name.as_str(), span.status.as_str()),
+        ("delegation.background", "cancelled")
+    );
+    assert!(
+        !telemetry
+            .get_active_spans()
+            .iter()
+            .any(|span| span.kind == SpanKind::Delegation)
+    );
 }
 
 /// A delivery strategy that records whether each delivery it is given is an

@@ -515,6 +515,8 @@ impl<S: ConversationStore> Drop for CutPost<'_, S> {
 
 #[cfg(test)]
 mod tests {
+    mod cancellation;
+
     // Python: orchestration/_worker_run.py `f"The task timed out after {timeout:g}s."`,
     // as tests/orchestration/test_worker_delegation_bound.py reads it.
     #[test]
