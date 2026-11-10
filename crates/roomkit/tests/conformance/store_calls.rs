@@ -16,7 +16,7 @@ use roomkit::model::{
 };
 use roomkit::store::{
     CommitEventOptions, DeleteEventOptions, FindLatestRoomOptions, FindRoomIdByChannelOptions,
-    GetTimelineOptions, GetVerificationOptions, ListTasksOptions,
+    GetTimelineOptions, GetVerificationOptions, ListTasksOptions, PatchRoomMetadataOptions,
 };
 use roomkit::{
     ConversationStore, EventFilter, ListReadMarkersOptions, MarkAllReadOptions, MarkReadOptions,
@@ -60,6 +60,7 @@ pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
         "store.record_delivery_results" => &["room_id", "event_id", "results"],
         "store.write_change_target" => &["room_id", "target"],
         "store.update_room_if" => &["room", "status", "paused_at", "last_activity_at"],
+        "store.patch_room_metadata" => &["room_id", "patch", "unset"],
         "store.add_task" | "store.update_task" => &["task"],
         "store.get_task" => &["task_id"],
         "store.list_tasks" => &["room_id", "status"],
@@ -410,6 +411,7 @@ async fn writes_and_tasks(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Ca
             stored(run, name, outcome)
         }
         "store.get_room" => stored(run, name, store.get_room(&room()?).await),
+        "store.patch_room_metadata" => patch_room_metadata(run, spec).await?,
         "store.update_room_if" => {
             let room: Room = stamped(&spec["room"], &["created_at", "updated_at"], "room")?;
             let status: RoomStatus = field(spec, "status")?;
@@ -434,6 +436,21 @@ async fn writes_and_tasks(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Ca
         }
         _ => verifications(run, name, spec).await?,
     })
+}
+
+/// A metadata-only write: leave every other field of the room as stored.
+async fn patch_room_metadata(run: &Arc<Run>, spec: &Value) -> Result<Called, Unreadable> {
+    let reader = run.reader();
+    let room: RoomId = field(spec, "room_id")?;
+    let patch: Metadata = field(spec, "patch")?;
+    let options = PatchRoomMetadataOptions {
+        unset: optional(spec, "unset")?.unwrap_or_default(),
+    };
+    let outcome = reader
+        .store()
+        .patch_room_metadata(&room, patch, options)
+        .await;
+    Ok(stored(run, "store.patch_room_metadata", outcome))
 }
 
 /// The store's verifications and their requests (RFC §11.7, §14.1): a
