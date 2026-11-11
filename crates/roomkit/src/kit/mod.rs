@@ -39,9 +39,11 @@ mod identity;
 mod inject;
 mod inline;
 mod inputs;
+mod local_executor;
 mod locks;
 mod members;
 mod message;
+mod named_hooks;
 mod options;
 mod output;
 mod post;
@@ -95,10 +97,12 @@ pub use self::greeting::SendGreetingOptions;
 pub use self::identity::IdentityHookOptions;
 pub(crate) use self::identity::run_identity_hooks;
 pub use self::inputs::RejectInputOptions;
+pub use self::local_executor::TurnExecutor;
 pub use self::members::{
     AddMemberOptions, EnsureParticipantOptions, IsMemberOptions, RemoveMemberOptions,
     RenameMemberOptions, ResolveParticipantOptions,
 };
+pub use self::named_hooks::{DisableRoomHookOptions, EnableRoomHookOptions};
 pub use self::options::{
     ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions, CheckRoomTimersOptions,
     CloseRoomOptions, CommitEventOptions, CreateRoomOptions, DeleteEventOptions,
@@ -718,7 +722,7 @@ impl<S> Inner<S> {
     ) -> Vec<(HookSpec, Arc<dyn HookHandler<ToolCallEvent>>)> {
         let config = Arc::clone(&read(&self.config));
         let handlers = read(&self.hooks);
-        let registry = &config.hooks;
+        let registry = named_hooks::registry_for_turn(&config.hooks, room_id);
         let subject = HookSubject::of_channel(channel_id, channel_type).in_room(room_id);
         registry
             .chain(trigger, subject)

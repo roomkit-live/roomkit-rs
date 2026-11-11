@@ -14,6 +14,7 @@ mod cuts;
 mod delegation;
 mod depth;
 mod host;
+mod named_hooks;
 mod result_tool;
 mod steering;
 mod streams;

@@ -455,9 +455,10 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
         "send_greeting" => &["room_id", "channel_id", "agent_id", "greeting"],
         "register_channel" => &["channel"],
         "unregister_channel" => &["channel_id"],
-        "register_hook" => &["hook"],
+        "register_hook" | "kit_executor.hook" | "kit_executor.room_hook" => &["hook"],
+        "kit_executor.remove_room_hook" => &["name"],
+        "enable_room_hook" | "disable_room_hook" | "remove_room_hook" => &["room_id", "name"],
         "add_room_hook" => &["room_id", "hook"],
-        "remove_room_hook" => &["room_id", "name"],
         "process_delivery_status" => &["status"],
         "process_webhook" => &["meta", "channel_id"],
         "deliver" => &[
@@ -989,6 +990,18 @@ fn call(call: &Value, extra: &[&str], path: &str, found: &mut Vec<String>) {
         "create_room" => members(&call["room"], NEW_ROOM, &format!("{path}.room"), found),
         "register_channel" => channel(&call["channel"], &format!("{path}.channel"), found),
         "register_hook" => hook(&call["hook"], &format!("{path}.hook"), found),
+        "kit_executor.hook" | "kit_executor.room_hook" => {
+            let known: Vec<&str> = HOOK
+                .iter()
+                .copied()
+                .filter(|field| {
+                    !["router", "needs_lock"].contains(field)
+                        && (name != "kit_executor.room_hook"
+                            || !["channel_ids", "channel_types", "directions"].contains(field))
+                })
+                .collect();
+            hook_of(&call["hook"], &known, &format!("{path}.hook"), found);
+        }
         "add_room_hook" => room_hook(&call["hook"], &format!("{path}.hook"), found),
         "save_conversation_state" => {
             for (index, transition) in items(&call["transitions"]) {

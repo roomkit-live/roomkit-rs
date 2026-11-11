@@ -31,6 +31,7 @@ mod handoff_calls;
 mod harness;
 mod identity;
 mod input_calls;
+mod kit_executor;
 mod locks;
 mod matching;
 mod media;

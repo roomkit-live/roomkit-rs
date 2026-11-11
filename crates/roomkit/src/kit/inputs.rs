@@ -79,7 +79,7 @@ impl<S: ConversationStore> Inner<S> {
         let trigger = HookTrigger::OnUserInputRequired;
         let config = Arc::clone(&read(&self.config));
         let handlers = read(&self.hooks);
-        let registry = &config.hooks;
+        let registry = super::named_hooks::registry_for_turn(&config.hooks, room_id);
         let subject = HookSubject::of_channel(channel_id, channel_type).in_room(room_id);
         registry
             .chain(trigger, subject)

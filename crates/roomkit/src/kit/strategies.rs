@@ -140,7 +140,7 @@ struct Replaced<S> {
 /// What an install added for a room: what an uninstall takes back.
 #[derive(Clone, Debug, Default)]
 struct Added {
-    hooks: Vec<String>,
+    hooks: Vec<(bool, String)>,
     /// The tools set up for the room alone, by channel and name.
     tools: Vec<(ChannelId, String)>,
     runners: Vec<ChannelId>,
@@ -151,7 +151,7 @@ struct Added {
 /// What a room holds that a strategy's install may add to.
 #[derive(Clone)]
 struct Snapshot {
-    hooks: BTreeSet<String>,
+    hooks: BTreeSet<(bool, String)>,
     tools: BTreeMap<ChannelId, BTreeSet<String>>,
     runners: BTreeSet<ChannelId>,
     bindings: BTreeSet<ChannelId>,
@@ -182,7 +182,14 @@ impl Added {
             .filter(|agent| bound.contains(agent))
             .collect();
         Self {
-            hooks: union(&held.hooks, added.hooks),
+            hooks: held
+                .hooks
+                .iter()
+                .cloned()
+                .chain(added.hooks)
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
             tools: tools.into_iter().collect(),
             runners: runners.into_iter().collect(),
             attached: attached.into_iter().collect(),
@@ -633,7 +640,7 @@ impl<S: ConversationStore> RoomKit<S> {
                     error = %error,
                     "what an install added could not be read whole"
                 );
-                let hooks = self.hook_engine().room_hook_names(room_id);
+                let hooks = self.strategy_hook_names(room_id);
                 let runners = self.inner.turn_runners.channels(room_id);
                 let tools = self.inner.owner_tools.room_names(room_id);
                 let added = Added {
@@ -821,6 +828,22 @@ impl<S: ConversationStore> RoomKit<S> {
         Ok(())
     }
 
+    /// Hook registrations and named activations are separate cleanup scopes.
+    fn strategy_hook_names(&self, room_id: &RoomId) -> BTreeSet<(bool, String)> {
+        self.hook_engine()
+            .room_hook_names(room_id)
+            .into_iter()
+            .map(|name| (false, name))
+            .chain(
+                self.config()
+                    .hooks
+                    .enabled_room_hooks(room_id)
+                    .into_iter()
+                    .map(|name| (true, name)),
+            )
+            .collect()
+    }
+
     /// What `room_id` holds now that an install may add to.
     async fn snapshot(&self, room_id: &RoomId) -> Result<Snapshot, RoomKitError> {
         let room = self
@@ -829,11 +852,7 @@ impl<S: ConversationStore> RoomKit<S> {
             .await
             .map_err(|error| self.read_failed(error))?;
         Ok(Snapshot {
-            hooks: self
-                .hook_engine()
-                .room_hook_names(room_id)
-                .into_iter()
-                .collect(),
+            hooks: self.strategy_hook_names(room_id),
             tools: self.inner.owner_tools.room_names(room_id),
             runners: self.inner.turn_runners.channels(room_id),
             bindings: self.bound(room_id).await?,
@@ -961,8 +980,14 @@ impl<S: ConversationStore> RoomKit<S> {
         strategy: &Arc<dyn Orchestration<S>>,
     ) -> Result<Vec<ChannelId>, RoomKitError> {
         let engine = self.hook_engine();
-        for name in &added.hooks {
-            engine.remove_room_hook(room_id, name);
+        for (on_executor, name) in &added.hooks {
+            if *on_executor {
+                let Ok(_) = self.inner.try_change_config(|config| {
+                    Ok::<_, std::convert::Infallible>(config.hooks.disable_room_hook(room_id, name))
+                });
+            } else {
+                engine.remove_room_hook(room_id, name);
+            }
         }
         for (channel_id, name) in &added.tools {
             self.inner

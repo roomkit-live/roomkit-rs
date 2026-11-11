@@ -479,6 +479,11 @@ async fn lifecycle_call(
         "register_hook" => finish(run, name, register_hook(run, &spec["hook"])?, |()| {
             Value::Null
         }),
+        "kit_executor.hook"
+        | "kit_executor.room_hook"
+        | "kit_executor.remove_room_hook"
+        | "enable_room_hook"
+        | "disable_room_hook" => crate::kit_executor::call(run, name, spec).await?,
         "add_room_hook" | "remove_room_hook" => room_hook_call(run, name, spec).await?,
         "mute_output" | "unmute_output" => output_call(run, name, spec).await?,
         "process_delivery_status" | "process_webhook" => status_call(run, name, spec).await?,

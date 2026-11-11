@@ -6,6 +6,8 @@
 //! back. A registration's scope is the kit or one room (RFC §9.1): a room's
 //! hooks fire for that room's payloads alone, beside the kit's.
 
+mod named;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
@@ -617,6 +619,7 @@ pub enum RegistrationError {
 #[derive(Clone, Debug, Default)]
 pub struct HookRegistry {
     hooks: Vec<Registered>,
+    named: named::NamedHooks,
     /// The id the next registration takes: ids are never given out twice,
     /// a removed hook's included.
     next: usize,
@@ -675,7 +678,7 @@ impl HookRegistry {
 
     /// Whether no hook is registered.
     pub fn is_empty(&self) -> bool {
-        self.hooks.is_empty()
+        self.hooks.is_empty() && self.named.definitions.is_empty()
     }
 
     /// Registers `spec`, returning the id the driver keeps its handler
@@ -726,19 +729,27 @@ impl HookRegistry {
         self.add(Some(room_id), spec)
     }
 
-    fn add(
+    fn add(&mut self, room: Option<RoomId>, spec: HookSpec) -> Result<HookId, RegistrationError> {
+        self.add_from(room, spec, false)
+    }
+
+    fn add_from(
         &mut self,
         room: Option<RoomId>,
         mut spec: HookSpec,
+        executor: bool,
     ) -> Result<HookId, RegistrationError> {
         if spec.name.is_empty() {
-            spec.name = self.default_name(room.as_ref());
+            let mut name = "hook".to_owned();
+            let mut rank = 2;
+            while self.registration_name_taken(room.as_ref(), &name, spec.trigger, executor) {
+                name = format!("hook#{rank}");
+                rank += 1;
+            }
+            spec.name = name;
         }
         check_alone(&spec)?;
-        if self
-            .in_scope(room.as_ref())
-            .any(|hook| hook.spec.name == spec.name)
-        {
+        if self.registration_name_taken(room.as_ref(), &spec.name, spec.trigger, executor) {
             return Err(RegistrationError::DuplicateName { name: spec.name });
         }
         let id = HookId(self.next);
@@ -757,6 +768,9 @@ impl HookRegistry {
             return Err(error);
         }
         self.next += 1;
+        if executor {
+            self.executor_registration(id);
+        }
         Ok(id)
     }
 
@@ -777,6 +791,8 @@ impl HookRegistry {
     ) -> Result<(HookId, Option<Removed>), RegistrationError> {
         let position = self.hooks.iter().position(|hook| {
             !spec.name.is_empty()
+                && !self.named.direct.contains(&hook.id)
+                && !hook.spec.trigger.is_turn_trigger()
                 && hook.room.as_ref() == Some(&room_id)
                 && hook.spec.name == spec.name
         });
@@ -801,7 +817,10 @@ impl HookRegistry {
     /// Whether a hook is registered, the kit's or a room's, whose
     /// registration `keep` admits.
     pub fn has_hooks_where(&self, keep: impl Fn(&HookSpec) -> bool) -> bool {
-        self.hooks.iter().any(|hook| keep(&hook.spec))
+        self.hooks
+            .iter()
+            .chain(&self.named.definitions)
+            .any(|hook| keep(&hook.spec))
     }
 
     /// The ids of the kit's hooks and of those the room `room_id` was given.
@@ -898,28 +917,11 @@ impl HookRegistry {
             .filter(move |hook| hook.room.as_ref() == room)
     }
 
-    /// The name a hook registered without one takes, unique in its scope,
-    /// the kit's hooks or one room's: `hook`, then `hook#2`, `hook#3`...,
-    /// skipping a reserved name, as the Python implementation names a hook
-    /// from the base it takes when its function has no name (`_named`, RFC
-    /// §9.1).
-    fn default_name(&self, room: Option<&RoomId>) -> String {
-        let taken = |name: &str| {
-            is_reserved(name) || self.in_scope(room).any(|hook| hook.spec.name == name)
-        };
-        let mut name = "hook".to_owned();
-        let mut rank = 2;
-        while taken(&name) {
-            name = format!("hook#{rank}");
-            rank += 1;
-        }
-        name
-    }
-
     /// The registration of `id`.
     pub fn get(&self, id: HookId) -> Option<&HookSpec> {
         self.hooks
             .iter()
+            .chain(&self.named.definitions)
             .find(|hook| hook.id == id)
             .map(|hook| &hook.spec)
     }
@@ -938,7 +940,7 @@ impl HookRegistry {
             .matching(trigger, subject.into())
             .filter(|hook| hook.spec.execution == HookExecution::Sync)
             .collect();
-        chain.sort_by_key(|hook| chain_rank(hook));
+        chain.sort_by_key(|hook| (hook.spec.priority, hook.spec.needs_lock));
         chain.into_iter().map(|hook| hook.id).collect()
     }
 
@@ -989,7 +991,7 @@ impl HookRegistry {
             .collect();
         // As the Python implementation starts them: by priority, the kit's
         // before a room's at equal priority, then in registration order.
-        observers.sort_by_key(|hook| (hook.spec.priority, hook.room.is_some(), hook.id));
+        observers.sort_by_key(|hook| hook.spec.priority);
         observers.into_iter().map(|hook| hook.id).collect()
     }
 
@@ -1014,9 +1016,25 @@ impl HookRegistry {
         trigger: HookTrigger,
         subject: HookSubject<'registry>,
     ) -> impl Iterator<Item = &'registry Registered> {
-        self.hooks.iter().filter(move |hook| {
+        // Stable sorting keeps the merged order: global, named in request
+        // order, then owner room hooks (Python _hooks_of_room).
+        let global = self.hooks.iter().filter(|hook| hook.room.is_none());
+        let named = subject
+            .room_id
+            .into_iter()
+            .flat_map(|room| self.named.selected.get(room).into_iter().flatten())
+            .flat_map(|name| {
+                self.named
+                    .definitions
+                    .iter()
+                    .filter(move |hook| hook.spec.name == *name)
+            });
+        let room = self
+            .hooks
+            .iter()
+            .filter(move |hook| hook.room.is_some() && hook.reaches(subject.room_id));
+        global.chain(named).chain(room).filter(move |hook| {
             hook.spec.trigger == trigger
-                && hook.reaches(subject.room_id)
                 && (trigger.skips_filter() || hook.spec.filter.admits(subject))
         })
     }

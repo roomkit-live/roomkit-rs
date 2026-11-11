@@ -783,30 +783,39 @@ members = ["report_cascade"]
 scope = "text"
 reason = "not ported: plumbing (lot 2)"
 
-[[missing]]
-python = "roomkit.RoomKit"
-members = ["turn_executor"]
-scope = "text"
-reason = "not in 0.x: the turn executor"
-
-[[missing]]
-python = "roomkit.RoomKit"
-members = ["disable_room_hook", "enable_room_hook"]
-scope = "text"
-reason = "not in 0.x: the room hooks the turn executors define by name (TurnExecutor.room_hook)"
-
-[[missing]]
+[[exception]]
 python = "roomkit.HookEngine"
 members = [
-    "FAIL_CLOSED_TRIGGERS", "__init__", "add_owner_room_hook",
-    "define_room_hook", "defined_room_hooks", "defines_room_hooks",
-    "drain_observers", "fail_closed_hook", "has_hooks_for",
-    "has_off_lock_hooks", "has_sync_hooks", "holds",
-    "remove_hook", "run_async_hooks", "run_observers", "run_sync_hooks",
-    "running_observers", "undefine_room_hook", "use_room_hooks",
+    "FAIL_CLOSED_TRIGGERS", "__init__", "drain_observers", "fail_closed_hook",
+    "has_hooks_for", "has_off_lock_hooks", "has_sync_hooks", "holds",
+    "remove_hook", "run_async_hooks", "run_observers", "run_sync_hooks", "running_observers",
 ]
+approved = "2026-11-11"
+reason = "The engine is built with its kit; its chains and observer tasks run in core/runtime operations, registration identity stays private, and fail-closed triggers are fixed. The six named-hook operations are public (HITL 6f09bcba, option b)."
+
+[[missing]]
+python = "roomkit.TurnExecutor"
+members = ["__init__", "take", "reach_owner", "control", "wire", "use_wiring", "wiring"]
 scope = "text"
-reason = "not in 0.x: the engine is the kit's, built with it; its chains run in the core's operations; the room hooks the turn executors define by name; its fail-closed triggers are fixed (RFC 9.3); the text side until HITL 6f09bcba decides"
+reason = "The public backend, wire messages and construction of remote executors remain deferred; this type is the kit's local executor handle (HITL ac49c79d, option 1)."
+
+[[missing]]
+python = "roomkit.TurnExecutor"
+members = ["close"]
+scope = "text"
+reason = "Executor-only cancellation is still to port; the kit's close shuts its executor down. Named-hook activation does not claim this lifecycle method."
+
+[[exception]]
+rust = "roomkit::TurnExecutor::hook"
+params = ["fn"]
+approved = "2026-11-07"
+reason = "Rust has no decorator: the decorated function is the call's argument, as RoomKit::hook (HITL ac49c79d, option 1's public executor API)."
+
+[[exception]]
+rust = "roomkit::TurnExecutor::room_hook"
+params = ["fn"]
+approved = "2026-11-07"
+reason = "Rust has no decorator: the decorated function is the call's argument, as RoomKit::hook (HITL ac49c79d, option 1's room_hook(name, trigger, handler))."
 
 [[missing]]
 python = "roomkit.RoomKit"

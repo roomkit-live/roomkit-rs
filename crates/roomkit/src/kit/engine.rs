@@ -21,8 +21,7 @@ use crate::store::{ConversationStore, InMemoryStore};
 /// - the kit's, [`RoomKit::hook_engine`], takes and reads every hook;
 /// - its executor's, [`RoomKit::hooks_for`] a trigger a turn fires, takes
 ///   and reads the hooks of those triggers alone, refuses another trigger's
-///   and any room's hook, and lists no room hook, as Python's turn
-///   executor's engine does.
+///   and direct room registration; named definitions are activated per room.
 ///
 /// Its calls read no room and are taken during the kit's close and after
 /// it, as Python's engine takes them. Cloning it is cheap. It holds the
@@ -30,9 +29,9 @@ use crate::store::{ConversationStore, InMemoryStore};
 /// [`WeakRoomKit`](crate::WeakRoomKit) and takes the engine from it, or the
 /// kit and its hooks hold each other (decision 18).
 pub struct HookEngine<S = InMemoryStore> {
-    kit: RoomKit<S>,
+    pub(super) kit: RoomKit<S>,
     /// Whether it is the turn executor's side: the triggers a turn fires.
-    turns: bool,
+    pub(super) turns: bool,
 }
 
 impl<S> Clone for HookEngine<S> {
@@ -107,7 +106,9 @@ impl<S: ConversationStore> HookEngine<S> {
         }
         self.refuse_router(&hook, None)?;
         self.given(hook, |registry, spec| {
-            if spec.trigger.is_tool_trigger() {
+            if self.turns {
+                registry.register_executor_hook(spec)
+            } else if spec.trigger.is_tool_trigger() {
                 registry.register_tool_hook(spec)
             } else {
                 registry.register(spec)
@@ -166,26 +167,22 @@ impl<S: ConversationStore> HookEngine<S> {
     /// one, Python's `HookEngine.remove_global_hook(name)`. A room's hook of
     /// that name stays.
     pub fn remove_global_hook(&self, name: &str) -> bool {
-        self.removed(|registry| {
-            let held = registry.global_hook(name)?;
-            if !self.sees(held.trigger) {
-                return None;
-            }
-            registry.remove_global_hook(name)
-        })
+        self.removed(|registry| registry.remove_engine_hook(None, name, self.turns))
     }
 
     /// Removes the hook named `name` the room `room_id` was given: whether
     /// the engine held one, Python's `HookEngine.remove_room_hook(room_id,
     /// name)`. It reads no room; the hook of every room of that name stays.
     pub fn remove_room_hook(&self, room_id: &RoomId, name: &str) -> bool {
-        self.removed(|registry| {
-            let held = registry.room_hook(room_id, name)?;
-            if !self.sees(held.trigger) {
-                return None;
-            }
-            registry.remove_room_hook(room_id, name)
-        })
+        let removed =
+            self.removed(|registry| registry.remove_engine_hook(Some(room_id), name, self.turns));
+        if removed || !self.turns {
+            return removed;
+        }
+        let Ok(unused) = self.kit.inner.try_change_config(|config| {
+            Ok::<_, std::convert::Infallible>(config.hooks.unuse_room_hook(room_id, name))
+        });
+        unused
     }
 
     /// Refuses a router's hook where a discussion holds the room, any room for
@@ -223,18 +220,18 @@ impl<S: ConversationStore> HookEngine<S> {
         config
             .hooks
             .ids_applying_to(room_id)
-            .any(|id| matches!(handlers.get(&id), Some(Kept::Router(_))))
+            .any(|id| !self.turns && matches!(handlers.get(&id), Some(Kept::Router(_))))
     }
 
     /// The names of the hooks the room `room_id` was given, in their
     /// registration order: Python's `HookEngine.room_hook_names(room_id)`.
-    /// The turn executor's engine lists none: the kit gave it the room's
-    /// hooks, which it holds as the kit's.
+    /// The executor lists active named definitions, excluding hooks the kit gave it.
     pub fn room_hook_names(&self, room_id: &RoomId) -> Vec<String> {
+        let config = read(&self.kit.inner.config);
         if self.turns {
-            return Vec::new();
+            return config.hooks.selected_room_hooks(room_id);
         }
-        read(&self.kit.inner.config).hooks.room_hook_names(room_id)
+        config.hooks.owner_room_hook_names(room_id)
     }
 
     /// Whether the engine holds a hook, of every room or of one, on the
@@ -278,7 +275,7 @@ impl<S: ConversationStore> HookEngine<S> {
     /// Registers `hook` through `register`, which hands back the id the
     /// handler is kept under and the id of the hook it replaced, then gives
     /// the registration held.
-    fn given(
+    pub(super) fn given(
         &self,
         hook: HookRegistration,
         register: impl FnOnce(
@@ -327,7 +324,7 @@ impl<S> Inner<S> {
     /// hooks it read, as the Python implementation's chain runs the list it
     /// took. Lets go of each retired hook no copy of the registry holds any
     /// more, which no operation can ask for.
-    fn retire(&self, removed: Option<Removed>) {
+    pub(super) fn retire(&self, removed: Option<Removed>) {
         let mut retired = write(&self.retired_hooks);
         retired.extend(removed);
         let mut handlers = write(&self.hooks);

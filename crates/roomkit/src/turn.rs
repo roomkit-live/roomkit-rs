@@ -92,6 +92,7 @@ pub(crate) fn turn_in_scope() -> Option<TurnHost> {
 #[derive(Clone)]
 pub struct TurnHost {
     shared: Arc<Shared>,
+    room_hooks: Arc<[String]>,
 }
 
 struct Shared {
@@ -163,6 +164,19 @@ pub enum ToolGate {
 }
 
 impl TurnHost {
+    pub(crate) fn with_room_hooks(mut self, names: Vec<String>) -> Self {
+        self.room_hooks = names.into();
+        self
+    }
+
+    pub(crate) fn room_hook_names(&self) -> &[String] {
+        &self.room_hooks
+    }
+
+    pub(crate) fn room_id(&self) -> &RoomId {
+        &self.shared.room_id
+    }
+
     /// Whether the turn it serves still runs, Python's `open`.
     pub fn open(&self) -> bool {
         self.shared.link.is_open()
@@ -1197,6 +1211,9 @@ pub(crate) struct OwnerCall {
 }
 
 pub(crate) trait TurnKit: Send + Sync {
+    fn room_hook_names(&self, room: &RoomId) -> Vec<String>;
+    fn defines_room_hooks(&self, names: &[String]) -> bool;
+
     /// The kit's telemetry, while it lives: what a turn's work reports to.
     fn telemetry(&self) -> Option<KitTelemetry>;
 
@@ -1351,6 +1368,17 @@ pub(crate) trait TurnKit: Send + Sync {
 }
 
 impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
+    fn room_hook_names(&self, room: &RoomId) -> Vec<String> {
+        self.upgrade()
+            .map(|inner| inner.config().hooks.enabled_room_hooks(room))
+            .unwrap_or_default()
+    }
+
+    fn defines_room_hooks(&self, names: &[String]) -> bool {
+        self.upgrade()
+            .is_some_and(|inner| inner.config().hooks.defines_room_hooks(names))
+    }
+
     fn telemetry(&self) -> Option<KitTelemetry> {
         self.upgrade().map(|inner| inner.telemetry.clone())
     }
@@ -1679,6 +1707,7 @@ pub(crate) fn host(
     response_depth: u32,
 ) -> TurnHost {
     TurnHost {
+        room_hooks: Arc::default(),
         shared: Arc::new(Shared {
             room_id: context.room.id.clone(),
             channel_id,

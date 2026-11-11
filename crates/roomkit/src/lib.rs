@@ -91,7 +91,7 @@ mod transport;
 mod turn;
 mod turn_record;
 mod turn_runners;
-mod turns;
+pub mod turns;
 mod unwind;
 
 /// The data model of RFC §5, field for field: the core's, but for the
@@ -188,7 +188,7 @@ pub use self::lock_manager::{
 pub use self::hooks::TurnPayload;
 pub use self::host::{HostChannel, HostChannelOptions};
 pub use self::inbound::{CancelOptions, DeliveryHandle, InboundResult};
-pub use self::kit::RejectInputOptions;
+pub use self::kit::TurnExecutor;
 pub use self::kit::{
     AddMemberOptions, EnsureParticipantOptions, IsMemberOptions, RemoveMemberOptions,
     RenameMemberOptions, ResolveParticipantOptions,
@@ -215,6 +215,7 @@ pub use self::kit::{
 pub use self::kit::{
     DelegateOptions, DeliverOptions, ProcessDeliveryStatusOptions, ProcessWebhookOptions,
 };
+pub use self::kit::{DisableRoomHookOptions, EnableRoomHookOptions, RejectInputOptions};
 pub use self::kit::{
     ListObservationsOptions, ListTasksOptions, SubmitFeedbackOptions, UpdateRoomMetadataOptions,
 };
@@ -282,6 +283,7 @@ pub use self::orchestration::{HandoffHandler, HandoffRequest, HandoffResult};
 pub use self::tasks::result_tool::ResultTool;
 #[doc(hidden)]
 pub use self::turn::OwnerToolAnswer;
+#[doc(inline)]
 pub use self::turns::TurnTimeouts;
 
 /// Python's `roomkit.tools` helpers this crate has.

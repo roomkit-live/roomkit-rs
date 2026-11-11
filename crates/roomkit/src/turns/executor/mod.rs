@@ -142,6 +142,7 @@ impl Executor {
             Arc::clone(&link),
             response_depth(&request.event),
         );
+        let host = host.with_room_hooks(request.room_hooks.clone());
         host.reads_trace_from(Arc::clone(&self.turn.traced));
         let flow = Arc::new(Flow::default());
         let _released = Released(Arc::clone(&link));
@@ -192,6 +193,18 @@ impl Executor {
                 return None;
             }
         };
+        if !self.kit.defines_room_hooks(&request.room_hooks) {
+            drop(self.send(&Frame::Error {
+                error: one(
+                    "no_executor",
+                    format!(
+                        "No executor takes {} with room hooks {:?}",
+                        request.channel_id, request.room_hooks
+                    ),
+                ),
+            }));
+            return None;
+        }
         let Some(channel) = self.kit.channel(&request.channel_id) else {
             let error = one(
                 CHANNEL_NOT_REGISTERED,

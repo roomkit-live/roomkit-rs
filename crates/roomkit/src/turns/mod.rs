@@ -28,6 +28,9 @@
 //! call that first read it, so a tool that calls the kit keeps the
 //! reentrancy rules it would have in the owner's own code.
 
+mod public_options;
+pub use public_options::{HookOptions, RoomHookOptions, TakesOptions};
+
 mod codec;
 mod error;
 mod executor;
@@ -233,7 +236,11 @@ impl Turns {
         self.closed.store(true, Ordering::Release);
     }
 
-    fn timeouts(&self) -> TurnTimeouts {
+    pub(crate) fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn timeouts(&self) -> TurnTimeouts {
         *self.timeouts.read().unwrap_or_else(PoisonError::into_inner)
     }
 
@@ -285,6 +292,7 @@ impl Turns {
         if self.closed.load(Ordering::Acquire) || *self.cut.borrow() {
             return Err(closed());
         }
+        let room_hooks = request_room_hooks(&**kit, &event.room_id, &binding.channel_id)?;
         let turn_id: Arc<str> = Arc::from(format!("turn-{}", Uuid::new_v4().simple()));
         let previous = self.records().put(
             &binding.channel_id,
@@ -299,6 +307,7 @@ impl Turns {
         let owner_tools = kit.owner_tools(&binding.channel_id, &event.room_id);
         let trace = current_trace();
         let request = Request {
+            room_hooks: &room_hooks,
             turn_id: &turn_id,
             binding,
             event: &event,
@@ -569,6 +578,24 @@ fn cross<T: Serialize + serde::de::DeserializeOwned>(
 fn executor_id() -> String {
     let drawn = Uuid::new_v4().simple().to_string();
     format!("executor-{}", drawn.get(..12).unwrap_or(&drawn))
+}
+
+/// Resolve placement before changing the previous-turn record. A refusal
+/// before handover must preserve the last valid turn (RFC §10.6.2).
+fn request_room_hooks(
+    kit: &dyn TurnKit,
+    room: &RoomId,
+    channel: &ChannelId,
+) -> Result<Vec<String>, ErrorRecord> {
+    let names = kit.room_hook_names(room);
+    if !kit.defines_room_hooks(&names) {
+        return Err(TurnError::new(
+            "no_executor",
+            format!("No executor takes {channel} with room hooks {names:?}"),
+        )
+        .to_record());
+    }
+    Ok(names)
 }
 
 /// The error of a turn the backend no longer takes, or still open as the

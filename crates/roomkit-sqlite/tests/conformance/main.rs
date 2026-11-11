@@ -162,3 +162,6 @@ fn every_scenario_gives_what_the_rfc_says() {
         KNOWN_FAILURES,
     );
 }
+
+#[path = "../../../roomkit/tests/conformance/kit_executor.rs"]
+mod kit_executor;

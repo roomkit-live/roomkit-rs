@@ -116,6 +116,7 @@ pub(crate) struct CarriedRequest {
 
 /// A turn's request, as the owner submits it.
 pub(super) struct Request<'a> {
+    pub(super) room_hooks: &'a [String],
     pub(super) turn_id: &'a str,
     pub(super) binding: &'a ChannelBinding,
     pub(super) event: &'a RoomEvent,
@@ -177,7 +178,7 @@ impl Request<'_> {
             notes: discussion_notes(self.event),
             in_place: discussion_turn(self.event),
             owner_tools: self.owner_tools,
-            room_hooks: [],
+            room_hooks: self.room_hooks,
             previous_turn: self.previous,
             trace: self.trace,
         }
@@ -196,7 +197,7 @@ struct RestOut<'a> {
     notes: Vec<String>,
     in_place: bool,
     owner_tools: &'a [OwnerTool],
-    room_hooks: [String; 0],
+    room_hooks: &'a [String],
     previous_turn: Option<&'a PreviousTurn>,
     trace: Option<&'a BTreeMap<String, String>>,
 }

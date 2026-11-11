@@ -1704,3 +1704,52 @@ fn mock_dispatch_policy_options_defaults_as_python() {
     // roomkit.MockDispatchPolicy.__init__(error) = None
     assert!(defaults.error.is_none());
 }
+
+#[test]
+fn local_executor_options_defaults_as_python() {
+    let hook = roomkit::turns::HookOptions::default();
+    // roomkit.TurnExecutor.hook(execution) = <HookExecution.SYNC: 'sync'>
+    assert_eq!(hook.execution, HookExecution::Sync);
+    // roomkit.TurnExecutor.hook(priority) = 0
+    assert_eq!(hook.priority, 0);
+    // roomkit.TurnExecutor.hook(name) = ''
+    assert_eq!(hook.name, "");
+    // roomkit.TurnExecutor.hook(timeout) = 30.0
+    assert_eq!(hook.timeout, Duration::from_secs(30));
+    // roomkit.TurnExecutor.hook(channel_types) = None
+    assert!(hook.channel_types.is_none());
+    // roomkit.TurnExecutor.hook(channel_ids) = None
+    assert!(hook.channel_ids.is_none());
+    // roomkit.TurnExecutor.hook(directions) = None
+    assert!(hook.directions.is_none());
+    // roomkit.TurnExecutor.hook(event_types) = None
+    assert!(hook.event_types.is_none());
+    // roomkit.TurnExecutor.hook(fail_closed) = False
+    assert!(!hook.fail_closed);
+    let named = roomkit::turns::RoomHookOptions::default();
+    // roomkit.TurnExecutor.room_hook(execution) = <HookExecution.SYNC: 'sync'>
+    assert_eq!(named.execution, HookExecution::Sync);
+    // roomkit.TurnExecutor.room_hook(priority) = 0
+    assert_eq!(named.priority, 0);
+    // roomkit.TurnExecutor.room_hook(timeout) = 30.0
+    assert_eq!(named.timeout, Duration::from_secs(30));
+    // roomkit.TurnExecutor.room_hook(fail_closed) = False
+    assert!(!named.fail_closed);
+    let takes = roomkit::turns::TakesOptions::default();
+    // roomkit.TurnExecutor.takes(room_hooks) = ()
+    assert_eq!(takes.room_hooks, Vec::<String>::new());
+    // roomkit.TurnExecutor.takes(organization_id) = None
+    assert!(takes.organization_id.is_none());
+    // roomkit.RoomKit.enable_room_hook(organization_id) = None
+    assert!(
+        roomkit::EnableRoomHookOptions::default()
+            .organization_id
+            .is_none()
+    );
+    // roomkit.RoomKit.disable_room_hook(organization_id) = None
+    assert!(
+        roomkit::DisableRoomHookOptions::default()
+            .organization_id
+            .is_none()
+    );
+}
