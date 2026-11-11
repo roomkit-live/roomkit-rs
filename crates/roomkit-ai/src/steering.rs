@@ -78,11 +78,12 @@ impl Running {
         true
     }
 
+    /// Whether it is a loop of the turn `turn_id`, else of the room
+    /// `room_id`; with neither, of no address.
     fn addressed(&self, room_id: Option<&RoomId>, turn_id: Option<&str>) -> bool {
-        match (turn_id, room_id) {
-            (Some(turn), _) => self.turn_id.as_deref() == Some(turn),
-            (None, Some(room)) => self.room_id.as_ref() == Some(room),
-            (None, None) => true,
+        match turn_id {
+            Some(turn) => self.turn_id.as_deref() == Some(turn),
+            None => room_id.is_some_and(|room| self.room_id.as_ref() == Some(room)),
         }
     }
 }
@@ -150,17 +151,28 @@ impl Loops {
             }
         };
         drop(running);
-        if reached == 0 {
-            tracing::info!(
-                target: "roomkit::ai",
-                ?loop_id,
-                ?room_id,
-                ?turn_id,
-                "steer(): no active tool loop"
-            );
-        }
+        log_unreached(
+            reached,
+            (loop_id.as_deref(), room_id.as_ref(), turn_id.as_deref()),
+        );
         Ok(reached)
     }
+}
+
+/// Logs a directive that reached no loop at its address, as Python's
+/// `steer()` does.
+fn log_unreached(reached: usize, address: (Option<&str>, Option<&RoomId>, Option<&str>)) {
+    if reached > 0 {
+        return;
+    }
+    let (loop_id, room_id, turn_id) = address;
+    tracing::info!(
+        target: "roomkit::ai",
+        ?loop_id,
+        ?room_id,
+        ?turn_id,
+        "steer(): no active tool loop"
+    );
 }
 
 /// One loop's steering: its queue and its cancel, until it ends.

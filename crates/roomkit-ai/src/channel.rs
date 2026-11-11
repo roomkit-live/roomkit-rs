@@ -784,10 +784,9 @@ impl<P: AiProvider> AiChannel<P> {
     /// exactly one of the loop, the room or the turn it acts for: a
     /// `Cancel` reaches every loop of the room (or of the turn `turn_id`),
     /// any other directive the most recent one, never a loop of another
-    /// room. A loop is
-    /// reachable once its turn's stream is read, until it has read its
-    /// queue for the last time: at its end, or once the model answered
-    /// with no message steered in meanwhile.
+    /// room. A loop is reachable once its turn's stream is read, until it
+    /// has read its queue for the last time: at its end, or once the model
+    /// answered with no message steered in meanwhile.
     ///
     /// Returns how many loops the directive reached.
     ///
