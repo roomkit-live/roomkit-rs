@@ -1,0 +1,425 @@
+[
+  [
+    "unicode",
+    [
+      {
+        "index": 7,
+        "id": "a",
+        "function": {
+          "name": "search",
+          "arguments": "{\"q\":"
+        }
+      },
+      {
+        "index": 7,
+        "id": null,
+        "function": {
+          "name": null,
+          "arguments": "\"é猫🙂\"}"
+        }
+      }
+    ],
+    [
+      [
+        0,
+        "search",
+        "{\"q\":"
+      ],
+      [
+        0,
+        "search",
+        "\"é猫🙂\"}"
+      ]
+    ],
+    [
+      {
+        "q": "é猫🙂"
+      }
+    ]
+  ],
+  [
+    "empty-repeat",
+    [
+      {
+        "index": 0,
+        "id": "a",
+        "function": {
+          "name": "search",
+          "arguments": ""
+        }
+      },
+      {
+        "index": 0,
+        "id": null,
+        "function": {
+          "name": "search",
+          "arguments": ""
+        }
+      },
+      {
+        "index": 0,
+        "id": null,
+        "function": {
+          "name": null,
+          "arguments": "{}"
+        }
+      }
+    ],
+    [
+      [
+        0,
+        "search",
+        ""
+      ],
+      [
+        0,
+        "search",
+        "{}"
+      ]
+    ],
+    [
+      {}
+    ]
+  ],
+  [
+    "late-id-after-name",
+    [
+      {
+        "index": 0,
+        "id": null,
+        "function": {
+          "name": "search",
+          "arguments": "{\"q\":"
+        }
+      },
+      {
+        "index": 0,
+        "id": "late",
+        "function": {
+          "name": null,
+          "arguments": "\"x\"}"
+        }
+      }
+    ],
+    [
+      [
+        0,
+        "search",
+        "{\"q\":"
+      ],
+      [
+        0,
+        "search",
+        "\"x\"}"
+      ]
+    ],
+    [
+      {
+        "q": "x"
+      }
+    ]
+  ],
+  [
+    "late-id-before-name",
+    [
+      {
+        "index": 0
+      },
+      {
+        "index": 0,
+        "id": "late",
+        "function": {
+          "name": "search",
+          "arguments": "{}"
+        }
+      }
+    ],
+    [
+      [
+        0,
+        "search",
+        "{}"
+      ]
+    ],
+    [
+      {}
+    ]
+  ],
+  [
+    "name-after-arguments",
+    [
+      {
+        "index": 0,
+        "id": "a",
+        "function": {
+          "name": null,
+          "arguments": "{\"q\":"
+        }
+      },
+      {
+        "index": 0,
+        "id": null,
+        "function": {
+          "name": "search",
+          "arguments": "\"x\"}"
+        }
+      }
+    ],
+    [
+      [
+        0,
+        "search",
+        "\"x\"}"
+      ]
+    ],
+    [
+      {
+        "q": "x"
+      }
+    ]
+  ],
+  [
+    "interleaved",
+    [
+      {
+        "index": 8,
+        "id": "b",
+        "function": {
+          "name": "search",
+          "arguments": "{\"q\":"
+        }
+      },
+      {
+        "index": 2,
+        "id": "a",
+        "function": {
+          "name": "search",
+          "arguments": "{\"q\":"
+        }
+      },
+      {
+        "index": 8,
+        "id": null,
+        "function": {
+          "name": null,
+          "arguments": "\"b\"}"
+        }
+      },
+      {
+        "index": 2,
+        "id": null,
+        "function": {
+          "name": null,
+          "arguments": "\"a\"}"
+        }
+      }
+    ],
+    [
+      [
+        0,
+        "search",
+        "{\"q\":"
+      ],
+      [
+        1,
+        "search",
+        "{\"q\":"
+      ],
+      [
+        0,
+        "search",
+        "\"b\"}"
+      ],
+      [
+        1,
+        "search",
+        "\"a\"}"
+      ]
+    ],
+    [
+      {
+        "q": "b"
+      },
+      {
+        "q": "a"
+      }
+    ]
+  ],
+  [
+    "repeated-id",
+    [
+      {
+        "index": 0,
+        "id": "same",
+        "function": {
+          "name": "search",
+          "arguments": "{}"
+        }
+      },
+      {
+        "index": 1,
+        "id": "same",
+        "function": {
+          "name": "search",
+          "arguments": "{}"
+        }
+      }
+    ],
+    [
+      [
+        0,
+        "search",
+        "{}"
+      ],
+      [
+        1,
+        "search",
+        "{}"
+      ]
+    ],
+    [
+      {},
+      {}
+    ]
+  ],
+  [
+    "reused-index",
+    [
+      {
+        "index": 0,
+        "id": null,
+        "function": {
+          "name": "search",
+          "arguments": "{}"
+        }
+      },
+      {
+        "index": 0,
+        "id": null,
+        "function": {
+          "name": "search",
+          "arguments": "{}"
+        }
+      }
+    ],
+    [
+      [
+        0,
+        "search",
+        "{}"
+      ],
+      [
+        1,
+        "search",
+        "{}"
+      ]
+    ],
+    [
+      {},
+      {}
+    ]
+  ],
+  [
+    "object-arguments",
+    [
+      {
+        "index": 0,
+        "id": "a",
+        "function": {
+          "name": "search",
+          "arguments": {
+            "q": "é猫🙂"
+          }
+        }
+      }
+    ],
+    [
+      [
+        0,
+        "search",
+        "{\"q\": \"\\u00e9\\u732b\\ud83d\\ude42\"}"
+      ]
+    ],
+    [
+      {
+        "q": "é猫🙂"
+      }
+    ]
+  ],
+  [
+    "invalid-json",
+    [
+      {
+        "index": 0,
+        "id": "a",
+        "function": {
+          "name": "search",
+          "arguments": "{bad"
+        }
+      },
+      {
+        "index": 0,
+        "id": null,
+        "function": {
+          "name": null,
+          "arguments": " json"
+        }
+      }
+    ],
+    [
+      [
+        0,
+        "search",
+        "{bad"
+      ],
+      [
+        0,
+        "search",
+        " json"
+      ]
+    ],
+    [
+      {
+        "raw": "{bad json"
+      }
+    ]
+  ],
+  [
+    "no-function",
+    [
+      {
+        "index": 0,
+        "id": "custom"
+      }
+    ],
+    [],
+    []
+  ],
+  [
+    "custom-before-call",
+    [
+      {
+        "index": 0,
+        "id": "custom"
+      },
+      {
+        "index": 2,
+        "id": "a",
+        "function": {
+          "name": "search",
+          "arguments": "{}"
+        }
+      }
+    ],
+    [
+      [
+        1,
+        "search",
+        "{}"
+      ]
+    ],
+    [
+      {}
+    ]
+  ]
+]

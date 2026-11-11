@@ -4,8 +4,7 @@ use crate::error::OpenAiError;
 use crate::{OpenAiApi, responses, wire};
 use roomkit_ai::StreamEvent;
 
-use crate::request::{push_end, push_text, push_thinking};
-use crate::think_tags::Segment;
+use crate::request::push_end;
 use std::collections::VecDeque;
 
 pub(super) enum Folding {
@@ -45,7 +44,7 @@ impl Folding {
                     finish_chat(*std::mem::take(folding), ready)?;
                     return Ok(true);
                 }
-                push_segments(ready, folding.take(data, secret)?);
+                folding.take(data, secret, ready)?;
                 Ok(false)
             }
             Self::Responses(folding) => folding.take(data, secret, ready),
@@ -66,18 +65,8 @@ fn finish_chat(
     mut folding: wire::Folding,
     ready: &mut VecDeque<StreamEvent>,
 ) -> Result<(), OpenAiError> {
-    push_segments(ready, folding.flush());
+    folding.flush(ready);
     let (calls, done) = folding.finish()?;
     push_end(ready, calls, done);
     Ok(())
-}
-
-/// Queues `segments`, each as the event its kind makes.
-fn push_segments(ready: &mut VecDeque<StreamEvent>, segments: Vec<Segment>) {
-    for segment in segments {
-        match segment {
-            Segment::Thinking(thinking) => push_thinking(ready, thinking),
-            Segment::Text(text) => push_text(ready, text),
-        }
-    }
 }

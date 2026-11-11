@@ -1,7 +1,8 @@
 //! A generation read as it arrives (RFC §6.4 "One loop, streamed or not";
 //! step 4, decision 11): the completion's server-sent events over
 //! `reqwest`'s `chunk()`, each text delta handed to the loop as it comes,
-//! the calls' fragments folded by their index and handed with the end.
+//! the calls' fragments surfaced as composition events with stable ids, and
+//! complete calls handed with the end.
 //!
 //! The stream is pulled: the answer is read only as the loop reads it, and
 //! dropping the stream closes the connection. An endpoint that answers a

@@ -3,13 +3,12 @@
 //!
 //! A fragment belongs to the call its stream index names, unless it starts
 //! another call: a server that sends each call whole may tag every one with
-//! index 0, and folding them together would run one call made of two. No
-//! composition event crosses here, so a call's id is its server's, empty until
-//! it gives one no other call holds before the call is named;
-//! [`CallIds`](roomkit_ai::CallIds) mints the rest once the response is over.
+//! index 0, and folding them together would run one call made of two. Each slot
+//! has an id from its opening and keeps it once a composition event names it.
 
 use std::collections::{HashMap, HashSet};
 
+use roomkit_ai::{CallIds, StreamToolCallDelta};
 use serde_json::Value;
 
 use crate::request::RawCall;
@@ -18,6 +17,8 @@ use crate::request::RawCall;
 #[derive(Debug, Default)]
 struct Slot {
     id: String,
+    /// An id minted here can be replaced until its first composition event.
+    minted: bool,
     /// The server's id when it was no text (a number, `true`): the slot
     /// holds it as Python's does, and fails the read once it is a call.
     odd_id: Option<Value>,
@@ -26,8 +27,7 @@ struct Slot {
     /// Whether a fragment carried a function, even one with no name and no
     /// arguments: that is a call, for the loop to refuse.
     function: bool,
-    /// Whether a composition event would have named the call, on a wire that
-    /// sends them: it keeps the id it had then.
+    /// Whether a composition event named the call: it keeps that id.
     announced: bool,
 }
 
@@ -89,7 +89,10 @@ impl CallSlots {
     /// (a list, an object), where Python asks whether a call holds it; a call
     /// named under an id that is no text, as Python's composition event,
     /// which carries the id, fails as it is built.
-    pub(crate) fn fold(&mut self, fragment: &Fragment<'_>) -> Result<(), String> {
+    pub(crate) fn fold(
+        &mut self,
+        fragment: &Fragment<'_>,
+    ) -> Result<Option<StreamToolCallDelta>, String> {
         let mut name = fragment.name.map(str::to_owned);
         let mut position = self.by_index.get(&fragment.index).copied();
         if let Some(held) = position.and_then(|at| self.slots.get(at))
@@ -100,60 +103,79 @@ impl CallSlots {
             }
             position = None;
         }
-        let at = position.unwrap_or_else(|| self.new_slot(fragment.index));
+        let at = position.unwrap_or_else(|| self.new_slot(fragment.index, name.as_deref()));
         self.fill(at, fragment, name.as_deref())
     }
 
-    fn new_slot(&mut self, index: u64) -> usize {
-        self.slots.push(Slot::default());
+    fn new_slot(&mut self, index: u64, name: Option<&str>) -> usize {
+        let id = CallIds::new().call("", name.unwrap_or("tool"));
+        self.taken.insert(id.clone());
+        self.slots.push(Slot {
+            id,
+            minted: true,
+            ..Slot::default()
+        });
         let at = self.slots.len() - 1;
         self.by_index.insert(index, at);
         at
     }
 
-    /// Adds `fragment` to the call at `at`, named `name`: the server's id once
-    /// no other call holds it, the name once given, the arguments appended.
+    /// Adds a fragment and emits only the first name or new argument text.
     fn fill(
         &mut self,
         at: usize,
         fragment: &Fragment<'_>,
         name: Option<&str>,
-    ) -> Result<(), String> {
+    ) -> Result<Option<StreamToolCallDelta>, String> {
+        self.adopt_id(at, fragment.id)?;
         let Some(slot) = self.slots.get_mut(at) else {
-            return Ok(());
+            return Ok(None);
         };
         slot.function |= fragment.function;
-        if fragment.id.is_true() && !slot.has_server_id() && !slot.announced {
-            match fragment.id {
-                FragmentId::Text(id) if !self.taken.contains(id) => {
-                    id.clone_into(&mut slot.id);
-                    self.taken.insert(id.to_owned());
-                }
-                FragmentId::True(id @ (Value::Array(_) | Value::Object(_))) => {
-                    return Err(format!("a call's id is no text: {id}"));
-                }
-                FragmentId::True(id) if !self.taken_odd.iter().any(|held| same_odd(held, id)) => {
-                    slot.odd_id = Some(id.clone());
-                    self.taken_odd.push(id.clone());
-                }
-                FragmentId::None
-                | FragmentId::False
-                | FragmentId::Text(_)
-                | FragmentId::True(_) => {}
-            }
-        }
         let first_name = name.is_some() && slot.name.is_empty();
         if let Some(name) = name {
             name.clone_into(&mut slot.name);
         }
         slot.arguments.push_str(fragment.arguments);
-        let announces = !slot.name.is_empty() && (first_name || !fragment.arguments.is_empty());
-        // Python's composition event names the call by its id, which a number
-        // or `true` fails as it is built.
-        if announces && let Some(id) = &slot.odd_id {
+        if slot.name.is_empty() || (!first_name && fragment.arguments.is_empty()) {
+            return Ok(None);
+        }
+        if let Some(id) = &slot.odd_id {
             return Err(format!("a call's id is no text: {id}"));
         }
-        slot.announced |= announces;
+        slot.announced = true;
+        Ok(Some(StreamToolCallDelta {
+            id: slot.id.clone(),
+            name: slot.name.clone(),
+            index: u32::try_from(at).map_err(|_| "too many tool-call slots")?,
+            arguments_delta: fragment.arguments.to_owned(),
+        }))
+    }
+
+    /// Takes an unused server id only before the slot was announced.
+    fn adopt_id(&mut self, at: usize, id: FragmentId<'_>) -> Result<(), String> {
+        let Some(slot) = self.slots.get_mut(at) else {
+            return Ok(());
+        };
+        if !id.is_true() || slot.has_server_id() || slot.announced {
+            return Ok(());
+        }
+        match id {
+            FragmentId::Text(id) if !self.taken.contains(id) => {
+                self.taken.remove(&slot.id);
+                id.clone_into(&mut slot.id);
+                slot.minted = false;
+                self.taken.insert(id.to_owned());
+            }
+            FragmentId::True(id @ (Value::Array(_) | Value::Object(_))) => {
+                return Err(format!("a call's id is no text: {id}"));
+            }
+            FragmentId::True(id) if !self.taken_odd.iter().any(|held| same_odd(held, id)) => {
+                slot.odd_id = Some(id.clone());
+                self.taken_odd.push(id.clone());
+            }
+            FragmentId::None | FragmentId::False | FragmentId::Text(_) | FragmentId::True(_) => {}
+        }
         Ok(())
     }
 
@@ -203,7 +225,7 @@ impl Slot {
 
     /// Whether the call took the server's id, text or not.
     fn has_server_id(&self) -> bool {
-        !self.id.is_empty() || self.odd_id.is_some()
+        !self.minted || self.odd_id.is_some()
     }
 
     /// Whether `id` is the id the call took.

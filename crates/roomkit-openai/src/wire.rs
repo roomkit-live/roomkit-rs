@@ -5,11 +5,13 @@ use crate::call_slots::{CallSlots, Fragment, FragmentId};
 use crate::config::OpenAiConfig;
 use crate::dialect::ChatDialect;
 use crate::request::{RawCall, Request, Whole, done as finished};
+use crate::request::{push_text, push_thinking};
 use reqwest::StatusCode;
 use roomkit::model::Metadata;
-use roomkit_ai::StreamDone;
+use roomkit_ai::{StreamDone, StreamEvent, StreamToolCallDelta};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::VecDeque;
 
 use crate::error::OpenAiError;
 use crate::think_tags::{
@@ -562,13 +564,13 @@ struct ChunkChoice {
 #[derive(Debug, Deserialize)]
 struct Delta {
     #[serde(default)]
-    content: Option<String>,
+    content: Option<Value>,
     #[serde(default)]
     reasoning_content: Option<Value>,
     #[serde(default)]
     reasoning: Option<Value>,
     #[serde(default, deserialize_with = "nullable")]
-    tool_calls: Vec<DeltaCall>,
+    tool_calls: Vec<Value>,
     /// A piece of the refusal the model gives in place of its answer.
     #[serde(default)]
     refusal: Option<Value>,
@@ -627,8 +629,8 @@ impl Folding {
         }
     }
 
-    /// Takes the chunk `data`: the reasoning and the text it settles, in
-    /// order; each delta's reasoning field before its content, as Python's
+    /// Takes the chunk `data`: composition, reasoning and text in order.
+    /// Events read before a later malformed call remain queued, as Python's
     /// `generate_structured_stream` reads them.
     ///
     /// # Errors
@@ -636,7 +638,12 @@ impl Folding {
     /// [`OpenAiError::Malformed`] when `data` is no chunk,
     /// [`OpenAiError::StreamFailed`] when it reports the provider's error,
     /// each without `secret`, the API key.
-    pub(crate) fn take(&mut self, data: &str, secret: &str) -> Result<Vec<Segment>, OpenAiError> {
+    pub(crate) fn take(
+        &mut self,
+        data: &str,
+        secret: &str,
+        ready: &mut VecDeque<StreamEvent>,
+    ) -> Result<(), OpenAiError> {
         let chunk: Chunk = serde_json::from_str(data).map_err(|error| OpenAiError::Malformed {
             reason: cleaned(&error.to_string(), secret, MESSAGE_LIMIT),
         })?;
@@ -660,40 +667,75 @@ impl Folding {
         if let Some(usage) = chunk.usage {
             self.usage = usage_of(&usage, self.cache_hits);
         }
-        let mut segments = Vec::new();
         for choice in chunk.choices.into_iter().filter(|choice| choice.index == 0) {
-            if let Some(reason) = choice.finish_reason {
-                self.finish_reason = Some(reason);
-            }
-            let Some(delta) = choice.delta else {
-                continue;
-            };
-            if let Some(refusal) = delta.refusal.as_ref().and_then(Value::as_str) {
-                self.refusal.push_str(refusal);
-            }
-            for call in delta.tool_calls {
-                self.fold(call).map_err(|reason| OpenAiError::Malformed {
-                    reason: cleaned(&reason, secret, MESSAGE_LIMIT),
-                })?;
-            }
-            let reasoning =
-                field_reasoning(delta.reasoning_content.as_ref(), delta.reasoning.as_ref());
-            segments.extend(reasoning.map(Segment::Thinking));
-            segments.extend(self.tags.feed(delta.content.as_deref().unwrap_or_default()));
+            self.read_choice(choice, secret, ready)?;
         }
-        Ok(segments)
+        Ok(())
+    }
+
+    fn read_choice(
+        &mut self,
+        choice: ChunkChoice,
+        secret: &str,
+        ready: &mut VecDeque<StreamEvent>,
+    ) -> Result<(), OpenAiError> {
+        if let Some(reason) = choice.finish_reason {
+            self.finish_reason = Some(reason);
+        }
+        let Some(delta) = choice.delta else {
+            return Ok(());
+        };
+        if let Some(refusal) = delta.refusal.as_ref().and_then(Value::as_str) {
+            self.refusal.push_str(refusal);
+        }
+        for call in delta.tool_calls {
+            let call = serde_json::from_value(call).map_err(|error| OpenAiError::Malformed {
+                reason: cleaned(&error.to_string(), secret, MESSAGE_LIMIT),
+            })?;
+            if let Some(composition) = self.fold(call).map_err(|reason| OpenAiError::Malformed {
+                reason: cleaned(&reason, secret, MESSAGE_LIMIT),
+            })? {
+                ready.push_back(StreamEvent::ToolCallDelta(composition));
+            }
+        }
+        if let Some(reasoning) =
+            field_reasoning(delta.reasoning_content.as_ref(), delta.reasoning.as_ref())
+        {
+            push_thinking(ready, reasoning);
+        }
+        self.read_text(delta.content, ready)?;
+        Ok(())
+    }
+
+    /// Validate content only when it is read, after this chunk's calls and
+    /// reasoning. Python's SDK permits malformed members until that point.
+    fn read_text(
+        &mut self,
+        content: Option<Value>,
+        ready: &mut VecDeque<StreamEvent>,
+    ) -> Result<(), OpenAiError> {
+        let Some(content) = content.filter(truthy) else {
+            return Ok(());
+        };
+        let Value::String(text) = content else {
+            return Err(OpenAiError::Malformed {
+                reason: "chat delta content is not text".to_owned(),
+            });
+        };
+        queue_segments(ready, self.tags.feed(&text));
+        Ok(())
     }
 
     /// What the tags still hold once the stream is over.
-    pub(crate) fn flush(&mut self) -> Vec<Segment> {
-        self.tags.flush()
+    pub(crate) fn flush(&mut self, ready: &mut VecDeque<StreamEvent>) {
+        queue_segments(ready, self.tags.flush());
     }
 
     /// Adds a call's fragment to the call it belongs to; an object for its
     /// arguments reads as the JSON text it stands for. Fails, saying why, on
     /// an id the calls cannot hold, or a call named under an id that is no
     /// text ([`CallSlots::fold`]).
-    fn fold(&mut self, fragment: DeltaCall) -> Result<(), String> {
+    fn fold(&mut self, fragment: DeltaCall) -> Result<Option<StreamToolCallDelta>, String> {
         let DeltaCall {
             index,
             id,
@@ -705,9 +747,8 @@ impl Folding {
         let arguments = match arguments {
             Value::String(text) => text,
             Value::Null => String::new(),
-            other @ (Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_)) => {
-                other.to_string()
-            }
+            object @ Value::Object(_) => roomkit_ai::dumps(&object),
+            other @ (Value::Bool(_) | Value::Number(_) | Value::Array(_)) => other.to_string(),
         };
         self.calls.fold(&Fragment {
             index,
@@ -735,6 +776,16 @@ impl Folding {
         answered_by(&mut done, self.model, &self.asked);
         keep_refusal(&mut done, Some(&self.refusal));
         Ok((calls, done))
+    }
+}
+
+/// Text and reasoning retain the tag parser's order.
+fn queue_segments(ready: &mut VecDeque<StreamEvent>, segments: Vec<Segment>) {
+    for segment in segments {
+        match segment {
+            Segment::Thinking(thinking) => push_thinking(ready, thinking),
+            Segment::Text(text) => push_text(ready, text),
+        }
     }
 }
 
@@ -1348,9 +1399,34 @@ mod tests {
             let chunk = serde_json::json!({
                 "choices": [{ "index": 0, "delta": { "tool_calls": [call] } }]
             });
-            folding.take(&chunk.to_string(), "sk-1").unwrap();
+            folding
+                .take(&chunk.to_string(), "sk-1", &mut VecDeque::new())
+                .unwrap();
         }
-        folding.finish().unwrap().0
+        let ids = fragments
+            .iter()
+            .filter_map(|(_, f)| f["id"].as_str())
+            .collect();
+        normalize_minted_ids(folding.finish().unwrap().0, &ids)
+    }
+
+    /// These slot-shape tests use an empty id as a placeholder for a minted
+    /// one. Check its uniqueness before normalization; the public composition
+    /// tests separately require the exact same id on every fragment and call.
+    fn normalize_minted_ids(
+        mut calls: Vec<RawCall>,
+        server_ids: &std::collections::HashSet<&str>,
+    ) -> Vec<RawCall> {
+        assert!(calls.iter().all(|call| !call.id.is_empty()));
+        let unique: std::collections::HashSet<_> = calls.iter().map(|call| &call.id).collect();
+        assert_eq!(unique.len(), calls.len());
+        for call in &mut calls {
+            if !server_ids.contains(call.id.as_str()) {
+                assert!(call.id.starts_with("call_"), "{}", call.id);
+                call.id.clear();
+            }
+        }
+        calls
     }
 
     fn fragment(id: Option<&str>, name: Option<&str>, arguments: &str) -> Value {
@@ -1539,9 +1615,12 @@ mod tests {
             let chunk = serde_json::json!({
                 "choices": [{ "index": 0, "delta": { "tool_calls": [fragment] } }]
             });
-            folding.take(&chunk.to_string(), "sk-1")?;
+            folding.take(&chunk.to_string(), "sk-1", &mut VecDeque::new())?;
         }
-        folding.finish().map(|(calls, _)| calls)
+        let ids = fragments.iter().filter_map(|f| f["id"].as_str()).collect();
+        folding
+            .finish()
+            .map(|(calls, _)| normalize_minted_ids(calls, &ids))
     }
 
     // Python: providers/ai/openai_dialect.py ToolCallSlots: an id Python reads as
@@ -1644,8 +1723,11 @@ mod tests {
             let mut call = named();
             call["index"] = 0.into();
             call["id"] = again.clone();
-            assert_eq!(folding.take(&chunk(&entry), "sk-1"), Ok(Vec::new()));
-            let read = folding.take(&chunk(&call), "sk-1");
+            assert_eq!(
+                folding.take(&chunk(&entry), "sk-1", &mut VecDeque::new()),
+                Ok(())
+            );
+            let read = folding.take(&chunk(&call), "sk-1", &mut VecDeque::new());
             assert!(
                 matches!(read, Err(OpenAiError::Malformed { .. })),
                 "{held} then {again}: {read:?}"
@@ -1786,9 +1868,19 @@ mod tests {
             r#"{"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]}"#,
             r#"{"choices": [], "usage": {"prompt_tokens": 9, "completion_tokens": 4}}"#,
         ];
-        let text: Vec<Segment> = chunks
-            .iter()
-            .flat_map(|chunk| folding.take(chunk, "sk-1").unwrap())
+        let mut ready = VecDeque::new();
+        for chunk in chunks {
+            folding.take(chunk, "sk-1", &mut ready).unwrap();
+        }
+        let text: Vec<_> = ready
+            .into_iter()
+            .filter_map(|e| match e {
+                StreamEvent::TextDelta(delta) => Some(Segment::Text(delta.text)),
+                StreamEvent::ThinkingDelta(delta) => Some(Segment::Thinking(delta.thinking)),
+                StreamEvent::ToolCall(_) | StreamEvent::ToolCallDelta(_) | StreamEvent::Done(_) => {
+                    None
+                }
+            })
             .collect();
         let (calls, done) = folding.finish().unwrap();
         assert_eq!(
@@ -1817,7 +1909,11 @@ mod tests {
     #[test]
     fn a_chunk_reporting_an_error_fails_without_the_key() {
         let mut folding = Folding::default();
-        let failed = folding.take(r#"{"error": {"message": "overloaded, key sk-1"}}"#, "sk-1");
+        let failed = folding.take(
+            r#"{"error": {"message": "overloaded, key sk-1"}}"#,
+            "sk-1",
+            &mut VecDeque::new(),
+        );
         assert_eq!(
             failed,
             Err(OpenAiError::StreamFailed {

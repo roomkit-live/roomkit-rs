@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Stream Chat Completions tool-call fragments with stable call identities, including missing or repeated server ids, through the provider and the room's composition events (RFC §6.4, RMK-1119).
+
 - Publish tool-call composition sizes and terminal frames across retries, fallback and cancellation; support `MockAiProviderOptions::tool_call_delta_chunks` (RFC §6.4, RMK-1119).
 
 - Protect every message left by a generation hook when a deferred input can no longer be identified; only new tool results may be shortened, and an unsafe overflow fails explicitly (RMK-1576).
