@@ -42,6 +42,8 @@ pub(crate) struct Adopted {
     /// its notes included, as the hooks left it: what a compaction keeps
     /// whole (RFC §6.4).
     pub(crate) turn_input: Option<usize>,
+    /// The message a discussion answers, when it reads before later messages.
+    pub(crate) answered_input: Option<usize>,
 }
 
 /// The calls a round ran, as `AFTER_TOOL_ROUND` hands them: none when the
@@ -102,6 +104,10 @@ impl Loop {
     /// they took out withdrawn (Python's `_adopt_hook_toolset`).
     fn adopt(&mut self, built: &AiContext, left: AiContext, conversation: usize) {
         if left.messages != built.messages {
+            self.adopted.answered_input = self
+                .adopted
+                .answered_input
+                .and_then(|at| retained_input(at, &built.messages, &left.messages));
             self.adopted.messages = Some((left.messages, conversation));
         }
         self.system_prompt = left.system_prompt;
@@ -267,4 +273,20 @@ impl Loop {
         self.record_tools(&round);
         self.shown_tools(round)
     }
+}
+
+/// Keep the existing boundary when its message is unchanged. Only relocate a
+/// moved input when there is exactly one match: repeated questions are not
+/// interchangeable, even when their rendered words are identical.
+fn retained_input(at: usize, built: &[AiMessage], left: &[AiMessage]) -> Option<usize> {
+    let input = built.get(at)?;
+    if left.get(at) == Some(input) {
+        return Some(at);
+    }
+    let mut matches = left
+        .iter()
+        .enumerate()
+        .filter(|(_, message)| *message == input);
+    let (at, _) = matches.next()?;
+    matches.next().is_none().then_some(at)
 }

@@ -672,11 +672,12 @@ impl Loop {
         }
     }
 
-    /// Places the images the turn replays at its input, the last of
-    /// `messages`, the conversation its first round reads (RFC §6.4).
-    pub(crate) fn place_turn_images(&mut self, messages: &[Message]) {
+    /// Place replayed images and remember the answered input in the
+    /// conversation the first round reads, before generation hooks (RFC §6.4).
+    pub(crate) fn place_turn_input(&mut self, messages: &[Message], answered: Option<usize>) {
         let shown = ai_messages(&self.shown_messages(messages));
         self.media.place(&shown);
+        self.keep_answered_input(messages, answered);
     }
 
     /// `messages` as a round shows them to the provider: each call's

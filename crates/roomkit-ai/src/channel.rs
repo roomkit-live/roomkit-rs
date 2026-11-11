@@ -20,7 +20,7 @@ use roomkit::{
 use roomkit_core::rules::edits::opens_no_turn;
 use roomkit_core::rules::instructions::kept_instruction;
 use roomkit_core::rules::transcript::{
-    Message, Replayed, TurnMemory, conversation_with_memory, earlier_turns, people_taking_part,
+    Message, Replayed, TurnMemory, conversation_with_input, earlier_turns, people_taking_part,
 };
 use serde_json::{Map, Value};
 
@@ -1646,13 +1646,13 @@ impl<P: AiProvider> AiChannel<P> {
         memory: &TurnMemory,
         images: &AuthorImages,
         vision: bool,
-    ) -> Vec<Message> {
+    ) -> (Vec<Message>, Option<usize>) {
         let reader = TurnReader {
             images,
             vision,
             describer: self.media.describer.as_ref(),
         };
-        conversation_with_memory(
+        conversation_with_input(
             &self.channel_id,
             read,
             history,
@@ -1789,11 +1789,12 @@ impl<P: AiProvider> AiChannel<P> {
             keys: images.sent(),
         });
         let memory = with_discussion_turn(&event, recalled.memory, notes);
-        let messages = self.conversation((&read, &recalled.history), &memory, &images, vision);
+        let (messages, input) =
+            self.conversation((&read, &recalled.history), &memory, &images, vision);
         // The context takes the settings once the conversation is read, as
         // Python's AIContext validates them.
         settings.validated()?;
-        looped.place_turn_images(&messages);
+        looped.place_turn_input(&messages, input.filter(|_| memory.in_place));
         // What the turn's generation hooks leave is its context; a block
         // runs no generation (RFC §6.4).
         if !looped.before_generation(&event, &messages).await {

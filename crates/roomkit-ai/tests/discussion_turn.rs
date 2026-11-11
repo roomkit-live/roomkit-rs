@@ -8,6 +8,9 @@
     reason = "a test fails on a broken fixture"
 )]
 
+#[path = "discussion_turn/compaction.rs"]
+mod compaction;
+
 use std::future::{self, Future};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};

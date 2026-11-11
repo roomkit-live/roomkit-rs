@@ -116,6 +116,14 @@ impl Loop {
         context.messages.splice(at..at, exchanges);
         self.adopted.messages = Some((context.messages, self.shown(messages).len()));
         self.adopted.turn_input = Some(at + count);
+        if let Some(input) = self
+            .adopted
+            .answered_input
+            .as_mut()
+            .filter(|input| **input >= at)
+        {
+            *input += count;
+        }
         true
     }
 

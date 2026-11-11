@@ -38,6 +38,17 @@ const STORED_OVER_CHARS: usize = 2000;
 const STORED_PREVIEW_CHARS: usize = 1000;
 
 impl Loop {
+    /// Retain a discussion's answered message before generation hooks, mapped
+    /// through grouped tool results and any memory summary joined ahead of it.
+    pub(crate) fn keep_answered_input(&mut self, messages: &[Message], input: Option<usize>) {
+        let Some(before) = input.and_then(|at| messages.get(..at)) else {
+            return;
+        };
+        let shown = self.shown(messages);
+        let asked = crate::memory::after_memory(&self.remembered, shown.clone());
+        self.adopted.answered_input = Some(asked.len() - shown.len() + self.shown(before).len());
+    }
+
     /// Keeps where the turn's input is among the messages of its first
     /// round, `messages` its conversation: the last one when it is a
     /// user's, what a compaction keeps whole (Python's `turn_input`, set
@@ -68,7 +79,7 @@ impl Loop {
         let room = self.context.room_id.as_str();
         let (compacted, turn_input) = compacted(
             &context.messages,
-            self.adopted.turn_input,
+            self.adopted.answered_input.or(self.adopted.turn_input),
             &self.eviction,
             room,
         )
@@ -76,7 +87,11 @@ impl Loop {
         // Counted as the provider reads them: a round's results are one message.
         let shown = self.shown(messages).len();
         self.adopted.messages = Some((compacted.clone(), shown));
-        self.adopted.turn_input = turn_input;
+        if self.adopted.answered_input.is_some() {
+            self.adopted.answered_input = turn_input;
+        } else {
+            self.adopted.turn_input = turn_input;
+        }
         self.show_lost_references(&context.messages, &compacted, &mut context.tools);
         context.messages = compacted;
         Ok(())

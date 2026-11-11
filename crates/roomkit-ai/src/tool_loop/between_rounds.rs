@@ -44,7 +44,7 @@ impl Loop {
     /// [`with_compacted_history`] places it. A memory that returns none
     /// changes nothing, and one that fails is logged.
     async fn compact_after_round(&mut self, messages: &[Message], usage: &Metadata) {
-        let Some(at) = self.adopted.turn_input else {
+        let Some(at) = self.adopted.answered_input.or(self.adopted.turn_input) else {
             return;
         };
         let asked = self.round_context(messages, None).messages;
@@ -73,7 +73,11 @@ impl Loop {
         let shown = self.shown(messages).len();
         self.show_lost_references(&asked, &placed, &mut []);
         self.adopted.messages = Some((placed, shown));
-        self.adopted.turn_input = Some(input);
+        if self.adopted.answered_input.is_some() {
+            self.adopted.answered_input = Some(input);
+        } else {
+            self.adopted.turn_input = Some(input);
+        }
     }
 }
 

@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Keep a deferred discussion turn's answered message whole across memory summaries, tool-round compaction and repeated context overflows (RFC §6.4, §20.1).
+
 - **BREAKING: a router picks each turn's provider**, as Python's (RFC §6.4, RMK-1647). `AiChannel::routed(channel_id, router, options)` and `Agent::routed` take an `AiRouter`, asked at each turn's start, before the turn's context is built, and again once a generation's retries are spent; a turn's later rounds stay on the provider that served the round before. `AiChannelOptions::fallback_provider` is removed: `AiChannel::new(id, primary, AiChannelOptions { fallback_provider: Some(Arc::new(backup)), .. })` becomes `AiChannel::routed(id, FallbackRouter::new(Arc::new(primary), Arc::new(backup)), options)`, and a turn the fallback served now stays on it. A routed channel checks a cost budget's price on each turn's pick, so a model with no price fails the turn instead of `routed`. `provider()` is an `Option`, `None` for a routed channel.
 
 - Budget-aware, compacting and summarizing memories exclude a custom memory's returned current event before reducing history, leaving the original input to the channel once (RFC §20.1).

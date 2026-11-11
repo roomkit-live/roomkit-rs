@@ -305,6 +305,21 @@ pub fn conversation_with_memory(
     memory: &TurnMemory,
     read: impl Fn(&RoomEvent) -> TurnContent,
 ) -> Vec<Message> {
+    conversation_with_input(channel_id, event, context, history, memory, read).0
+}
+
+/// The conversation and the position of the event this turn answers, before
+/// any memory messages are prepended. Used by the AI loop to keep that input
+/// whole during compaction, including when a discussion reads it in place.
+#[doc(hidden)]
+pub fn conversation_with_input(
+    channel_id: &ChannelId,
+    event: &RoomEvent,
+    context: &RoomContext,
+    history: usize,
+    memory: &TurnMemory,
+    read: impl Fn(&RoomEvent) -> TurnContent,
+) -> (Vec<Message>, Option<usize>) {
     let mut authors = Authors::new(context);
     let mut turns = past_turns(channel_id, event, context, history, &mut authors, &read);
     let input = Turn::input(event, &mut authors, &read);
@@ -377,6 +392,7 @@ struct Turn {
     written_in: Option<String>,
     rounds: Vec<ToolRound>,
     said_with_round: bool,
+    input: bool,
 }
 
 impl Turn {
@@ -397,6 +413,7 @@ impl Turn {
             written_in: own.then(|| event.correlation_id.clone()).flatten(),
             rounds: Vec::new(),
             said_with_round: false,
+            input: false,
         }
     }
 
@@ -425,6 +442,7 @@ impl Turn {
             written_in: None,
             rounds: Vec::new(),
             said_with_round: false,
+            input: true,
         }
     }
 
@@ -441,6 +459,7 @@ impl Turn {
             written_in: None,
             rounds: Vec::new(),
             said_with_round: false,
+            input: false,
         }
     }
 
@@ -781,9 +800,13 @@ impl Notes<'_> {
 /// the turn's `notes` after the last message when it is a user's, the
 /// input or not, else as a user message of their own (Python's
 /// `with_turn_notes`): some chat formats refuse two user messages in a row.
-fn rendered(turns: Vec<Turn>, notes: &Notes<'_>) -> Vec<Message> {
+fn rendered(turns: Vec<Turn>, notes: &Notes<'_>) -> (Vec<Message>, Option<usize>) {
     let mut messages: Vec<Message> = Vec::with_capacity(turns.len());
+    let mut input = None;
     for turn in turns {
+        if turn.input {
+            input = Some(messages.len());
+        }
         let content = match (&turn.speaker, turn.content) {
             (_, TurnContent::Text(text)) if turn.instruction => {
                 TurnContent::Text(format!("{INSTRUCTION_MARK}\n{text}"))
@@ -810,7 +833,7 @@ fn rendered(turns: Vec<Turn>, notes: &Notes<'_>) -> Vec<Message> {
             None => messages.push(Message::new(Role::User, notes)),
         }
     }
-    messages
+    (messages, input)
 }
 
 /// The turn's `input` with `notes` after it (RFC §6.4): a text input a
