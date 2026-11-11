@@ -57,10 +57,23 @@ impl MemoryProvider for Scripted {
     ) -> Pin<Box<dyn Future<Output = Result<MemoryResult, ChannelError>> + Send + 'a>> {
         Box::pin(async move {
             write_record(&self.spec);
-            let window = self
+            let mut window = self
                 .window
                 .retrieve(room_id, current_event, context, options)
                 .await?;
+            if self
+                .spec
+                .get("returns_current_event")
+                .and_then(Value::as_bool)
+                == Some(true)
+            {
+                let before = window
+                    .events
+                    .iter()
+                    .position(|past| past.index > current_event.index)
+                    .unwrap_or(window.events.len());
+                window.events.insert(before, current_event.clone());
+            }
             Ok(MemoryResult {
                 messages: self.messages.clone(),
                 events: window.events,

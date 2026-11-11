@@ -16,7 +16,10 @@ use super::footprint::{history_event_costs, turn_history_budget};
 use super::summary::{
     SUMMARIZER_PROMPT, SUMMARY_FAILED, SummaryLines, summary_message, unavailable,
 };
-use super::{CompactOptions, IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions};
+use super::{
+    CompactOptions, IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions,
+    without_current_event,
+};
 use crate::provider::{AiContext, AiMessage, AiProvider, AiRole};
 
 /// How many summaries the cache keeps, the least recently used dropped.
@@ -262,6 +265,7 @@ impl<P: AiProvider> MemoryProvider for CompactingMemory<P> {
                 .inner
                 .retrieve(room_id, current_event, context, options)
                 .await?;
+            let inner = without_current_event(inner, current_event);
             // What the inner memory carries besides its events is not
             // compacted: it is paid for first, with the rest of the turn.
             let budget = turn_history_budget(

@@ -11,7 +11,10 @@ use roomkit::model::{Metadata, RoomContext, RoomEvent, RoomId};
 
 use super::footprint::{history_event_costs, turn_history_budget};
 use super::token_estimator::{EstimateEventTokensOptions, estimate_event_tokens};
-use super::{CompactOptions, IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions};
+use super::{
+    CompactOptions, IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions,
+    without_current_event,
+};
 use crate::provider::{AiMessage, ProviderError, ProviderErrorOptions};
 
 /// What [`BudgetAwareMemory::new`] takes beside its inner memory and its
@@ -162,6 +165,7 @@ impl MemoryProvider for BudgetAwareMemory {
                 .inner
                 .retrieve(room_id, current_event, context, options)
                 .await?;
+            let inner = without_current_event(inner, current_event);
             let budget = self.budget(&inner, current_event);
             let events = self.trimmed(inner.events, budget);
             Ok(MemoryResult { events, ..inner })

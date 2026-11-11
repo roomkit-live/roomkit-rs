@@ -19,7 +19,10 @@ use super::summary::{
     summary_message, unavailable,
 };
 use super::token_estimator::{estimate_message_tokens, estimate_notes_tokens};
-use super::{CompactOptions, IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions};
+use super::{
+    CompactOptions, IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions,
+    without_current_event,
+};
 use crate::provider::{AiContext, AiMessage, AiProvider, AiRole};
 use crate::turn_budget::TurnBudget;
 
@@ -452,6 +455,7 @@ impl<P: AiProvider> MemoryProvider for SummarizingMemory<P> {
                 .inner
                 .retrieve(room_id, current_event, context, options)
                 .await?;
+            let inner = without_current_event(inner, current_event);
             // What the turn leaves the history of the window: no margin,
             // the tiers' ratios are the headroom when no reply budget is set.
             let budget = turn_history_budget(self.max_context_tokens, 0.0, current_event, 0, None);

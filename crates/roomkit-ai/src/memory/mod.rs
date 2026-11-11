@@ -87,6 +87,12 @@ pub struct MemoryResult {
     pub speakers: Vec<String>,
 }
 
+/// Leave the input to the channel before history is trimmed or summarized.
+fn without_current_event(mut result: MemoryResult, current_event: &RoomEvent) -> MemoryResult {
+    result.events.retain(|event| event.id != current_event.id);
+    result
+}
+
 /// `memory`, the messages a memory built, then `rest`, the conversation: a
 /// user text `memory` ends on joins the user message that opens `rest`, a
 /// blank line between, rather than forming a second user message in a

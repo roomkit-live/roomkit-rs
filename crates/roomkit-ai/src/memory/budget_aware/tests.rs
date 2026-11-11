@@ -67,6 +67,31 @@ fn cost(events: &[RoomEvent]) -> usize {
         .sum()
 }
 
+// Python: TestBudgetAwareMemory::test_a_returned_current_event_is_not_charged_twice
+#[tokio::test]
+async fn a_returned_current_event_is_not_charged_twice() {
+    let before = event(&"a".repeat(100));
+    let current = event(&"q".repeat(1200));
+    let later = event(&"b".repeat(100));
+    let inner = mock(MockMemoryProviderOptions {
+        events: vec![before.clone(), current.clone(), later.clone()],
+        notes: vec!["Keep this note.".to_owned()],
+        ..MockMemoryProviderOptions::default()
+    });
+    let memory = with(
+        inner,
+        500,
+        BudgetAwareMemoryOptions {
+            safety_margin_ratio: 0.0,
+            min_events: 0,
+            ..BudgetAwareMemoryOptions::default()
+        },
+    );
+    let result = read(&memory, &current).await;
+    assert_eq!(result.events, vec![before, later]);
+    assert_eq!(result.notes, vec!["Keep this note."]);
+}
+
 // Python: TestBudgetAwareMemory::test_returns_all_events_when_under_budget,
 // test_empty_events and test_preserves_inner_messages
 #[tokio::test]

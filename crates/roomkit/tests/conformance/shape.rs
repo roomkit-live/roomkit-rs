@@ -232,6 +232,7 @@ const RAISES: &[&str] = &["kind", "message"];
 const POLICY: &[&str] = &["allow", "deny"];
 const MEMORY: &[&str] = &[
     "max_events",
+    "returns_current_event",
     "messages",
     "notes",
     "speakers",
