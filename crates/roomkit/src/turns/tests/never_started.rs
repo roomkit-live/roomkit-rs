@@ -145,3 +145,65 @@ async fn an_executor_whose_accepted_is_refused_builds_no_turn_work() {
         "the refused turn keeps no channel resource"
     );
 }
+
+// Python: tests/test_work_cancelled_before_start.py's closed-at-once contract,
+// applied to the public independent executor close. Admission is synchronous:
+// close must wait for an unpolled executor without ever running its channel.
+#[tokio::test(start_paused = true)]
+async fn a_local_executor_closed_before_its_first_poll_builds_no_turn_work() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let kit = kit_with(Unbuilt {
+        calls: Arc::clone(&calls),
+        _held: Arc::new(()),
+    })
+    .await;
+    let binding = kit
+        .store()
+        .get_binding(&room_id(), &channel("ai"))
+        .await
+        .unwrap()
+        .unwrap();
+    let context = RoomContext::new(kit.store().get_room(&room_id()).await.unwrap().unwrap());
+    let event = RoomEvent::new(
+        room_id(),
+        EventSource::new(channel("sms"), ChannelType::SMS),
+        TextContent::new("Hi"),
+    );
+    let turn_kit: Arc<dyn TurnKit> = Arc::new(Arc::downgrade(&kit.inner));
+    let (mut turn, ()) = kit
+        .inner
+        .turns
+        .submit(&turn_kit, &binding, event.clone(), context.clone(), |_| ())
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), kit.turn_executor().close())
+        .await
+        .unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert!(turn.output(kit.inner.turns.cutting()).await.is_err());
+    let previous = kit
+        .inner
+        .turns
+        .records()
+        .get(&channel("ai"), &room_id())
+        .cloned()
+        .unwrap();
+    let refusal = kit
+        .inner
+        .turns
+        .submit(&turn_kit, &binding, event, context, |_| ())
+        .unwrap_err();
+    assert_eq!(
+        refusal.attributes.get("reason"),
+        Some(&serde_json::json!("no_executor"))
+    );
+    let after = kit
+        .inner
+        .turns
+        .records()
+        .get(&channel("ai"), &room_id())
+        .cloned()
+        .unwrap();
+    assert_eq!(after.turn_id, previous.turn_id);
+    kit.close().await.unwrap();
+    assert_eq!(kit.inner.tasks.running(), 0);
+}

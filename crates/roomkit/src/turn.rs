@@ -1495,6 +1495,7 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
     }
 
     fn spawn_tracked(&self, task: BoxFuture<'static, ()>) -> Option<AbortHandle> {
+        let task = crate::turns::context::TurnScope::current().scope(task);
         let inner = self.upgrade()?;
         inner
             .tasks
@@ -1503,12 +1504,14 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
     }
 
     fn spawn_observer(&self, task: BoxFuture<'static, ()>) -> bool {
+        let task = crate::turns::context::TurnScope::current().scope(task);
         self.upgrade()
             .and_then(|inner| inner.tasks.spawn_observer(task))
             .is_some()
     }
 
     fn spawn_publisher(&self, task: BoxFuture<'static, ()>) -> bool {
+        let task = crate::turns::context::TurnScope::current().scope(task);
         self.upgrade()
             .and_then(|inner| inner.tasks.spawn_alone(Kind::Turn, task))
             .is_some()

@@ -479,7 +479,9 @@ async fn lifecycle_call(
         "register_hook" => finish(run, name, register_hook(run, &spec["hook"])?, |()| {
             Value::Null
         }),
-        "kit_executor.hook"
+        "kit_executor.close"
+        | "kit_executor.closed"
+        | "kit_executor.hook"
         | "kit_executor.room_hook"
         | "kit_executor.remove_room_hook"
         | "enable_room_hook"

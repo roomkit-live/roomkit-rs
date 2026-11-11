@@ -23,6 +23,7 @@
 //!   an item that is no delta until a later pull (`pulls`).
 
 mod inputs;
+mod lifecycle;
 mod link;
 mod record;
 mod work;
@@ -35,6 +36,7 @@ use std::sync::atomic::Ordering;
 use roomkit_core::rules::chain_depth::response_depth;
 
 pub(crate) use self::inputs::{ExecutorInputs, InputSettler};
+pub(crate) use self::lifecycle::{Lifecycle, Running};
 pub(crate) use self::link::HostLink;
 use self::link::{FrameSender, TurnFacts};
 use self::record::RecordChanges;
@@ -59,12 +61,14 @@ const CHANNEL_NOT_REGISTERED: &str = roomkit_core::ops::CHANNEL_NOT_REGISTERED;
 /// kit's; `false` when the kit runs no task any more.
 pub(super) fn take(
     turns: &Arc<Turns>,
+    running: Running,
     turn: Arc<MemoryTurn>,
     controls: PipeReceiver<Control>,
     carried: CarriedRequest,
     kit: &Arc<dyn TurnKit>,
 ) -> bool {
     let executor = Executor {
+        running,
         id: turns.executor_id.clone(),
         turns: Arc::clone(turns),
         sender: Arc::new(FrameSender::new(Arc::clone(&turn))),
@@ -81,6 +85,7 @@ pub(super) fn take(
 
 /// What one turn's task runs with.
 struct Executor {
+    running: Running,
     /// The executor's id.
     id: String,
     turns: Arc<Turns>,
@@ -230,6 +235,7 @@ impl Executor {
         let mut beat = Beat::new(&timeouts, true);
         let mut work = Some(work);
         let mut cut = None;
+        let mut closing = self.running.cutting();
         loop {
             if work.is_none() && (cut.is_some() || link.is_settled()) {
                 return cut;
@@ -243,11 +249,17 @@ impl Executor {
             };
             tokio::select! {
                 biased;
+                () = executor_closing(&mut closing) => {
+                    // Independent executor close has no owner-side cancellation:
+                    // finish its pending calls and stream, then send the end.
+                    drop(work.take());
+                    return Some(Cut::Cancelled("cancelled".to_owned()));
+                }
                 control = controls.get() => {
                     beat.heard();
                     match control {
                         Ok((_, control)) => match apply(control, flow, link, steering) {
-                            Some(Cut::Cancelled(_)) if self.kit.acting() => {
+                            Some(Cut::Cancelled(_)) if self.kit.acting() || self.running.spared_by_owner() => {
                                 return Some(self.let_go(work.take(), flow, link).await);
                             }
                             Some(cutting) => {
@@ -256,6 +268,9 @@ impl Executor {
                             }
                             None => {}
                         },
+                        Err(_) if self.running.spared_by_owner() => {
+                            return Some(self.let_go(work.take(), flow, link).await);
+                        }
                         Err(failure) => return Some(Cut::Lost(lost(&failure))),
                     }
                 }
@@ -269,6 +284,9 @@ impl Executor {
                 silent = beat.tick() => {
                     if silent >= timeouts.silent_intervals() {
                         tracing::warn!(target: "roomkit::turns", turn = %self.turn.turn_id, "a turn's owner fell silent");
+                        if self.running.spared_by_owner() {
+                            return Some(self.let_go(work.take(), flow, link).await);
+                        }
                         return Some(Cut::Lost(TurnError::new("owner_lost", "the turn's owner fell silent")));
                     }
                 }
@@ -298,7 +316,14 @@ impl Executor {
         lock(&flow.gate).close();
         flow.wake.notify_one();
         if let Some(work) = work {
-            work.await;
+            let mut closing = self.running.cutting();
+            tokio::select! {
+                biased;
+                () = executor_closing(&mut closing) => {
+                    return Cut::Cancelled("cancelled".to_owned());
+                }
+                () = work => {}
+            }
         }
         Cut::LetGo
     }
@@ -329,7 +354,7 @@ impl Executor {
                 // No read returned while the call ran: the arguments its gate
                 // fixed reach the owner before the turn's end (RFC §10.6.4).
                 drop(host.with_ran_with(|ran_with| self.sender.report_args(ran_with)));
-                host.report_cut(&self.turn.stream_context(), &reason);
+                host.report_cut(self.turn.stream_context().execution(), &reason);
                 link.fail_all(&TurnError::new(
                     "cancelled",
                     format!("the turn was cut: {reason}"),
@@ -337,7 +362,7 @@ impl Executor {
             }
             Some(Cut::Lost(error)) => {
                 self.sender.silence();
-                host.report_cut(&self.turn.stream_context(), &error.kind);
+                host.report_cut(self.turn.stream_context().execution(), &error.kind);
                 link.fail_all(&error);
                 return;
             }
@@ -583,5 +608,17 @@ mod tests {
         };
         let refused = parse(carried).unwrap_err();
         assert!(refused.contains("past the bound"), "{refused}");
+    }
+}
+
+/// Wait for an independent close to cut this turn.
+async fn executor_closing(closing: &mut tokio::sync::watch::Receiver<bool>) {
+    loop {
+        if *closing.borrow_and_update() {
+            return;
+        }
+        if closing.changed().await.is_err() {
+            pending::<()>().await;
+        }
     }
 }

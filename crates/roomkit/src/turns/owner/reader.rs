@@ -14,9 +14,9 @@ use tokio::sync::{mpsc, watch};
 
 use super::{Canceller, Main, OwnerState, Steerable, cancel};
 use crate::channel::ChannelError;
-use crate::context::ExecutionContext;
 use crate::stream::{ResponseItem, UsageMarker};
 use crate::turns::codec::{decode_end, decode_loop_end, decode_output, decode_start};
+use crate::turns::context::TurnContext;
 use crate::turns::error::{RemoteError, TurnError, TurnFailure};
 use crate::turns::lock;
 use crate::turns::pulls::PullWindow;
@@ -401,7 +401,7 @@ impl OwnerTurn {
 
     /// The context of the current call is the one waiting on the turn.
     fn wait_here(&self) {
-        *lock(&self.state.waiting) = ExecutionContext::current();
+        *lock(&self.state.waiting) = TurnContext::current();
     }
 
     fn put(&self, control: &Control) {

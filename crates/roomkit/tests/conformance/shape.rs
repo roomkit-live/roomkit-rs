@@ -455,6 +455,7 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
         "send_greeting" => &["room_id", "channel_id", "agent_id", "greeting"],
         "register_channel" => &["channel"],
         "unregister_channel" => &["channel_id"],
+        "kit_executor.close" | "kit_executor.closed" => &[],
         "register_hook" | "kit_executor.hook" | "kit_executor.room_hook" => &["hook"],
         "kit_executor.remove_room_hook" => &["name"],
         "enable_room_hook" | "disable_room_hook" | "remove_room_hook" => &["room_id", "name"],

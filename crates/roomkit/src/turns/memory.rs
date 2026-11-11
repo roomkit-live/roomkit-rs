@@ -11,12 +11,12 @@ use roomkit_core::model::{
 };
 use serde::Serialize;
 
+use super::context::TurnContext;
 use super::lock;
 use super::observe::{Carried, Observers};
 use super::pipe::{MAX_MESSAGE_BYTES, Pipe};
 use super::timeouts::TurnTimeouts;
 use super::wire::{Control, Frame, OwnerTool, PreviousTurn};
-use crate::context::ExecutionContext;
 use crate::discussion_turn::{discussion_notes, discussion_turn};
 
 /// One turn in memory: what its two sides share.
@@ -43,10 +43,10 @@ pub(crate) struct MemoryTurn {
 pub(super) struct Contexts {
     /// The context of the owner's call that submitted the turn, which its
     /// `on_event()` runs in.
-    pub(super) turn: ExecutionContext,
+    pub(super) turn: TurnContext,
     /// The context of the owner's call that first read the turn's stream,
     /// set as its first pull is sent, which the stream advances in.
-    pub(super) stream: Option<ExecutionContext>,
+    pub(super) stream: Option<TurnContext>,
 }
 
 impl MemoryTurn {
@@ -66,25 +66,29 @@ impl MemoryTurn {
             timeouts,
             traced: Arc::default(),
             contexts: Mutex::new(Contexts {
-                turn: ExecutionContext::current(),
+                turn: TurnContext::current(),
                 stream: None,
             }),
         }
     }
 
     /// The context the turn's `on_event()` runs in.
-    pub(crate) fn turn_context(&self) -> ExecutionContext {
-        lock(&self.contexts).turn.clone()
+    pub(crate) fn turn_context(&self) -> TurnContext {
+        lock(&self.contexts)
+            .turn
+            .clone()
+            .in_turn(Arc::clone(&self.turn_id))
     }
 
     /// The context the turn's stream advances in: its first reader's, else
     /// the turn's own.
-    pub(crate) fn stream_context(&self) -> ExecutionContext {
+    pub(crate) fn stream_context(&self) -> TurnContext {
         let contexts = lock(&self.contexts);
         contexts
             .stream
             .clone()
             .unwrap_or_else(|| contexts.turn.clone())
+            .in_turn(Arc::clone(&self.turn_id))
     }
 
     /// Lends the stream the context of the call reading it, unless one
@@ -92,7 +96,7 @@ impl MemoryTurn {
     pub(crate) fn lend_stream_context(&self) {
         lock(&self.contexts)
             .stream
-            .get_or_insert_with(ExecutionContext::current);
+            .get_or_insert_with(TurnContext::current);
     }
 
     /// Stops both directions: their readers learn it, and what is put on

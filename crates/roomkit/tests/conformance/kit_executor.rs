@@ -22,6 +22,16 @@ use crate::run::Run;
 pub(crate) async fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Called, Unreadable> {
     let kit = run.kit();
     match name {
+        "kit_executor.close" => {
+            kit.turn_executor().close().await;
+            Ok(finish(run, name, Ok(()), |()| Value::Null))
+        }
+        "kit_executor.closed" => Ok(finish(
+            run,
+            name,
+            Ok(kit.turn_executor().closed()),
+            |value| Value::Bool(*value),
+        )),
         "enable_room_hook" => {
             let room: RoomId = field(spec, "room_id")?;
             let hook: String = field(spec, "name")?;

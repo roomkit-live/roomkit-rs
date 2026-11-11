@@ -3,6 +3,7 @@
 
 mod cross_read;
 mod cut_reads;
+mod executor_close;
 mod liveness;
 mod never_started;
 mod records;

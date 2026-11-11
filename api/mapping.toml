@@ -799,12 +799,6 @@ members = ["__init__", "take", "reach_owner", "control", "wire", "use_wiring", "
 scope = "text"
 reason = "The public backend, wire messages and construction of remote executors remain deferred; this type is the kit's local executor handle (HITL ac49c79d, option 1)."
 
-[[missing]]
-python = "roomkit.TurnExecutor"
-members = ["close"]
-scope = "text"
-reason = "Executor-only cancellation is still to port; the kit's close shuts its executor down. Named-hook activation does not claim this lifecycle method."
-
 [[exception]]
 rust = "roomkit::TurnExecutor::hook"
 params = ["fn"]

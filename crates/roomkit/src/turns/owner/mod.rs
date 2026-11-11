@@ -39,8 +39,8 @@ use super::pipe::PipeReceiver;
 use super::wire::{Control, Frame, Item, WireError, WireOutput};
 use super::{MemoryTurn, Turns};
 use crate::channel::BoxFuture;
-use crate::context::ExecutionContext;
 use crate::turn::TurnKit;
+use crate::turns::context::TurnContext;
 
 /// What the owner knows of a turn it submitted, which its verbs read.
 #[derive(Clone, Debug)]
@@ -88,7 +88,7 @@ pub(super) struct OwnerState {
     pub(super) facts: Facts,
     /// The context of the owner's call last waiting on the turn: a verb the
     /// turn asks runs in a copy of it (RFC §10.6.5).
-    pub(super) waiting: Mutex<ExecutionContext>,
+    pub(super) waiting: Mutex<TurnContext>,
     /// The arguments each call runs with once its gate fixed them, by its
     /// start's frame (`tool_args`).
     pub(super) ran_with: Mutex<HashMap<u64, Metadata>>,
@@ -197,7 +197,7 @@ pub(crate) fn open(
     let state = Arc::new(OwnerState {
         turn,
         facts,
-        waiting: Mutex::new(ExecutionContext::default()),
+        waiting: Mutex::new(TurnContext::default()),
         ran_with: Mutex::new(HashMap::new()),
         told_ends: Mutex::new(HashMap::new()),
         granted: AtomicU64::new(0),

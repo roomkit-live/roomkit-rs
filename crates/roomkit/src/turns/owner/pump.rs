@@ -14,9 +14,9 @@ use tokio::task::AbortHandle;
 use tokio::time::Instant;
 
 use super::{Facts, Main, OwnerState, verbs};
-use crate::context::ExecutionContext;
 use crate::turn::TurnKit;
 use crate::turns::codec::decode_end;
+use crate::turns::context::TurnContext;
 use crate::turns::error::{TurnError, one};
 use crate::turns::pipe::PipeReceiver;
 use crate::turns::timeouts::Beat;
@@ -257,7 +257,9 @@ impl Pump {
     /// Runs a verb the turn's host asks, in a copy of the context of the
     /// call waiting on the turn, as a task the turn cancels when it ends.
     fn serve(&mut self, call_id: String, verb: String, arguments: Metadata, context: CallContext) {
-        let waiting = lock(&self.state.waiting).clone();
+        let waiting = lock(&self.state.waiting)
+            .clone()
+            .in_turn(Arc::clone(&self.state.turn.turn_id));
         let state = Arc::clone(&self.state);
         let kit = Arc::clone(&self.kit);
         let answering = call_id.clone();
@@ -286,7 +288,9 @@ impl Pump {
         arguments: Metadata,
         context: &CallContext,
     ) {
-        let waiting = lock(&self.state.waiting).clone();
+        let waiting = lock(&self.state.waiting)
+            .clone()
+            .in_turn(Arc::clone(&self.state.turn.turn_id));
         let state = Arc::clone(&self.state);
         let kit = Arc::clone(&self.kit);
         let floor = context.chain_depth.max(state.facts.response_depth);
@@ -417,7 +421,7 @@ impl Drop for Pump {
         // Over first: a steer that comes after reads it and waits for none.
         self.state.steers.end();
         self.state.turn.shut();
-        *lock(&self.state.waiting) = ExecutionContext::default();
+        *lock(&self.state.waiting) = TurnContext::default();
     }
 }
 

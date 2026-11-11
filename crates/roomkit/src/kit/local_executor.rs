@@ -100,9 +100,15 @@ impl<S: ConversationStore> TurnExecutor<S> {
         self.hooks().undefine_room_hook(name)
     }
 
+    /// Take no more turns and cut running turns, except those this call runs
+    /// under (RFC §10.6.8). The kit and its registered channels remain open.
+    pub async fn close(&self) {
+        self.kit.inner.turns.executor_lifecycle.close().await;
+    }
+
     /// Whether this executor has closed.
     pub fn closed(&self) -> bool {
-        self.kit.inner.turns.is_closed()
+        self.kit.inner.turns.is_closed() || self.kit.inner.turns.executor_lifecycle.is_closed()
     }
 
     /// Whether it hosts this channel, even after closing.

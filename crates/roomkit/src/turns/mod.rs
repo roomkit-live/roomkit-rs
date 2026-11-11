@@ -32,6 +32,7 @@ mod public_options;
 pub use public_options::{HookOptions, RoomHookOptions, TakesOptions};
 
 mod codec;
+pub(crate) mod context;
 mod error;
 mod executor;
 mod memory;
@@ -108,6 +109,7 @@ pub(crate) struct Turns {
     /// The id the kit's own executor answers with.
     executor_id: String,
     closed: AtomicBool,
+    pub(crate) executor_lifecycle: Arc<executor::Lifecycle>,
     /// Each room's last turn of each channel the owner submitted.
     records: Mutex<RoomRecords>,
     /// How many of the turns' streams the owner reads now.
@@ -136,6 +138,7 @@ impl Default for Turns {
             observers: RwLock::new(Observers::default()),
             executor_id: executor_id(),
             closed: AtomicBool::new(false),
+            executor_lifecycle: Arc::default(),
             records: Mutex::new(RoomRecords::default()),
             reads: Mutex::new(0),
             reads_changed: Notify::new(),
@@ -294,6 +297,12 @@ impl Turns {
         }
         let room_hooks = request_room_hooks(&**kit, &event.room_id, &binding.channel_id)?;
         let turn_id: Arc<str> = Arc::from(format!("turn-{}", Uuid::new_v4().simple()));
+        let running = self
+            .executor_lifecycle
+            .admit(Arc::clone(&turn_id))
+            .ok_or_else(|| {
+                TurnError::new("no_executor", "the kit's local executor has closed").to_record()
+            })?;
         let previous = self.records().put(
             &binding.channel_id,
             &event.room_id,
@@ -340,7 +349,14 @@ impl Turns {
         // step on another worker. An earlier cut is already in its pipe.
         let following = submitted(turn.canceller());
         let taken = kit.spawn(pump)
-            && executor::take(self, Arc::clone(&memory), controls_read, carried, kit);
+            && executor::take(
+                self,
+                running,
+                Arc::clone(&memory),
+                controls_read,
+                carried,
+                kit,
+            );
         if !taken {
             memory.shut();
             return Err(closed());
