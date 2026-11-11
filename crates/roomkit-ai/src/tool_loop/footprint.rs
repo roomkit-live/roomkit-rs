@@ -10,7 +10,7 @@ use super::Loop;
 use crate::memory::{
     TurnFootprint, estimate_message_tokens, estimate_tokens, estimate_tool_tokens,
 };
-use crate::provider::{AiMessage, AiProvider, AiRole, ai_messages};
+use crate::provider::{AiMessage, AiRole, ai_messages};
 
 /// The note Python's runtime gives a turn whose history holds an answer a
 /// barge-in cut: a turn's measure keeps room for it, whether its history
@@ -20,7 +20,7 @@ const CUT_NOTE: &str = "[Cut answers, from the runtime: when the person cuts you
      an answer followed by such a mark was cut; every answer of yours without one was heard to \
      its end.]";
 
-impl<P: AiProvider> Loop<P> {
+impl Loop {
     /// The turn's footprint: its system prompt, the tools its first round
     /// declares, measured on their own schemas (the intent property is the
     /// request's), the notes the channel adds to its input (room for the

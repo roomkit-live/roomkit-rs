@@ -1,12 +1,12 @@
 //! A round's generation recovered from its provider's refusal (RFC §6.4):
 //! a context too long for the model compacted and replayed once, a
 //! refusal worth another try tried again under the channel's retry
-//! policy, then the fallback provider asked. Python's
-//! `_generate_stream_with_retry` and `_fallback_stream`.
+//! policy, then the channel's router asked for another provider. Python's
+//! `_generate_stream_with_retry`, `_rerouted` and `_rerouted_stream`.
 //!
 //! One rule holds for every recovery: a generation that handed anything is
-//! never read again, by a replay, a retry or the fallback, since the room
-//! and the turn already hold what it handed.
+//! never read again, by a replay, a retry or another provider, since the
+//! room and the turn already hold what it handed.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,10 +19,12 @@ use super::rules::Limits;
 use super::text_window::RoundWindows;
 use super::{Loop, TurnItem};
 use crate::error::AiError;
-use crate::provider::{AiContext, AiProvider, DynAiProvider, ProviderError};
+use crate::provider::{AiContext, DynAiProvider, ProviderError};
+use crate::router::{AiRouter, RouteRequest};
 use crate::steering::Steering;
 use crate::stream::Yielder;
 use crate::tools::AiTool;
+use crate::turn_budget::warn_if_priced_otherwise;
 
 /// What a round's generation is read with: the loop's steering, its
 /// reader, the text a round replays of the round before, the windows of its
@@ -36,18 +38,19 @@ pub(super) type Reading<'a> = (
 );
 
 /// How a channel's generations recover from their provider's refusals:
-/// Python's `retry_policy` and `fallback_provider`.
+/// Python's `retry_policy`, and the router a spent generation is handed to.
 #[derive(Clone, Default)]
 pub(crate) struct Resilience {
     /// How a refusal worth another try is tried again; `None` tries
     /// nothing again.
     pub(crate) retry_policy: Option<RetryPolicy>,
-    /// The provider asked once the retries are spent.
-    pub(crate) fallback_provider: Option<Arc<dyn DynAiProvider>>,
+    /// The router asked once the retries are spent, a routed channel's; a
+    /// channel serving one provider has none.
+    pub(crate) router: Option<Arc<dyn AiRouter>>,
 }
 
 impl Resilience {
-    /// The channel's `retry_policy` and `fallback_provider`.
+    /// The channel's `retry_policy`, and its `router` when it has one.
     ///
     /// # Errors
     ///
@@ -55,7 +58,7 @@ impl Resilience {
     /// as Python's `RetryPolicy` does (`gt=0`).
     pub(crate) fn checked(
         retry_policy: Option<RetryPolicy>,
-        fallback_provider: Option<Arc<dyn DynAiProvider>>,
+        router: Option<Arc<dyn AiRouter>>,
     ) -> Result<Self, AiError> {
         if let Some(policy) = &retry_policy {
             policy.check().map_err(|refused| AiError::RetryPolicy {
@@ -64,7 +67,7 @@ impl Resilience {
         }
         Ok(Self {
             retry_policy,
-            fallback_provider,
+            router,
         })
     }
 }
@@ -74,15 +77,12 @@ impl std::fmt::Debug for Resilience {
         formatter
             .debug_struct("Resilience")
             .field("retry_policy", &self.retry_policy)
-            .field(
-                "fallback_provider",
-                &self.fallback_provider.as_ref().map(|p| p.dyn_name()),
-            )
+            .field("router", &self.router.as_ref().map(|router| router.name()))
             .finish()
     }
 }
 
-impl<P: AiProvider> Loop<P> {
+impl Loop {
     /// Reads the round's generation, asked on `messages` with the `asked`
     /// tools and system prompt, `reading` as [`Generation::read`] takes it.
     /// A refusal before the provider handed anything is recovered from, in
@@ -93,13 +93,16 @@ impl<P: AiProvider> Loop<P> {
     /// - a refusal not worth another try fails the call;
     /// - one worth another try is tried again, at most the policy's
     ///   `max_retries` times, each after its delay;
-    /// - once the retries are spent, the fallback provider is asked once.
+    /// - once the retries are spent, the channel's router is asked for
+    ///   another provider, which gets one attempt; once it served, the
+    ///   turn's later rounds stay on it.
     ///
     /// # Errors
     ///
     /// The provider's error, whether the generation handed anything before
-    /// it, and what the room was handed; a fallback that failed before it
-    /// handed anything leaves the primary's error, its own the source.
+    /// it, and what the room was handed; a provider the router handed the
+    /// generation to that failed before it handed anything leaves the turn's
+    /// provider's error, its own the source.
     pub(super) async fn generate(
         &mut self,
         messages: &[Message],
@@ -118,12 +121,15 @@ impl<P: AiProvider> Loop<P> {
         let mut compacted = false;
         let mut attempt = 0;
         // What any try received, held text included: the round's, which
-        // its tries and its fallback share (Python's `note_received`).
+        // its tries and another provider's attempt share (Python's
+        // `note_received`).
         let mut received = false;
         let last = loop {
-            let sending =
-                super::deferred::declared_for(self.provider.supports_deferred_tools(), &context);
-            let stream = self.provider.generate_structured_stream(&sending);
+            let sending = super::deferred::declared_for(
+                self.provider.dyn_supports_deferred_tools(),
+                &context,
+            );
+            let stream = self.provider.dyn_generate_structured_stream(&sending);
             let reading = (steering, out, prefix, &mut *window, limits);
             let held = context.response_schema.is_some();
             let failure = match Generation::read(stream, reading, held).await {
@@ -170,47 +176,58 @@ impl<P: AiProvider> Loop<P> {
             tokio::time::sleep(delay).await;
             attempt += 1;
         };
-        match self.resilience.fallback_provider.clone() {
-            Some(fallback) => {
-                let reading = (steering, out, prefix, window, limits);
-                fall_back(&*fallback, &context, last, reading).await
-            }
-            None => Err(last),
-        }
+        let Some(other) = self.rerouted(&last.error).await else {
+            return Err(last);
+        };
+        let reading = (steering, out, prefix, window, limits);
+        let generation = rerouted(&*other, &context, last, reading).await?;
+        // It served the generation: the turn's later rounds stay on it.
+        self.provider = other;
+        Ok(generation)
+    }
+
+    /// The provider the channel's router hands a generation to once the
+    /// turn's provider spent its retries on `error`; `None` without a router,
+    /// or when it names none (Python's `_rerouted`).
+    async fn rerouted(&self, error: &ProviderError) -> Option<Arc<dyn DynAiProvider>> {
+        let router = self.resilience.router.as_ref()?;
+        let asked = self.route_request.clone();
+        let asked = asked.unwrap_or_else(|| RouteRequest::new(crate::RouteReason::Turn, ""));
+        let request = asked.retry(Arc::clone(&self.provider), error.clone());
+        let other = router.route(request).await?;
+        warn_if_priced_otherwise(self.budget.as_ref(), &*other);
+        Some(other)
     }
 }
 
-/// The fallback provider's generation on `context`, once the primary's
-/// retries are spent on `primary` and nothing was handed: Python's
-/// `_fallback_stream`. It is a second chance, not the turn's provider: a
-/// failure before it handed anything leaves the primary's error, its own
-/// riding as the source; one after is the turn's.
-async fn fall_back(
-    fallback: &dyn DynAiProvider,
+/// `provider`'s generation on `context`, the one attempt the router handed
+/// it once the turn's provider spent its retries on `spent` with nothing
+/// handed: Python's `_rerouted_stream`. It is a second chance, not the
+/// turn's provider: a failure before it handed anything leaves `spent`'s
+/// error, its own riding as the source; one after is the turn's.
+async fn rerouted(
+    provider: &dyn DynAiProvider,
     context: &AiContext,
-    primary: Failed,
+    spent: Failed,
     reading: Reading<'_>,
 ) -> Result<Generation, Failed> {
-    tracing::warn!(target: "roomkit::ai", provider = fallback.dyn_name(), "trying the fallback provider");
-    let context = super::deferred::declared_for(fallback.dyn_supports_deferred_tools(), context);
-    let stream = fallback.dyn_generate_structured_stream(&context);
+    tracing::warn!(target: "roomkit::ai", error = %spent.error, provider = provider.dyn_name(), "retries spent: the router hands the generation over");
+    let context = super::deferred::declared_for(provider.dyn_supports_deferred_tools(), context);
+    let stream = provider.dyn_generate_structured_stream(&context);
     let held = context.response_schema.is_some();
     let (steering, out, prefix, window, limits) = reading;
     let read = Generation::read(stream, (steering, out, prefix, &mut *window, limits), held).await;
     match read {
         Err(failure) if !failure.streamed => {
             window.thinking.drop_reasoning();
-            tracing::error!(target: "roomkit::ai", error = %failure.error, "the fallback provider failed too");
+            tracing::error!(target: "roomkit::ai", error = %failure.error, "the provider the router handed the generation to failed");
             Err(Failed {
-                error: primary.error.with_source(failure.error),
-                received: primary.received || failure.received,
-                ..primary
+                error: spent.error.with_source(failure.error),
+                received: spent.received || failure.received,
+                ..spent
             })
         }
-        Ok(generation) => Ok(Generation {
-            by_fallback: true,
-            ..generation
-        }),
+        Ok(generation) => Ok(generation),
         Err(failure) => Err(Failed {
             received: true,
             ..failure

@@ -12,7 +12,7 @@ use roomkit::testing::TurnTap;
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
     AiChannel, AiChannelOptions, AiContext, AiError, AiMessage, AiProvider, AiResponse, AiTool,
-    Date, DynAiProvider, HumanInputToolHandler, HumanInputToolHandlerOptions, ModelInfo,
+    Date, FallbackRouter, HumanInputToolHandler, HumanInputToolHandlerOptions, ModelInfo,
     ModelPricing, ProviderError, SkillRegistry, ToolPolicy, ToolResult, Tools,
 };
 use serde_json::{Value, json};
@@ -407,8 +407,8 @@ impl AiProvider for Priced {
 
 /// RFC §6.4: a generation whose usage the cost budget's price cannot read
 /// fails the turn, as Python's `ModelPricing.cost_for` raises in its loop;
-/// Rust raises it as the failure of the provider that served it, the
-/// fallback's when it did (HITL 5a287312).
+/// Rust raises it as the failure of the provider that served it, the one a
+/// router handed the generation to when it did (HITL 5a287312).
 #[tokio::test]
 async fn a_usage_the_price_cannot_read_fails_the_turn() {
     let unreadable = |counter: Value| {
@@ -446,18 +446,19 @@ async fn a_usage_the_price_cannot_read_fails_the_turn() {
         ),
     ];
     for (primary, fallback, named) in cases {
-        let fallback: Option<Arc<dyn DynAiProvider>> = match fallback {
-            Some(fallback) => Some(Arc::new(fallback)),
-            None => None,
-        };
         let options = AiChannelOptions {
             turn_budget_usd: Some(1.0),
-            fallback_provider: fallback,
             tools: served().into(),
             ..AiChannelOptions::default()
         };
-        let agent = AiChannel::new(channel("assistant"), Priced(primary), options).unwrap();
-        let room = Room::with_agent(agent).await;
+        let room = if let Some(fallback) = fallback {
+            let router = FallbackRouter::new(Arc::new(Priced(primary)), Arc::new(fallback));
+            let agent = AiChannel::routed(channel("assistant"), router, options).unwrap();
+            Room::with_agent(agent).await
+        } else {
+            let agent = AiChannel::new(channel("assistant"), Priced(primary), options);
+            Room::with_agent(agent.unwrap()).await
+        };
         let result = room.says("Order 1?").await;
         assert_eq!(
             result.error.map(|error| error.message),

@@ -15,6 +15,9 @@
 //!   serve themselves; an MCP server gives its tools and its handler
 //!   (`roomkit-mcp`).
 //! - [`ToolPolicy`]: which tools the model may call (RFC §21.1).
+//! - [`AiRouter`]: what picks each turn's provider, for a channel built with
+//!   [`AiChannel::routed`] (RFC §6.4); [`FallbackRouter`] hands a
+//!   generation whose retries are spent to another provider.
 //! - [`knowledge`]: the knowledge sources a retrieval memory searches
 //!   (RFC §20.2), Python's `roomkit.knowledge`.
 //! - [`memory`]: where a turn reads its history (RFC §20), Python's
@@ -79,6 +82,7 @@ pub mod memory;
 mod mock;
 pub mod orchestration;
 mod provider;
+mod router;
 pub mod tasks;
 pub use author_images::ImageResolver;
 mod handoff;
@@ -127,6 +131,9 @@ pub use self::provider::{
 };
 #[doc(hidden)]
 pub use self::provider::{check_schema_answer, checked_stream, schema_for_generate};
+pub use self::router::{
+    AiRouter, AiRouterFuture, FallbackRouter, RouteReason, RouteRequest, Routed,
+};
 #[doc(hidden)]
 pub use self::skills::dumps;
 pub use self::skills::{DiscoverOptions, Skill, SkillError, SkillMetadata, SkillRegistry};

@@ -1,9 +1,9 @@
 //! An AI agent whose model is overloaded (RFC §6.4): Alice asks a bakery by
 //! SMS, and the agent's provider answers 503, once and again. The agent's
 //! retry policy tries the generation once more, after 10 ms; once that
-//! retry is spent, the agent asks its fallback provider, another model,
-//! whose answer is the agent's. Nothing of a refused generation reached
-//! the room, so nothing is said twice.
+//! retry is spent, the agent's router, a `FallbackRouter`, hands the
+//! generation to another model, whose answer is the agent's. Nothing of a
+//! refused generation reached the room, so nothing is said twice.
 //!
 //! Both models are local fakes of the OpenAI wire, so it needs no network
 //! and no key. With `OPENAI_BASE_URL`, `OPENAI_API_KEY` and `OPENAI_MODEL`
@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use roomkit::model::{ChannelId, InboundMessage, RetryPolicy, RoomId, TextContent};
 use roomkit::{AttachChannelOptions, Channel, CreateRoomOptions, ProcessInboundOptions};
-use roomkit_ai::{AiChannel, AiChannelOptions};
+use roomkit_ai::{AiChannel, AiChannelOptions, FallbackRouter};
 
 use shared::text_of;
 use shared::{Checks, FakeOpenAi, OpenAiEndpoint, Reply, SmsNumber};
@@ -48,10 +48,10 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
             base_delay_seconds: 0.01,
             ..RetryPolicy::default()
         }),
-        fallback_provider: Some(Arc::new(backup.provider()?)),
         ..AiChannelOptions::default()
     };
-    let agent = AiChannel::new(ChannelId::new("assistant")?, primary.provider()?, options)?;
+    let router = FallbackRouter::new(Arc::new(primary.provider()?), Arc::new(backup.provider()?));
+    let agent = AiChannel::routed(ChannelId::new("assistant")?, router, options)?;
 
     let kit = shared::kit();
     let sms = SmsNumber::new(ChannelId::new("sms")?);

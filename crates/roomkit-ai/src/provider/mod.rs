@@ -228,7 +228,7 @@ pub trait AiProvider: Send + Sync + 'static {
 }
 
 /// The name of the type `T`, without its path nor its parameters.
-fn short_type_name<T: ?Sized>() -> &'static str {
+pub(crate) fn short_type_name<T: ?Sized>() -> &'static str {
     let full = std::any::type_name::<T>();
     let base = full.split('<').next().unwrap_or(full);
     base.rsplit("::").next().unwrap_or(base)

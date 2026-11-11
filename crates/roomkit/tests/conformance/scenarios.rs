@@ -53,44 +53,6 @@ const APART: &str = "executors/";
 /// backend and its executor are private here.
 const NO_EXECUTOR_APART: &str = "§10.6.7: an executor apart needs a public turn backend";
 
-/// Python's per-turn model router has no Rust API or runner yet (RMK-1647).
-/// Each exact case must fail; a newly supported case fails the suite until
-/// its entry is removed. The turn-record scenario already passes unlisted.
-const MODEL_ROUTER_FAILURES: &[(&str, &str)] = &[
-    (
-        "ai-router/a-generation-that-spoke-is-not-handed-over",
-        "§6.4: the public model router and its runner are not ported (RMK-1647)",
-    ),
-    (
-        "ai-router/a-generation-the-router-hands-over-keeps-the-turn-s-later-rounds",
-        "§6.4: the public model router and its runner are not ported (RMK-1647)",
-    ),
-    (
-        "ai-router/a-retry-the-router-names-no-model-for-fails-with-the-last-refusal",
-        "§6.4: the public model router and its runner are not ported (RMK-1647)",
-    ),
-    (
-        "ai-router/before-ai-generation-names-the-model-the-router-picks",
-        "§6.4: the public model router and its runner are not ported (RMK-1647)",
-    ),
-    (
-        "ai-router/the-router-picks-each-turn-s-model-and-its-rounds-stay-on-it",
-        "§6.4: the public model router and its runner are not ported (RMK-1647)",
-    ),
-    (
-        "ai-router/the-turn-s-context-is-built-for-the-model-the-router-picks",
-        "§6.4: the public model router and its runner are not ported (RMK-1647)",
-    ),
-    (
-        "reasoning/a-fallback-s-blocks-go-back",
-        "§6.4: later tool rounds return to the primary instead of staying on the fallback (RMK-1647)",
-    ),
-    (
-        "tools/a-fallback-s-generations-are-priced-at-the-primary-s-rate",
-        "§6.4: later tool rounds return to the primary instead of staying on the fallback (RMK-1647)",
-    ),
-];
-
 /// Whether `id` is a scenario no runner here runs, reported as a known failure.
 #[expect(
     clippy::print_stdout,
@@ -164,10 +126,7 @@ pub(crate) fn every_scenario_gives_what_the_rfc_says(
             continue;
         }
         let problems = problems(&scenario, runtime);
-        let listed = known
-            .iter()
-            .chain(MODEL_ROUTER_FAILURES)
-            .find(|(listed, _)| *listed == id);
+        let listed = known.iter().find(|(listed, _)| *listed == id);
         if !problems.is_empty() {
             failing.push(id.clone());
         }
@@ -182,7 +141,7 @@ pub(crate) fn every_scenario_gives_what_the_rfc_says(
             (true, None) => {}
         }
     }
-    for (listed, _) in known.iter().chain(MODEL_ROUTER_FAILURES) {
+    for (listed, _) in known {
         if !paths.iter().any(|path| scenario_id(&root, path) == *listed) {
             report.push(format!("known failure {listed} names no scenario"));
         }

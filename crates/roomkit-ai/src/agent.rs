@@ -20,6 +20,7 @@ use serde_json::Value;
 use crate::channel::{AiChannel, AiChannelOptions};
 use crate::error::AiError;
 use crate::provider::AiProvider;
+use crate::router::{AiRouter, Routed};
 use crate::steering::SteerOptions;
 use crate::tools::ToolHandler;
 
@@ -123,6 +124,23 @@ pub struct Agent<P> {
     identity_in_prompt: bool,
 }
 
+impl Agent<Routed> {
+    /// The agent `channel_id`, each turn answering with the provider
+    /// `router` picks at its start (RFC §6.4): Python's
+    /// `Agent(channel_id, router=router, ...)`, which is not config-only.
+    ///
+    /// # Errors
+    ///
+    /// Returns what [`AiChannel::routed`] refuses `options.ai` with.
+    pub fn routed(
+        channel_id: ChannelId,
+        router: impl AiRouter,
+        options: AgentOptions,
+    ) -> Result<Self, AiError> {
+        Self::of(options, |ai| AiChannel::routed(channel_id, router, ai))
+    }
+}
+
 impl<P: AiProvider> Agent<P> {
     /// The agent `channel_id`, answering with `provider`.
     ///
@@ -130,6 +148,15 @@ impl<P: AiProvider> Agent<P> {
     ///
     /// Returns what [`AiChannel::new`] refuses `options.ai` with.
     pub fn new(channel_id: ChannelId, provider: P, options: AgentOptions) -> Result<Self, AiError> {
+        Self::of(options, |ai| AiChannel::new(channel_id, provider, ai))
+    }
+
+    /// The agent `options` describe, answering through the channel `build`
+    /// makes of their AI channel's options.
+    fn of(
+        options: AgentOptions,
+        build: impl FnOnce(AiChannelOptions) -> Result<AiChannel<P>, AiError>,
+    ) -> Result<Self, AiError> {
         let AgentOptions {
             name,
             role,
@@ -155,7 +182,7 @@ impl<P: AiProvider> Agent<P> {
             auto_greet,
         };
         let prompt = identity_in_prompt.then(|| IdentityPrompt::of(&identity));
-        let channel = AiChannel::new(channel_id, provider, ai)?.with_identity(prompt);
+        let channel = build(ai)?.with_identity(prompt);
         Ok(Self {
             channel,
             identity,
@@ -181,9 +208,16 @@ impl<P: AiProvider> Agent<P> {
         IdentityPrompt::of(&self.identity).block(language.as_deref())
     }
 
-    /// The provider its turns answer with: Python's `provider`.
-    pub fn provider(&self) -> &P {
+    /// The provider its turns answer with: Python's `provider`; `None` for
+    /// an agent a router serves.
+    pub fn provider(&self) -> Option<&P> {
         self.channel.provider()
+    }
+
+    /// The router that picks each turn's provider, if it has one: Python's
+    /// `router`.
+    pub fn router(&self) -> Option<&dyn AiRouter> {
+        self.channel.router()
     }
 
     /// Replaces what every turn's system prompt opens with: Python's

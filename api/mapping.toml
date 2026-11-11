@@ -216,8 +216,8 @@ reason = "Python's **kwargs, which go to start_span's keywords: StartSpanOptions
 rust = "roomkit_ai::Agent::new"
 python = "roomkit.Agent.__init__"
 params = { ai = "kwargs" }
-py_spec = "sha256:56667118afbb2b6319f2073f4921ae72de0afd29382663882356bb88a3a999d4"
-reason = "Python's **kwargs, which go to the AIChannel it is: AgentOptions::ai (HITL 2af87061 item 5)"
+py_spec = "sha256:e4cfe769a2a8b10406b2b5f3c4405aa4fa9c24400aa4d43fbd0b23b32fe32228"
+reason = "Python's **kwargs, which go to the AIChannel it is: AgentOptions::ai (HITL 2af87061 item 5); its router is Agent::routed's (HITL 0bd7a643, RMK-1647)"
 
 [[map]]
 rust = "roomkit::RoomKit::attach_channel"
@@ -480,6 +480,46 @@ rust = "roomkit_ai::Agent::new"
 params = ["provider"]
 approved = "2026-11-02"
 reason = "the provider is the channel's generic parameter: Agent::new takes it, and Python's provider=None, a config-only agent, is Agent::config_only, not in 0.x: it serves the realtime voice channel, left out (HITL 2af87061 item 5, HITL a9e5d1a3)"
+
+[[exception]]
+rust = "roomkit_ai::AiChannel::new"
+params = ["provider"]
+approved = "2026-11-10"
+reason = "the provider is the channel's generic parameter, as Agent::new's: AiChannel::new takes it, and Python's provider=None with a router is AiChannel::routed, an AiChannel<Routed> (HITL 0bd7a643, RMK-1647)"
+
+[[exception]]
+python = "roomkit.AIChannel.__init__"
+params = ["router"]
+approved = "2026-11-10"
+reason = "a channel a router serves has no provider of its own, the channel's generic parameter: it is built by AiChannel::routed(channel_id, router, options), the provider and the router one of the two by type (HITL 0bd7a643, RMK-1647)"
+
+[[exception]]
+python = "roomkit.Agent.__init__"
+params = ["router"]
+approved = "2026-11-10"
+reason = "as AIChannel's router: Agent::routed(channel_id, router, options) (HITL 0bd7a643, RMK-1647)"
+
+[[exception]]
+rust = "roomkit_ai::AiChannel"
+members = ["routed"]
+approved = "2026-11-10"
+reason = "Python's AIChannel(channel_id, router=router, ...): the constructor of a channel a router serves, an AiChannel<Routed> (HITL 0bd7a643, RMK-1647)"
+
+[[exception]]
+rust = "roomkit_ai::Agent"
+members = ["routed"]
+approved = "2026-11-10"
+reason = "Python's Agent(channel_id, router=router, ...), as AiChannel::routed (HITL 0bd7a643, RMK-1647)"
+
+[[exception]]
+rust = "roomkit_ai::Routed"
+approved = "2026-11-10"
+reason = "the provider type of a channel a router serves, which has none of its own: no value of it exists (architecture: the Python names table; HITL 0bd7a643, RMK-1647)"
+
+[[exception]]
+rust = "roomkit_ai::AiRouterFuture"
+approved = "2026-11-10"
+reason = "the channel holds its router as a trait object, as the kit its inbound router: AiRouter::route returns a boxed future (architecture: the Python names table; HITL 0bd7a643, RMK-1647)"
 
 [[exception]]
 rust = "roomkit_ai::Agent::channel"
@@ -1026,7 +1066,7 @@ reason = "Python's `ToolResult` alias (`roomkit.channels.ai`, not exported) read
 [[exception]]
 rust = "roomkit_ai::DynAiProvider"
 approved = "2026-11-03"
-reason = "Python's `AIProvider` held as an object (AIChannel(fallback_provider=...)): `AiProvider`'s async methods make it no `dyn` trait, so every provider is also a `DynAiProvider` (HITL be4dae08, RMK-1267)"
+reason = "Python's `AIProvider` held as an object (what an AIRouter returns, what FallbackRouter holds): `AiProvider`'s async methods make it no `dyn` trait, so every provider is also a `DynAiProvider` (HITL be4dae08, RMK-1267; HITL 0bd7a643, RMK-1647)"
 
 [[exception]]
 rust = "roomkit::RoomLock"

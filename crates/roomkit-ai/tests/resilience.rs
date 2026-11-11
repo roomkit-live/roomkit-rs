@@ -1,5 +1,5 @@
-//! What a generation's retries and its fallback provider leave that a
-//! scenario does not see (RFC §6.4; roomkit-specs
+//! What a generation's retries and the provider its router hands it to
+//! leave that a scenario does not see (RFC §6.4; roomkit-specs
 //! `conformance/scenarios/resilience/`): the turn's error and its source,
 //! and a retry policy the channel refuses.
 
@@ -15,7 +15,7 @@ use roomkit::model::{
     RetryPolicy, Room, RoomContext, RoomEvent, RoomId, TextContent,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
-use roomkit_ai::{AiChannel, AiChannelOptions, AiError, ProviderError};
+use roomkit_ai::{AiChannel, AiChannelOptions, AiError, FallbackRouter, ProviderError};
 
 fn room_id() -> RoomId {
     RoomId::new("r1").unwrap()
@@ -43,7 +43,7 @@ fn provider_errors(error: &(dyn Error + 'static)) -> Vec<String> {
     found
 }
 
-// Python: tests/test_channels/test_ai_retry.py::TestFallbackProvider::test_fallback_failure_raises_original_error
+// Python: tests/test_channels/test_ai_retry.py::TestFallbackRouter::test_fallback_failure_raises_original_error
 #[tokio::test]
 async fn a_fallback_that_fails_leaves_the_primary_s_error_its_own_the_source() {
     let primary = ScriptedProvider::new([
@@ -58,10 +58,10 @@ async fn a_fallback_that_fails_leaves_the_primary_s_error_its_own_the_source() {
         ScriptedProvider::new([ScriptedRound::answering("").refusing(500, "fallback error")]);
     let options = AiChannelOptions {
         retry_policy: Some(one_retry()),
-        fallback_provider: Some(Arc::new(fallback.clone())),
         ..AiChannelOptions::default()
     };
-    let agent = AiChannel::new(ChannelId::new("ai1").unwrap(), primary.clone(), options).unwrap();
+    let router = FallbackRouter::new(Arc::new(primary.clone()), Arc::new(fallback.clone()));
+    let agent = AiChannel::routed(ChannelId::new("ai1").unwrap(), router, options).unwrap();
     let event = RoomEvent::new(
         room_id(),
         EventSource::new(ChannelId::new("sms1").unwrap(), ChannelType::SMS),

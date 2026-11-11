@@ -3,7 +3,6 @@
 //! where the turn starts, under the kit's call: its stream may be read from
 //! another task.
 
-use std::any::type_name;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -48,17 +47,13 @@ impl TurnTelemetry {
 
     /// The turn's `llm.generate` span, naming `P` as its provider, as
     /// Python's names its provider's class.
-    pub(super) fn start_turn<P: ?Sized>(
+    pub(super) fn start_turn(
         &self,
         room_id: &RoomId,
         channel_id: &ChannelId,
+        name: &str,
     ) -> Option<TurnSpan> {
         let provider = self.provider.clone()?;
-        let name = type_name::<P>()
-            .split('<')
-            .next()
-            .and_then(|path| path.rsplit("::").next())
-            .unwrap_or_default();
         let mut attributes = Metadata::new();
         attributes.insert(Attr::PROVIDER.to_owned(), Value::from(name));
         attributes.insert(Attr::LLM_STREAMING.to_owned(), Value::from(true));
@@ -277,7 +272,7 @@ mod tests {
         };
         let room = RoomId::new("r1").unwrap();
         let channel = ChannelId::new("ai").unwrap();
-        telemetry.start_turn::<u8>(&room, &channel).unwrap()
+        telemetry.start_turn(&room, &channel, "u8").unwrap()
     }
 
     /// The status of a turn's span, by how its loop ended.

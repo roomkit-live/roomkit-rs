@@ -154,7 +154,7 @@ fn texts_of(parts: &[Part]) -> String {
 /// content's plain text), each media as its label, a composite's parts
 /// joined, one per line; `None` for content of another kind. Python's
 /// `content_text`.
-fn content_text(content: &EventContent) -> Option<String> {
+pub(crate) fn content_text(content: &EventContent) -> Option<String> {
     match content {
         EventContent::Text(text) => Some(text.body.clone()),
         EventContent::Rich(rich) => Some(

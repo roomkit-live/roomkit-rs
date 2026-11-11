@@ -238,6 +238,19 @@ impl Comparison<'_> {
             let calls = Value::Array(self.observed.router_calls.clone());
             self.check(expected, Some(&calls), "router_calls");
         }
+        for (agent, expected) in expect["ai_routes"].as_object().into_iter().flatten() {
+            let asked = self
+                .observed
+                .ai_routes
+                .get(agent)
+                .cloned()
+                .unwrap_or_default();
+            self.check(
+                expected,
+                Some(&Value::Array(asked)),
+                &format!("ai_routes.{agent}"),
+            );
+        }
         if let Some(expected) = expect.get("media_resolver") {
             let calls = Value::Array(self.observed.media_resolver.clone());
             self.check(expected, Some(&calls), "media_resolver");

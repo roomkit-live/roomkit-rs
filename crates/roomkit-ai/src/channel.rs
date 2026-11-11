@@ -36,6 +36,7 @@ use crate::memory::{
     SlidingWindowMemoryOptions, TurnFootprint, measured, runtime_or_cleaned,
 };
 use crate::provider::{AiContentPart, AiMessage, AiProvider, DynAiProvider, check_portable_schema};
+use crate::router::{AiRouter, RouteRequest, Routed};
 use crate::rows;
 use crate::server_instructions::ServerInstructions;
 use crate::skills::SkillRegistry;
@@ -65,9 +66,10 @@ use crate::turn_settings::{ReasoningLevels, TurnSettings, VALUE_ERROR};
 /// rule 7), as the pipeline writes it.
 const STANDALONE: &str = "standalone";
 
-/// What [`AiChannel::new`] takes beside its id and its provider: Python's
-/// `AIChannel` keywords for the features this implementation has, with
-/// Python's defaults.
+/// What [`AiChannel::new`] takes beside its id and its provider, and
+/// [`AiChannel::routed`] beside its id and its router: Python's `AIChannel`
+/// keywords for the features this implementation has, with Python's
+/// defaults.
 #[derive(Clone)]
 #[expect(
     clippy::struct_excessive_bools,
@@ -147,16 +149,10 @@ pub struct AiChannelOptions {
     /// ([`ProviderError::retryable`](crate::ProviderError::retryable)),
     /// before it handed anything, is tried again (RFC §6.4): Python's
     /// `retry_policy`, its `retryable_errors` unread, as Python's AI channel
-    /// leaves it; `None` tries nothing again.
+    /// leaves it; `None` tries nothing again. Once a routed channel's
+    /// retries are spent, its router may hand the generation to another
+    /// provider ([`AiChannel::routed`]).
     pub retry_policy: Option<RetryPolicy>,
-    /// The provider asked once a generation's retries are spent on refusals
-    /// worth another try, nothing handed yet (RFC §6.4); a refusal not worth
-    /// one never reaches it. Python's `fallback_provider`, any provider,
-    /// `Some(Arc::new(provider))`. When it fails before it hands anything,
-    /// the turn's error is the primary's, the fallback's its
-    /// [`source`](std::error::Error::source); the record of a turn it
-    /// answered names its model and provider.
-    pub fallback_provider: Option<Arc<dyn DynAiProvider>>,
     /// The longest a tool's call may take (RFC §21.6), more than zero;
     /// `None` bounds nothing.
     pub tool_timeout: Option<Duration>,
@@ -171,12 +167,14 @@ pub struct AiChannelOptions {
     /// metadata sets; `None` sets none.
     pub turn_budget_tokens: Option<u64>,
     /// The turn's cost budget, above 0: each generation's usage priced as
-    /// one response at the model's catalogue price
-    /// ([`ModelPricing::cost_for`](crate::ModelPricing::cost_for)), the
-    /// fallback's generations at the primary's; past it, the loop ends
-    /// `budget_exceeded` at its next round boundary (RFC §6.4). A model
-    /// with no price refuses it. Python's `turn_budget_usd`, under the one
-    /// a binding's metadata sets; `None` sets none.
+    /// one response at the catalogue price of the model the turn started on
+    /// ([`ModelPricing::cost_for`](crate::ModelPricing::cost_for)), a
+    /// generation a router handed to another model included; past it, the
+    /// loop ends `budget_exceeded` at its next round boundary (RFC §6.4). A
+    /// model with no price refuses it: at construction for a channel's own
+    /// provider, at the turn's start for the one a router picks. Python's
+    /// `turn_budget_usd`, under the one a binding's metadata sets; `None`
+    /// sets none.
     pub turn_budget_usd: Option<f64>,
     /// How hard a reasoning model thinks on the agent's turns (RFC §6.7),
     /// under the effort a binding's metadata sets and over the provider's
@@ -327,7 +325,6 @@ impl Default for AiChannelOptions {
             tool_loop_warn_after: 25,
             max_empty_retries: 1,
             retry_policy: None,
-            fallback_provider: None,
             tool_timeout: Some(Duration::from_secs(30)),
             tool_timeouts: BTreeMap::new(),
             turn_budget_tokens: None,
@@ -412,8 +409,12 @@ impl fmt::Debug for AiChannelOptions {
 /// With MCP servers' instructions, each turn's system prompt carries them
 /// after the channel's own (RFC §21.2); with skills, it then lists them,
 /// and carries the instructions of those active in the room (RFC §24.4).
-/// Its close closes its provider ([`AiProvider::close`]); the host closes
-/// what serves its tools, as Python's.
+/// Built with a router ([`AiChannel::routed`]), each turn runs on the
+/// provider the router picks at its start (RFC §6.4).
+///
+/// Its close closes its provider ([`AiProvider::close`]), or its router
+/// ([`AiRouter::close`]); the host closes what serves its tools, as
+/// Python's.
 ///
 /// It answers a message or an instruction, never its own events, and takes
 /// no inbound message. Cloning it shares its provider, its tools, its
@@ -422,7 +423,9 @@ impl fmt::Debug for AiChannelOptions {
 pub struct AiChannel<P> {
     channel_id: ChannelId,
     capabilities: ChannelCapabilities,
-    provider: Arc<P>,
+    /// Its provider; `None` for a channel a router serves, whose router
+    /// sits in `resilience`.
+    provider: Option<Arc<P>>,
     toolbox: Arc<Toolbox>,
     /// The host's handler, which the setter replaces.
     tool_handler: Arc<RwLock<Option<ToolHandler>>>,
@@ -549,7 +552,7 @@ impl<P> Clone for AiChannel<P> {
         Self {
             channel_id: self.channel_id.clone(),
             capabilities: self.capabilities.clone(),
-            provider: Arc::clone(&self.provider),
+            provider: self.provider.clone(),
             toolbox: Arc::clone(&self.toolbox),
             tool_handler: Arc::clone(&self.tool_handler),
             policy: self.policy.clone(),
@@ -582,6 +585,63 @@ impl<P> Clone for AiChannel<P> {
     }
 }
 
+/// What serves an AI channel's turns: one provider, or a router that picks
+/// one per turn (RFC §6.4), never both, as Python's constructor checks.
+enum Serving<P> {
+    Provider(P),
+    Router(Arc<dyn AiRouter>),
+}
+
+impl<P> Serving<P> {
+    /// The channel's provider, or its router.
+    fn split(self) -> (Option<Arc<P>>, Option<Arc<dyn AiRouter>>) {
+        match self {
+            Self::Provider(provider) => (Some(Arc::new(provider)), None),
+            Self::Router(router) => (None, Some(router)),
+        }
+    }
+}
+
+/// `provider` as an object.
+fn as_dyn<P: AiProvider>(provider: &P) -> &dyn DynAiProvider {
+    provider
+}
+
+/// What a turn runs on (RFC §6.4): its provider, what the router was asked
+/// for it (none without a router), and the turn's budget, priced at that
+/// provider's rate.
+struct Started {
+    provider: Arc<dyn DynAiProvider>,
+    asked: Option<RouteRequest>,
+    budget: Option<TurnBudget>,
+}
+
+impl AiChannel<Routed> {
+    /// The channel `channel_id`, each turn answering through the provider
+    /// `router` picks at its start, as `options` configure it: Python's
+    /// `AIChannel(channel_id, router=router, ...)`, whose `provider` is
+    /// `None` (RFC §6.4).
+    ///
+    /// The router is asked again, [`RouteReason::Retry`](crate::RouteReason::Retry),
+    /// once a generation's retries are spent before it handed anything; the
+    /// provider it names gets one attempt, and the turn's later rounds stay
+    /// on the provider that served the round before. A cost budget is
+    /// checked at each turn's start, on the model the router picks. The
+    /// channel's close closes the router.
+    ///
+    /// # Errors
+    ///
+    /// As [`AiChannel::new`]'s, but a cost budget on a model with no price,
+    /// which fails the turn instead.
+    pub fn routed(
+        channel_id: ChannelId,
+        router: impl AiRouter,
+        options: AiChannelOptions,
+    ) -> Result<Self, AiError> {
+        Self::built(channel_id, Serving::Router(Arc::new(router)), options)
+    }
+}
+
 impl<P: AiProvider> AiChannel<P> {
     /// The channel `channel_id`, answering through `provider`, as `options`
     /// configure it: Python's `AIChannel(channel_id, provider, ...)`.
@@ -605,6 +665,17 @@ impl<P: AiProvider> AiChannel<P> {
     pub fn new(
         channel_id: ChannelId,
         provider: P,
+        options: AiChannelOptions,
+    ) -> Result<Self, AiError> {
+        Self::built(channel_id, Serving::Provider(provider), options)
+    }
+
+    /// The channel `channel_id`, as `options` configure it, serving each
+    /// turn on what `serving` gives: its provider, or the provider its
+    /// router picks.
+    fn built(
+        channel_id: ChannelId,
+        serving: Serving<P>,
         options: AiChannelOptions,
     ) -> Result<Self, AiError> {
         let AiChannelOptions {
@@ -631,7 +702,6 @@ impl<P: AiProvider> AiChannel<P> {
             tool_loop_warn_after,
             max_empty_retries,
             retry_policy,
-            fallback_provider,
             tool_timeout,
             tool_timeouts,
             turn_budget_tokens,
@@ -661,11 +731,12 @@ impl<P: AiProvider> AiChannel<P> {
         // built, before its constructor runs.
         let policy = tool_policy.unwrap_or_default();
         refuse_bracketed(&policy)?;
-        let resilience = Resilience::checked(retry_policy, fallback_provider)?;
+        let (provider, router) = serving.split();
+        let resilience = Resilience::checked(retry_policy, router)?;
         refuse_tool_names(&tools)?;
         // Then in the order Python's constructor stores them.
-        let fallback = resilience.fallback_provider.as_deref();
-        check_budgets(turn_budget_tokens, turn_budget_usd, &provider, fallback)?;
+        let own = provider.as_deref().map(as_dyn);
+        check_budgets(turn_budget_tokens, turn_budget_usd, own)?;
         let instructions = instructions_of(&server_instructions)?;
         response_schema.as_ref().map(portable).transpose()?;
         refuse_zero_bounds(tool_timeout, &tool_timeouts)?;
@@ -676,7 +747,7 @@ impl<P: AiProvider> AiChannel<P> {
         Ok(Self {
             capabilities: ai_channel_capabilities(),
             channel_id,
-            provider: Arc::new(provider),
+            provider,
             toolbox: Arc::new(surface.toolbox),
             tool_handler: surface.tool_handler,
             policy,
@@ -719,9 +790,61 @@ impl<P: AiProvider> AiChannel<P> {
         self
     }
 
-    /// The channel's provider: Python's `provider`.
-    pub fn provider(&self) -> &P {
-        &self.provider
+    /// The provider the channel was given: Python's `provider`; `None` for
+    /// a channel a router serves, which picks one per turn. The provider
+    /// that served an answer is on its message, as `ai_provider` and
+    /// `ai_model` (RFC §6.4).
+    pub fn provider(&self) -> Option<&P> {
+        self.provider.as_deref()
+    }
+
+    /// The router that picks each turn's provider, if the channel has one:
+    /// Python's `router`.
+    pub fn router(&self) -> Option<&dyn AiRouter> {
+        self.resilience.router.as_deref()
+    }
+
+    /// What a turn answering `event` on `binding` runs on (RFC §6.4): the
+    /// channel's own provider, or the one its router picks, asked before the
+    /// turn's context is built, then the turn's budget, read from `settings`
+    /// and the binding and priced at that provider's rate (Python's
+    /// `_route_turn`, then `_turn_budget`).
+    ///
+    /// # Errors
+    ///
+    /// Python's `ValueError` for a router that names no provider, then
+    /// [`Self::budget_of`]'s.
+    async fn start_turn(
+        &self,
+        event: &RoomEvent,
+        binding: &ChannelBinding,
+        settings: &mut TurnSettings,
+    ) -> Result<Started, ChannelError> {
+        let (provider, asked): (Arc<dyn DynAiProvider>, _) = match &self.resilience.router {
+            None => {
+                let own = self.provider.clone();
+                (
+                    own.ok_or("an AI channel serves a provider or a router")?,
+                    None,
+                )
+            }
+            Some(router) => {
+                let request = RouteRequest::turn(event, Some(&binding.room_id));
+                let Some(provider) = router.route(request.clone()).await else {
+                    let router = router.name().to_owned();
+                    let error = AiError::RouterNamedNone { router };
+                    return Err(Box::new(ClassedError::new(VALUE_ERROR, error)));
+                };
+                (provider, Some(request))
+            }
+        };
+        settings.read_budgets(&binding.metadata)?;
+        let budget = Self::budget_of(settings, &*provider)?;
+        Ok(Started {
+            provider,
+            asked,
+            budget,
+        })
     }
 
     /// What every turn's system prompt opens with: Python's
@@ -808,18 +931,20 @@ impl<P: AiProvider> AiChannel<P> {
         event.source.channel_id != self.channel_id && !opens_no_turn(event)
     }
 
-    /// What a turn with `settings` may spend, priced at the channel's
-    /// provider's rate (Python's `_turn_budget`).
+    /// What a turn with `settings` may spend, priced at the rate of
+    /// `provider`, the one the turn starts on (Python's `_turn_budget`).
     ///
     /// # Errors
     ///
     /// Python's `ValueError` for a cost budget on a model with no price,
     /// before the turn reads anything.
-    fn budget_of(&self, settings: &TurnSettings) -> Result<Option<TurnBudget>, ChannelError> {
-        let fallback = self.resilience.fallback_provider.as_deref();
+    fn budget_of(
+        settings: &TurnSettings,
+        provider: &dyn DynAiProvider,
+    ) -> Result<Option<TurnBudget>, ChannelError> {
         let (tokens, usd) = (settings.turn_budget_tokens, settings.turn_budget_usd);
         refuse_unpositive(tokens, usd)
-            .and_then(|()| turn_budget(tokens, usd, &*self.provider, fallback))
+            .and_then(|()| turn_budget(tokens, usd, Some(provider)))
             .map_err(|error| -> ChannelError { Box::new(ClassedError::new(VALUE_ERROR, error)) })
     }
 
@@ -965,7 +1090,7 @@ impl<P: AiProvider> AiChannel<P> {
     fn turn_search(
         &self,
         toolbox: Arc<Toolbox>,
-        context: &RoomContext,
+        (context, provider): (&RoomContext, &dyn DynAiProvider),
         (stands_alone, in_kit): (bool, bool),
     ) -> Result<(Arc<Toolbox>, Arc<TurnSearch>), AiError> {
         let memory = &self.media.tool_usage;
@@ -977,7 +1102,7 @@ impl<P: AiProvider> AiChannel<P> {
             let used = used_tools(rows).filter(|name| self.toolbox.in_tool_memory(name));
             memory.hydrate(&context.room.id, used);
         }
-        let window = self.provider.context_window();
+        let window = provider.dyn_context_window();
         let room = &context.room.id;
         let search = self
             .tool_search
@@ -1185,9 +1310,9 @@ impl<P: AiProvider> AiChannel<P> {
 
     /// The images this channel's tool calls in `room` returned that ride
     /// the turn's input (RFC §6.4); none for a turn that `stands_alone` or
-    /// a model that does not see. Python's `_turn_images`.
-    fn turn_images(&self, room: &RoomId, stands_alone: bool) -> Vec<AiContentPart> {
-        if stands_alone || !self.provider.supports_vision() {
+    /// a model that does not see (`vision`). Python's `_turn_images`.
+    fn turn_images(&self, room: &RoomId, stands_alone: bool, vision: bool) -> Vec<AiContentPart> {
+        if stands_alone || !vision {
             return Vec::new();
         }
         self.media.tool_usage.turn_images(room)
@@ -1213,12 +1338,12 @@ impl<P: AiProvider> AiChannel<P> {
     /// resolver, else the `kit`'s. Python's `_author_images`.
     async fn author_images(
         &self,
-        event: &RoomEvent,
-        history: &RoomContext,
+        (event, history): (&RoomEvent, &RoomContext),
         kit: &KitMedia,
+        vision: bool,
     ) -> AuthorImages {
         let events: Vec<&RoomEvent> = history.recent_events.iter().chain([event]).collect();
-        if !self.provider.supports_vision() {
+        if !vision {
             return unseen_images(&events);
         }
         let room = &history.room.id;
@@ -1517,14 +1642,14 @@ impl<P: AiProvider> AiChannel<P> {
     /// it, and of `history`, with what `memory` adds.
     fn conversation(
         &self,
-        read: &RoomEvent,
-        history: &RoomContext,
+        (read, history): (&RoomEvent, &RoomContext),
         memory: &TurnMemory,
         images: &AuthorImages,
+        vision: bool,
     ) -> Vec<Message> {
         let reader = TurnReader {
             images,
-            vision: self.provider.supports_vision(),
+            vision,
             describer: self.media.describer.as_ref(),
         };
         conversation_with_memory(
@@ -1541,7 +1666,7 @@ impl<P: AiProvider> AiChannel<P> {
     /// captured for the same request and the history it may replay.
     fn measure_turn(
         &self,
-        looped: &Loop<P>,
+        looped: &Loop,
         context: &RoomContext,
         stands_alone: bool,
         notes: &[String],
@@ -1549,6 +1674,21 @@ impl<P: AiProvider> AiChannel<P> {
         let people = self.people(context, stands_alone);
         let replayed = self.replayed(context, stands_alone);
         looped.footprint(&replayed, &people, notes)
+    }
+
+    /// What the calls of a turn answering `event` in `context`'s room read:
+    /// the room, the kit's `turn`, whether it stands alone, and who acts.
+    fn tool_context(
+        &self,
+        (event, context): (&RoomEvent, &RoomContext),
+        turn: Option<roomkit::TurnHost>,
+        stands_alone: bool,
+    ) -> ToolContext {
+        ToolContext::new(context.room.id.clone(), self.channel_id.clone())
+            .reading_room(&context.room.metadata)
+            .within(turn)
+            .standing_alone(stands_alone)
+            .acting_for(turn_actor(event, &context.participants))
     }
 
     /// The turn's work within its `record`: its settings, its memory, its
@@ -1570,29 +1710,28 @@ impl<P: AiProvider> AiChannel<P> {
         let mut settings = self.turn_settings(&binding, configured)?;
         let (toolbox, skills) = self.turn_toolbox(owned, configured, &binding)?;
         self.warn_unoffered_human_tools(&toolbox);
-        settings.read_budgets(&binding.metadata)?;
-        let budget = self.budget_of(&settings)?;
+        // The context is built for the provider the turn runs on (RFC §6.4).
+        let started = self.start_turn(&event, &binding, &mut settings).await?;
+        let vision = started.provider.dyn_supports_vision();
         let stands_alone = stands_alone(&event);
-        let in_kit = turn.is_some();
-        let (toolbox, search) = self.turn_search(toolbox, &context, (stands_alone, in_kit))?;
+        let window = (&context, &*started.provider);
+        let (toolbox, search) =
+            self.turn_search(toolbox, window, (stands_alone, turn.is_some()))?;
         let system_prompt = self.turn_system_prompt(
             &binding,
             (configured, skills.as_deref()),
             &context,
             (stands_alone, search.active()),
         );
-        let tools = ToolContext::new(context.room.id.clone(), self.channel_id.clone())
-            .reading_room(&context.room.metadata)
-            .within(turn.clone())
-            .standing_alone(stands_alone)
-            .acting_for(turn_actor(&event, &context.participants));
+        let tools = self.tool_context((&event, &context), turn.clone(), stands_alone);
         let mut looped = Loop {
             record: record.clone(),
-            provider: Arc::clone(&self.provider),
+            provider: started.provider,
+            route_request: started.asked,
             toolbox,
             policy: self.policy.clone(),
             bounds: self.bounds.clone(),
-            budget,
+            budget: started.budget,
             resilience: self.resilience.clone(),
             system_prompt,
             temperature: settings.temperature,
@@ -1615,7 +1754,7 @@ impl<P: AiProvider> AiChannel<P> {
             deferred: crate::tool_loop::DeferredTools::default(),
             sent_images: None,
             tool_usage: Arc::clone(&self.media.tool_usage),
-            media: TurnMedia::replaying(self.turn_images(&context.room.id, stands_alone)),
+            media: TurnMedia::replaying(self.turn_images(&context.room.id, stands_alone, vision)),
             telemetry: TurnTelemetry::current(),
             turn_span: None,
             search,
@@ -1643,14 +1782,14 @@ impl<P: AiProvider> AiChannel<P> {
             .await
             .map_err(rows::provider_failure)?;
         looped.remembered = recalled.messages;
-        let images = self.author_images(&read, &recalled.history, &kit).await;
+        let images = (self.author_images((&read, &recalled.history), &kit, vision)).await;
         looped.sent_images = Some(SentImages {
             refused: Arc::clone(&self.media.refused),
             room: context.room.id.clone(),
             keys: images.sent(),
         });
         let memory = with_discussion_turn(&event, recalled.memory, notes);
-        let messages = self.conversation(&read, &recalled.history, &memory, &images);
+        let messages = self.conversation((&read, &recalled.history), &memory, &images, vision);
         // The context takes the settings once the conversation is read, as
         // Python's AIContext validates them.
         settings.validated()?;
@@ -1724,8 +1863,13 @@ impl<P: AiProvider> Channel for AiChannel<P> {
         self.capabilities.clone()
     }
 
+    /// Its provider's name, or its router's with a router (Python's
+    /// `provider_name`).
     fn provider_name(&self) -> Option<String> {
-        Some(self.provider.name().to_owned())
+        if let Some(router) = &self.resilience.router {
+            return Some(router.name().to_owned());
+        }
+        Some(self.provider.as_ref()?.name().to_owned())
     }
 
     /// How many turns it is running right now, each counted from its first
@@ -1865,12 +2009,17 @@ impl<P: AiProvider> Channel for AiChannel<P> {
         self.toolbox.own_names().cloned().collect()
     }
 
-    /// Closes the channel's provider ([`AiProvider::close`]), then its
-    /// memory, as Python's `close()`, and settles the requests its
-    /// person's tools still have open: what serves its other tools is the
-    /// host's to close.
+    /// Closes the channel's provider ([`AiProvider::close`]) or its router
+    /// ([`AiRouter::close`]), then its memory, as Python's `close()`, and
+    /// settles the requests its person's tools still have open: what serves
+    /// its other tools is the host's to close.
     async fn close(&self) {
-        self.provider.close().await;
+        if let Some(provider) = &self.provider {
+            provider.close().await;
+        }
+        if let Some(router) = &self.resilience.router {
+            router.close().await;
+        }
         self.memory.close().await;
         if let Some((human, registration)) = &self.human_input {
             let registration = registration.load(Ordering::Acquire);

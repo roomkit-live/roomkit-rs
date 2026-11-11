@@ -21,7 +21,7 @@ use serde_json::Value;
 
 use super::{Loop, Spent};
 use crate::loop_events::{AiGenerationEvent, AiResponseEvent, ToolRoundEvent, response_transcript};
-use crate::provider::{AiContext, AiMessage, AiProvider, AiToolCall, AiToolResultPart};
+use crate::provider::{AiContext, AiMessage, AiToolCall, AiToolResultPart};
 use crate::tool_eviction::REREAD_TOOL;
 use crate::tools::AiTool;
 
@@ -52,7 +52,7 @@ pub(super) struct Ran {
     pub(super) results: Vec<AiToolResultPart>,
 }
 
-impl<P: AiProvider> Loop<P> {
+impl Loop {
     /// Fires `BEFORE_AI_GENERATION` on the turn answering `trigger`, whose
     /// conversation starts with `messages`, and emits
     /// `before_ai_generation` (RFC §8.2); whether the turn generates. What
@@ -71,7 +71,7 @@ impl<P: AiProvider> Loop<P> {
         };
         let event = AiGenerationEvent {
             room_id: Some(self.context.room_id.clone()),
-            provider_name: Some(self.provider.name().to_owned()),
+            provider_name: Some(self.provider.dyn_name().to_owned()),
             trigger: Some(trigger.clone()),
             ..AiGenerationEvent::new(built.clone(), self.context.channel_id.clone())
         };

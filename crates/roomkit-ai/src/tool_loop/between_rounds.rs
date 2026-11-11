@@ -15,10 +15,10 @@ use super::Loop;
 use super::compaction::with_results_stored;
 use super::hooks::Ran;
 use crate::memory::{CompactOptions, after_memory, runtime_or_cleaned};
-use crate::provider::{AiMessage, AiProvider, AiRole};
+use crate::provider::{AiMessage, AiRole};
 use crate::tool_eviction::ToolEviction;
 
-impl<P: AiProvider> Loop<P> {
+impl Loop {
     /// What follows round `round_index` once its calls `ran`, `messages`
     /// the conversation and `usage` what the round's generation measured:
     /// `AFTER_TOOL_ROUND`, its messages read after the results, then the

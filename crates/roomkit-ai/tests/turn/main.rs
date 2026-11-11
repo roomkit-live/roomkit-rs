@@ -18,6 +18,7 @@ mod observer_tools;
 mod prompt;
 mod resilience;
 mod room_turns;
+mod router;
 mod servers;
 mod steering;
 mod support;

@@ -33,8 +33,6 @@ pub(super) struct Generation {
     pub(super) reports: Vec<Metadata>,
     /// A `Cancel` stopped it before its end (RFC §21.3).
     pub(super) cancelled: bool,
-    /// The fallback provider served it, not the channel's own (RFC §6.4).
-    pub(super) by_fallback: bool,
     /// The round's reasoning, once the read returned.
     pub(super) thinking: String,
     /// What it said, in the order it came, which its replay keeps (RFC §6.4).
@@ -76,7 +74,7 @@ impl Called {
 pub(super) struct Failed {
     pub(super) error: ProviderError,
     /// The read passed on an event before the failure: never read again by
-    /// a retry, a replay or the fallback. Reasoning is none, nor is text a
+    /// a retry, a replay or another provider. Reasoning is none, nor is text a
     /// response schema held (Python's `emitted`, counted after
     /// `hold_until_checked`).
     pub(super) streamed: bool,
@@ -226,7 +224,6 @@ impl Generation {
             done,
             reports,
             cancelled: false,
-            by_fallback: false,
             thinking: String::new(),
             transcript,
         })
@@ -248,7 +245,6 @@ impl Generation {
             done,
             reports,
             cancelled: true,
-            by_fallback: false,
             thinking: String::new(),
             transcript,
         }

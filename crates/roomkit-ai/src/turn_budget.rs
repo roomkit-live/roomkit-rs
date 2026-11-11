@@ -67,9 +67,9 @@ impl TurnBudget {
 /// The budget `tokens` and `usd` set for a turn on `provider`, or `None`
 /// when neither is set (Python's `turn_budget`).
 ///
-/// Every generation is priced at `provider`'s rate, one a `fallback`
-/// serves included (RFC §6.4): a fallback priced otherwise is logged once
-/// per pair of models.
+/// Every generation of the turn is priced at `provider`'s rate, one a router
+/// hands to another provider included (RFC §6.4). Without a `provider` (a
+/// channel whose router picks it per turn), only the numbers are checked.
 ///
 /// # Errors
 ///
@@ -78,20 +78,23 @@ impl TurnBudget {
 pub(crate) fn turn_budget(
     tokens: Option<u64>,
     usd: Option<f64>,
-    provider: &dyn DynAiProvider,
-    fallback: Option<&dyn DynAiProvider>,
+    provider: Option<&dyn DynAiProvider>,
 ) -> Result<Option<TurnBudget>, AiError> {
     if tokens.is_none() && usd.is_none() {
         return Ok(None);
     }
+    let Some(provider) = provider else {
+        return Ok(Some(TurnBudget {
+            tokens,
+            usd,
+            pricing: None,
+        }));
+    };
     let pricing = pricing(provider);
     if usd.is_some() && pricing.is_none() {
         return Err(AiError::UnpricedModel {
             model: provider.dyn_model_name().to_owned(),
         });
-    }
-    if let Some(fallback) = fallback.filter(|_| usd.is_some()) {
-        warn_if_priced_otherwise(provider, fallback);
     }
     Ok(Some(TurnBudget {
         tokens,
@@ -122,8 +125,9 @@ pub(crate) fn refuse_unpositive(tokens: Option<u64>, usd: Option<f64>) -> Result
 }
 
 /// Refuses the budgets a channel is built with as Python's constructor
-/// does: [`refuse_unpositive`]'s, then one on a model with no price; a
-/// fallback priced otherwise is logged.
+/// does: [`refuse_unpositive`]'s, then one on a model with no price, when
+/// the channel has a provider of its own; with a router, the price is
+/// checked per turn, on the model it picks.
 ///
 /// # Errors
 ///
@@ -131,11 +135,10 @@ pub(crate) fn refuse_unpositive(tokens: Option<u64>, usd: Option<f64>) -> Result
 pub(crate) fn check_budgets(
     tokens: Option<u64>,
     usd: Option<f64>,
-    provider: &dyn DynAiProvider,
-    fallback: Option<&dyn DynAiProvider>,
+    provider: Option<&dyn DynAiProvider>,
 ) -> Result<(), AiError> {
     refuse_unpositive(tokens, usd)?;
-    turn_budget(tokens, usd, provider, fallback).map(|_| ())
+    turn_budget(tokens, usd, provider).map(|_| ())
 }
 
 /// `provider`'s catalogue price, if it has one.
@@ -143,29 +146,32 @@ fn pricing(provider: &dyn DynAiProvider) -> Option<ModelPricing> {
     provider.dyn_catalog_entry().and_then(|entry| entry.pricing)
 }
 
-/// Logs once per pair of models that a cost budget prices `fallback`'s
-/// generations at `provider`'s rate when the two are priced otherwise;
-/// whether it logged.
-fn warn_if_priced_otherwise(provider: &dyn DynAiProvider, fallback: &dyn DynAiProvider) -> bool {
-    static WARNED: OnceLock<Mutex<HashSet<(String, String)>>> = OnceLock::new();
-    if pricing(fallback) == pricing(provider) {
+/// Logs once per model that a cost `budget`, priced at the rate of the
+/// model its turn started on, prices `other`'s generations at that rate when
+/// `other` is priced otherwise; whether it logged (Python's
+/// `warn_if_priced_otherwise`).
+pub(crate) fn warn_if_priced_otherwise(
+    budget: Option<&TurnBudget>,
+    other: &dyn DynAiProvider,
+) -> bool {
+    static WARNED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    let Some(budget) = budget.filter(|budget| budget.usd.is_some()) else {
+        return false;
+    };
+    if pricing(other) == budget.pricing {
         return false;
     }
-    let pair = (
-        provider.dyn_model_name().to_owned(),
-        fallback.dyn_model_name().to_owned(),
-    );
+    let model = other.dyn_model_name().to_owned();
     let first = WARNED
         .get_or_init(Mutex::default)
         .lock()
-        .is_ok_and(|mut warned| warned.insert(pair.clone()));
+        .is_ok_and(|mut warned| warned.insert(model.clone()));
     if first {
         tracing::warn!(
             target: "roomkit::ai",
-            primary = %pair.0,
-            fallback = %pair.1,
-            "turn_budget_usd prices every generation at the primary's rate; the fallback is \
-             priced otherwise, so a turn it serves is counted at the primary's price"
+            model = %model,
+            "turn_budget_usd prices every generation of a turn at the rate of the model it \
+             started on; the model the router handed a generation is priced otherwise"
         );
     }
     first
@@ -213,24 +219,25 @@ mod tests {
         value.as_object().cloned().unwrap_or_default()
     }
 
-    // Python: tests/test_channels/test_turn_budget.py::test_a_fallback_priced_otherwise_is_logged_once
+    // Python: tests/test_channels/test_turn_budget.py::test_a_generation_handed_to_a_model_priced_otherwise_is_logged_once
     #[test]
-    fn a_fallback_priced_otherwise_is_logged_once() {
+    fn a_generation_handed_to_a_model_priced_otherwise_is_logged_once() {
         let primary = Priced {
             model: "priced-primary",
             pricing: Some(price(10.0)),
         };
+        let budget = turn_budget(None, Some(1.0), Some(&primary)).unwrap();
         let otherwise = Priced {
-            model: "fallback-priced-otherwise",
+            model: "handed-priced-otherwise",
             pricing: Some(price(20.0)),
         };
         let alike = Priced {
-            model: "fallback-priced-alike",
+            model: "handed-priced-alike",
             pricing: Some(price(10.0)),
         };
-        assert!(warn_if_priced_otherwise(&primary, &otherwise));
-        assert!(!warn_if_priced_otherwise(&primary, &otherwise));
-        assert!(!warn_if_priced_otherwise(&primary, &alike));
+        assert!(warn_if_priced_otherwise(budget.as_ref(), &otherwise));
+        assert!(!warn_if_priced_otherwise(budget.as_ref(), &otherwise));
+        assert!(!warn_if_priced_otherwise(budget.as_ref(), &alike));
     }
 
     // Python: channels/_turn_budget.py TurnBudget.reached, either cap.

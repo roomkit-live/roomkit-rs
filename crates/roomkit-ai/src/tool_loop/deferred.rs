@@ -9,7 +9,7 @@ use serde_json::json;
 use super::Loop;
 use crate::loop_events::{DeclaredTool, FromToolOptions};
 use crate::provider::{
-    AiContentPart, AiContext, AiMessage, AiMessageContent, AiProvider, AiRole, AiToolCallPart,
+    AiContentPart, AiContext, AiMessage, AiMessageContent, AiRole, AiToolCallPart,
     AiToolResultPart, CallIds,
 };
 use crate::tool_search::render_find_payload;
@@ -23,7 +23,7 @@ pub(crate) struct DeferredTools {
     declared: Mutex<Vec<DeclaredTool>>,
 }
 
-impl<P: AiProvider> Loop<P> {
+impl Loop {
     /// Record only ordinary declarations or newly granted references.
     pub(super) fn record_tools<'a>(&self, tools: impl IntoIterator<Item = &'a AiTool>) {
         let mut declared = self
@@ -62,7 +62,7 @@ impl<P: AiProvider> Loop<P> {
     /// Fix the ordinary declarations before a generation can reveal anything.
     pub(super) fn open_declaration(&mut self, messages: &[Message]) {
         self.find_turn_input(messages, self.system_prompt.clone());
-        if !self.provider.supports_deferred_tools() {
+        if !self.provider.dyn_supports_deferred_tools() {
             return;
         }
         let shown = self.first_declaration();

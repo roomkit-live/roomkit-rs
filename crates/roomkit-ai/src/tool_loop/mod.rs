@@ -10,8 +10,8 @@
 //! - this module: the items and the loop's rounds;
 //! - `generation`: one generation read from its provider, and its calls;
 //! - `resilience`: a generation its provider refused, replayed once
-//!   compacted, tried again, then handed to the fallback provider (RFC
-//!   §6.4);
+//!   compacted, tried again, then handed to the provider the channel's
+//!   router names (RFC §6.4);
 //! - `compaction`: a context the provider refused as too long, compacted
 //!   for its replay (RFC §6.4 "A turn compacted");
 //! - `calls`: one call through its gate (RFC §21.1) and its tool, reported
@@ -73,7 +73,7 @@ use self::tool_events::{Ended, Running, ToolEvents};
 use crate::author_images::refuses_content;
 use crate::memory::{MemoryProvider, after_memory};
 use crate::provider::{
-    AiContentPart, AiContext, AiMessage, AiProvider, AiToolResultPart, ProviderError,
+    AiContentPart, AiContext, AiMessage, AiToolResultPart, DynAiProvider, ProviderError,
     ProviderErrorOptions, ResponseSchemaError, ai_messages, ai_messages_with,
 };
 use crate::steering::{Loops, Steering};
@@ -168,10 +168,17 @@ impl Bounds {
 
 /// One turn's loop: what it calls and how, owned, so that the turn's
 /// stream outlives the turn's `on_event()`, which hands it to the kit.
-pub(crate) struct Loop<P> {
+pub(crate) struct Loop {
     /// The turn's one record, which a generation hook may replace (RFC §6.7).
     pub(crate) record: TurnRecord,
-    pub(crate) provider: Arc<P>,
+    /// The provider the turn runs on: the one its channel's router picked
+    /// when the turn started, then the one a retry handed a generation to,
+    /// which every later round stays on; the channel's own without a router
+    /// (RFC §6.4).
+    pub(crate) provider: Arc<dyn DynAiProvider>,
+    /// What the router was asked at the turn's start, which a retry asks
+    /// again; `None` for a channel serving one provider.
+    pub(crate) route_request: Option<crate::router::RouteRequest>,
     pub(crate) toolbox: Arc<Toolbox>,
     pub(crate) policy: ToolPolicy,
     pub(crate) bounds: Bounds,
@@ -250,7 +257,7 @@ pub(crate) struct Loop<P> {
     pub(crate) instruction: Option<String>,
 }
 
-impl<P: AiProvider> Loop<P> {
+impl Loop {
     /// Round `round`'s generation, its reasoning observed and kept in
     /// `spent`.
     async fn read_round(
@@ -295,7 +302,8 @@ impl<P: AiProvider> Loop<P> {
     pub(crate) fn run(mut self, conversation: Vec<Message>) -> TurnItems<'static> {
         items(move |out| async move {
             let (room_id, channel_id) = (&self.context.room_id, &self.context.channel_id);
-            self.turn_span = self.telemetry.start_turn::<P>(room_id, channel_id);
+            let name = self.provider.dyn_type_name();
+            self.turn_span = self.telemetry.start_turn(room_id, channel_id, name);
             self.rounds(conversation, out).await;
         })
     }
@@ -490,7 +498,7 @@ impl<P: AiProvider> Loop<P> {
             usage: spent.usage.clone(),
             last_usage: Some(spent.last.clone()),
             usage_complete: Some(spent.complete),
-            ..self.end_of(reason, rounds, limits.timeout, spent.by_fallback)
+            ..self.end_of(reason, rounds, limits.timeout)
         };
         out.give(Ok(TurnItem::End(end))).await;
         // Once the reader read past the end, as Python's turn reports it
@@ -547,7 +555,7 @@ impl<P: AiProvider> Loop<P> {
     /// against its `limits`. A usage its turn's price cannot read fails the
     /// generation, after it handed its text, as Python's
     /// `ModelPricing.cost_for` raises in the loop: the failure of the
-    /// provider that served it, the fallback's when it did.
+    /// provider that served it.
     fn counted(
         &self,
         generation: Generation,
@@ -567,13 +575,10 @@ impl<P: AiProvider> Loop<P> {
             spent.add_thinking(generation.thinking.clone());
             return Ok(generation);
         };
-        let fallback = self.resilience.fallback_provider.as_ref();
-        let provider = match fallback.filter(|_| generation.by_fallback) {
-            Some(fallback) => fallback.dyn_name(),
-            None => self.provider.name(),
-        };
+        // The provider that served it: the turn's, which a retry the router
+        // handed to another provider moved to that one (RFC §6.4).
         let options = ProviderErrorOptions {
-            provider: provider.to_owned(),
+            provider: self.provider.dyn_name().to_owned(),
             ..ProviderErrorOptions::default()
         };
         Err(Failed {
@@ -626,12 +631,7 @@ impl<P: AiProvider> Loop<P> {
             let end = LoopEndMarker {
                 usage: spent.usage.clone(),
                 usage_complete: Some(false),
-                ..self.end_of(
-                    LoopEndReason::Error,
-                    rounds,
-                    limits.timeout,
-                    spent.by_fallback,
-                )
+                ..self.end_of(LoopEndReason::Error, rounds, limits.timeout)
             };
             out.give(Ok(TurnItem::End(end))).await;
             self.report(LoopEndReason::Error, rounds, &spent);
@@ -692,16 +692,16 @@ impl<P: AiProvider> Loop<P> {
 
     /// The end of the loop for `reason` after `rounds` rounds of calls, the
     /// round bound and the deadline it ran under, and the model and
-    /// provider of its last generation, the fallback's when it served it
-    /// (`by_fallback`); no usage yet.
+    /// provider of its last generation: the turn's provider, which a retry
+    /// the router handed to another moved to that one (RFC §6.4); no usage
+    /// yet.
     fn end_of(
         &self,
         reason: LoopEndReason,
         rounds: u32,
         timeout: Option<Duration>,
-        by_fallback: bool,
     ) -> LoopEndMarker {
-        let (model, provider) = self.served_by(by_fallback);
+        let (model, provider) = self.served_by();
         LoopEndMarker {
             rounds,
             max_rounds: Some(self.bounds.max_rounds),
@@ -714,19 +714,15 @@ impl<P: AiProvider> Loop<P> {
         }
     }
 
-    /// The model and the provider of a generation, its fallback's when it
-    /// served it.
-    fn served_by(&self, by_fallback: bool) -> (&str, &str) {
-        let fallback = self.resilience.fallback_provider.as_ref();
-        match fallback.filter(|_| by_fallback) {
-            Some(fallback) => (fallback.dyn_model_name(), fallback.dyn_name()),
-            None => (self.provider.model_name(), self.provider.name()),
-        }
+    /// The model and the provider of the turn's latest generation: the
+    /// provider the turn is on (RFC §6.4).
+    fn served_by(&self) -> (&str, &str) {
+        (self.provider.dyn_model_name(), self.provider.dyn_name())
     }
 
     /// What `generation` tells of itself once it returned.
     fn usage_of(&self, generation: &Generation) -> UsageMarker {
-        let (model, provider) = self.served_by(generation.by_fallback);
+        let (model, provider) = self.served_by();
         UsageMarker {
             usage: generation.done.usage.clone(),
             model: Some(model.to_owned()),
@@ -844,7 +840,7 @@ type Ending<'a> = (
     &'a Yielder<Result<TurnItem, ProviderError>>,
 );
 
-impl<P: AiProvider> Loop<P> {
+impl Loop {
     /// The end of an announced call a `Cancel` kept from running (RFC
     /// §21.3): failed, `cancelled`, reported to the kit's observers once as
     /// a call the turn cut (RFC §9.3).
@@ -896,8 +892,6 @@ async fn try_again(
 struct Spent {
     usage: Metadata,
     last: Metadata,
-    /// The fallback provider served the last generation (RFC §6.4).
-    by_fallback: bool,
     complete: bool,
     segments: Vec<String>,
     calls: u32,
@@ -912,7 +906,6 @@ impl Spent {
         Self {
             usage: Metadata::new(),
             last: Metadata::new(),
-            by_fallback: false,
             complete: true,
             segments: Vec::new(),
             calls: 0,
@@ -928,11 +921,9 @@ impl Spent {
         }
     }
 
-    /// Counts one generation's usage counters, and which provider served
-    /// it.
+    /// Counts one generation's usage counters.
     fn count(&mut self, generation: &Generation) {
         let last = &generation.done.usage;
-        self.by_fallback = generation.by_fallback;
         for report in &generation.reports {
             add_usage(&mut self.usage, report);
         }

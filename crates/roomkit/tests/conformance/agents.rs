@@ -23,12 +23,13 @@ use roomkit_ai::tasks::{
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
     Agent, AgentOptions, AiChannel, AiChannelOptions, AiChannelTurnConfig, AiContentPart,
-    AiContext, AiImagePart, AiMessage, AiMessageContent, AiProvider, AiResponse, AiRole,
-    AiTextPart, AiThinkingPart, AiTool, AiToolCall, HumanInputToolHandler,
-    HumanInputToolHandlerOptions, ModelInfo, ModelPricing, ProviderError, ProviderStream,
-    StreamDone, StreamEvent, StreamTextDelta, StreamThinkingDelta, StreamToolCallDelta, Tool,
-    ToolContext, ToolEntry, ToolError, ToolHandler, ToolPolicy, ToolResult, ToolResultPart, Tools,
-    check_schema_answer, checked_stream, schema_for_generate,
+    AiContext, AiImagePart, AiMessage, AiMessageContent, AiProvider, AiResponse, AiRole, AiRouter,
+    AiRouterFuture, AiTextPart, AiThinkingPart, AiTool, AiToolCall, DynAiProvider, FallbackRouter,
+    HumanInputToolHandler, HumanInputToolHandlerOptions, ModelInfo, ModelPricing, ProviderError,
+    ProviderStream, RouteReason, RouteRequest, Routed, StreamDone, StreamEvent, StreamTextDelta,
+    StreamThinkingDelta, StreamToolCallDelta, Tool, ToolContext, ToolEntry, ToolError, ToolHandler,
+    ToolPolicy, ToolResult, ToolResultPart, Tools, check_schema_answer, checked_stream,
+    schema_for_generate,
 };
 use serde_json::{Value, json};
 
@@ -292,7 +293,7 @@ impl Stream for PacedStream<'_> {
 
 /// A scripted agent's models by the name `expect.models` gives them: its
 /// own under its id, its memory's summarizer under `<id>/summarizer`, its
-/// fallback under `<id>/fallback`.
+/// fallback under `<id>/fallback`, its router's under `<id>/<name>`.
 pub(crate) type Models = Vec<(String, ScriptedProvider)>;
 
 /// The scripted agent `spec` describes, and its models; its gates are
@@ -363,17 +364,13 @@ pub(crate) fn scripted_agent_of(
     }
     let mut models = vec![(id.to_string(), model)];
     keep_chat_dialect(&spec["model"], id.to_string(), run);
-    if let Some(fallback) = spec.get("fallback_model") {
-        keep_chat_dialect(fallback, format!("{id}/fallback"), run);
-        let (fallback, paced) = scripted_model(
-            fallback,
-            run,
-            &format!("{id}/fallback"),
-            shared(&format!("{id}/fallback")),
-        )?;
-        models.push((format!("{id}/fallback"), fallback));
-        options.fallback_provider = Some(Arc::new(paced));
-    }
+    let serving = if spec.get("fallback_model").is_none() && spec.get("router").is_none() {
+        Serving::Model(Box::new(paced))
+    } else {
+        let own: Arc<dyn DynAiProvider> = Arc::new(paced);
+        let own = (id.to_string(), own);
+        Serving::Router(scripted_router(spec, own, (run, &shared), &mut models)?)
+    };
     if let Some(memory) = spec.get("memory") {
         let memory = agent_memory(memory, (&id, run), options.max_context_events, &mut models)?;
         options.memory = Some(memory);
@@ -384,10 +381,26 @@ pub(crate) fn scripted_agent_of(
         options.human_input_handler = Some(human_input(human)?);
     }
     options.tools.extend(kit_tools(spec, run)?);
-    // An identity makes the scripted agent an Agent (README, "Scripted agents").
-    let Some(identity) = spec.get("agent") else {
-        let agent = AiChannel::new(id, paced, options).map_err(|e| e.to_string())?;
-        return Ok((Scripted::Channel(Box::new(agent)), models));
+    Ok((scripted(id, serving, options, spec.get("agent"))?, models))
+}
+
+/// The scripted channel `id`, served by `serving`, as `options` configure
+/// it; an Agent with `identity` (README, "Scripted agents").
+fn scripted(
+    id: ChannelId,
+    serving: Serving,
+    options: AiChannelOptions,
+    identity: Option<&Value>,
+) -> Result<Scripted, String> {
+    let Some(identity) = identity else {
+        return Ok(match serving {
+            Serving::Model(paced) => Scripted::Channel(Box::new(
+                AiChannel::new(id, *paced, options).map_err(|e| e.to_string())?,
+            )),
+            Serving::Router(router) => Scripted::RoutedChannel(Box::new(
+                AiChannel::routed(id, Boxed(router), options).map_err(|e| e.to_string())?,
+            )),
+        });
     };
     let text = |key: &str| identity[key].as_str().map(str::to_owned);
     let agent_options = AgentOptions {
@@ -403,8 +416,189 @@ pub(crate) fn scripted_agent_of(
         ai: options,
         ..AgentOptions::default()
     };
-    let agent = Agent::new(id, paced, agent_options).map_err(|e| e.to_string())?;
-    Ok((Scripted::Agent(Box::new(agent)), models))
+    Ok(match serving {
+        Serving::Model(paced) => Scripted::Agent(Box::new(
+            Agent::new(id, *paced, agent_options).map_err(|e| e.to_string())?,
+        )),
+        Serving::Router(router) => Scripted::RoutedAgent(Box::new(
+            Agent::routed(id, Boxed(router), agent_options).map_err(|e| e.to_string())?,
+        )),
+    })
+}
+
+/// The models a scripted router may pick, by the name `expect.models` gives
+/// them.
+type Pickable = Vec<(String, Arc<dyn DynAiProvider>)>;
+
+/// The model another process's agent shares with the run's, by its name.
+type SharedModel<'a> = &'a dyn Fn(&str) -> Option<ScriptedProvider>;
+
+/// The router of the scripted agent `spec` (README, `fallback_model`,
+/// `router`), its `own` model among those it picks, the models it adds
+/// among `models`; another process's agent answers from the run's (`shared`).
+fn scripted_router(
+    spec: &Value,
+    own: (String, Arc<dyn DynAiProvider>),
+    (run, shared): (&Arc<Run>, SharedModel<'_>),
+    models: &mut Models,
+) -> Result<Box<dyn AiRouter>, String> {
+    let id = own.0.clone();
+    // The models a router may pick, the agent's own first, by the name
+    // `expect.models` gives them.
+    let mut pickable: Pickable = vec![own];
+    let mut router: Option<Box<dyn AiRouter>> = None;
+    if let Some(fallback) = spec.get("fallback_model") {
+        let name = format!("{id}/fallback");
+        keep_chat_dialect(fallback, name.clone(), run);
+        let (fallback, paced) = scripted_model(fallback, run, &name, shared(&name))?;
+        models.push((name, fallback));
+        // Every turn on its own model, a spent generation handed to the other.
+        let own = Arc::clone(&pickable[0].1);
+        router = Some(Box::new(FallbackRouter::new(own, Arc::new(paced))));
+    }
+    if let Some(script) = spec.get("router") {
+        for (name, model) in script["models"].as_object().into_iter().flatten() {
+            let name = format!("{id}/{name}");
+            keep_chat_dialect(model, name.clone(), run);
+            let (model, paced) = scripted_model(model, run, &name, shared(&name))?;
+            models.push((name.clone(), model));
+            pickable.push((name, Arc::new(paced)));
+        }
+        router = Some(Box::new(ScriptedAiRouter::new(
+            script,
+            (id, pickable),
+            run,
+        )?));
+    }
+    router.ok_or_else(|| "a scripted agent with no router".to_owned())
+}
+
+/// What serves a scripted agent's turns: its own model, or its router
+/// (README, `fallback_model`, `router`).
+enum Serving {
+    Model(Box<Paced>),
+    Router(Box<dyn AiRouter>),
+}
+
+/// A router held as an object, handed to a channel that takes a router of
+/// any type.
+struct Boxed(Box<dyn AiRouter>);
+
+impl AiRouter for Boxed {
+    fn route(&self, request: RouteRequest) -> AiRouterFuture<'_> {
+        self.0.route(request)
+    }
+
+    fn name(&self) -> &str {
+        self.0.name()
+    }
+
+    fn close(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        self.0.close()
+    }
+}
+
+/// A router picking from a script (README, `router`): each turn's start the
+/// next of `turns`, each retry the next of `retries` (`[null]` by default),
+/// the last of each repeating; a pick names a model as `expect.models` does.
+/// It records what each request carried under `ai_routes`. Python's
+/// `ScriptedAIRouter`.
+struct ScriptedAiRouter {
+    agent: String,
+    turns: Vec<Option<String>>,
+    retries: Vec<Option<String>>,
+    models: Pickable,
+    asked: Mutex<(usize, usize)>,
+    run: Weak<Run>,
+}
+
+impl ScriptedAiRouter {
+    /// The router `script` describes for the agent `agent`, picking among
+    /// `models`, recording on `run`.
+    fn new(
+        script: &Value,
+        (agent, models): (String, Pickable),
+        run: &Arc<Run>,
+    ) -> Result<Self, String> {
+        let picks =
+            |key: &str, default: Vec<Option<String>>| -> Result<Vec<Option<String>>, String> {
+                let Some(listed) = script.get(key) else {
+                    return Ok(default);
+                };
+                listed
+                    .as_array()
+                    .ok_or(format!("router.{key}: not a list"))?
+                    .iter()
+                    .map(|pick| match pick {
+                        Value::Null => Ok(None),
+                        Value::String(name) => Ok(Some(name.clone())),
+                        Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_) => {
+                            Err(format!("router.{key}: a pick is a model's name or null"))
+                        }
+                    })
+                    .collect()
+            };
+        Ok(Self {
+            agent,
+            turns: picks("turns", Vec::new())?,
+            retries: picks("retries", vec![None])?,
+            models,
+            asked: Mutex::new((0, 0)),
+            run: Arc::downgrade(run),
+        })
+    }
+
+    /// The name `expect.models` gives `provider`, if it is one of its models.
+    fn key(&self, provider: Option<&Arc<dyn DynAiProvider>>) -> Value {
+        let Some(provider) = provider else {
+            return Value::Null;
+        };
+        self.models
+            .iter()
+            .find(|(_, model)| std::ptr::addr_eq(Arc::as_ptr(model), Arc::as_ptr(provider)))
+            .map_or(Value::Null, |(name, _)| Value::from(name.as_str()))
+    }
+}
+
+impl AiRouter for ScriptedAiRouter {
+    fn route(&self, request: RouteRequest) -> AiRouterFuture<'_> {
+        let failed = request.failed.as_ref().map_or(
+            Value::Null,
+            |error| json!({ "status": error.status_code, "message": error.message }),
+        );
+        let asked = json!({
+            "reason": request.reason.as_str(),
+            "text": request.text,
+            "previous": self.key(request.previous.as_ref()),
+            "failed": failed,
+        });
+        if let Some(run) = self.run.upgrade() {
+            let mut observed = crate::run::lock(&run.observed);
+            observed
+                .ai_routes
+                .entry(self.agent.clone())
+                .or_default()
+                .push(asked);
+        }
+        let mut asked = self
+            .asked
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (picks, count) = match request.reason {
+            RouteReason::Turn => (&self.turns, &mut asked.0),
+            RouteReason::Retry => (&self.retries, &mut asked.1),
+        };
+        let pick = picks
+            .get((*count).min(picks.len().saturating_sub(1)))
+            .cloned()
+            .flatten();
+        *count += 1;
+        let picked = pick.and_then(|name| {
+            let found = self.models.iter().find(|(model, _)| *model == name);
+            found.map(|(_, model)| Arc::clone(model))
+        });
+        Box::pin(std::future::ready(picked))
+    }
 }
 
 /// The scripted memory `memory` of the agent `id`, recorded on `run`, its
@@ -555,6 +749,8 @@ fn retry_policy(spec: &Value) -> Result<RetryPolicy, String> {
 pub(crate) enum Scripted {
     Channel(Box<AiChannel<Paced>>),
     Agent(Box<Agent<Paced>>),
+    RoutedChannel(Box<AiChannel<Routed>>),
+    RoutedAgent(Box<Agent<Routed>>),
 }
 
 /// The tools the kit makes that a scripted agent is given as its own

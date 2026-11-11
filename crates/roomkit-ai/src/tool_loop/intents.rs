@@ -15,7 +15,7 @@ use super::Loop;
 use super::generation::Called;
 use crate::tools::AiTool;
 
-impl<P> Loop<P> {
+impl Loop {
     /// `declared` as the requests show it: each tool's schema with the
     /// reserved intent property, one that cannot take it as it is, or one
     /// the agent's list does not name. The toolbox keeps the tools' own

@@ -75,6 +75,8 @@ pub(crate) struct Observed {
     /// The kit's media resolver's calls, in order: `{url, room_id}`.
     pub(crate) media_resolver: Vec<Value>,
     pub(crate) router_calls: Vec<Value>,
+    /// Per scripted agent with a `router`, what it was asked, in order.
+    pub(crate) ai_routes: BTreeMap<String, Vec<Value>>,
     /// The human-input requests the run showed, in the order it first
     /// showed them: `$p1`, `$p2`...
     pub(crate) requests: Vec<String>,

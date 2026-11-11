@@ -11,7 +11,6 @@ use tokio::time::Instant;
 
 use super::generation::{Called, Partial};
 use super::{Loop, ToolEnd};
-use crate::provider::AiProvider;
 use crate::rows::end_row;
 use crate::skills::ACTIVATE_SKILL;
 use crate::texts;
@@ -33,7 +32,7 @@ enum Gated {
     InvalidArguments(ToolCallReport),
 }
 
-impl<P: AiProvider> Loop<P> {
+impl Loop {
     /// Serves `called`, the `nth` of its round's calls under its id: its
     /// gate, then its tool, then the kit's hooks on a served result; tells
     /// the kit its end and reports it once to the kit's observers (RFC
@@ -187,7 +186,7 @@ impl<P: AiProvider> Loop<P> {
         let ToolResult::Parts(parts) = read_tool_result(&ended.result) else {
             return (ended, None);
         };
-        if self.provider.supports_vision() {
+        if self.provider.dyn_supports_vision() {
             return (ended, None);
         }
         let text = Value::String(ToolResult::Parts(parts).as_text());
@@ -231,7 +230,7 @@ impl<P: AiProvider> Loop<P> {
     /// fail the request. Python's `_shape_for_model`.
     fn for_model(&self, result: ToolResult) -> ToolResult {
         match result {
-            ToolResult::Parts(_) if !self.provider.supports_vision() => {
+            ToolResult::Parts(_) if !self.provider.dyn_supports_vision() => {
                 ToolResult::Text(result.as_text())
             }
             ToolResult::Text(_) | ToolResult::Json(_) | ToolResult::Parts(_) => result,
@@ -357,7 +356,7 @@ impl<P: AiProvider> Loop<P> {
                 text,
             )));
         }
-        let model = self.provider.model_name();
+        let model = self.provider.dyn_model_name();
         if !repair.folded.is_empty() {
             tracing::info!(target: "roomkit::ai", tool = %call.name, folded = ?repair.folded, model, "folded a call's hoisted arguments into its container");
         }

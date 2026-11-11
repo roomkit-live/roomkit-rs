@@ -129,6 +129,7 @@ const CHANNEL: &[&str] = &[
     "tool_call_intents",
     "retry_policy",
     "fallback_model",
+    "router",
     "max_author_images",
     "evict_threshold_tokens",
     "describe_empty_event",
@@ -378,6 +379,7 @@ const EXPECT: &[&str] = &[
     "participants",
     "resolver",
     "router_calls",
+    "ai_routes",
     "media_resolver",
     "tool_audit",
     "session_audit",
@@ -719,6 +721,7 @@ fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
     for kind in ["model", "fallback_model"] {
         scripted_model(&channel[kind], &format!("{path}.{kind}"), found);
     }
+    ai_router(&channel["router"], &format!("{path}.router"), found);
     scripted_acp(&channel["acp"], &format!("{path}.acp"), found);
     optional(
         &channel["retry_policy"],
@@ -1005,6 +1008,15 @@ fn outcome(outcome: &Value, path: &str, found: &mut Vec<String>) {
 }
 
 /// A scripted model's members, at `path`, and its rounds'.
+/// A scripted agent's router (README, `router`): the models it adds, and
+/// its picks.
+fn ai_router(router: &Value, path: &str, found: &mut Vec<String>) {
+    optional(router, &["models", "turns", "retries"], path, found);
+    for (name, model) in router["models"].as_object().into_iter().flatten() {
+        scripted_model(model, &format!("{path}.models.{name}"), found);
+    }
+}
+
 fn scripted_model(model: &Value, path: &str, found: &mut Vec<String>) {
     optional(model, MODEL, path, found);
     if model

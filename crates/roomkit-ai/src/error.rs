@@ -43,6 +43,13 @@ pub enum AiError {
         /// The pattern.
         pattern: String,
     },
+    /// A router named no provider for a turn's start, where it must name
+    /// one (RFC §6.4): Python's `ValueError`, in its words. The turn fails.
+    #[error("router '{router}' named no provider for a turn")]
+    RouterNamedNone {
+        /// The router's name.
+        router: String,
+    },
     /// A tool's call is bounded by zero (RFC §21.6): Python's
     /// `ValueError`, a bound being positive or none.
     #[error("tool timeout for 'tool_timeout' must be positive or None, got 0")]

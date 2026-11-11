@@ -17,8 +17,8 @@ use roomkit_core::rules::transcript::{
 use super::Loop;
 use super::generation::Failed;
 use crate::provider::{
-    AiContentPart, AiContext, AiMessage, AiMessageContent, AiProvider, AiRole, AiTextPart,
-    AiToolResultPart, ProviderError,
+    AiContentPart, AiContext, AiMessage, AiMessageContent, AiRole, AiTextPart, AiToolResultPart,
+    ProviderError,
 };
 use crate::tool_eviction::{
     REREAD_TOOL, ToolEviction, char_len, is_placeholder, kept_whole, texts_of,
@@ -37,7 +37,7 @@ const MIN_COMPACTED: usize = 5;
 const STORED_OVER_CHARS: usize = 2000;
 const STORED_PREVIEW_CHARS: usize = 1000;
 
-impl<P: AiProvider> Loop<P> {
+impl Loop {
     /// Keeps where the turn's input is among the messages of its first
     /// round, `messages` its conversation: the last one when it is a
     /// user's, what a compaction keeps whole (Python's `turn_input`, set

@@ -703,6 +703,8 @@ pub(crate) fn register_channel(
         match agent {
             agents::Scripted::Channel(agent) => run.kit().register_channel(*agent),
             agents::Scripted::Agent(agent) => run.kit().register_channel(*agent),
+            agents::Scripted::RoutedChannel(agent) => run.kit().register_channel(*agent),
+            agents::Scripted::RoutedAgent(agent) => run.kit().register_channel(*agent),
         }
     } else {
         run.kit()
@@ -731,6 +733,8 @@ pub(crate) fn register_process_channel(
         match agents::scripted_agent_of(channel, run, true)?.0 {
             agents::Scripted::Channel(agent) => kit.register_channel(*agent),
             agents::Scripted::Agent(agent) => kit.register_channel(*agent),
+            agents::Scripted::RoutedChannel(agent) => kit.register_channel(*agent),
+            agents::Scripted::RoutedAgent(agent) => kit.register_channel(*agent),
         }
     } else {
         kit.register_channel(ScriptedChannel::new(channel, run)?)

@@ -17,8 +17,8 @@ use roomkit::testing::TurnTap;
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
     AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, AiToolCall, Date,
-    MockAiProvider, MockAiProviderOptions, ModelInfo, ModelPricing, ProviderError, ProviderStream,
-    StreamDone, StreamEvent, StreamTextDelta, Tools, tool_arguments,
+    FallbackRouter, MockAiProvider, MockAiProviderOptions, ModelInfo, ModelPricing, ProviderError,
+    ProviderStream, StreamDone, StreamEvent, StreamTextDelta, Tools, tool_arguments,
 };
 use roomkit_core::rules::transcoding::text_of;
 use serde_json::{Value, json};
@@ -276,6 +276,7 @@ async fn each_done_event_is_priced_as_one_response() {
     room.kit.close().await.unwrap();
 }
 
+// Python: tests/test_channels/test_ai_retry.py::TestFallbackRouter::test_fallback_triggers_after_retry_exhaustion
 #[tokio::test]
 async fn a_turn_the_fallback_answered_names_the_fallback_in_its_record() {
     let primary = ScriptedProvider::new([ScriptedRound::answering("")
@@ -289,11 +290,13 @@ async fn a_turn_the_fallback_answered_names_the_fallback_in_its_record() {
         json!(fallback.model_name()),
         json!(AiProvider::name(&fallback)),
     );
-    let room = Room::equipped(primary, Tools::default(), |options| AiChannelOptions {
-        fallback_provider: Some(Arc::new(fallback)),
-        ..options
-    })
-    .await;
+    let router = FallbackRouter::new(Arc::new(primary), Arc::new(fallback));
+    let options = AiChannelOptions {
+        tools: Tools::default().into(),
+        ..AiChannelOptions::default()
+    };
+    let agent = AiChannel::routed(channel("assistant"), router, options).unwrap();
+    let room = Room::with_agent(agent).await;
     room.says("Hello?").await;
     let rows = room.timeline().await;
     let answer = rows
