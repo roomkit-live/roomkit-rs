@@ -1,6 +1,7 @@
-//! Python: tests/test_executor_close_contract.py; independent executor lifecycle.
+//! Python: `tests/test_executor_close_contract.py`; independent executor lifecycle.
 #![expect(clippy::unwrap_used, reason = "tests fail on invalid fixtures")]
 
+use std::future::{Future, ready};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -21,20 +22,20 @@ impl Channel for ClosingChannel {
     fn channel_type(&self) -> ChannelType {
         ChannelType::SMS
     }
-    async fn handle_inbound(
+    fn handle_inbound(
         &self,
         message: InboundMessage,
         context: RoomContext,
-    ) -> Result<RoomEvent, ChannelError> {
-        Ok(roomkit::default_inbound_event(self, &message, &context))
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
     }
-    async fn deliver(
+    fn deliver(
         &self,
         _event: RoomEvent,
         _binding: ChannelBinding,
         _context: RoomContext,
-    ) -> Result<ChannelOutput, ChannelError> {
-        Ok(ChannelOutput::empty())
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        ready(Ok(ChannelOutput::empty()))
     }
     async fn close(&self) {
         self.0.fetch_add(1, Ordering::SeqCst);
@@ -96,20 +97,20 @@ impl Channel for HeldAgent {
     fn category(&self) -> roomkit::model::ChannelCategory {
         roomkit::model::ChannelCategory::Intelligence
     }
-    async fn handle_inbound(
+    fn handle_inbound(
         &self,
         message: InboundMessage,
         context: RoomContext,
-    ) -> Result<RoomEvent, ChannelError> {
-        Ok(roomkit::default_inbound_event(self, &message, &context))
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
     }
-    async fn deliver(
+    fn deliver(
         &self,
         _event: RoomEvent,
         _binding: ChannelBinding,
         _context: RoomContext,
-    ) -> Result<ChannelOutput, ChannelError> {
-        Ok(ChannelOutput::empty())
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        ready(Ok(ChannelOutput::empty()))
     }
     async fn on_event(
         &self,

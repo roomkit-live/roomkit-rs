@@ -1,11 +1,12 @@
-//! Python: tests/test_executor_close_contract.py; actual backend ancestry.
+//! Python: `tests/test_executor_close_contract.py`; actual backend ancestry.
 
+use std::future::{Future, ready};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use roomkit_core::model::{
     ChannelBinding, ChannelCategory, ChannelId, ChannelOutput, ChannelType, InboundMessage,
-    RoomContext, RoomEvent, RoomId,
+    Metadata, RoomContext, RoomEvent, RoomId,
 };
 
 use super::support::{channel, kit_with, room_id, says};
@@ -27,20 +28,20 @@ impl Channel for Nested {
     fn category(&self) -> ChannelCategory {
         ChannelCategory::Intelligence
     }
-    async fn handle_inbound(
+    fn handle_inbound(
         &self,
         message: InboundMessage,
         context: RoomContext,
-    ) -> Result<RoomEvent, ChannelError> {
-        Ok(crate::default_inbound_event(self, &message, &context))
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Ok(crate::default_inbound_event(self, &message, &context)))
     }
-    async fn deliver(
+    fn deliver(
         &self,
         _event: RoomEvent,
         _binding: ChannelBinding,
         _context: RoomContext,
-    ) -> Result<ChannelOutput, ChannelError> {
-        Ok(ChannelOutput::empty())
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        ready(Ok(ChannelOutput::empty()))
     }
     async fn on_event(
         &self,
@@ -114,20 +115,20 @@ impl Channel for CallsOwner {
     fn category(&self) -> ChannelCategory {
         ChannelCategory::Intelligence
     }
-    async fn handle_inbound(
+    fn handle_inbound(
         &self,
         message: InboundMessage,
         context: RoomContext,
-    ) -> Result<RoomEvent, ChannelError> {
-        Ok(crate::default_inbound_event(self, &message, &context))
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Ok(crate::default_inbound_event(self, &message, &context)))
     }
-    async fn deliver(
+    fn deliver(
         &self,
         _event: RoomEvent,
         _binding: ChannelBinding,
         _context: RoomContext,
-    ) -> Result<ChannelOutput, ChannelError> {
-        Ok(ChannelOutput::empty())
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        ready(Ok(ChannelOutput::empty()))
     }
     async fn on_event(
         &self,
@@ -136,9 +137,7 @@ impl Channel for CallsOwner {
         _context: RoomContext,
     ) -> Result<ChannelOutput, ChannelError> {
         let host = crate::current_turn_host().unwrap();
-        let answer = host
-            .call_owner_tool("close", Default::default(), "c1")
-            .await;
+        let answer = host.call_owner_tool("close", Metadata::new(), "c1").await;
         assert!(matches!(answer, crate::turn::OwnerToolAnswer::Served(_)));
         Ok(ChannelOutput::empty())
     }

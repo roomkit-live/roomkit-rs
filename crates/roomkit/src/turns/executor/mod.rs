@@ -578,6 +578,18 @@ fn parse(carried: CarriedRequest) -> Result<TurnRequest, String> {
     })
 }
 
+/// Wait for an independent close to cut this turn.
+async fn executor_closing(closing: &mut tokio::sync::watch::Receiver<bool>) {
+    loop {
+        if *closing.borrow_and_update() {
+            return;
+        }
+        if closing.changed().await.is_err() {
+            pending::<()>().await;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use roomkit_core::model::{
@@ -608,17 +620,5 @@ mod tests {
         };
         let refused = parse(carried).unwrap_err();
         assert!(refused.contains("past the bound"), "{refused}");
-    }
-}
-
-/// Wait for an independent close to cut this turn.
-async fn executor_closing(closing: &mut tokio::sync::watch::Receiver<bool>) {
-    loop {
-        if *closing.borrow_and_update() {
-            return;
-        }
-        if closing.changed().await.is_err() {
-            pending::<()>().await;
-        }
     }
 }
