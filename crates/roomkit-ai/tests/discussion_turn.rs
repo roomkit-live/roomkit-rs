@@ -99,10 +99,14 @@ async fn test_a_turn_reads_the_answered_event_at_its_place_with_the_notes() {
     retire_mark(&mark);
 
     let sent = texts(&provider);
-    let first = sent.iter().position(|text| text.contains("first: what is"));
+    let first = sent
+        .iter()
+        .position(|text| text.contains("first: what is"))
+        .unwrap();
     let second = sent
         .iter()
-        .position(|text| text.contains("second: and since"));
+        .position(|text| text.contains("second: and since"))
+        .unwrap();
     assert!(first < second, "{sent:?}");
     assert!(sent.last().unwrap().contains("ROOM NOTES"), "{sent:?}");
 }

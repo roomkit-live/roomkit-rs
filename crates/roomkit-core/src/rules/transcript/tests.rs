@@ -797,11 +797,12 @@ fn test_a_history_opens_on_no_calls_when_the_answered_event_reads_as_nothing() {
 
         let messages = read_with(&room, &asked, &in_place());
 
-        assert_ne!(
-            messages.first().map(|message| message.role),
-            Some(Role::Assistant),
-            "{messages:?}"
-        );
+        let roles: Vec<_> = messages.iter().map(|message| message.role).collect();
+        let expected = if followed { vec![Role::User] } else { vec![] };
+        assert_eq!(roles, expected, "{messages:?}");
+        if followed {
+            assert!(messages[0].text.contains("later"), "{messages:?}");
+        }
     }
 }
 
@@ -819,15 +820,10 @@ fn an_instruction_s_turn_reads_before_a_round_at_its_own_index() {
 
     let messages = read_with(&room, &instruction, &in_place());
 
-    let input = messages
-        .iter()
-        .position(|message| message.text.contains("do it"))
-        .unwrap();
-    let calls = messages
-        .iter()
-        .position(|message| message.role == Role::Assistant)
-        .unwrap();
-    assert!(input < calls, "{messages:?}");
+    let roles: Vec<_> = messages.iter().map(|message| message.role).collect();
+    assert_eq!(roles, [Role::User, Role::User, Role::Assistant, Role::Tool]);
+    assert!(messages[0].text.contains("earlier"), "{messages:?}");
+    assert!(messages[1].text.contains("do it"), "{messages:?}");
 }
 
 // Python: channels/_ai_context.py `_replayed_rounds`: a standalone turn reads
@@ -869,6 +865,7 @@ fn an_instruction_with_no_turn_before_it_keeps_a_round_at_its_own_index_alone() 
 
         let read: Vec<_> = messages.iter().map(|message| message.role).collect();
         assert_eq!(read, roles, "{messages:?}");
+        assert!(messages[0].text.contains("do it"), "{messages:?}");
     }
 }
 
