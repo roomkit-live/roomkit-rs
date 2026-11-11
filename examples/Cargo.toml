@@ -157,6 +157,10 @@ name = "agent_fallback"
 path = "agent_fallback.rs"
 
 [[example]]
+name = "ai_router_local_or_hosted"
+path = "ai_router_local_or_hosted.rs"
+
+[[example]]
 name = "ai_response_schema"
 path = "ai_response_schema.rs"
 
