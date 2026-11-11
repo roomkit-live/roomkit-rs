@@ -3,7 +3,7 @@
 //! §20): Python's `AIChannel._measure_turn`.
 
 use roomkit_core::rules::transcript::{
-    Message, Replayed, SPEAKER_ATTRIBUTION_NOTE, people_note, turn_notes,
+    Message, Replayed, SPEAKER_ATTRIBUTION_NOTE, cleaned_notes, people_note, turn_notes,
 };
 
 use super::Loop;
@@ -25,13 +25,19 @@ impl<P: AiProvider> Loop<P> {
     /// declares, measured on their own schemas (the intent property is the
     /// request's), the notes the channel adds to its input (room for the
     /// speaker attribution and a cut answer's note, and the note naming the
-    /// `people` taking part when two or more do), and the images its input
+    /// `people` taking part when two or more do, then the `discussion`
+    /// notes), and the images its input
     /// replays; its reply budget apart; and each piece of its `earlier`
     /// turns its history replays (a round of tool calls, an instruction a
     /// turn read), measured apart by its index and its turn, all of them,
     /// for the memory to charge to the history event it reads with (RFC
     /// §20, Python's `_replayed_costs`).
-    pub(crate) fn footprint(&self, earlier: &[Replayed], people: &[String]) -> TurnFootprint {
+    pub(crate) fn footprint(
+        &self,
+        earlier: &[Replayed],
+        people: &[String],
+        discussion: &[String],
+    ) -> TurnFootprint {
         let prompt = estimate_tokens(self.system_prompt.as_deref().unwrap_or(""));
         let declared = self.first_declaration();
         let tools: usize = declared.iter().map(estimate_tool_tokens).sum();
@@ -39,6 +45,7 @@ impl<P: AiProvider> Loop<P> {
             .into_iter()
             .chain(people_note(people))
             .chain([CUT_NOTE.to_owned()])
+            .chain(cleaned_notes(discussion))
             .collect();
         let notes = estimate_tokens(&turn_notes(&room).unwrap_or_default());
         let images = self.turn_images_tokens();

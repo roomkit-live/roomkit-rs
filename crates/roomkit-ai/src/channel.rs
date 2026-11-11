@@ -1614,7 +1614,12 @@ impl<P: AiProvider> AiChannel<P> {
         // Measured as the first round sends it, before the memory reads the
         // room (RFC §20).
         let people = self.people(&context, stands_alone);
-        let footprint = looped.footprint(&self.replayed(&context, stands_alone), &people);
+        let discussion_notes = roomkit::discussion_notes(&event);
+        let footprint = looped.footprint(
+            &self.replayed(&context, stands_alone),
+            &people,
+            &discussion_notes,
+        );
         // The event as the model reads it, the media the application keeps
         // beside its content among its parts, as its history (RFC §6.4).
         let kit = KitMedia::of(looped.turn.as_ref());
@@ -1635,7 +1640,7 @@ impl<P: AiProvider> AiChannel<P> {
             room: context.room.id.clone(),
             keys: images.sent(),
         });
-        let memory = with_discussion_turn(&event, recalled.memory);
+        let memory = with_discussion_turn(&event, recalled.memory, discussion_notes);
         let messages = self.conversation(&read, &recalled.history, &memory, &images);
         // The context takes the settings once the conversation is read, as
         // Python's AIContext validates them.
@@ -1685,9 +1690,9 @@ fn loop_bounds(
 /// `memory`, with what a discussion's turn on `event` adds: its notes, and
 /// its event read at its place (RFC §19.7.5). Python's `discussion_notes` and
 /// `_answered_position`.
-fn with_discussion_turn(event: &RoomEvent, memory: TurnMemory) -> TurnMemory {
+fn with_discussion_turn(event: &RoomEvent, memory: TurnMemory, notes: Vec<String>) -> TurnMemory {
     TurnMemory {
-        turn_notes: roomkit::discussion_notes(event),
+        turn_notes: notes,
         in_place: roomkit::discussion_turn(event),
         ..memory
     }

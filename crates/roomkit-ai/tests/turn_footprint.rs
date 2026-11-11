@@ -18,7 +18,7 @@ use roomkit::model::{
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, ProcessInboundOptions, RoomKit,
-    RoomKitOptions,
+    RoomKitOptions, issue_mark, retire_mark,
 };
 use roomkit_ai::memory::{
     BudgetAwareMemory, BudgetAwareMemoryOptions, CompactingMemory, CompactingMemoryOptions,
@@ -28,6 +28,8 @@ use roomkit_ai::memory::{
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{AiChannel, AiChannelOptions, AiContentPart, AiTool, ToolHandler, ToolResult};
+use roomkit_core::rules::transcript::SPEAKER_ATTRIBUTION_NOTE;
+use serde_json::Value;
 
 /// The notes' room every turn's footprint keeps (Python's
 /// `turn_notes([SPEAKER_ATTRIBUTION_NOTE, CUT_NOTE])`): 1,048 characters.
@@ -56,6 +58,28 @@ impl MemoryProvider for Measured {
     ) -> Pin<Box<dyn Future<Output = Result<MemoryResult, ChannelError>> + Send + 'a>> {
         self.0.lock().unwrap().push(current_turn_footprint());
         Box::pin(std::future::ready(Ok(MemoryResult::default())))
+    }
+}
+
+/// Retire the mark while reading, after recording the footprint.
+struct RetiringMeasured {
+    measured: Measured,
+    mark: Value,
+}
+
+impl MemoryProvider for RetiringMeasured {
+    fn retrieve<'a>(
+        &'a self,
+        room_id: &'a RoomId,
+        current_event: &'a RoomEvent,
+        context: &'a RoomContext,
+        options: RetrieveOptions,
+    ) -> Pin<Box<dyn Future<Output = Result<MemoryResult, ChannelError>> + Send + 'a>> {
+        let result = self
+            .measured
+            .retrieve(room_id, current_event, context, options);
+        retire_mark(&self.mark);
+        result
     }
 }
 
@@ -139,6 +163,61 @@ fn context_of(people: Vec<Participant>) -> RoomContext {
     ];
     context.participants = people;
     context
+}
+
+async fn measured_discussion(notes: Vec<String>) -> (TurnFootprint, String) {
+    let model = ScriptedProvider::new([ScriptedRound::answering("ok")]);
+    let measured = Measured::default();
+    let mark = issue_mark(notes);
+    let agent = AiChannel::new(
+        channel("agent"),
+        model.clone(),
+        AiChannelOptions {
+            memory: Some(Arc::new(RetiringMeasured {
+                measured: measured.clone(),
+                mark: mark.clone(),
+            })),
+            ..AiChannelOptions::default()
+        },
+    )
+    .unwrap();
+    let mut event = RoomEvent::new(
+        room_id(),
+        EventSource::new(channel("member"), ChannelType::WEBSOCKET),
+        EventContent::Text(TextContent::new("hello")),
+    );
+    event
+        .metadata
+        .insert("_discussion_turn".to_owned(), mark.clone());
+    let binding = ChannelBinding {
+        category: ChannelCategory::Intelligence,
+        ..ChannelBinding::new(channel("agent"), room_id(), ChannelType::AI)
+    };
+    let result = agent.on_event(event, binding, context_of(Vec::new())).await;
+    retire_mark(&mark);
+    result.unwrap();
+    let footprint = measured.0.lock().unwrap().pop().unwrap().unwrap();
+    let text = model.requests().remove(0).messages.remove(0).content.text();
+    (footprint, text)
+}
+
+#[tokio::test]
+async fn discussion_notes_are_retained_when_memory_retires_the_mark() {
+    let (footprint, text) = measured_discussion(vec!["ROOM NOTES".to_owned()]).await;
+    assert!(footprint.input_tokens > 1 + NOTES_ROOM);
+    assert!(text.ends_with("ROOM NOTES"), "{text}");
+}
+
+#[tokio::test]
+async fn discussion_notes_split_over_a_runtime_mark_cost_only_their_cleaned_text() {
+    let whole = vec![SPEAKER_ATTRIBUTION_NOTE.to_owned()];
+    let (first, second) = SPEAKER_ATTRIBUTION_NOTE.split_once(' ').unwrap();
+    let split = vec![first.to_owned(), second.to_owned()];
+    let (whole_cost, whole_text) = measured_discussion(whole).await;
+    let (split_cost, split_text) = measured_discussion(split).await;
+    assert!(whole_text.contains("A copy of a runtime mark stood here"));
+    assert_eq!(split_text, whole_text);
+    assert_eq!(split_cost, whole_cost);
 }
 
 // Python: tests/test_turn_footprint.py::test_the_footprint_is_the_turn_as_round_0_sends_it

@@ -8,6 +8,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Budget-aware, compacting and summarizing memories exclude a custom memory's returned current event before reducing history, leaving the original input to the channel once (RFC §20.1).
 
+- A deferred turn reserves its Discussion notes before its memory reduces history, as Python does (RFC §20.3).
+
 - Detaching or attaching an AI channel discards the room's stored tool results, while keeping other rooms and previously issued result IDs intact (RFC §10.6.2; RMK-1645).
 
 - **BREAKING: a steer names its room**, as Python's (RFC §21.3, RMK-1644). `RoomKit::steer(room_id, channel_id, directive, SteerOptions { turn_id, organization_id })` takes the room first, always, and `turn_id` narrows it to one turn of that room; `SteerOptions` loses `room_id`. A directive naming no room reached the agent's most recent turn in any room. `AiChannel::steer` and `Agent::steer` take exactly one of `loop_id`, `room_id` and `turn_id`, `AiError::SteerAddress` otherwise.

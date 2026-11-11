@@ -665,7 +665,8 @@ pub fn turn_notes(blocks: &[String]) -> Option<String> {
 /// `blocks` others wrote, each copy of a runtime mark replaced, one that
 /// runs over two blocks too, as the notes join them, and a block left
 /// blank dropped.
-fn cleaned_notes(blocks: &[String]) -> Vec<String> {
+#[doc(hidden)]
+pub fn cleaned_notes(blocks: &[String]) -> Vec<String> {
     without_copies(blocks)
         .into_iter()
         .filter(|block| !block.trim().is_empty())
