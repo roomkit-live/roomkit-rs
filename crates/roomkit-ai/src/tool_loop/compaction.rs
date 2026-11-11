@@ -77,12 +77,12 @@ impl Loop {
     ) -> Result<(), Failed> {
         tracing::warn!(target: "roomkit::ai", %error, "context overflow: compacting and replaying");
         let room = self.context.room_id.as_str();
-        let (compacted, turn_input) = compacted(
-            &context.messages,
-            self.adopted.answered_input.or(self.adopted.turn_input),
-            &self.eviction,
-            room,
-        )
+        let input = self.adopted.answered_input.or(self.adopted.turn_input);
+        let (compacted, turn_input) = match self.adopted.protected_prefix {
+            Some(prefix) => compact_protected(&context.messages, prefix, &self.eviction, room)
+                .map(|messages| (messages, input)),
+            None => compacted(&context.messages, input, &self.eviction, room),
+        }
         .map_err(Failed::before_streaming)?;
         // Counted as the provider reads them: a round's results are one message.
         let shown = self.shown(messages).len();
@@ -96,6 +96,36 @@ impl Loop {
         context.messages = compacted;
         Ok(())
     }
+}
+
+/// An unidentifiable input permits no summary of the hook's context. Only
+/// new results in the older half can free room; call/result pairs stay whole.
+fn compact_protected(
+    messages: &[AiMessage],
+    prefix: usize,
+    eviction: &ToolEviction,
+    room: &str,
+) -> Result<Vec<AiMessage>, ProviderError> {
+    if messages.len() < MIN_COMPACTED {
+        return Err(ProviderError::from(
+            "Context too large but cannot compact further (<=4 messages)",
+        ));
+    }
+    let end = prefix.max(past_results(messages, messages.len() / 2));
+    let (protected, after) = messages.split_at(prefix.min(messages.len()));
+    let (rounds, rest) = after.split_at((end - prefix).min(after.len()));
+    let (stored, changed) = with_results_stored(rounds, eviction, room);
+    if !changed {
+        return Err(ProviderError::from(
+            "Context too large but nothing left to compact before the turn's input",
+        ));
+    }
+    Ok(protected
+        .iter()
+        .cloned()
+        .chain(stored)
+        .chain(rest.iter().cloned())
+        .collect())
 }
 
 /// `messages` compacted to make room, the turn's input, at `turn_input`,

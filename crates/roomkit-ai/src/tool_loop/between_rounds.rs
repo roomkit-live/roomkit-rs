@@ -44,7 +44,13 @@ impl Loop {
     /// [`with_compacted_history`] places it. A memory that returns none
     /// changes nothing, and one that fails is logged.
     async fn compact_after_round(&mut self, messages: &[Message], usage: &Metadata) {
-        let Some(at) = self.adopted.answered_input.or(self.adopted.turn_input) else {
+        let boundary = self
+            .adopted
+            .protected_prefix
+            .map(|_| 0)
+            .or(self.adopted.answered_input)
+            .or(self.adopted.turn_input);
+        let Some(at) = boundary else {
             return;
         };
         let asked = self.round_context(messages, None).messages;
@@ -67,13 +73,25 @@ impl Loop {
             }
         };
         let room = self.context.room_id.as_str();
-        let placed = with_compacted_history(&asked, at, compacted, &self.eviction, room);
+        let placed = with_compacted_history(
+            &asked,
+            at,
+            compacted,
+            &self.eviction,
+            room,
+            self.adopted.protected_prefix,
+        );
         let input = placed.len() - (asked.len() - at);
         // Counted as the provider reads them: a round's results are one message.
         let shown = self.shown(messages).len();
         self.show_lost_references(&asked, &placed, &mut []);
         self.adopted.messages = Some((placed, shown));
-        if self.adopted.answered_input.is_some() {
+        if let Some(prefix) = self.adopted.protected_prefix.as_mut() {
+            *prefix += input;
+            if let Some(turn_input) = self.adopted.turn_input.as_mut() {
+                *turn_input += input;
+            }
+        } else if self.adopted.answered_input.is_some() {
             self.adopted.answered_input = Some(input);
         } else {
             self.adopted.turn_input = Some(input);
@@ -100,11 +118,16 @@ fn with_compacted_history(
     compacted: Vec<AiMessage>,
     eviction: &ToolEviction,
     room: &str,
+    protected_prefix: Option<usize>,
 ) -> Vec<AiMessage> {
     let (history, after) = asked.split_at(at.min(asked.len()));
-    let last = last_round(after);
-    let (input, rounds) = after.split_at(1.min(after.len()));
-    let (earlier, latest) = rounds.split_at(last.saturating_sub(1).min(rounds.len()));
+    let protected = protected_prefix
+        .unwrap_or(at + 1)
+        .saturating_sub(at)
+        .min(after.len());
+    let last = last_round(after, protected);
+    let (input, rounds) = after.split_at(protected);
+    let (earlier, latest) = rounds.split_at(last.saturating_sub(protected).min(rounds.len()));
     let mut rest = input.to_vec();
     rest.extend(with_results_stored(earlier, eviction, room).0);
     rest.extend_from_slice(latest);
@@ -130,11 +153,11 @@ fn with_compacted_history(
 /// turn's input on: its assistant message, which holds the calls whose
 /// results the model has not read yet; the end when there is none after
 /// the input.
-fn last_round(after: &[AiMessage]) -> usize {
+fn last_round(after: &[AiMessage], protected: usize) -> usize {
     after
         .iter()
         .enumerate()
-        .skip(1)
+        .skip(protected)
         .rev()
         .find(|(_, message)| message.role == AiRole::Assistant)
         .map_or(after.len(), |(at, _)| at)

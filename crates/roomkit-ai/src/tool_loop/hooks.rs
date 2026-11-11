@@ -44,6 +44,9 @@ pub(crate) struct Adopted {
     pub(crate) turn_input: Option<usize>,
     /// The message a discussion answers, when it reads before later messages.
     pub(crate) answered_input: Option<usize>,
+    /// Every message left by a hook whose answered input is no longer identifiable.
+    /// Only results appended after this prefix may be shortened.
+    pub(crate) protected_prefix: Option<usize>,
 }
 
 /// The calls a round ran, as `AFTER_TOOL_ROUND` hands them: none when the
@@ -104,10 +107,16 @@ impl Loop {
     /// they took out withdrawn (Python's `_adopt_hook_toolset`).
     fn adopt(&mut self, built: &AiContext, left: AiContext, conversation: usize) {
         if left.messages != built.messages {
+            let had_input = self.adopted.answered_input.is_some();
             self.adopted.answered_input = self
                 .adopted
                 .answered_input
                 .and_then(|at| retained_input(at, &built.messages, &left.messages));
+            if self.adopted.protected_prefix.is_some()
+                || (had_input && self.adopted.answered_input.is_none())
+            {
+                self.adopted.protected_prefix = Some(left.messages.len());
+            }
             self.adopted.messages = Some((left.messages, conversation));
         }
         self.system_prompt = left.system_prompt;
