@@ -19,7 +19,10 @@ use roomkit::model::{
     ToolCallContent,
 };
 use roomkit::{Channel, ChannelError, issue_mark, retire_mark};
-use roomkit_ai::memory::{IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions};
+use roomkit_ai::memory::{
+    IngestOptions, MemoryProvider, MemoryResult, MockMemoryProvider, MockMemoryProviderOptions,
+    RetrieveOptions,
+};
 use roomkit_ai::{AiChannel, AiChannelOptions, AiRole, MockAiProvider, MockAiProviderOptions};
 use serde_json::{Value, json};
 
@@ -82,6 +85,40 @@ fn texts(provider: &MockAiProvider) -> Vec<String> {
         .iter()
         .map(|message| message.content.text())
         .collect()
+}
+
+// RFC §20.1: memory may return the answered event itself, in its original place.
+#[tokio::test]
+async fn a_memory_returning_the_answered_event_does_not_duplicate_it() {
+    let provider = provider();
+    let (asked, context) = asked_after_another();
+    let memory = MockMemoryProvider::new(MockMemoryProviderOptions {
+        events: context.recent_events.clone(),
+        ..MockMemoryProviderOptions::default()
+    });
+    let channel = AiChannel::new(
+        agent_id(),
+        provider.clone(),
+        AiChannelOptions {
+            memory: Some(Arc::new(memory)),
+            ..AiChannelOptions::default()
+        },
+    )
+    .unwrap();
+    let mark = issue_mark(vec!["ROOM NOTES".to_owned()]);
+    channel
+        .on_event(marked(&asked, mark.clone()), binding(), context)
+        .await
+        .unwrap();
+    retire_mark(&mark);
+    let sent = texts(&provider);
+    assert_eq!(sent.len(), 2, "{sent:?}");
+    assert_eq!(sent[0], "first: what is the error rate?");
+    assert!(
+        sent[1].starts_with("second: and since when?\n\n"),
+        "{sent:?}"
+    );
+    assert!(sent[1].contains("ROOM NOTES"), "{sent:?}");
 }
 
 // Python: tests/test_discussion_core.py::test_a_turn_reads_the_answered_event_at_its_place_with_the_notes
