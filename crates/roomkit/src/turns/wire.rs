@@ -7,7 +7,7 @@
 //! channel control outside any turn; and `room_call`, a host verb made
 //! after its turn. A frame and a control message travel in an envelope that
 //! numbers them per direction ([`super::pipe`]). The messages of features
-//! 0.1 lacks are not modelled (`channel_call`, `channel_released`,
+//! 0.1 lacks are not modelled (`channel_released`,
 //! `room_publication`), but `ephemeral`, which a Python executor sends, is
 //! read so that it can be dropped.
 
@@ -479,6 +479,7 @@ pub(crate) struct ControlEnvelope {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum ChannelControl {
+    ChannelCall(Box<super::channel_calls::ChannelCall>),
     RoomAttached {
         channel_id: ChannelId,
         room_id: RoomId,

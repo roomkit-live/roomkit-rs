@@ -451,7 +451,7 @@ pub struct TurnTap {
 pub struct TappedMessage {
     /// Its family: `request`, `frame` (executor to owner), `control`
     /// (owner to executor), `channel_control`, `room_call` (a host verb
-    /// after its turn) or `room_call_result`.
+    /// after its turn), `room_call_result`, or `channel_result`.
     pub family: &'static str,
     /// The message as it crossed, in the serialized form of RFC §1.4: a
     /// frame or a control message in its numbered envelope.

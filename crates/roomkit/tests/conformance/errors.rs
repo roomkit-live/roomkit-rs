@@ -56,6 +56,10 @@ pub(crate) fn error_of(error: &RoomKitError) -> Option<Value> {
         RoomKitError::EventNotFound(_) => named("event_not_found"),
         RoomKitError::IdempotencyKeyTaken { .. } => named("idempotency_key_taken"),
         RoomKitError::Channel { .. } => named("channel_failed"),
+        RoomKitError::RemoteTurn { kind, .. } if kind == "ScriptedFailureError" => {
+            named("channel_failed")
+        }
+        RoomKitError::TurnLink { reason, .. } => json!({"name": "turn_link", "reason": reason}),
         RoomKitError::Value(_)
         | RoomKitError::ChannelAlreadyRegistered(_)
         | RoomKitError::ToolNameCollision(_) => named("invalid_argument"),

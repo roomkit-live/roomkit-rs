@@ -611,9 +611,9 @@ reason = "decision 12: Python's class attributes channel_type, category and dire
 
 [[missing]]
 python = "roomkit.Channel"
-members = ["channel_call", "restore_room_state", "room_state", "update_binding"]
+members = ["update_binding"]
 scope = "text"
-reason = "not in 0.x: a channel's per-room verbs and the room state the owner keeps for it (RFC 10.6.3, 6.4), and the binding a framework call stored (lot 4's list)"
+reason = "not in 0.x: the binding a framework call stored (lot 4's list)"
 
 [[missing]]
 python = "roomkit.Channel"
@@ -829,12 +829,6 @@ members = [
 ]
 scope = "tier1b"
 reason = "not in 0.x: sources, and the WebSocket and webhook helpers"
-
-[[missing]]
-python = "roomkit.RoomKit"
-members = ["channel_call"]
-scope = "text"
-reason = "not in 0.x: a channel's per-room verbs, through the turn backend (RFC 10.6.3)"
 
 [[exception]]
 python = "roomkit.PendingInput.__init__"

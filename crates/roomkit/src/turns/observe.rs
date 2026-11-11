@@ -17,6 +17,8 @@ pub(crate) enum Carried {
     Control,
     /// A channel control message, owner to executor, outside any turn.
     ChannelControl,
+    /// The answer to a per-room channel verb.
+    ChannelResult,
     /// A host verb made after its turn, executor to owner.
     RoomCall,
     /// The answer to a `room_call`, owner to executor.
@@ -31,6 +33,7 @@ impl Carried {
             Self::Frame => "frame",
             Self::Control => "control",
             Self::ChannelControl => "channel_control",
+            Self::ChannelResult => "channel_result",
             Self::RoomCall => "room_call",
             Self::RoomCallResult => "room_call_result",
         }

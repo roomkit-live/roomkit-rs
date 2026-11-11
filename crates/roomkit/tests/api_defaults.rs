@@ -1753,3 +1753,11 @@ fn local_executor_options_defaults_as_python() {
             .is_none()
     );
 }
+
+#[test]
+fn channel_call_options_defaults() {
+    let options = roomkit::ChannelCallOptions::default();
+    // roomkit.RoomKit.channel_call(organization_id) = None
+    assert_eq!(options.organization_id, None);
+    assert!(options.arguments.is_empty());
+}

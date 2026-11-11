@@ -547,6 +547,44 @@ pub trait Channel: Send + Sync + 'static {
         }
     }
 
+    /// Run a per-room verb (RFC §10.6.3). The default refuses every verb,
+    /// as Python's `Channel.channel_call(room_id, verb, arguments)`.
+    fn channel_call(
+        &self,
+        room_id: RoomId,
+        verb: String,
+        arguments: Metadata,
+    ) -> impl Future<Output = Result<serde_json::Value, ChannelError>> + Send {
+        drop((room_id, arguments));
+        let channel_id = self.declaration().channel_id;
+        async move {
+            Err(crate::RoomKitError::Value(format!(
+                "Channel '{channel_id}' has no per-room verb '{verb}'"
+            ))
+            .into())
+        }
+    }
+
+    /// The state the room keeps for this channel (RFC §10.6.2), empty by
+    /// default. A verb's changed state is stored even when the verb fails.
+    ///
+    /// # Errors
+    /// A channel may refuse to read its state.
+    fn room_state(&self, room_id: &RoomId) -> Result<Metadata, ChannelError> {
+        let _ = room_id;
+        Ok(Metadata::new())
+    }
+
+    /// Hand the stored state back before a turn or call (RFC §10.6.2).
+    /// Channels keep an existing local copy; the default keeps nothing.
+    ///
+    /// # Errors
+    /// A channel may refuse to restore its state.
+    fn restore_room_state(&self, room_id: &RoomId, state: Metadata) -> Result<(), ChannelError> {
+        drop((room_id, state));
+        Ok(())
+    }
+
     /// Releases what the channel holds (RFC §6.1 `close`): the kit's
     /// [`close`](crate::RoomKit::close) calls it once for each channel
     /// registered then, in turn, once the work under way ended or was cut.
@@ -707,6 +745,17 @@ pub(crate) trait DynChannel: Send + Sync {
         context: RoomContext,
     ) -> BoxFuture<'_, Result<ChannelOutput, ChannelError>>;
 
+    fn channel_call(
+        &self,
+        room_id: RoomId,
+        verb: String,
+        arguments: Metadata,
+    ) -> BoxFuture<'_, Result<serde_json::Value, ChannelError>>;
+
+    fn room_state(&self, room_id: &RoomId) -> Result<Metadata, ChannelError>;
+
+    fn restore_room_state(&self, room_id: &RoomId, state: Metadata) -> Result<(), ChannelError>;
+
     fn close(&self) -> BoxFuture<'_, ()>;
 
     fn human_input_registered(&self, registration: u64);
@@ -817,6 +866,23 @@ impl<C: Channel> DynChannel for C {
             binding,
             context,
         ))
+    }
+
+    fn channel_call(
+        &self,
+        room_id: RoomId,
+        verb: String,
+        arguments: Metadata,
+    ) -> BoxFuture<'_, Result<serde_json::Value, ChannelError>> {
+        Box::pin(Channel::channel_call(self, room_id, verb, arguments))
+    }
+
+    fn room_state(&self, room_id: &RoomId) -> Result<Metadata, ChannelError> {
+        Channel::room_state(self, room_id)
+    }
+
+    fn restore_room_state(&self, room_id: &RoomId, state: Metadata) -> Result<(), ChannelError> {
+        Channel::restore_room_state(self, room_id, state)
     }
 
     fn close(&self) -> BoxFuture<'_, ()> {

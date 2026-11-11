@@ -150,6 +150,7 @@ const CHANNEL: &[&str] = &[
     "sender_is_participant",
     "memory",
     "agent",
+    "verbs",
 ];
 const ADDRESSES: &[&str] = &["normalizes", "conversation_key", "recipient_at"];
 const AGENT: &[&str] = &[
@@ -473,6 +474,7 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
             "chain_depth",
             "instruction",
         ],
+        "channel_call" => &["channel_id", "room_id", "verb", "arguments"],
         "cancel_delivery" => &["key", "reason"],
         "steer" => &["channel_id", "directive", "room_id"],
         other => {
@@ -696,6 +698,25 @@ fn scripted_acp(acp: &Value, path: &str, found: &mut Vec<String>) {
 }
 
 fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
+    if let Some(verbs) = channel["verbs"].as_object() {
+        for (name, verb) in verbs {
+            members(
+                verb,
+                &["keeps", "reads", "result", "forgets", "gate", "fail", "do"],
+                &format!("{path}.verbs.{name}"),
+                found,
+            );
+            for (index, action) in items(&verb["do"]) {
+                call(
+                    action,
+                    &["as", "expect"],
+                    &format!("{path}.verbs.{name}.do[{index}]"),
+                    found,
+                );
+            }
+        }
+    }
+
     members(channel, CHANNEL, path, found);
     let human = &channel["human_input"];
     optional(human, HUMAN_INPUT, &format!("{path}.human_input"), found);

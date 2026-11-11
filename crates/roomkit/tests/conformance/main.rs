@@ -22,6 +22,7 @@ mod agents;
 mod ai_hooks;
 mod audits;
 mod calls;
+mod channel_verbs;
 mod chat_wire;
 mod compare;
 mod delegate_calls;

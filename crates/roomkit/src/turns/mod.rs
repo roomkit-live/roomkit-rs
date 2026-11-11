@@ -31,6 +31,9 @@
 mod public_options;
 pub use public_options::{HookOptions, RoomHookOptions, TakesOptions};
 
+mod channel_calls;
+mod detach_state;
+pub(crate) use detach_state::{DetachTicket, PendingDetaches};
 mod codec;
 pub(crate) mod context;
 mod error;
@@ -42,6 +45,10 @@ mod owner_inputs;
 mod pipe;
 mod pulls;
 mod records;
+mod rooms;
+pub(crate) use channel_calls::ChannelCall;
+pub(crate) use error::rebuild_kit_error;
+pub(crate) use rooms::{state_key, stored_state};
 pub(crate) mod served;
 mod started;
 #[cfg(test)]
@@ -112,6 +119,8 @@ pub(crate) struct Turns {
     pub(crate) executor_lifecycle: Arc<executor::Lifecycle>,
     /// Each room's last turn of each channel the owner submitted.
     records: Mutex<RoomRecords>,
+    rooms: Arc<rooms::ExecutorRooms>,
+    pub(crate) pending_detaches: Arc<PendingDetaches>,
     /// How many of the turns' streams the owner reads now.
     reads: Mutex<usize>,
     /// Told each time a read ends.
@@ -140,6 +149,8 @@ impl Default for Turns {
             closed: AtomicBool::new(false),
             executor_lifecycle: Arc::default(),
             records: Mutex::new(RoomRecords::default()),
+            rooms: Arc::default(),
+            pending_detaches: Arc::default(),
             reads: Mutex::new(0),
             reads_changed: Notify::new(),
             cut: watch::Sender::new(false),
@@ -303,14 +314,8 @@ impl Turns {
             .ok_or_else(|| {
                 TurnError::new("no_executor", "the kit's local executor has closed").to_record()
             })?;
-        let previous = self.records().put(
-            &binding.channel_id,
-            &event.room_id,
-            PreviousTurn {
-                turn_id: turn_id.to_string(),
-                executor_id: None,
-            },
-        );
+        let mut records = self.records();
+        let previous = records.get(&binding.channel_id, &event.room_id).cloned();
         let history = std::mem::take(&mut context.recent_events);
         let observers = self.observers();
         let owner_tools = kit.owner_tools(&binding.channel_id, &event.room_id);
@@ -327,6 +332,23 @@ impl Turns {
             trace: trace.as_ref(),
         };
         let rest = request.write(&observers).map_err(|why| uncarried(&why))?;
+        records.put(
+            &binding.channel_id,
+            &event.room_id,
+            PreviousTurn {
+                turn_id: turn_id.to_string(),
+                executor_id: None,
+            },
+        );
+        let stale = kit.channel(&binding.channel_id).is_some_and(|channel| {
+            self.rooms.enter(
+                &channel,
+                (binding.channel_id.clone(), event.room_id.clone()),
+                &turn_id,
+                previous.as_ref(),
+            )
+        });
+        drop(records);
         let timeouts = self.timeouts();
         let (frames, frames_read) = pipe(Arc::clone(&turn_id), Carried::Frame, observers.clone());
         let (controls, controls_read) = pipe(Arc::clone(&turn_id), Carried::Control, observers);
@@ -355,6 +377,7 @@ impl Turns {
                 Arc::clone(&memory),
                 controls_read,
                 carried,
+                stale,
                 kit,
             );
         if !taken {
@@ -437,7 +460,7 @@ impl Turns {
         let answered = ExecutionContext::default().scope(answering).await;
         let answered: RoomCallResult = cross(&observers, Carried::RoomCallResult, &answered)?;
         match answered.error {
-            Some(error) => Err(error::rebuild_kit_error(&error)),
+            Some(error) => Err(rebuild_kit_error(&error)),
             None => Ok(answered.result),
         }
     }
@@ -451,6 +474,9 @@ impl Turns {
         binding: &ChannelBinding,
         channel: Option<Arc<dyn DynChannel>>,
     ) {
+        self.pending_detaches
+            .wait(&binding.channel_id, &binding.room_id)
+            .await;
         let message = ChannelControl::RoomAttached {
             channel_id: binding.channel_id.clone(),
             room_id: binding.room_id.clone(),
@@ -473,6 +499,7 @@ impl Turns {
         channel: Option<Arc<dyn DynChannel>>,
     ) {
         self.records().pop(channel_id, room_id);
+        self.rooms.forget(channel_id, room_id);
         let message = ChannelControl::RoomDetached {
             channel_id: channel_id.clone(),
             room_id: room_id.clone(),
@@ -534,6 +561,7 @@ async fn apply(channel: Option<Arc<dyn DynChannel>>, message: ChannelControl) {
         return;
     };
     let (kind, channel_id, room_id, applied) = match message {
+        ChannelControl::ChannelCall(_) => unreachable!("channel calls require an answer"),
         ChannelControl::RoomAttached {
             channel_id,
             room_id,

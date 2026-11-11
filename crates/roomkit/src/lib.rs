@@ -188,7 +188,6 @@ pub use self::lock_manager::{
 pub use self::hooks::TurnPayload;
 pub use self::host::{HostChannel, HostChannelOptions};
 pub use self::inbound::{CancelOptions, DeliveryHandle, InboundResult};
-pub use self::kit::TurnExecutor;
 pub use self::kit::{
     AddMemberOptions, EnsureParticipantOptions, IsMemberOptions, RemoveMemberOptions,
     RenameMemberOptions, ResolveParticipantOptions,
@@ -208,6 +207,7 @@ pub use self::kit::{
     CancelDeliveryOptions, CancelTaskOptions, SetupBackgroundOptions, StartTaskOptions,
     SteerOptions,
 };
+pub use self::kit::{ChannelCallOptions, TurnExecutor};
 pub use self::kit::{
     CompleteVerificationOptions, RecordFailedAttemptOptions, RequestVerificationOptions,
     RevokeVerificationOptions, VerificationOfOptions,

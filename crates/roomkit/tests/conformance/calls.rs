@@ -368,6 +368,9 @@ async fn other_call(
     name: &str,
     spec: &Value,
 ) -> Result<Called, Unreadable> {
+    if name == "channel_call" {
+        return crate::channel_verbs::call(run, spec).await;
+    }
     if name == "close" {
         return close(run, name, spec).await;
     }

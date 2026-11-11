@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Add local channel calls with per-room state restoration, persistence and detach cleanup.
+
 - Public setup, architecture and API documentation no longer require internal
   planning files. The local `docs/` directory is excluded from version control.
 

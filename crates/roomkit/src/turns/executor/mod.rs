@@ -65,10 +65,12 @@ pub(super) fn take(
     turn: Arc<MemoryTurn>,
     controls: PipeReceiver<Control>,
     carried: CarriedRequest,
+    stale: bool,
     kit: &Arc<dyn TurnKit>,
 ) -> bool {
     let executor = Executor {
         running,
+        stale,
         id: turns.executor_id.clone(),
         turns: Arc::clone(turns),
         sender: Arc::new(FrameSender::new(Arc::clone(&turn))),
@@ -86,6 +88,7 @@ pub(super) fn take(
 /// What one turn's task runs with.
 struct Executor {
     running: Running,
+    stale: bool,
     /// The executor's id.
     id: String,
     turns: Arc<Turns>,
@@ -159,17 +162,15 @@ impl Executor {
         let changes = Arc::new(RecordChanges::default());
         let telemetry = self.kit.telemetry();
         let trace = request.trace.clone();
-        let work: Pin<Box<dyn Future<Output = ()> + Send>> = Box::pin(within_turn_trace(
+        let work = Box::pin(within_turn_trace(
             telemetry,
             trace.as_ref(),
-            work(
-                Arc::clone(&self.turn),
-                Arc::clone(&self.sender),
-                Arc::clone(&changes),
-                host.clone(),
-                Arc::clone(&flow),
+            self.ready_work(
                 request,
                 channel,
+                host.clone(),
+                Arc::clone(&flow),
+                Arc::clone(&changes),
             ),
         ));
         let beating = Beating::start(&self.kit, &self.sender, &self.turn);
@@ -182,6 +183,31 @@ impl Executor {
         drop(changes.report(&self.sender, false));
         self.end(cut, &host, &link);
         panicked.disarm();
+    }
+
+    /// State preparation is part of the work watched for cancellation.
+    fn ready_work(
+        &self,
+        request: TurnRequest,
+        channel: Arc<dyn DynChannel>,
+        host: TurnHost,
+        flow: Arc<Flow>,
+        changes: Arc<RecordChanges>,
+    ) -> crate::channel::BoxFuture<'static, ()> {
+        let key = (request.channel_id.clone(), request.room_id.clone());
+        let stale = self.stale;
+        let stored = super::stored_state(&request.context.room.metadata, &request.channel_id);
+        let rooms = Arc::clone(&self.turns.rooms);
+        let (turn, sender) = (Arc::clone(&self.turn), Arc::clone(&self.sender));
+        Box::pin(async move {
+            if let Err(error) = rooms.ready(&*channel, &key, stored, stale).await {
+                drop(sender.send(&Frame::Error {
+                    error: super::error::turn_failure(&*error),
+                }));
+                return;
+            }
+            work(turn, sender, changes, host, flow, request, channel).await;
+        })
     }
 
     /// The turn's request, parsed anew around its events, and its channel;

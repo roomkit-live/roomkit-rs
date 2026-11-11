@@ -9,8 +9,8 @@ use std::time::Duration;
 use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
     ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
-    ChannelOutput, ChannelType, DeliveryStatus, HookResult, InboundMessage, RoomContext, RoomEvent,
-    RoomId,
+    ChannelOutput, ChannelType, DeliveryStatus, HookResult, InboundMessage, Metadata, RoomContext,
+    RoomEvent, RoomId,
 };
 use roomkit::{
     Channel, ChannelError, DeliveryStream, HookError, HookFuture, SessionStartedEvent, StreamItem,
@@ -191,7 +191,7 @@ pub(crate) async fn perform(
 /// `ProviderDeliveryError` of its `ProviderResult`.
 fn refusal(reaction: &Value) -> Option<roomkit::RoomKitError> {
     let refuse = reaction.get("refuse")?;
-    let mut metadata = roomkit::model::Metadata::new();
+    let mut metadata = Metadata::new();
     for key in ["code", "retryable"] {
         if let Some(value) = refuse.get(key) {
             metadata.insert(key.to_owned(), value.clone());
@@ -239,6 +239,7 @@ pub(crate) struct ScriptedChannel {
     deliver_stream: Reactions,
     on_room_attached: Reactions,
     on_room_detached: Reactions,
+    verbs: crate::channel_verbs::Verbs,
     /// What its own address methods answer: the defaults when `None`.
     addresses: Option<Value>,
     /// The rooms it streams in: every room when `None`.
@@ -295,6 +296,7 @@ impl ScriptedChannel {
             deliver_stream: Reactions::new(spec.get("deliver_stream")),
             on_room_attached: Reactions::new(spec.get("on_room_attached")),
             on_room_detached: Reactions::new(spec.get("on_room_detached")),
+            verbs: crate::channel_verbs::Verbs::new(spec["verbs"].clone()),
             addresses: spec.get("addresses").cloned(),
             streams_in: spec
                 .get("streams_in")
@@ -548,6 +550,32 @@ impl Channel for ScriptedChannel {
         self.react(&self.on_event, &event, true).await
     }
 
+    async fn channel_call(
+        &self,
+        room_id: RoomId,
+        verb: String,
+        arguments: Metadata,
+    ) -> Result<Value, ChannelError> {
+        self.verbs
+            .call(
+                self.run.upgrade(),
+                &self.declaration.channel_id,
+                room_id,
+                verb,
+                arguments,
+            )
+            .await
+    }
+
+    fn room_state(&self, room_id: &RoomId) -> Result<Metadata, ChannelError> {
+        Ok(self.verbs.state(room_id))
+    }
+
+    fn restore_room_state(&self, room_id: &RoomId, state: Metadata) -> Result<(), ChannelError> {
+        self.verbs.restore(room_id, state);
+        Ok(())
+    }
+
     async fn on_room_attached(
         &self,
         room_id: RoomId,
@@ -559,6 +587,7 @@ impl Channel for ScriptedChannel {
     }
 
     async fn on_room_detached(&self, room_id: RoomId) -> Result<(), ChannelError> {
+        self.verbs.forget(&room_id);
         let reactions = &self.on_room_detached;
         self.room_callback(reactions, &room_id, "on_room_detached", None)
             .await
