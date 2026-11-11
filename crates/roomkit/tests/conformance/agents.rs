@@ -428,7 +428,7 @@ fn scripted(
 
 /// The models a scripted router may pick, by the name `expect.models` gives
 /// them.
-type Pickable = Vec<(String, Arc<dyn DynAiProvider>)>;
+pub(crate) type Pickable = Vec<(String, Arc<dyn DynAiProvider>)>;
 
 /// The model another process's agent shares with the run's, by its name.
 type SharedModel<'a> = &'a dyn Fn(&str) -> Option<ScriptedProvider>;
@@ -503,7 +503,7 @@ impl AiRouter for Boxed {
 /// the last of each repeating; a pick names a model as `expect.models` does.
 /// It records what each request carried under `ai_routes`. Python's
 /// `ScriptedAIRouter`.
-struct ScriptedAiRouter {
+pub(crate) struct ScriptedAiRouter {
     agent: String,
     turns: Vec<Option<String>>,
     retries: Vec<Option<String>>,
@@ -515,33 +515,42 @@ struct ScriptedAiRouter {
 impl ScriptedAiRouter {
     /// The router `script` describes for the agent `agent`, picking among
     /// `models`, recording on `run`.
-    fn new(
+    pub(crate) fn new(
         script: &Value,
         (agent, models): (String, Pickable),
         run: &Arc<Run>,
     ) -> Result<Self, String> {
-        let picks =
-            |key: &str, default: Vec<Option<String>>| -> Result<Vec<Option<String>>, String> {
-                let Some(listed) = script.get(key) else {
-                    return Ok(default);
-                };
-                listed
-                    .as_array()
-                    .ok_or(format!("router.{key}: not a list"))?
-                    .iter()
-                    .map(|pick| match pick {
-                        Value::Null => Ok(None),
-                        Value::String(name) => Ok(Some(name.clone())),
-                        Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_) => {
-                            Err(format!("router.{key}: a pick is a model's name or null"))
-                        }
-                    })
-                    .collect()
+        // `turns` is required and a pick names one of `models`, as Python's
+        // `spec["turns"]` and `self._models[pick]` raise: a typo fails the
+        // run, never reads as a router that names no model.
+        let picks = |key: &str,
+                     default: Option<Vec<Option<String>>>|
+         -> Result<Vec<Option<String>>, String> {
+            let Some(listed) = script.get(key) else {
+                return default.ok_or(format!("router.{key}: missing"));
             };
+            listed
+                .as_array()
+                .ok_or(format!("router.{key}: not a list"))?
+                .iter()
+                .map(|pick| match pick {
+                    Value::Null => Ok(None),
+                    Value::String(name) if models.iter().any(|(model, _)| model == name) => {
+                        Ok(Some(name.clone()))
+                    }
+                    Value::String(name) => Err(format!("router.{key}: no model named {name:?}")),
+                    Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_) => {
+                        Err(format!("router.{key}: a pick is a model's name or null"))
+                    }
+                })
+                .collect()
+        };
+        let turns = picks("turns", None)?;
+        let retries = picks("retries", Some(vec![None]))?;
         Ok(Self {
             agent,
-            turns: picks("turns", Vec::new())?,
-            retries: picks("retries", vec![None])?,
+            turns,
+            retries,
             models,
             asked: Mutex::new((0, 0)),
             run: Arc::downgrade(run),
@@ -587,6 +596,8 @@ impl AiRouter for ScriptedAiRouter {
         let (picks, count) = match request.reason {
             RouteReason::Turn => (&self.turns, &mut asked.0),
             RouteReason::Retry => (&self.retries, &mut asked.1),
+            // A reason the README does not script picks nothing.
+            _ => return Box::pin(std::future::ready(None)),
         };
         let pick = picks
             .get((*count).min(picks.len().saturating_sub(1)))

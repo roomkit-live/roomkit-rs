@@ -24,8 +24,10 @@ use roomkit::model::{RoomEvent, RoomId};
 
 use crate::provider::{AiContext, AiProvider, AiResponse, DynAiProvider, ProviderError};
 
-/// Why a router is asked: Python's `RouteReason`.
+/// Why a router is asked: Python's `RouteReason`. More reasons may come,
+/// so a `match` outside this crate ends with a wildcard arm.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum RouteReason {
     /// At a turn's start.
     Turn,

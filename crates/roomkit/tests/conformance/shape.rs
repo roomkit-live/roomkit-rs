@@ -1007,7 +1007,6 @@ fn outcome(outcome: &Value, path: &str, found: &mut Vec<String>) {
     }
 }
 
-/// A scripted model's members, at `path`, and its rounds'.
 /// A scripted agent's router (README, `router`): the models it adds, and
 /// its picks.
 fn ai_router(router: &Value, path: &str, found: &mut Vec<String>) {
@@ -1017,6 +1016,7 @@ fn ai_router(router: &Value, path: &str, found: &mut Vec<String>) {
     }
 }
 
+/// A scripted model's members, at `path`, and its rounds'.
 fn scripted_model(model: &Value, path: &str, found: &mut Vec<String>) {
     optional(model, MODEL, path, found);
     if model

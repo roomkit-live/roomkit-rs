@@ -99,30 +99,28 @@ struct LocalOrHosted {
 
 impl AiRouter for LocalOrHosted {
     fn route(&self, request: RouteRequest) -> AiRouterFuture<'_> {
-        let picked = match request.reason {
-            RouteReason::Retry => {
-                let was_local = request.previous.as_ref().is_some_and(|previous| {
-                    std::ptr::addr_eq(Arc::as_ptr(previous), Arc::as_ptr(&self.local))
-                });
-                was_local.then(|| Arc::clone(&self.hosted))
-            }
-            RouteReason::Turn => {
-                let load = load_per_core();
-                let picked = if load > self.max_load {
-                    println!(
-                        "  router: load {load:.2} per core > {:.2}, hosted",
-                        self.max_load
-                    );
-                    &self.hosted
-                } else if is_complex(&request.text) {
-                    println!("  router: load {load:.2} per core, complex");
-                    &self.hosted
-                } else {
-                    println!("  router: load {load:.2} per core, simple");
-                    &self.local
-                };
-                Some(Arc::clone(picked))
-            }
+        let picked = if request.reason == RouteReason::Retry {
+            let was_local = request.previous.as_ref().is_some_and(|previous| {
+                std::ptr::addr_eq(Arc::as_ptr(previous), Arc::as_ptr(&self.local))
+            });
+            was_local.then(|| Arc::clone(&self.hosted))
+        } else {
+            // A turn's start, as Python's `else` reads any reason but a retry.
+            let load = load_per_core();
+            let picked = if load > self.max_load {
+                println!(
+                    "  router: load {load:.2} per core > {:.2}, hosted",
+                    self.max_load
+                );
+                &self.hosted
+            } else if is_complex(&request.text) {
+                println!("  router: load {load:.2} per core, complex");
+                &self.hosted
+            } else {
+                println!("  router: load {load:.2} per core, simple");
+                &self.local
+            };
+            Some(Arc::clone(picked))
         };
         let name = picked
             .as_ref()

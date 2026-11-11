@@ -1,8 +1,8 @@
 //! Generation mode, concurrent reservation and cancellation in the fixture.
 
-use crate::agents::{Paced, scripted_model};
+use crate::agents::{Paced, Pickable, ScriptedAiRouter, scripted_model};
 use crate::run::{Run, lock};
-use roomkit_ai::{AiContext, AiProvider, ProviderError, StreamEvent};
+use roomkit_ai::{AiContext, AiProvider, DynAiProvider, ProviderError, StreamEvent};
 use serde_json::{Value, json};
 use std::future::poll_fn;
 use std::sync::Arc;
@@ -156,4 +156,33 @@ fn stream_only_fields_and_non_boolean_modes_are_refused() {
     for flag in [Value::Null, json!(0), json!("false"), json!([])] {
         refused_model(&json!({"streaming": flag, "rounds": []}), "streaming");
     }
+}
+
+#[tokio::test]
+async fn a_router_script_without_turns_or_naming_no_model_is_refused() {
+    let mut store = None;
+    let (kit, _kept) = crate::new_kit(|options| {
+        store = Some(Arc::clone(&options.store));
+        options
+    })
+    .await;
+    let store = store.unwrap();
+    let run = Arc::new(Run::new(kit, Arc::clone(&store), store, &json!({})));
+    let (_, local) = scripted_model(&json!({"rounds": []}), &run, "agent", None).unwrap();
+    let local: Arc<dyn DynAiProvider> = Arc::new(local);
+    let models: Pickable = vec![("agent/local".to_owned(), local)];
+    let built = |script: Value| {
+        ScriptedAiRouter::new(&script, ("agent".to_owned(), models.clone()), &run).err()
+    };
+    assert_eq!(built(json!({})).as_deref(), Some("router.turns: missing"));
+    assert_eq!(
+        built(json!({"turns": ["agent/locale"]})).as_deref(),
+        Some("router.turns: no model named \"agent/locale\"")
+    );
+    assert_eq!(
+        built(json!({"turns": ["agent/local"], "retries": ["agent/hosted"]})).as_deref(),
+        Some("router.retries: no model named \"agent/hosted\"")
+    );
+    assert_eq!(built(json!({"turns": ["agent/local", null]})), None);
+    run.kit().close().await.unwrap();
 }
