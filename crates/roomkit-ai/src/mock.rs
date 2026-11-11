@@ -9,8 +9,8 @@ use serde_json::Value;
 
 use crate::provider::{
     AiContext, AiProvider, AiResponse, ModelInfo, ProviderError, ProviderStream, StreamDone,
-    StreamEvent, TextStream, check_schema_answer, checked_stream, is_malformed_call,
-    response_events, schema_for_generate,
+    StreamEvent, StreamToolCall, StreamToolCallDelta, TextStream, check_schema_answer,
+    checked_stream, is_malformed_call, response_events, schema_for_generate,
 };
 use crate::stream::{Yielder, items, next};
 
@@ -31,6 +31,10 @@ pub struct MockAiProviderOptions {
     /// `supports_structured_streaming`); either way its structured stream
     /// sends each response as its events.
     pub streaming: bool,
+    /// Split each call's JSON arguments into this many fragments before
+    /// its complete call. Zero (the default) or negative emits none; a mock
+    /// that does not stream emits none either. Python's `tool_call_delta_chunks`.
+    pub tool_call_delta_chunks: i64,
     /// Whether it honours [`AiContext::response_schema`] as a real provider
     /// must (RFC §6.7), streaming included: the answer must be a JSON
     /// document satisfying the schema, a response ending `refusal` is a
@@ -70,6 +74,7 @@ pub struct MockAiProvider {
     responses: Arc<Vec<AiResponse>>,
     vision: bool,
     streaming: bool,
+    tool_call_delta_chunks: i64,
     /// `response_schema` and `response_schema_with_tools`.
     schema: (bool, bool),
     shared: Arc<Mutex<Asked>>,
@@ -90,6 +95,7 @@ impl MockAiProvider {
             vision,
             ai_responses,
             streaming,
+            tool_call_delta_chunks,
             response_schema,
             response_schema_with_tools,
         } = options;
@@ -106,6 +112,7 @@ impl MockAiProvider {
             responses: Arc::new(responses),
             vision,
             streaming,
+            tool_call_delta_chunks,
             schema: (response_schema, response_schema_with_tools),
             shared: Arc::default(),
         }
@@ -225,6 +232,13 @@ impl AiProvider for MockAiProvider {
                 match response {
                     Ok(response) => {
                         for event in response_events(response) {
+                            if self.streaming
+                                && let StreamEvent::ToolCall(call) = &event
+                            {
+                                for delta in call_deltas(call, self.tool_call_delta_chunks) {
+                                    out.give(Ok(StreamEvent::ToolCallDelta(delta))).await;
+                                }
+                            }
                             out.give(Ok(event)).await;
                         }
                     }
@@ -254,6 +268,27 @@ impl AiProvider for MockAiProvider {
             },
         ))
     }
+}
+
+/// Python's mock splits `json.dumps(arguments)` before each complete call.
+/// The ASCII JSON serialization makes byte boundaries character boundaries.
+fn call_deltas(call: &StreamToolCall, chunks: i64) -> Vec<StreamToolCallDelta> {
+    let Ok(chunks) = usize::try_from(chunks) else {
+        return Vec::new();
+    };
+    if chunks == 0 {
+        return Vec::new();
+    }
+    let payload = crate::skills::dumps(&Value::Object(call.arguments.clone()));
+    let size = payload.len().div_ceil(chunks).max(1);
+    payload
+        .as_bytes()
+        .chunks(size)
+        .map(|fragment| StreamToolCallDelta {
+            arguments_delta: String::from_utf8_lossy(fragment).into_owned(),
+            ..StreamToolCallDelta::new(&call.id, &call.name)
+        })
+        .collect()
 }
 
 /// Why a scripted response declined: its `refusal` ending.

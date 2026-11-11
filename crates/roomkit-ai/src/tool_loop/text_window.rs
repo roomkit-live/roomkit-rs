@@ -169,6 +169,9 @@ impl Drop for TextWindow {
 pub(super) struct RoundWindows {
     pub(super) thinking: ThinkingWindow,
     pub(super) text: TextWindow,
+    // Fields drop in declaration order: close reasoning and text before
+    // the terminal composition frame, as Python's _StreamRound.close does.
+    pub(super) composition: super::composition::Composition,
 }
 
 #[cfg(test)]

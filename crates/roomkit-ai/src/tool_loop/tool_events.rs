@@ -54,6 +54,12 @@ pub(super) struct ToolEvents {
 }
 
 impl ToolEvents {
+    /// `TOOL_CALL_DELTA`: call identities and cumulative sizes only; an
+    /// empty list closes the attempt (RFC §6.4).
+    pub(super) fn composing(&self, calls: Vec<Value>) {
+        self.publish(EphemeralEventType::ToolCallDelta, calls, None);
+    }
+
     /// Round `round`'s publisher, none outside a kit or for a turn whose
     /// trigger scopes its answers (`answers_room` false, RFC §8.4).
     pub(super) fn new(

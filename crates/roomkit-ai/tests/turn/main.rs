@@ -6,6 +6,7 @@
 
 mod author_images;
 mod bounds;
+mod composition;
 mod config;
 mod history;
 mod human_input;

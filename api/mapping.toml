@@ -1244,12 +1244,6 @@ members = ["thinking"]
 approved = "2026-11-04"
 reason = "Python's instance attribute `thinking`, which the snapshot lists no attribute of: a method of the same name (HITL 7e870bca, RMK-1316)"
 
-[[missing]]
-python = "roomkit.providers.ai.MockAIProvider.__init__"
-params = ["tool_call_delta_chunks"]
-scope = "text"
-reason = "not in 0.x: a call's arguments streamed in fragments"
-
 [[exception]]
 rust = "roomkit_ai::ToolError"
 approved = "2026-11-01"

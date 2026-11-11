@@ -29,6 +29,7 @@
 mod between_rounds;
 mod calls;
 mod compaction;
+mod composition;
 mod deferred;
 pub(crate) use deferred::DeferredTools;
 mod footprint;
@@ -286,6 +287,15 @@ impl Loop {
     fn round_windows(&self, round: u32) -> RoundWindows {
         let ids = (&self.context.room_id, &self.context.channel_id);
         RoundWindows {
+            composition: composition::Composition::new(
+                ToolEvents::new(
+                    self.turn.as_ref(),
+                    ids,
+                    round,
+                    self.thinking_publication.answers_room,
+                ),
+                self.thinking_publication,
+            ),
             thinking: ThinkingWindow::new(
                 self.turn.as_ref(),
                 ids,

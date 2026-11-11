@@ -260,6 +260,8 @@ fn discover_options_defaults_as_python() {
 #[test]
 fn mock_ai_provider_options_defaults_as_python() {
     let defaults = MockAiProviderOptions::default();
+    // roomkit.providers.ai.MockAIProvider.__init__(tool_call_delta_chunks) = 0
+    assert_eq!(defaults.tool_call_delta_chunks, 0);
     // roomkit.providers.ai.MockAIProvider.__init__(ai_responses) = None
     assert!(defaults.ai_responses.is_none());
     // roomkit.providers.ai.MockAIProvider.__init__(responses) = None

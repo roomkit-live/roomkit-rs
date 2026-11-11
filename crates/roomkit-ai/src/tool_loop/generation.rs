@@ -131,6 +131,20 @@ impl Generation {
     /// Returns the provider's error, whether the stream had handed
     /// anything before it, and the text the room was handed.
     pub(super) async fn read(
+        stream: ProviderStream<'_>,
+        (steering, out, prefix, window, limits): Reading<'_>,
+        held: bool,
+    ) -> Result<Self, Failed> {
+        let reading = (steering, out, prefix, &mut *window, limits);
+        let result = Self::read_stream(stream, reading, held).await;
+        window.text.flush();
+        window.composition.close();
+        result
+    }
+
+    /// Read one attempt; its caller closes composition before any retry,
+    /// fallback or execution. Dropping the windows handles a cancelled read.
+    async fn read_stream(
         mut stream: ProviderStream<'_>,
         (steering, out, prefix, window, limits): Reading<'_>,
         held: bool,
@@ -177,9 +191,10 @@ impl Generation {
                 StreamEvent::TextDelta(delta) => {
                     read_text(vec![delta.text], read, window, out).await;
                 }
-                StreamEvent::ToolCallDelta(_) => {
+                StreamEvent::ToolCallDelta(delta) => {
                     window.thinking.end();
                     window.text.flush();
+                    window.composition.add(delta);
                 }
                 // A whole call alone does not close the reasoning window.
                 StreamEvent::ToolCall(call) => {
