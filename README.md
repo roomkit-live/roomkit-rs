@@ -64,10 +64,6 @@ roomkit-openai = { git = "https://github.com/roomkit-live/roomkit-rs", rev = "FU
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
-Until the repository is public, fetching it requires GitHub read access. With
-an existing Git credential helper, set `CARGO_NET_GIT_FETCH_WITH_CLI=true` when
-Cargo's own Git client cannot authenticate.
-
 ## A first room
 
 This example connects a recording transport and an echo agent without network
