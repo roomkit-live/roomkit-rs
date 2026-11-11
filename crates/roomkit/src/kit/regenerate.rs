@@ -2,7 +2,7 @@
 //! `RegenerateMixin`, `regenerate_response` and `regenerate_target`.
 
 use roomkit_core::model::{EventId, RoomEvent, RoomId};
-use roomkit_core::ops::Inbound;
+use roomkit_core::ops::{Inbound, RegenerationSelection, SelectRegeneration};
 use roomkit_core::rules::chain_depth::Draw;
 use roomkit_core::rules::regeneration;
 
@@ -98,6 +98,12 @@ impl<S: ConversationStore> RoomKit<S> {
     /// `response_events`. The answers already given stay: removing them is
     /// the caller's, before the call.
     ///
+    /// A discussion queues one turn of its own for each agent that answered
+    /// the trigger, falling back to the agents it originally asked. Those
+    /// turns run independently: the result names the trigger and has no
+    /// `response_events` (RFC §19.7.5 rule 7). A stored discussion that is
+    /// over refuses the call `discussion_over` after target selection.
+    ///
     /// Returns `None` when the room holds no message to answer again. A
     /// room whose status refuses new events is refused first, blocked
     /// `room_closed` with a `room_refused_event` (RFC §5.1); then a call
@@ -118,9 +124,8 @@ impl<S: ConversationStore> RoomKit<S> {
     /// [`RoomKitError::RoomNotFound`] for a room the store lacks, or of
     /// another organization than `options` names;
     /// [`RoomKitError::ReentryLoopCap`] from an `ASYNC` hook's body past the
-    /// budget that body runs on; [`RoomKitError::Value`] in a room a
-    /// discussion holds, which this implementation does not regenerate yet
-    /// (RMK-1474); and what fails the call before its choice is planned,
+    /// budget that body runs on; and what fails the call before its choice
+    /// is planned or queued in a discussion,
     /// the store's failure among them. Nothing is run or written then.
     pub async fn regenerate_response(
         &self,
@@ -131,15 +136,10 @@ impl<S: ConversationStore> RoomKit<S> {
             trigger_id,
             organization_id,
         } = options;
+        self.inner.open()?;
         if organization_id.is_some() {
             self.get_room(room_id, GetRoomOptions { organization_id })
                 .await?;
-        }
-        if self.inner.discussions.get(room_id).is_some() {
-            return Err(RoomKitError::Value(format!(
-                "room {room_id} is held by a discussion: regenerate_response there is not \
-                 available yet (RMK-1474)"
-            )));
         }
         // Only a hook's body draws as it starts; any work of the room lends
         // its budget to the answers.
@@ -149,7 +149,20 @@ impl<S: ConversationStore> RoomKit<S> {
         {
             return Err(RoomKitError::ReentryLoopCap(room_id.clone()));
         }
+        match driver::regeneration_room(&self.inner, room_id).await {
+            Ok(Some(room)) => self.follow_discussion(&room),
+            Ok(None) => {}
+            Err(RoomKitError::KitClosed) => {
+                return Ok(Some(driver::cut_before_its_commit().into()));
+            }
+            Err(error) => return Err(error),
+        }
         let floor = ExecutionContext::current().turn_depth().unwrap_or(0);
+        if let Some(discussion) = self.inner.discussions.get(room_id) {
+            return self
+                .regenerate_in_discussion(room_id, trigger_id, floor, discussion)
+                .await;
+        }
         let mut regenerate = Inbound::regenerate(self.config(), room_id.clone(), trigger_id, floor);
         if let Some(draw) = work {
             regenerate = regenerate.drawing_on(draw);
@@ -159,5 +172,39 @@ impl<S: ConversationStore> RoomKit<S> {
         // A call that found no message to answer names no event and is no
         // refusal.
         Ok((result.event.is_some() || result.blocked).then(|| result.into()))
+    }
+
+    async fn regenerate_in_discussion(
+        &self,
+        room_id: &RoomId,
+        trigger_id: Option<EventId>,
+        floor: u32,
+        discussion: std::sync::Arc<dyn crate::kit::discussions::DiscussionSeam>,
+    ) -> Result<Option<InboundResult>, RoomKitError> {
+        let selection = SelectRegeneration::new(self.config(), room_id.clone(), trigger_id);
+        let selected = match driver::run(&self.inner, REGENERATE, selection).await {
+            Ok(selected) => selected?,
+            Err(RoomKitError::KitClosed) => {
+                return Ok(Some(driver::cut_before_its_commit().into()));
+            }
+            Err(error) => return Err(error),
+        };
+        match selected {
+            RegenerationSelection::Nothing => Ok(None),
+            RegenerationSelection::Refused(result) => Ok(Some((*result).into())),
+            RegenerationSelection::Selected {
+                trigger,
+                context,
+                release_error,
+            } => {
+                // Selection is over: close no longer cuts this call. Keep
+                // the original discussion even if another call uninstalls it.
+                let mut result = discussion
+                    .queue_regeneration(*trigger, *context, floor)
+                    .await?;
+                result.error = release_error.or(result.error);
+                Ok((result.event.is_some() || result.blocked).then(|| result.into()))
+            }
+        }
     }
 }

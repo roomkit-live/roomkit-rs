@@ -11,6 +11,7 @@ mod lease;
 mod models;
 mod notes;
 mod queue;
+mod regenerate;
 pub(crate) mod room;
 pub(in crate::orchestration) mod strategy;
 

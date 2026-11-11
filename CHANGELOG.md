@@ -8,6 +8,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **BREAKING: a steer names its room**, as Python's (RFC §21.3, RMK-1644). `RoomKit::steer(room_id, channel_id, directive, SteerOptions { turn_id, organization_id })` takes the room first, always, and `turn_id` narrows it to one turn of that room; `SteerOptions` loses `room_id`. A directive naming no room reached the agent's most recent turn in any room. `AiChannel::steer` and `Agent::steer` take exactly one of `loop_id`, `room_id` and `turn_id`, `AiError::SteerAddress` otherwise.
 
+- `regenerate_response` queues Discussion answers as separate front turns, following stored discussions and preserving refusal, shutdown, depth-limit, and lock-release behavior (RFC §19.7.5 rule 7; RMK-1474).
+
 - Regeneration on a kit's first call to a stored, completed Discussion is blocked with `discussion_over`, as Python does (RFC §19.7.5 rule 15).
 
 - An install whose initial room snapshot fails keeps its claim until `uninstall_strategy` releases it, as Python does (RFC §19.7).

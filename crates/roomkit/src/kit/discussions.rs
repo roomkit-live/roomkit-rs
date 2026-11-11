@@ -48,6 +48,15 @@ pub(crate) trait DiscussionSeam: Send + Sync + 'static {
     /// 7).
     fn queue_instruction(&self, event: RoomEvent) -> BoxFuture<'_, Result<(), RoomKitError>>;
 
+    /// Queue selected regenerations after releasing the selection lock.
+    /// The discussion reads its current stored state and takes its own lock.
+    fn queue_regeneration(
+        &self,
+        event: RoomEvent,
+        context: RoomContext,
+        floor: u32,
+    ) -> BoxFuture<'_, Result<roomkit_core::ops::InboundResult, RoomKitError>>;
+
     /// The turn to give now, if any, its queue edited.
     fn next_turn(&self, context: RoomContext) -> BoxFuture<'_, Result<NextTurn, RoomKitError>>;
 
@@ -847,6 +856,23 @@ mod tests {
                     return Err(RoomKitError::Value("it fails".to_owned()));
                 }
                 Ok(())
+            })
+        }
+
+        fn queue_regeneration(
+            &self,
+            event: RoomEvent,
+            _context: RoomContext,
+            _floor: u32,
+        ) -> BoxFuture<'_, Result<roomkit_core::ops::InboundResult, RoomKitError>> {
+            Box::pin(async move {
+                if self.fails {
+                    return Err(RoomKitError::Value("it fails".to_owned()));
+                }
+                Ok(roomkit_core::ops::InboundResult {
+                    event: Some(event),
+                    ..roomkit_core::ops::InboundResult::default()
+                })
             })
         }
 

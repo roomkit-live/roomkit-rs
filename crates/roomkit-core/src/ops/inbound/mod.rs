@@ -89,6 +89,7 @@ mod pass;
 mod persist;
 mod queues;
 mod record;
+mod regenerate;
 mod reply_record;
 mod report;
 mod rerun;
@@ -856,3 +857,5 @@ impl Machine {
         }
     }
 }
+
+pub use regenerate::{RegenerationSelection, SelectRegeneration};

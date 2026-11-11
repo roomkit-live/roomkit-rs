@@ -472,7 +472,11 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         }
         loop {
             let pick = state.next_turn(self.config().max_depth);
-            for entry in &pick.stopped {
+            for entry in pick
+                .stopped
+                .iter()
+                .chain(pick.dropped.iter().filter(|entry| entry.regenerate))
+            {
                 next.stopped.extend(self.stopped(kit, entry).await?);
             }
             self.drop_instructions(&pick.dropped, state, changes);

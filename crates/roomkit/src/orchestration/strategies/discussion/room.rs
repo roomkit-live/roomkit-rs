@@ -83,6 +83,8 @@ pub(super) struct Live {
     /// The message waiting for the dispatch policy the look's plan found
     /// first, which the look has decided off the room's lock (rule 18).
     pub(super) deciding: Option<Pending>,
+    /// Whether the latest queue edit read a stored discussion.
+    pub(super) stored: bool,
     pub(super) closed: bool,
     pub(super) forgotten: bool,
 }
@@ -493,6 +495,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         let mut state = before.clone();
         let result = {
             let mut live = self.state();
+            live.stored = stored;
             let result = change(&mut state, &mut live);
             if stored && state != before && state.queue_differs(&before) {
                 state.version += 1;
@@ -1194,6 +1197,15 @@ impl<S: ConversationStore> DiscussionSeam for DiscussionRoom<S> {
 
     fn queue_instruction(&self, event: RoomEvent) -> BoxFuture<'_, Result<(), RoomKitError>> {
         Box::pin(self.instruction(event))
+    }
+
+    fn queue_regeneration(
+        &self,
+        event: RoomEvent,
+        context: RoomContext,
+        floor: u32,
+    ) -> BoxFuture<'_, Result<roomkit_core::ops::InboundResult, RoomKitError>> {
+        Box::pin(self.regenerate(event, context, floor))
     }
 
     fn next_turn(&self, context: RoomContext) -> BoxFuture<'_, Result<NextTurn, RoomKitError>> {

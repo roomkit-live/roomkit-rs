@@ -35,6 +35,7 @@ mod holds;
 mod in_flight;
 mod inbound;
 mod indexes;
+mod regenerate;
 mod spans;
 
 use std::collections::HashMap;
@@ -1777,3 +1778,7 @@ pub(crate) fn stalled() -> RoomKitError {
         "an operation's run stalled: it waited for effects the driver never received".to_owned(),
     )
 }
+
+pub(crate) use regenerate::regeneration_room;
+
+pub(crate) use inbound::cut_before_its_commit;

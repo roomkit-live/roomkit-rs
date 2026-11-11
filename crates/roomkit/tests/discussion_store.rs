@@ -5,6 +5,9 @@
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
+#[path = "discussion_store/regeneration.rs"]
+mod regeneration;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
@@ -29,6 +32,7 @@ use roomkit::{
 #[derive(Default)]
 struct FlakyStore {
     store: InMemoryStore,
+    room_read: regeneration::ReadGate,
     refuse_from: Arc<AtomicU64>,
     refused: Arc<Notify>,
     held: Arc<AtomicBool>,
@@ -55,6 +59,12 @@ macro_rules! forward {
 }
 
 impl ConversationStore for FlakyStore {
+    async fn get_room(&self, room_id: &RoomId) -> Result<Option<Room>, StoreError> {
+        let room = self.store.get_room(room_id).await?;
+        self.room_read.pass().await;
+        Ok(room)
+    }
+
     async fn get_event(&self, event_id: &EventId) -> Result<Option<RoomEvent>, StoreError> {
         self.reads.fetch_add(1, Ordering::SeqCst);
         if self.held.swap(false, Ordering::SeqCst) {
@@ -99,7 +109,6 @@ impl ConversationStore for FlakyStore {
     forward! {
         list_participants(room_id: &RoomId) -> Vec<Participant>;
         create_room(room: Room) -> Room;
-        get_room(room_id: &RoomId) -> Option<Room>;
         update_room(room: Room) -> Room;
         delete_room(room_id: &RoomId) -> bool;
         list_rooms(options: store::ListRoomsOptions) -> Vec<Room>;

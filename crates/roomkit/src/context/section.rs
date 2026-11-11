@@ -41,8 +41,7 @@ struct Held {
     run: Arc<RunShared>,
     frame: Frame,
     /// Dropped after the run let its tenure go: no lease outlives the lock.
-    #[expect(dead_code, reason = "held for its drop, which releases the lock")]
-    guard: HeldLock,
+    guard: Option<HeldLock>,
 }
 
 impl Section {
@@ -67,12 +66,39 @@ impl Section {
             room_id: room_id.clone(),
             run,
             frame,
-            guard,
+            guard: Some(guard),
         };
         Ok(Self {
             held: Some(held),
             unit,
         })
+    }
+
+    /// Ends the tenure and waits for its release, returning a failed
+    /// release without undoing the section's work (RFC §13.5). Dropping
+    /// this wait leaves the release running, as dropping the section does.
+    pub(crate) async fn release(mut self) -> Result<(), RoomKitError> {
+        let Some(held) = self.held.as_mut() else {
+            return Ok(());
+        };
+        held.run.released(&held.room_id);
+        held.run.clear();
+        let Some(guard) = held.guard.take() else {
+            return Ok(());
+        };
+        let key = held.room_id.clone();
+        let releasing = tokio::spawn(async move {
+            let result = guard.release().await;
+            if let Err(error) = &result {
+                tracing::warn!(target: "roomkit::locks", %key, %error, "releasing the lock failed");
+            }
+            result
+        });
+        match releasing.await {
+            Ok(result) => result,
+            Err(failure) if failure.is_panic() => std::panic::resume_unwind(failure.into_panic()),
+            Err(_) => Err(RoomKitError::Cancelled),
+        }
     }
 
     /// The unit of the kit's work the section's calls run within.
@@ -96,7 +122,9 @@ impl Section {
 impl Drop for Held {
     fn drop(&mut self) {
         // The lease dies with the tenure, before the lock is let go.
-        self.run.released(&self.room_id);
-        self.run.clear();
+        if self.guard.is_some() {
+            self.run.released(&self.room_id);
+            self.run.clear();
+        }
     }
 }

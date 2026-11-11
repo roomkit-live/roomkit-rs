@@ -40,7 +40,6 @@ use crate::ops::{Abort, Cx, Progress, RefusedOperation};
 use crate::rules::chain_depth::{self, ReentryBudget};
 use crate::rules::discussion;
 use crate::rules::permissions::{self, DeliveryPlan};
-use crate::rules::regeneration;
 use crate::rules::verification::release;
 
 /// What a rerun's section came to.
@@ -180,25 +179,19 @@ impl RerunWork {
         trigger_id: Option<&EventId>,
         floor: u32,
     ) -> Progress<Result<Reran, Abort>> {
-        let trigger = regeneration::target(&context).cloned();
-        let status = context.room.status;
-        if !status.accepts_events() {
-            report::regeneration_refused(cx, &context.room.id, trigger.as_ref(), status);
-            return Progress::Done(Ok(Reran::Refused));
-        }
-        if let Some(trigger_id) = trigger_id
-            && trigger.as_ref().map(|trigger| &trigger.id) != Some(trigger_id)
-        {
-            tracing::info!(
-                target: "roomkit::core::inbound",
-                room_id = %context.room.id,
-                event_id = %trigger_id,
-                "regeneration refused: its trigger is no longer the room's choice"
-            );
-            return Progress::Done(Ok(Reran::Moved));
-        }
-        let Some(trigger) = trigger else {
-            return Progress::Done(Ok(Reran::Nothing));
+        let (trigger, context) = match super::regenerate::select(cx, context, trigger_id) {
+            super::RegenerationSelection::Nothing => return Progress::Done(Ok(Reran::Nothing)),
+            super::RegenerationSelection::Refused(result) => {
+                let refused = if result.reason.as_deref() == Some("room_closed") {
+                    Reran::Refused
+                } else {
+                    Reran::Moved
+                };
+                return Progress::Done(Ok(refused));
+            }
+            super::RegenerationSelection::Selected {
+                trigger, context, ..
+            } => (*trigger, context),
         };
         if discussion::is_over(&context.room.metadata) {
             return Progress::Done(Ok(Reran::DiscussionOver));

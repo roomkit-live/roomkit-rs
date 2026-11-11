@@ -299,10 +299,6 @@ impl SpeakQueueState {
 
     /// A regenerated answer to the event `ask` names: a turn of its own, at
     /// the front, once per agent and event; whether it was queued.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "regeneration, lot 10 of stream I")
-    )]
     pub(crate) fn queue_regeneration(&mut self, agent: &ChannelId, ask: Ask) -> bool {
         let queued = self.entries.iter().any(|entry| {
             entry.regenerate
