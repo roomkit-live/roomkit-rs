@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from api_parity.compare import Finding
 from api_parity.cover import Report
-from api_parity.mapping import LOTS
+from api_parity.mapping import LOTS, SCOPES
 
 _ORDER = ("matches", "differs", "options", "exception", "unmapped")
 
@@ -29,6 +29,8 @@ def render(report: Report, rules_only: bool) -> str:
         "Items",
         [f"{r.status:<9} {r.path} ({r.kind})" + (f" -> {r.python}" if r.python else "") for r in report.items.values()],
     )
+    if not rules_only:
+        _scopes(lines.append, report)
     return "\n".join(lines)
 
 
@@ -68,6 +70,19 @@ def _one_sided(out, findings: list[Finding]) -> None:
         width = max(len(f.path) for f in found)
         for finding in found:
             out(f"    {finding.side:<6} {finding.path:<{width}}  {finding.detail}")
+    out("")
+
+
+def _scopes(out, report: Report) -> None:
+    """The [[missing]] entries by scope, the text side first, and their
+    total: the entries, and the Python names they cover, a dead one not
+    counted. The last lines of the report."""
+    out("== [[missing]] by scope: the Python names Rust lacks")
+    missing = report.mapping.of("missing")
+    for scope in (*SCOPES, None):
+        entries = missing if scope is None else [entry for entry in missing if entry.scope == scope]
+        names = sum(len({finding.path for finding in entry.covered}) for entry in entries)
+        out(f"  {scope or 'total'}: {len(entries)} entries, {names} names")
     out("")
 
 

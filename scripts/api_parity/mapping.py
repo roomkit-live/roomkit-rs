@@ -10,14 +10,21 @@ from pathlib import Path
 from api_parity import ParityError
 
 LOTS = ("1", "2", "3", "4", "5", "6", "?")
+# A [[missing]] entry's scope: the text side, which the API work drives to
+# zero; voice, video, realtime, recording, vision and conference; and tier 1b
+# (RMK-1544: transport providers, other AI providers' extras, sources, the
+# WebSocket and webhook helpers, injected HTTP transports, protocol traces).
+SCOPES = ("text", "media", "tier1b")
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 _PYTHON_NAME = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+(?:\([A-Za-z_]\w*\))?")
 _TOKEN = re.compile(r"[A-Z][a-z0-9]*|[a-z0-9]+")
+# A Python private name: one leading underscore, not a dunder.
+_PRIVATE = re.compile(r"_(?!_)\w*")
 # Each table's keys: those it requires, and those it may hold.
 _KEYS = {
     "map": ({"rust", "python", "py_spec"}, {"params", "reason"}),
     "exception": ({"approved", "reason"}, {"rust", "python", "members", "params", "until"}),
-    "missing": ({"python", "reason"}, {"members", "params"}),
+    "missing": ({"python", "reason", "scope"}, {"members", "params"}),
     "pending": ({"lot", "reason"}, {"rust", "python", "members", "params"}),
 }
 
@@ -190,6 +197,7 @@ class Entry:
     approved: str | None = None
     until: str | None = None
     py_spec: str | None = None
+    scope: str | None = None
     covered: list = field(default_factory=list)
 
     @property
@@ -251,6 +259,8 @@ def entry(table: str, index: int, raw: dict) -> Entry:
         raise ParityError(f"{where}: approved is a date, YYYY-MM-DD")
     if table == "pending" and str(raw["lot"]) not in LOTS:
         raise ParityError(f"{where}: lot is one of {', '.join(LOTS)}")
+    if table == "missing":
+        _check_missing(where, raw)
     if table == "map" and not str(raw["py_spec"]).startswith("sha256:"):
         raise ParityError(f"{where}: py_spec is sha256:<hex>, as api-parity.py --spec NAME prints it")
     params = raw.get("params", {} if table == "map" else [])
@@ -268,7 +278,21 @@ def entry(table: str, index: int, raw: dict) -> Entry:
         approved=str(raw["approved"]) if "approved" in raw else None,
         until=raw.get("until"),
         py_spec=raw.get("py_spec"),
+        scope=raw.get("scope"),
     )
+
+
+def _check_missing(where: str, raw: dict) -> None:
+    """A [[missing]] entry is a gap: its scope one of SCOPES, and neither a
+    Python private name nor a form the language forces, which an
+    [[exception]] holds with its row in the names table."""
+    if raw["scope"] not in SCOPES:
+        raise ParityError(f"{where}: scope is one of {', '.join(SCOPES)}")
+    private = [name for name in [*raw.get("members", []), *raw.get("params", [])] if _PRIVATE.fullmatch(name)]
+    if private:
+        raise ParityError(f"{where}: {', '.join(private)}: a Python private name is no gap, an [[exception]] holds it")
+    if str(raw["reason"]).startswith("language:"):
+        raise ParityError(f"{where}: a form the language forces is no gap, an [[exception]] holds it")
 
 
 def load_mapping(path: Path, rules_only: bool) -> Mapping:

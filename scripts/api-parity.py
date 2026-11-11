@@ -13,7 +13,9 @@ step-05.md, "The architecture table"). This script reads the Rust surface
   requires and the other defaults;
 - the `[[map]]` entries whose Python spec changed since they were written;
 - the dead entries: one naming what is gone, or covering nothing;
-- the `[[pending]]` entries, by the lot of step 5 that removes them.
+- the `[[pending]]` entries, by the lot of step 5 that removes them;
+- last, the `[[missing]]` entries by scope, `text` first, and their total:
+  the entries, and the Python names they cover.
 
 The rules, which apply with no entry:
 - a Rust type's name is Python's with an acronym in Rust's casing (the
@@ -92,7 +94,9 @@ describe, its variants' tags telling it from another such name.
 
 What a rule does not give, an entry of `api/mapping.toml` does: `[[map]]`
 names the Python counterpart, `[[exception]]` an approved Rust form,
-`[[missing]]` a Python name of a class in scope that Rust lacks, and
+`[[missing]]` a Python name of a class in scope that Rust lacks (its
+`scope` the text side, media or tier 1b; a private name or a form the
+language forces is refused there, an `[[exception]]`), and
 `[[pending]]` a known difference a lot of step 5 removes. A Python class is
 in scope once a Rust item maps to it. An entry naming a whole Rust item
 covers that item's own finding alone, so it goes dead once the item maps; an

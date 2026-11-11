@@ -12,7 +12,13 @@
 #   and reason; a dated one names in `until` the Python name whose arrival
 #   ends it, and the report lists it as due once the snapshot holds it;
 # - [[missing]]: a Python name of a class in scope that Rust lacks, not in
-#   0.x, with its reason;
+#   0.x, with its reason and its `scope`: `text`, the side the API work drives
+#   to zero; `media`, voice, video, realtime, recording, vision, conferences
+#   and a voice or video session; `tier1b`, what RMK-1544 lists (transport
+#   providers, other AI providers' extras, sources, the WebSocket and webhook
+#   helpers, injected HTTP transports, protocol traces). A Python private
+#   name, or a form the language forces (a reason "language: ..."), is no
+#   gap: an [[exception]] holds it, with its row in the names table;
 # - [[pending]]: a known difference not removed yet, with the lot of step 5
 #   that removes it ("?" while the plan names none). Lot 6 requires none left.
 # An entry names a `rust` or a `python` path and some of its `members` or
@@ -565,36 +571,56 @@ reason = "decision 12: Python's class attributes channel_type, category and dire
 
 [[missing]]
 python = "roomkit.Channel"
-members = [
-    "channel_call", "connect_session", "disconnect_session",
-    "emit_trace", "on_trace", "resolve_trace_room",
-    "restore_room_state", "room_state", "trace_enabled", "update_binding",
-]
-reason = "not in 0.x: identity resolution, active turns, tracing, sessions, channel calls, room state (lot 4's list)"
+members = ["channel_call", "restore_room_state", "room_state", "update_binding"]
+scope = "text"
+reason = "not in 0.x: a channel's per-room verbs and the room state the owner keeps for it (RFC 10.6.3, 6.4), and the binding a framework call stored (lot 4's list)"
+
+[[missing]]
+python = "roomkit.Channel"
+members = ["connect_session", "disconnect_session"]
+scope = "media"
+reason = "not in 0.x: the long-lived session an inbound message carries, a voice or video one (lot 4's list)"
+
+[[missing]]
+python = "roomkit.Channel"
+members = ["emit_trace", "on_trace", "resolve_trace_room", "trace_enabled"]
+scope = "tier1b"
+reason = "not in 0.x: protocol traces (tier 1b, RMK-1544)"
 
 [[missing]]
 python = "roomkit.ChannelDeclaration.__init__"
 params = ["thinks_while_listening"]
+scope = "text"
 reason = "not in 0.x: the thinker"
 
 [[missing]]
 python = "roomkit.Agent"
-members = ["extra_tools", "thinks_while_listening", "is_config_only"]
-reason = "not in 0.x: tools added at run time, the thinker, and the config-only agent, which serves the realtime voice channel (left out of the orchestration lots, HITL a9e5d1a3)"
+members = ["extra_tools", "thinks_while_listening"]
+scope = "text"
+reason = "not in 0.x: tools added at run time and the thinker"
+
+[[missing]]
+python = "roomkit.Agent"
+members = ["is_config_only"]
+scope = "media"
+reason = "not in 0.x: the config-only agent, which serves the realtime voice channel (left out of the orchestration lots, HITL a9e5d1a3)"
 
 [[missing]]
 python = "roomkit.Loop.__init__"
 params = ["async_delivery"]
+scope = "media"
 reason = "not in 0.x: the loop run in the background for a realtime voice session (left out of the orchestration lots with voice and realtime, HITL a9e5d1a3; RMK-1233)"
 
 [[missing]]
 python = "roomkit.Pipeline.__init__"
 params = ["voice_channel_id", "greet_on_handoff", "greeting_prompt", "farewell_prompt"]
+scope = "media"
 reason = "not in 0.x: a pipeline's voice channel, its voice map and its handoff greetings (left out of the orchestration lots with voice, HITL a9e5d1a3; RMK-1233)"
 
 [[missing]]
 python = "roomkit.ConversationPipeline.install"
 params = ["voice_channel_id", "greet_on_handoff", "greeting_prompt", "farewell_prompt"]
+scope = "media"
 reason = "not in 0.x: a pipeline's voice channel, its voice map, a realtime channel's sessions and its handoff greetings (left out of the orchestration lots with voice and realtime, HITL a9e5d1a3; RMK-1233)"
 
 
@@ -651,65 +677,82 @@ reason = "the callback's type, Python's Callable[[str], bool | Awaitable[bool]]:
 [[missing]]
 python = "roomkit.HandoffHandler.set_language"
 params = ["channel_id"]
+scope = "media"
 reason = "not in 0.x: the realtime voice channel whose sessions it reconfigures (left out of the orchestration lots with voice, HITL a9e5d1a3)"
 
 [[missing]]
 python = "roomkit.ConversationStore"
-members = [
-    "claim_voice_delivery", "complete_voice_delivery", "connection",
-    "get_voice_delivery",
-]
-reason = "not in 0.x: voice deliveries and the connection"
+members = ["claim_voice_delivery", "complete_voice_delivery", "get_voice_delivery"]
+scope = "media"
+reason = "not in 0.x: voice deliveries"
+
+[[missing]]
+python = "roomkit.ConversationStore"
+members = ["connection"]
+scope = "text"
+reason = "not in 0.x: the block of store calls one backend connection serves"
 
 [[missing]]
 python = "roomkit.HookTrigger"
 members = [
-    "AFTER_TTS",
-    "BEFORE_BRIDGE_AUDIO", "BEFORE_BRIDGE_VIDEO",
-    "ON_ACTIVE_SPEAKER_CHANGED",
-    "ON_BACKCHANNEL", "ON_BARGE_IN", "ON_CONFERENCE_PARTICIPANT_JOINED",
-    "ON_CONFERENCE_PARTICIPANT_LEFT", "ON_CONFERENCE_TRACK_MUTED",
-    "ON_CONFERENCE_TRACK_PUBLISHED", "ON_CONFERENCE_TRACK_UNMUTED",
-    "ON_CONFERENCE_TRACK_UNPUBLISHED", "ON_CONNECTION_QUALITY_CHANGED",
-    "ON_DTMF",
-    "ON_INPUT_AUDIO_LEVEL",
+    "AFTER_TTS", "BEFORE_BRIDGE_AUDIO", "BEFORE_BRIDGE_VIDEO",
+    "ON_ACTIVE_SPEAKER_CHANGED", "ON_BACKCHANNEL", "ON_BARGE_IN",
+    "ON_CONFERENCE_PARTICIPANT_JOINED", "ON_CONFERENCE_PARTICIPANT_LEFT",
+    "ON_CONFERENCE_TRACK_MUTED", "ON_CONFERENCE_TRACK_PUBLISHED",
+    "ON_CONFERENCE_TRACK_UNMUTED", "ON_CONFERENCE_TRACK_UNPUBLISHED",
+    "ON_CONNECTION_QUALITY_CHANGED", "ON_DTMF", "ON_INPUT_AUDIO_LEVEL",
     "ON_OUTPUT_AUDIO_LEVEL", "ON_PARTIAL_TRANSCRIPTION",
-    "ON_PLAN_UPDATED", "ON_PROTOCOL_TRACE", "ON_REALTIME_DELEGATION",
-    "ON_REALTIME_TEXT_INJECTED", "ON_RECORDING_STARTED",
-    "ON_RECORDING_STOPPED", "ON_SCREEN_SHARE_STARTED",
-    "ON_SCREEN_SHARE_STOPPED", "ON_SPEAKER_CHANGE", "ON_SPEAK_DECISION",
-    "ON_SPEECH_END", "ON_SPEECH_START", "ON_THOUGHT", "ON_TTS_CANCELLED", "ON_TURN_COMPLETE",
-    "ON_TURN_INCOMPLETE", "ON_VAD_AUDIO_LEVEL",
-    "ON_VAD_SILENCE",
-    "ON_VIDEO_DETECTION", "ON_VIDEO_SESSION_ENDED",
-    "ON_VIDEO_SESSION_STARTED", "ON_VIDEO_TRACK_ADDED",
-    "ON_VIDEO_TRACK_REMOVED", "ON_VISION_RESULT",
+    "ON_REALTIME_DELEGATION", "ON_REALTIME_TEXT_INJECTED",
+    "ON_RECORDING_STARTED", "ON_RECORDING_STOPPED", "ON_SCREEN_SHARE_STARTED",
+    "ON_SCREEN_SHARE_STOPPED", "ON_SPEAKER_CHANGE", "ON_SPEECH_END",
+    "ON_SPEECH_START", "ON_TTS_CANCELLED", "ON_TURN_COMPLETE",
+    "ON_TURN_INCOMPLETE", "ON_VAD_AUDIO_LEVEL", "ON_VAD_SILENCE",
+    "ON_VIDEO_DETECTION", "ON_VIDEO_SESSION_ENDED", "ON_VIDEO_SESSION_STARTED",
+    "ON_VIDEO_TRACK_ADDED", "ON_VIDEO_TRACK_REMOVED", "ON_VISION_RESULT",
 ]
-reason = "not in 0.x: the 57 hook triggers Rust lacks"
+scope = "media"
+reason = "not in 0.x: the hook triggers of voice, video, realtime, recording, vision and conferences"
+
+[[missing]]
+python = "roomkit.HookTrigger"
+members = ["ON_PLAN_UPDATED", "ON_SPEAK_DECISION", "ON_THOUGHT"]
+scope = "text"
+reason = "not in 0.x: the hook triggers of the planner, speaking turns and the thinker"
+
+[[missing]]
+python = "roomkit.HookTrigger"
+members = ["ON_PROTOCOL_TRACE"]
+scope = "tier1b"
+reason = "not in 0.x: protocol traces (tier 1b, RMK-1544)"
 
 [[missing]]
 python = "roomkit.InboundMessage.__init__"
 params = ["session"]
+scope = "media"
 reason = "not in 0.x: voice and video"
 
 [[missing]]
 python = "roomkit.SessionStartedEvent.__init__"
 params = ["session"]
+scope = "media"
 reason = "not in 0.x: voice and video"
 
 [[missing]]
 python = "roomkit.InboundResult"
 members = ["report_cascade"]
+scope = "text"
 reason = "not ported: plumbing (lot 2)"
 
 [[missing]]
 python = "roomkit.RoomKit"
 members = ["turn_executor"]
+scope = "text"
 reason = "not in 0.x: the turn executor"
 
 [[missing]]
 python = "roomkit.RoomKit"
 members = ["disable_room_hook", "enable_room_hook"]
+scope = "text"
 reason = "not in 0.x: the room hooks the turn executors define by name (TurnExecutor.room_hook)"
 
 [[missing]]
@@ -722,7 +765,8 @@ members = [
     "remove_hook", "run_async_hooks", "run_observers", "run_sync_hooks",
     "running_observers", "undefine_room_hook", "use_room_hooks",
 ]
-reason = "not in 0.x: the engine is the kit's, built with it; its chains run in the core's operations; the room hooks the turn executors define by name; its fail-closed triggers are fixed (RFC 9.3)"
+scope = "text"
+reason = "not in 0.x: the engine is the kit's, built with it; its chains run in the core's operations; the room hooks the turn executors define by name; its fail-closed triggers are fixed (RFC 9.3); the text side until HITL 6f09bcba decides"
 
 [[missing]]
 python = "roomkit.RoomKit"
@@ -730,6 +774,7 @@ members = [
     "add_room_recording_track", "room_recordings", "start_room_recording",
     "stop_room_recording",
 ]
+scope = "media"
 reason = "not in 0.x: recording"
 
 [[missing]]
@@ -739,22 +784,26 @@ members = [
     "disconnect_websocket", "list_sources", "source_health",
     "subscribe_websocket", "unsubscribe_websocket",
 ]
+scope = "tier1b"
 reason = "not in 0.x: sources, and the WebSocket and webhook helpers"
 
 [[missing]]
 python = "roomkit.RoomKit"
 members = ["channel_call"]
+scope = "text"
 reason = "not in 0.x: a channel's per-room verbs, through the turn backend (RFC 10.6.3)"
 
-[[missing]]
+[[exception]]
 python = "roomkit.PendingInput.__init__"
 params = ["_event", "_withdrawn"]
-reason = "the handler's own state, held private: the event its waiter awaits, and whether the handler gave the request up"
+approved = "2026-11-10"
+reason = "Python's private dataclass fields, the handler's own state, held private: the event its waiter awaits, and whether the handler gave the request up (architecture: the names table, private fields)"
 
-[[missing]]
+[[exception]]
 python = "roomkit.DeliveryContext.__init__"
 params = ["_voice_sessions", "_voice_channel", "_wait_for_turn"]
-reason = "the delivery path's own fields, held private: no channel of 0.x plays voice or hosts a realtime model, and whether the call waits for its turn is Queued's to set"
+approved = "2026-11-10"
+reason = "Python's private dataclass fields, the delivery path's own, held private: no channel of 0.x plays voice or hosts a realtime model, and whether the call waits for its turn is Queued's to set (architecture: the names table, private fields)"
 
 [[missing]]
 python = "roomkit.RoomKit"
@@ -764,25 +813,31 @@ members = [
     "stt", "synthesize", "transcribe",
     "tts", "voice",
 ]
+scope = "media"
 reason = "not in 0.x: voice and video"
 
 [[missing]]
 python = "roomkit.RoomKit.send_greeting"
 params = ["session", "channel_type"]
+scope = "media"
 reason = "not in 0.x: a voice or realtime session's greeting comes with voice"
 
 [[missing]]
 python = "roomkit.RoomKit.__init__"
-params = [
-    "stt", "tts", "voice",
-    "turn_backend",
-    "error_classes",
-]
-reason = "not in 0.x: a keyword for a feature Rust lacks (lot 1's list: identity, locks across processes, voice, delivery backends, orchestration, the turn backend)"
+params = ["stt", "tts", "voice"]
+scope = "media"
+reason = "not in 0.x: voice"
+
+[[missing]]
+python = "roomkit.RoomKit.__init__"
+params = ["turn_backend", "error_classes"]
+scope = "text"
+reason = "not in 0.x: the turn backend, and the application's error classes an error crossing it is rebuilt as (RFC 10.6.8)"
 
 [[missing]]
 python = "roomkit.RoomKit.create_room"
 params = ["recorders"]
+scope = "media"
 reason = "not in 0.x: recording"
 
 [[missing]]
@@ -791,6 +846,7 @@ members = [
     "has_references", "has_scripts", "list_references", "list_scripts",
     "read_reference", "resolve_script",
 ]
+scope = "text"
 reason = "not in 0.x: skill gating, references and scripts, skills served by MCP, unavailable and unlisted skills"
 
 [[missing]]
@@ -802,106 +858,127 @@ members = [
     "mark_unavailable", "mark_unlisted", "origin", "read_file",
     "unavailable_skills", "unopenable_tool_names",
 ]
+scope = "text"
 reason = "not in 0.x: skill gating, references and scripts, skills served by MCP, unavailable and unlisted skills"
 
 [[missing]]
 python = "roomkit.SkillMetadata"
 members = ["gated_tool_names", "gates", "required_tool_names"]
+scope = "text"
 reason = "not in 0.x: skill gating; a skill that gates or requires tools is refused"
 
 [[missing]]
 python = "roomkit.SkillMetadata.__init__"
 params = ["allowed_tools"]
+scope = "text"
 reason = "not in 0.x: skill gating; a skill that gates or requires tools is refused"
 
 [[missing]]
 python = "roomkit.SkillRegistry.__init__"
 params = ["requires_match"]
+scope = "text"
 reason = "not in 0.x: requires_match (convention 3: no empty options struct)"
 
 [[missing]]
 python = "roomkit.ToolCallEvent.__init__"
 params = ["session"]
+scope = "media"
 reason = "not in 0.x: voice and video"
 
 [[missing]]
 python = "roomkit.ToolPolicy"
 members = ["as_filter", "resolve"]
+scope = "text"
 reason = "not in 0.x: Rust has no roles"
 
 [[missing]]
 python = "roomkit.ToolPolicy.__init__"
 params = ["role_overrides"]
+scope = "text"
 reason = "not in 0.x: Rust has no roles"
 
 [[missing]]
 python = "roomkit.TurnHost"
 members = ["room_vision"]
+scope = "media"
 reason = "not in 0.x: vision"
 
-[[missing]]
+[[exception]]
 python = "roomkit.ResponseMetadata.__init__"
 params = ["initial"]
+approved = "2026-11-10"
 reason = "language: a record holding keys is ResponseMetadata::from(keys), an empty one ResponseMetadata::new() (HITL 5f1b8943)"
 
 [[missing]]
 python = "roomkit.providers.ai.AIContext.__init__"
 params = ["room", "target_capabilities", "target_media_types"]
+scope = "text"
 reason = "not in 0.x: the context's room and its targets' capabilities"
 
-[[missing]]
+[[exception]]
 python = "roomkit.providers.ai.AIContext"
 members = ["model_copy"]
-reason = "language: AiContext is Clone and built by struct update, Python's model_copy(update=...)"
+approved = "2026-11-10"
+reason = "language: AiContext is Clone and built by struct update, Python's model_copy(update=...) (architecture: the names table, AIContext.model_copy)"
 
 [[missing]]
 python = "roomkit.providers.ai.AIResponse.__init__"
 params = ["tasks", "observations"]
+scope = "text"
 reason = "not in 0.x: a response's tasks and observations"
 
 [[missing]]
 python = "roomkit.providers.ai.AIToolCall.__init__"
 params = ["served"]
+scope = "text"
 reason = "not in 0.x: owner-served tools"
 
 [[missing]]
 python = "roomkit.providers.ai.StreamToolCall.__init__"
 params = ["served"]
+scope = "text"
 reason = "not in 0.x: owner-served tools"
 
 [[missing]]
 python = "roomkit.providers.ai.AIToolResultPart.__init__"
 params = ["structured_content", "outcome"]
+scope = "text"
 reason = "not in 0.x: MCP structured results and a call's outcome"
 
-[[missing]]
+[[exception]]
 python = "roomkit.providers.ai.AITextPart.__init__"
 params = ["type"]
+approved = "2026-11-10"
 reason = "language: a part's `type` tag is the AiContentPart variant that holds it, a union no Python name exports"
 
-[[missing]]
+[[exception]]
 python = "roomkit.providers.ai.AIThinkingPart.__init__"
 params = ["type"]
+approved = "2026-11-10"
 reason = "language: a part's `type` tag is the AiContentPart variant that holds it, a union no Python name exports"
 
-[[missing]]
+[[exception]]
 python = "roomkit.providers.ai.AIImagePart.__init__"
 params = ["type"]
+approved = "2026-11-10"
 reason = "language: a part's `type` tag is the AiContentPart variant that holds it, a union no Python name exports"
 
-[[missing]]
+[[exception]]
 python = "roomkit.providers.ai.AIToolCallPart.__init__"
 params = ["type"]
+approved = "2026-11-10"
 reason = "language: a part's `type` tag is the AiContentPart variant that holds it, a union no Python name exports"
 
-[[missing]]
+[[exception]]
 python = "roomkit.providers.ai.AIToolResultPart.__init__"
 params = ["type"]
+approved = "2026-11-10"
 reason = "language: a part's `type` tag is the AiContentPart variant that holds it, a union no Python name exports"
 
 [[missing]]
 python = "roomkit.TransportChannel.__init__"
 params = ["provider"]
+scope = "tier1b"
 reason = "not in 0.x: Rust has no provider contract; without one, deliver returns an empty output, as Python's does, and the recipient check comes with the provider"
 
 # Known differences, by the lot of step 5 that removes them; lot 6 requires
@@ -922,6 +999,7 @@ reason = "An explicit None selects all skills; Rust has no optional call argumen
 [[missing]]
 python = "roomkit.SkillRegistry.copy"
 params = ["marks"]
+scope = "text"
 reason = "Skill availability marks are not implemented in the Rust registry yet"
 
 [[exception]]
@@ -1011,11 +1089,13 @@ params = [
     "external_tool_handler", "room_history", "context_contributor",
     "name", "role", "description", "instructions",
 ]
+scope = "text"
 reason = "not in 0.x yet: parity stream L's later lots (RMK-1429): thinking, permissions, session setup, the catch-up and instructions, the discussion"
 
 [[missing]]
 python = "roomkit.ACPChannel"
 members = ["cancel", "close_session", "config_options", "session_config", "set_config_option", "steer"]
+scope = "text"
 reason = "not in 0.x yet: parity stream L's later lots (RMK-1429): session setup and the kit's verbs"
 
 [[exception]]
@@ -1034,36 +1114,43 @@ params = [
     "speak_policy", "speak_timeout", "thinker",
     "think_wait",
 ]
+scope = "text"
 reason = "not in 0.x: continuation, thinking, scripts and sandbox, external and human tools, planning, tool search, speaking turns and the thinker"
 
 [[missing]]
 python = "roomkit.AIChannel"
 members = ["extra_tools", "thinks_while_listening"]
+scope = "text"
 reason = "not in 0.x: tools added at run time and the thinker"
 
 [[missing]]
 python = "roomkit.tools.ToolCallContext.__init__"
 params = ["structured_content"]
+scope = "text"
 reason = "not in 0.x: MCP Apps' structured results"
 
 [[missing]]
 python = "roomkit.providers.openai.OpenAIAIProvider.__init__"
 params = ["transport"]
+scope = "tier1b"
 reason = "not in 0.x: an injected HTTP transport; the provider builds its own client"
 
 [[missing]]
 python = "roomkit.providers.deepseek.DeepSeekAIProvider.__init__"
 params = ["transport"]
+scope = "tier1b"
 reason = "not in 0.x: an injected HTTP transport; the provider builds its own client, as OpenAI's"
 
 [[missing]]
 python = "roomkit.providers.minimax.MiniMaxAIProvider.__init__"
 params = ["transport"]
+scope = "tier1b"
 reason = "not in 0.x: an injected HTTP transport; the provider builds its own client, as OpenAI's"
 
 [[missing]]
 python = "roomkit.providers.kimi.KimiAIProvider.__init__"
 params = ["transport"]
+scope = "tier1b"
 reason = "not in 0.x: an injected HTTP transport; the provider builds its own client, as OpenAI's"
 
 [[missing]]
@@ -1072,16 +1159,19 @@ members = [
     "__init__", "call_tool_result", "get_tools_as_dicts", "read_resource",
     "request", "server_extensions", "server_info", "tool_meta",
 ]
+scope = "text"
 reason = "not in 0.x: the constructor taking every transport's keywords (from_command and from_url build a provider), the raw result, resources, raw requests and what the handshake said of the server"
 
 [[missing]]
 python = "roomkit.tools.MCPToolProvider.from_command"
 params = ["discover"]
+scope = "text"
 reason = "not in 0.x: connecting without listing the tools"
 
 [[missing]]
 python = "roomkit.tools.MCPToolProvider.from_url"
 params = ["transport", "discover"]
+scope = "text"
 reason = "not in 0.x: the legacy SSE transport, and connecting without listing the tools"
 
 [[exception]]
@@ -1117,6 +1207,7 @@ reason = "Python's instance attribute `thinking`, which the snapshot lists no at
 [[missing]]
 python = "roomkit.providers.ai.MockAIProvider.__init__"
 params = ["tool_call_delta_chunks"]
+scope = "text"
 reason = "not in 0.x: a call's arguments streamed in fragments"
 
 [[exception]]
@@ -1166,41 +1257,49 @@ reason = "Rust has no object to call: Python's ids(server_id, name) is ids.call(
 [[missing]]
 python = "roomkit.RoomKit"
 members = ["declare_host_verb"]
+scope = "text"
 reason = "not yet in Rust: a host's own verbs for its turns' host, Python's RMK-1470, whose lot ports it and takes this entry off (HITL 40019981)"
 
 [[missing]]
 python = "roomkit.TurnHost"
 members = ["call"]
+scope = "text"
 reason = "not yet in Rust: a host verb a turn calls, Python's RMK-1470, whose lot ports it and takes this entry off (HITL 40019981)"
 
 [[missing]]
 python = "roomkit.RoomKit"
 members = ["agent_presence", "executors"]
+scope = "text"
 reason = "not yet in Rust: which executors serve a kit's agents and their presence in a room, Python's RMK-1626, whose lot ports it and takes this entry off"
 
 [[missing]]
 python = "roomkit.SpeakQueueChange"
 members = ["TURN_SKIPPED"]
+scope = "text"
 reason = "not yet in Rust: a discussion skipping the turns of an agent no executor serves, Python's RMK-1626, whose lot ports it and takes this entry off"
 
 [[missing]]
 python = "roomkit.TurnHost"
 members = ["room_context"]
+scope = "text"
 reason = "not yet in Rust: the room an executor's turn reads, sent by the room owner, Python's RMK-1619, whose lot ports it and takes this entry off"
 
 [[missing]]
 python = "roomkit.RoomKit"
 members = ["input_request"]
+scope = "text"
 reason = "not yet in Rust: the owner reads an open human-input request, Python's RMK-1467, whose lot ports it and takes this entry off (HITL 40019981)"
 
 [[missing]]
 python = "roomkit.RoomKit"
 members = ["release_channel"]
+scope = "text"
 reason = "not yet in Rust: a declared channel built anew, Python's RMK-1477, whose lot ports it and takes this entry off (HITL 40019981)"
 
 [[missing]]
 python = "roomkit.AIChannelTurnConfig.__init__"
 params = ["tool_timeouts"]
+scope = "text"
 reason = "not yet in Rust: a turn's configuration bounds its calls with its tools, Python's RMK-1469, whose lot ports it and takes this entry off (HITL 40019981)"
 
 [[exception]]

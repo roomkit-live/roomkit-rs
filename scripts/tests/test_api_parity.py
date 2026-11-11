@@ -999,8 +999,8 @@ class Entries(unittest.TestCase):
                     {"rust": "roomkit::RoomKit", "members": ["downgrade"], "approved": "2026-10-27", "reason": "idem"},
                 ],
                 "missing": [
-                    {"python": "roomkit.RoomKit", "members": ["connect_voice"], "reason": "voice"},
-                    {"python": "roomkit.RoomKit.__init__", "params": ["stt"], "reason": "voice"},
+                    {"python": "roomkit.RoomKit", "members": ["connect_voice"], "reason": "voice", "scope": "media"},
+                    {"python": "roomkit.RoomKit.__init__", "params": ["stt"], "reason": "voice", "scope": "media"},
                 ],
                 "pending": [
                     {"rust": "roomkit::RoomKit", "members": ["attach"], "lot": 1, "reason": "decision 1"},
@@ -1031,7 +1031,7 @@ class Entries(unittest.TestCase):
             self.SIGNATURES,
             entries={
                 "pending": [{"rust": "roomkit::RoomKit", "members": ["shutdown"], "lot": 1, "reason": "x"}],
-                "missing": [{"python": "roomkit.RoomKit", "members": ["gone"], "reason": "x"}],
+                "missing": [{"python": "roomkit.RoomKit", "members": ["gone"], "reason": "x", "scope": "text"}],
             },
         )
         self.assertEqual(
@@ -1153,13 +1153,16 @@ class Entries(unittest.TestCase):
             {"pending": [{"rust": "roomkit::RoomKit", "lot": 9, "reason": "no such lot"}]},
             {"exception": [{"rust": "roomkit::RoomKit", "reason": "no date"}]},
             {"exception": [{"rust": "roomkit::RoomKit", "approved": "yesterday", "reason": "a bad date"}]},
-            {"missing": [{"python": "roomkit.RoomKit", "members": ["a"], "reason": "x", "status": "an unknown key"}]},
-            {"missing": [{"python": "roomkit.RoomKit", "members": ["a"], "params": ["b"], "reason": "both"}]},
+            {"missing": [{"python": "roomkit.RoomKit", "members": ["a"], "reason": "x", "scope": "text", "status": "an unknown key"}]},
+            {"missing": [{"python": "roomkit.RoomKit", "members": ["a"], "params": ["b"], "reason": "both", "scope": "text"}]},
+            {"missing": [{"python": "roomkit.RoomKit", "members": ["a"], "reason": "no scope"}]},
+            {"missing": [{"python": "roomkit.RoomKit", "members": ["a"], "reason": "x", "scope": "voice"}]},
+            {"exception": [{"rust": "roomkit::A", "approved": "2026-10-27", "reason": "x", "scope": "text"}]},
             {"map": [{"rust": "roomkit::A", "python": "roomkit.A"}]},
             {"unknown": []},
         ]
         whole_python = [
-            {"missing": [{"python": "roomkit.RoomKit", "reason": "a whole class"}]},
+            {"missing": [{"python": "roomkit.RoomKit", "reason": "a whole class", "scope": "text"}]},
             {"pending": [{"python": "roomkit.RoomKit", "lot": 1, "reason": "a whole class"}]},
             {"exception": [{"python": "roomkit.RoomKit", "approved": "2026-10-27", "reason": "a whole class"}]},
         ]
@@ -1169,6 +1172,61 @@ class Entries(unittest.TestCase):
             with self.subTest(entries=entries):
                 with self.assertRaises(parity.ParityError):
                     parity.Mapping.from_table({"rules": RULES, **entries})
+
+    def test_a_python_private_name_or_a_language_form_is_an_exception_not_a_gap(self) -> None:
+        # The [[missing]] entries count the names Rust lacks: Python's private
+        # dataclass field, or a form the language forces (a part's `type`
+        # tag is the variant holding it), is an [[exception]] instead, which
+        # covers the finding as the [[missing]] entry did.
+        report = run(
+            [struct("roomkit::PendingInput", methods=["pub fn new(pending_id: String) -> Self"])],
+            {"roomkit.PendingInput": {"__init__": ["def", "pending_id", "_event=<factory>"]}},
+            entries={
+                "exception": [
+                    {"python": "roomkit.PendingInput.__init__", "params": ["_event"], "approved": "2026-11-10", "reason": "held private"}
+                ]
+            },
+        )
+        self.assertEqual((report.uncovered, report.dead), ([], []))
+        refused = {
+            "private name": {"python": "roomkit.PendingInput.__init__", "params": ["_event"], "reason": "held private"},
+            "language forces": {"python": "roomkit.AITextPart.__init__", "params": ["type"], "reason": "language: its variant"},
+        }
+        for why, entry in refused.items():
+            with self.subTest(why):
+                with self.assertRaisesRegex(parity.ParityError, why):
+                    parity.Mapping.from_table({"rules": RULES, "missing": [{**entry, "scope": "text"}]})
+        dunder = {"python": "roomkit.HookEngine", "members": ["__init__"], "reason": "the kit's", "scope": "text"}
+        self.assertEqual(len(parity.Mapping.from_table({"rules": RULES, "missing": [dunder]}).of("missing")), 1)
+
+    def test_the_report_ends_on_the_missing_names_by_scope(self) -> None:
+        signatures = {
+            "roomkit.RoomKit": {
+                "attach_channel": ["async def", "room_id"],
+                "channel_call": ["async def"],
+                "connect_voice": ["async def"],
+                "connect_video": ["async def"],
+                "attach_source": ["async def"],
+            }
+        }
+        missing = [
+            {"python": "roomkit.RoomKit", "members": ["connect_voice", "connect_video"], "reason": "voice", "scope": "media"},
+            {"python": "roomkit.RoomKit", "members": ["channel_call", "gone"], "reason": "turn backend", "scope": "text"},
+            {"python": "roomkit.RoomKit", "members": ["attach_source"], "reason": "sources", "scope": "tier1b"},
+        ]
+        items = [struct("roomkit::RoomKit", methods=["pub async fn attach_channel(&self, room_id: &RoomId)"])]
+        report = run(items, signatures, entries={"missing": missing})
+        self.assertEqual(
+            parity.render(report, rules_only=False).splitlines()[-5:],
+            [
+                "== [[missing]] by scope: the Python names Rust lacks",
+                "  text: 1 entries, 1 names",
+                "  media: 1 entries, 2 names",
+                "  tier1b: 1 entries, 1 names",
+                "  total: 3 entries, 4 names",
+            ],
+        )
+        self.assertNotIn("by scope", parity.render(run(items, signatures, rules_only=True), rules_only=True))
 
 
 class TheGate(unittest.TestCase):
@@ -1184,7 +1242,7 @@ class TheGate(unittest.TestCase):
     def test_each_blocking_rule_fails_the_gate(self) -> None:
         unmapped = struct("roomkit::Extra", methods=["pub fn new() -> Self"])
         one_sided = {"roomkit.RoomKit": {"attach_channel": ["async def", "room_id", "category=None"]}}
-        dead = {"missing": [{"python": "roomkit.RoomKit", "members": ["gone"], "reason": "x"}]}
+        dead = {"missing": [{"python": "roomkit.RoomKit", "members": ["gone"], "reason": "x", "scope": "text"}]}
         pending = {"pending": [{"python": "roomkit.RoomKit.attach_channel", "params": ["category"], "lot": 6, "reason": "x"}]}
         cases = {
             "an unmapped item": (run([*self.ITEMS, unmapped], self.SIGNATURES), "1 finding no entry covers"),
