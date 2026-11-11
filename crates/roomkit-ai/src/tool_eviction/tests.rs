@@ -343,6 +343,28 @@ fn small() -> String {
     "line\n".repeat(200)
 }
 
+// RFC §10.6.2: forgetting one room drops its data, not another room or its issued ids.
+#[test]
+fn a_forgotten_room_keeps_no_result_and_never_reuses_its_old_ids() {
+    let eviction = ToolEviction::new(10);
+    let first = evict_in(&eviction, "room-a", &small(), "call");
+    evict_in(&eviction, "room-a", &small(), "another-call");
+    let other_text = "é\n".repeat(100);
+    let other = evict_in(&eviction, "room-b", &other_text, "call");
+
+    eviction.forget("room-a");
+    eviction.forget("room-a");
+    assert!(!eviction.has_evicted("room-a"));
+    assert!(!reads(&eviction, "room-a", &first));
+    assert!(reads(&eviction, "room-b", &other));
+    assert_eq!(eviction.lock().chars, char_len(&other_text));
+
+    let replacement = evict_in(&eviction, "room-a", &small(), "call");
+    assert_ne!(replacement, first);
+    assert!(!reads(&eviction, "room-a", &first));
+    assert!(reads(&eviction, "room-a", &replacement));
+}
+
 // Python: tests/test_tool_eviction_room_scope.py::TestCapacity::test_other_rooms_evictions_do_not_push_a_rooms_result_out
 #[test]
 fn other_rooms_evictions_do_not_push_a_rooms_result_out() {

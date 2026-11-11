@@ -1196,11 +1196,12 @@ impl<P: AiProvider> AiChannel<P> {
     /// Drops what the channel keeps for `room` (RFC §6.4, §10.6.3): the
     /// author images its provider refused there, its tools' images, and
     /// the skills active there, which its next turn reads again from the
-    /// store. Python's `_forget_room`: roomkit-rs has none of the thought,
-    /// speak policy or plan it also drops.
+    /// store, and its stored tool results. Python's `_forget_room`: roomkit-rs
+    /// has none of the thought, speak policy or plan it also drops.
     fn forget_room(&self, room: &RoomId) {
         self.media.refused.forget(room);
         self.media.tool_usage.forget(room);
+        self.eviction.forget(room.as_str());
         if let Some(skills) = &self.skills {
             skills.forget(room);
         }
@@ -1753,7 +1754,8 @@ impl<P: AiProvider> Channel for AiChannel<P> {
     /// What the channel keeps for the room goes with the binding (RFC
     /// §6.4, §10.6.3): the images its provider refused there, the images
     /// its tools returned there, which it replays no more, and the skills
-    /// active there. Python's `on_room_detached`, its `_forget_room`.
+    /// active there, and its stored tool results. Python's `on_room_detached`,
+    /// its `_forget_room`.
     fn on_room_detached(
         &self,
         room_id: RoomId,

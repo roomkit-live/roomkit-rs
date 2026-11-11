@@ -122,6 +122,14 @@ impl ToolEviction {
         self.lock().results.iter().any(|((at, _), _, _)| at == room)
     }
 
+    /// Discards this room's results on detach or attach (RFC §10.6.2).
+    /// Issued ids stay taken: an old placeholder must not read a new result.
+    pub(crate) fn forget(&self, room: &str) {
+        let mut store = self.lock();
+        store.results.retain(|((at, _), _, _)| at != room);
+        store.chars = store.results.iter().map(|(_, _, chars)| chars).sum();
+    }
+
     /// `result`, the model's copy of an outcome of a call in `room`,
     /// bounded: a text or the text of its parts stored and previewed when
     /// past the threshold, its images kept (Python's
