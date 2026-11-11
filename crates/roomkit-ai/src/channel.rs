@@ -1537,6 +1537,20 @@ impl<P: AiProvider> AiChannel<P> {
         )
     }
 
+    /// Measure the turn before memory reads the room, using the notes
+    /// captured for the same request and the history it may replay.
+    fn measure_turn(
+        &self,
+        looped: &Loop<P>,
+        context: &RoomContext,
+        stands_alone: bool,
+        notes: &[String],
+    ) -> TurnFootprint {
+        let people = self.people(context, stands_alone);
+        let replayed = self.replayed(context, stands_alone);
+        looped.footprint(&replayed, &people, notes)
+    }
+
     /// The turn's work within its `record`: its settings, its memory, its
     /// generation hooks, then its loop, as a stream within the kit.
     async fn answer(
@@ -1613,13 +1627,8 @@ impl<P: AiProvider> AiChannel<P> {
         };
         // Measured as the first round sends it, before the memory reads the
         // room (RFC §20).
-        let people = self.people(&context, stands_alone);
-        let discussion_notes = roomkit::discussion_notes(&event);
-        let footprint = looped.footprint(
-            &self.replayed(&context, stands_alone),
-            &people,
-            &discussion_notes,
-        );
+        let notes = roomkit::discussion_notes(&event);
+        let footprint = self.measure_turn(&looped, &context, stands_alone, &notes);
         // The event as the model reads it, the media the application keeps
         // beside its content among its parts, as its history (RFC §6.4).
         let kit = KitMedia::of(looped.turn.as_ref());
@@ -1640,7 +1649,7 @@ impl<P: AiProvider> AiChannel<P> {
             room: context.room.id.clone(),
             keys: images.sent(),
         });
-        let memory = with_discussion_turn(&event, recalled.memory, discussion_notes);
+        let memory = with_discussion_turn(&event, recalled.memory, notes);
         let messages = self.conversation(&read, &recalled.history, &memory, &images);
         // The context takes the settings once the conversation is read, as
         // Python's AIContext validates them.
