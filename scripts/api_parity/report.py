@@ -75,8 +75,10 @@ def _one_sided(out, findings: list[Finding]) -> None:
 
 def _scopes(out, report: Report) -> None:
     """The [[missing]] entries by scope, the text side first, and their
-    total: the entries, and the Python names they cover, a dead one not
-    counted. The last lines of the report."""
+    total: the entries, and the distinct Python names they cover. A name
+    re-exported at several Rust paths counts once, and a dead name not at
+    all; a dead entry still counts as an entry, which the gate refuses. The
+    last lines of the report."""
     out("== [[missing]] by scope: the Python names Rust lacks")
     missing = report.mapping.of("missing")
     for scope in (*SCOPES, None):

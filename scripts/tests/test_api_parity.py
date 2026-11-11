@@ -1214,8 +1214,14 @@ class Entries(unittest.TestCase):
             {"python": "roomkit.RoomKit", "members": ["channel_call", "gone"], "reason": "turn backend", "scope": "text"},
             {"python": "roomkit.RoomKit", "members": ["attach_source"], "reason": "sources", "scope": "tier1b"},
         ]
-        items = [struct("roomkit::RoomKit", methods=["pub async fn attach_channel(&self, room_id: &RoomId)"])]
+        # The kit re-exported at a second Rust path: each name it lacks is a
+        # finding per path, and one name.
+        items = [
+            struct(path, methods=["pub async fn attach_channel(&self, room_id: &RoomId)"])
+            for path in ("roomkit::RoomKit", "roomkit::model::RoomKit")
+        ]
         report = run(items, signatures, entries={"missing": missing})
+        self.assertEqual([len(entry.covered) for entry in report.mapping.of("missing")], [4, 2, 2])
         self.assertEqual(
             parity.render(report, rules_only=False).splitlines()[-5:],
             [

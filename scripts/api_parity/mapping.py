@@ -18,7 +18,8 @@ SCOPES = ("text", "media", "tier1b")
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 _PYTHON_NAME = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+(?:\([A-Za-z_]\w*\))?")
 _TOKEN = re.compile(r"[A-Z][a-z0-9]*|[a-z0-9]+")
-# A Python private name: one leading underscore, not a dunder.
+# A Python private name: one leading underscore, not a dunder. A mangled
+# `__x` (no trailing `__`) is not caught: the snapshot holds none.
 _PRIVATE = re.compile(r"_(?!_)\w*")
 # Each table's keys: those it requires, and those it may hold.
 _KEYS = {
