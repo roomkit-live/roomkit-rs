@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Preserve PostgreSQL channel attachment order across updates and restarts, keeping the first streaming target stable; reattaching a removed channel places it last.
+
 - Add local channel calls with per-room state restoration, persistence and detach cleanup.
 
 - Public setup, architecture and API documentation no longer require internal

@@ -219,7 +219,9 @@ pub(crate) async fn bindings<C: GenericClient>(
 ) -> Result<Vec<ChannelBinding>, Failure> {
     let rows = query(
         client,
-        &format!("SELECT {BINDING_COLUMNS} FROM bindings WHERE room_id = $1"),
+        &format!(
+            "SELECT {BINDING_COLUMNS} FROM bindings WHERE room_id = $1 ORDER BY attachment_order"
+        ),
         &[&room_id.as_str()],
     )
     .await?;
