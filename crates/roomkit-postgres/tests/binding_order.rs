@@ -29,7 +29,7 @@ async fn check_order(store: &PostgresStore, expected: &[&str]) {
     }
 }
 
-/// Python: tests/test_store_binding_contract.py::test_binding_order_survives_updates_and_reattach.
+/// Python: `tests/test_store_binding_contract.py::test_binding_order_survives_updates_and_reattach`.
 #[tokio::test]
 async fn binding_order_survives_updates_and_reattach() {
     if dsn().is_none() {
@@ -61,7 +61,7 @@ async fn binding_order_survives_updates_and_reattach() {
     reopened.close().await;
 }
 
-/// Python: tests/test_store_postgres.py::test_binding_order_is_restored_when_a_legacy_schema_is_upgraded.
+/// Python: `tests/test_store_postgres.py::test_binding_order_is_restored_when_a_legacy_schema_is_upgraded`.
 #[tokio::test]
 async fn binding_order_is_restored_when_a_legacy_schema_is_upgraded() {
     if dsn().is_none() {
