@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # roomkit-core performs no I/O, runs on no async runtime and reads no clock
-# but its environment's (docs/architecture.md, "Crates"). Its normal
+# but its environment's (ARCHITECTURE.md, "Core and runtime"). Its normal
 # dependency tree may hold only the crates allowed below, each there for a
 # dependency the architecture lists for the core: a crate joins the list in
 # the change that brings it, with its reason. The tree is read for every

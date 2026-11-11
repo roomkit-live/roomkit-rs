@@ -3,8 +3,7 @@
 
 The workspace rule: a public API that differs between the two
 implementations is forbidden, except where the language forces it, and each
-such case is a row of the table in docs/architecture.md (docs/steps/
-step-05.md, "The architecture table"). This script reads the Rust surface
+such case is a row of the public reference in api/PYTHON_API.md. This script reads the Rust surface
 `scripts/rs-surface.py` wrote, Python's snapshot pinned in `api/python/`
 (`make api-sync`), and `api/mapping.toml`, and prints:
 

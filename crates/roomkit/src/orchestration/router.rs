@@ -358,7 +358,7 @@ impl ConversationRouter {
     /// `BEFORE_BROADCAST` of the kit, a [`HandoffHandler`], and the generic
     /// handoff tool on every agent, each live or named by the id of one the
     /// kit holds, a live one registered once every one was read, since it
-    /// is given to the kit (`docs/architecture.md`).
+    /// is given to the kit.
     ///
     /// # Errors
     ///

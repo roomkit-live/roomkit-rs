@@ -2,13 +2,15 @@
 
 ## Before writing code
 
-- Read [docs/architecture.md](docs/architecture.md). A change that departs
-  from it updates it first.
-- The RoomKit RFC (`roomkit-specs/roomkit-rfc.md`) is normative. Code is
-  written from its text. When the text is silent or ambiguous, record the gap
-  in [docs/rfc-gaps.md](docs/rfc-gaps.md) with the decision taken; never settle
-  it by reading another implementation.
-- Work follows the current step's plan in [docs/steps/](docs/steps/).
+Read [ARCHITECTURE.md](ARCHITECTURE.md) for crate boundaries and the
+[RoomKit specification](https://github.com/roomkit-live/roomkit-specs) for shared
+behavior. The Python implementation is the public API reference. Demonstrate
+behavioral changes with deterministic tests and update the specification when
+its contract changes.
+
+Use [api/PYTHON_API.md](api/PYTHON_API.md) and `api/mapping.toml` for the
+language-specific API forms. Internal plans under `docs/` are local, ignored
+files; they are not prerequisites for contributing or running the checks.
 
 ## Setup
 
@@ -39,8 +41,8 @@ dependency graph against the security advisories every week.
 
 ## Public API
 
-The public API is the Python implementation's, in Rust's terms (step 5,
-[docs/steps/step-05.md](docs/steps/step-05.md)). `make api-parity` reports,
+The public API is the Python implementation's, in Rust's terms;
+[api/PYTHON_API.md](api/PYTHON_API.md) records the language-specific forms. `make api-parity` reports,
 from rustdoc's HTML, what differs from Python's snapshot pinned in
 `api/python/` (`make api-sync` pins another roomkit commit), and
 `api/mapping.toml` holds what its rules do not give. A change to the public
@@ -86,7 +88,7 @@ API keeps the report free of findings no entry covers, and of dead entries.
 ## Dependencies
 
 Ask before adding a production dependency. `roomkit-core` may depend only on
-what [docs/architecture.md](docs/architecture.md#crates) lists for it.
+the dependency allowlist enforced by `scripts/check-core-deps.sh`.
 `deny.toml` lists the licenses and sources the graph may contain.
 
 ## Commits

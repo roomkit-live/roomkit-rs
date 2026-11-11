@@ -370,7 +370,7 @@ api-parity: doc
 	PYTHONDONTWRITEBYTECODE=1 $(PYTHON) scripts/rs-surface.py --doc target/doc > $(API_REPORT)/rs-surface.json
 	@status=0; PYTHONDONTWRITEBYTECODE=1 $(PYTHON) scripts/api-parity.py $(API_REPORT)/rs-surface.json \
 		--json $(API_REPORT)/report.json --gate --defaults crates/*/tests/api_defaults.rs \
-		--architecture docs/architecture.md \
+		--architecture api/PYTHON_API.md \
 		> $(API_REPORT)/report.txt || status=$$?; \
 	cat $(API_REPORT)/report.txt; exit $$status
 

@@ -4,8 +4,8 @@
 //! once the run let the room's lock go.
 //!
 //! The protocol tells them apart: an event's place is taken under the
-//! lock, after its commit and before the release (docs/architecture.md,
-//! "Protocol rules"), so an index committed that took no place by the
+//! lock, after its commit and before the release, so an index committed
+//! that took no place by the
 //! release has no delivery set: a record stored `BLOCKED`, a lifecycle
 //! record, a record committed outside the pipeline.
 

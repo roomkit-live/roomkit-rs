@@ -1,5 +1,5 @@
 //! The pipeline operations, each a state machine run through the effect
-//! protocol (docs/architecture.md, "Operations").
+//! protocol.
 //!
 //! A driver runs an operation in a loop: it polls it, performs the notices,
 //! answers the callers of the entries it settled, executes the effects and
@@ -36,8 +36,7 @@
 //! An asynchronous driver completes each effect as it finishes, and hands
 //! an operation the calls into its room that its own work makes under the
 //! room's lock or in its admission order ([`Operation::adopt`]), answering
-//! each caller from [`Step::settled`] (docs/architecture.md,
-//! "Reentrancy").
+//! each caller from [`Step::settled`].
 
 mod config;
 mod delegation;

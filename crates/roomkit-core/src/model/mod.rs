@@ -7,8 +7,7 @@
 //! valid. The RFC is a draft and its records grow: before 1.0, a field or a
 //! variant added to follow it is a minor-version change.
 //!
-//! Every type serializes to the JSON form documented in
-//! `docs/architecture.md` (gap G-001).
+//! Serde definitions and the model round-trip tests specify the JSON form.
 
 mod binding;
 mod channel;

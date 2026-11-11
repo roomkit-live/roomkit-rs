@@ -6,6 +6,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Public setup, architecture and API documentation no longer require internal
+  planning files. The local `docs/` directory is excluded from version control.
+
 - Expose the kit’s turn executor and named room hooks, with per-room activation and request-scoped selections (RFC §10.6.6, RMK-1115).
 
 - Stream Chat Completions tool-call fragments with stable call identities, including missing or repeated server ids, through the provider and the room's composition events (RFC §6.4, RMK-1119).

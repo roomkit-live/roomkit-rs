@@ -285,7 +285,7 @@ impl ConversationPipeline {
     /// keeping to the stages, and on every agent a handoff tool naming the
     /// agents it can reach. Each agent is live or named by the id of one the
     /// kit holds, a live one registered once every one was read, since it is
-    /// given to the kit (`docs/architecture.md`). Returns the router and the
+    /// given to the kit. Returns the router and the
     /// handler for further customisation.
     ///
     /// # Errors

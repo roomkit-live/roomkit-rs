@@ -6,8 +6,8 @@
 //! operations and reads what it decides on through the store, so a store
 //! shared by several processes stays correct for the core; the kit's room
 //! lock holds within one process, so two kits on one store need a
-//! distributed lock (RFC §13.5), which 0.1 does not have
-//! (docs/architecture.md).
+//! distributed lock (RFC §13.5), such as the advisory lock manager supplied
+//! by `roomkit-postgres`.
 
 pub(crate) mod error;
 mod memory;
@@ -259,8 +259,8 @@ async fn mark_edits_deleted<S: ConversationStore + ?Sized>(
 /// operations and reads what it decides on through the store, so a store
 /// shared by several processes stays correct for the core; the kit's room
 /// lock holds within one process, so two kits on one store need a
-/// distributed lock (RFC §13.5), which 0.1 does not have
-/// (docs/architecture.md).
+/// distributed lock (RFC §13.5), such as the advisory lock manager supplied
+/// by `roomkit-postgres`.
 ///
 /// The room metadata keys under `roomkit:` belong to the implementation
 /// (RFC §10.6.5): the framework writes them, and host code that writes the

@@ -1,5 +1,4 @@
-//! The protocol between an operation and the driver that runs it
-//! (docs/architecture.md, "Operations").
+//! The protocol between an operation and the driver that runs it.
 //!
 //! Each poll of an [`Operation`] returns a [`Step`]: the [`Notice`]s to
 //! perform now, which need no answer, and what comes [`Next`], the

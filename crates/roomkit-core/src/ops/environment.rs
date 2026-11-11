@@ -7,8 +7,7 @@ use std::time::Duration;
 
 use crate::model::{EventId, ObservationId, RoomId, Timestamp};
 
-/// The clock and the identifiers an operation uses (docs/architecture.md,
-/// "Environment").
+/// The clock and the identifiers an operation uses.
 ///
 /// Reading the clock and creating an id are not effects: they never fail and
 /// never wait. A driver gives the system clock and random ids; a test gives a

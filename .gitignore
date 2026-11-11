@@ -1,3 +1,10 @@
 /target
 *.profraw
 __pycache__/
+
+# Internal planning and agent instructions stay local.
+/docs/
+/AGENTS.md
+/CLAUDE.md
+/.agents/
+/.codex/

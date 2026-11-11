@@ -1,5 +1,5 @@
 # How roomkit-rs's public API maps to the Python implementation's
-# (docs/steps/step-05.md, "The architecture table"), read by
+# (api/PYTHON_API.md), read by
 # scripts/api-parity.py (`make api-parity`) against the snapshot pinned in
 # api/python/.
 #

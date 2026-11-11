@@ -7,7 +7,7 @@
 //! `ON_PHASE_TRANSITION`, or refuses it and fires `ON_HANDOFF_REJECTED`.
 //! The tool's definition stays JSON here: `AiTool`, `HANDOFF_TOOL`,
 //! `build_handoff_tool` and `setup_handoff` are `roomkit_ai`'s (Python's
-//! one package is two crates, `docs/architecture.md`).
+//! one package is split into two Rust crates).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, PoisonError, RwLock};

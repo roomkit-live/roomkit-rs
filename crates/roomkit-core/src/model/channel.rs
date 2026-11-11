@@ -538,8 +538,7 @@ mod tests {
         );
     }
 
-    /// A type is an open name (docs/rfc-gaps.md, "Found by step 4's shared
-    /// SQLite file"): a well-known one, one the Python implementation writes
+    /// A type is an open name: a well-known one, one the Python implementation writes
     /// that the RFC does not list, and one no implementation knows are read
     /// and written back as they are.
     #[test]

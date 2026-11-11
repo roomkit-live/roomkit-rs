@@ -38,7 +38,7 @@ fn agent_labels() -> &'static BTreeSet<String> {
 
 /// A turn's label as a discussion reads it: with `(a participant)` after a
 /// name reading as one of an agent's own labels (Python's `_ranked`), which
-/// the transcript leaves out (docs/rfc-gaps.md, §6.4) and which keeps such a
+/// the transcript leaves out (RFC §6.4) and which keeps such a
 /// sender from being addressed. A nameless sender's label (`@sms`) has no
 /// name to read.
 #[must_use]
