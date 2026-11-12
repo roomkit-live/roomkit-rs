@@ -25,6 +25,7 @@ use serde_json::{Value, json};
 
 use super::RoomKit;
 use super::inline::Unstarted;
+use super::preparation::Preparing;
 use crate::context::ExecutionContext;
 use crate::error::{RoomKitError, repr};
 use crate::orchestration::StatusLevel;
@@ -289,6 +290,10 @@ impl<S: ConversationStore> RoomKit<S> {
     /// background, once it is submitted to the task runner, its result
     /// awaited with [`DelegatedTask::wait`].
     ///
+    /// Preparation that fails or is dropped before announcement keeps its
+    /// existing child, marked failed or cancelled with no result. Its records
+    /// and bindings remain; no task completion is reported (RFC §23.3).
+    ///
     /// # Errors
     ///
     /// [`RoomKitError::RoomNotFound`] for a parent room that is missing or
@@ -355,15 +360,19 @@ impl<S: ConversationStore> RoomKit<S> {
             },
         );
         handle.hold_span(self.inner.delegation_span(&handle, options.wait));
-        let opened_room = self.open_child_room(&handle, &parent, &options).await;
+        let mut preparing = Preparing::new(self, &handle);
+        let opened_room = self
+            .open_child_room(&handle, &parent, &options, &mut preparing)
+            .await;
         let announced = match opened_room {
             Ok(()) => self.announce_task(&handle, options.post_status).await,
             Err(error) => Err(error),
         };
         if let Err(error) = announced {
-            handle.fail_span(&error);
+            preparing.failed(&error).await;
             return Err(error);
         }
+        preparing.announced();
         // From here the task ends however this call ends: a caller cut
         // before its run started ends it cancelled (Python's `started`).
         let unstarted = Unstarted::new(self, &handle, &options);
@@ -487,6 +496,7 @@ impl<S: ConversationStore> RoomKit<S> {
         task: &DelegatedTask,
         parent: &Room,
         options: &DelegateOptions,
+        preparing: &mut Preparing<S>,
     ) -> Result<(), RoomKitError> {
         let inherited = parent
             .metadata
@@ -503,13 +513,14 @@ impl<S: ConversationStore> RoomKit<S> {
         let context = options.context.clone().unwrap_or_default();
         metadata.insert("task_context".to_owned(), Value::Object(context));
         metadata.insert("task_status".to_owned(), json!("pending"));
-        self.create_room(CreateRoomOptions {
-            room_id: Some(task.child_room_id.clone()),
-            organization_id: parent.organization_id.clone(),
-            metadata,
-            ..CreateRoomOptions::default()
-        })
-        .await?;
+        preparing
+            .create_room(CreateRoomOptions {
+                room_id: Some(task.child_room_id.clone()),
+                organization_id: parent.organization_id.clone(),
+                metadata,
+                ..CreateRoomOptions::default()
+            })
+            .await?;
         let agent = AttachChannelOptions {
             category: Some(ChannelCategory::Intelligence),
             ..AttachChannelOptions::default()
@@ -784,7 +795,7 @@ impl<S: ConversationStore> RoomKit<S> {
 
     /// Stamps the child room with how its task ended, and the worker's
     /// answer when it completed; a failure to write it is logged.
-    async fn record_task_end(&self, result: &DelegatedTaskResult) {
+    pub(super) async fn record_task_end(&self, result: &DelegatedTaskResult) {
         let completed = result.status == TaskStatus::Completed;
         let mut metadata = Metadata::new();
         metadata.insert("task_status".to_owned(), json!(result.status));

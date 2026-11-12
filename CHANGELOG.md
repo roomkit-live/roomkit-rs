@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Keep a delegation's partially prepared child room and mark its task failed or cancelled before announcement, including creation that finishes after caller cancellation, without reporting a task completion (RFC §23.3).
+
 - Preserve PostgreSQL channel attachment order across updates and restarts, keeping the first streaming target stable; reattaching a removed channel places it last.
 
 - Add local channel calls with per-room state restoration, persistence and detach cleanup.

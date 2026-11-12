@@ -10,6 +10,8 @@
 
 #[path = "delegate/preflight.rs"]
 mod preflight;
+#[path = "delegate/preparation.rs"]
+mod preparation;
 
 use std::collections::{BTreeSet, VecDeque};
 use std::future::{Future, pending, poll_fn, ready};
@@ -74,6 +76,7 @@ macro_rules! forward {
 #[derive(Debug, Default)]
 struct RoomReadsFail {
     store: InMemoryStore,
+    preparation: Option<preparation::Preparation>,
     down: AtomicBool,
     held: AtomicBool,
     entered: Notify,
@@ -85,7 +88,38 @@ struct RoomReadsFail {
 }
 
 impl ConversationStore for RoomReadsFail {
+    async fn create_room(&self, room: Room) -> Result<Room, StoreError> {
+        let mut room = room;
+        if self
+            .preparation
+            .as_ref()
+            .is_some_and(|p| p.foreign.load(Ordering::SeqCst))
+        {
+            room.metadata = serde_json::from_value(serde_json::json!({
+                "task_id": "another-task", "task_status": "pending", "keep": true
+            }))
+            .unwrap();
+        }
+        if let Some(preparation) = &self.preparation {
+            preparation
+                .stop(preparation::Boundary::BeforeCreate)
+                .await?;
+        }
+        let created = self.store.create_room(room).await?;
+        if let Some(preparation) = &self.preparation {
+            preparation.stop(preparation::Boundary::AfterCreate).await?;
+        }
+        Ok(created)
+    }
+
     async fn list_participants(&self, room_id: &RoomId) -> Result<Vec<Participant>, StoreError> {
+        if *room_id == room() {
+            if let Some(preparation) = &self.preparation {
+                preparation
+                    .stop(preparation::Boundary::BeforeAnnounce)
+                    .await?;
+            }
+        }
         if *room_id == room() && self.held.swap(false, Ordering::SeqCst) {
             self.entered.notify_one();
             self.go.notified().await;
@@ -112,6 +146,15 @@ impl ConversationStore for RoomReadsFail {
     }
 
     async fn get_room(&self, room_id: &RoomId) -> Result<Option<Room>, StoreError> {
+        if self
+            .preparation
+            .as_ref()
+            .is_some_and(|p| p.read_fails.load(Ordering::SeqCst))
+        {
+            return Err(StoreError::Unavailable(StoreFailure::new(
+                "cleanup unavailable",
+            )));
+        }
         if self.down.load(Ordering::SeqCst) {
             return Err(StoreError::Unavailable(StoreFailure::new(
                 "the database is gone",
@@ -120,8 +163,21 @@ impl ConversationStore for RoomReadsFail {
         self.store.get_room(room_id).await
     }
 
+    async fn patch_room_metadata(
+        &self,
+        room_id: &RoomId,
+        patch: roomkit::model::Metadata,
+        options: store::PatchRoomMetadataOptions,
+    ) -> Result<Option<Room>, StoreError> {
+        if let Some(preparation) = &self.preparation {
+            preparation.patch().await?;
+        }
+        self.store
+            .patch_room_metadata(room_id, patch, options)
+            .await
+    }
+
     forward! {
-        create_room(room: Room) -> Room;
         update_room(room: Room) -> Room;
         delete_room(room_id: &RoomId) -> bool;
         list_rooms(options: store::ListRoomsOptions) -> Vec<Room>;

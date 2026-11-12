@@ -50,6 +50,7 @@ mod named_hooks;
 mod options;
 mod output;
 mod post;
+mod preparation;
 mod read_markers;
 mod regenerate;
 mod registry;
