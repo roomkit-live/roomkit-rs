@@ -4,6 +4,7 @@
 
 mod cancellation;
 mod configuration;
+mod detachment;
 mod opening;
 pub(in crate::channel) mod recovery;
 mod session_lifecycle;

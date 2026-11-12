@@ -27,8 +27,10 @@ pub(super) async fn run<T: AcpTransport>(
     prompt: String,
     record: ResponseMetadata,
     text: mpsc::UnboundedSender<String>,
+    generation: u64,
 ) -> (Result<Option<Answered>, ChannelError>, Option<Hold<T>>) {
     let mut hold = Hold::acquire(shared, room_id, record).await;
+    hold.generation = generation;
     let result = execute(&mut hold, &event_id, &prompt, &text).await;
     hold.preparation.finish();
     (result, Some(hold))
@@ -83,8 +85,12 @@ async fn execute<T: AcpTransport>(
 }
 
 async fn open<T: AcpTransport>(
-    hold: &Hold<T>,
+    hold: &mut Hold<T>,
 ) -> Result<Option<(Arc<T::Connection>, String)>, ChannelError> {
+    if hold.detached() {
+        interrupted(&hold.record);
+        return Ok(None);
+    }
     let shared = Arc::clone(&hold.shared);
     let opened = hold
         .preparation
@@ -101,7 +107,13 @@ async fn open<T: AcpTransport>(
         interrupted(&hold.record);
         return Ok(None);
     };
-    opened.map(Some).map_err(raised)
+    let opened = opened.map_err(raised)?;
+    hold.session_generation = Some(hold.generation);
+    if hold.detached() {
+        interrupted(&hold.record);
+        return Ok(None);
+    }
+    Ok(Some(opened))
 }
 
 async fn rebuild<T: AcpTransport>(

@@ -27,7 +27,9 @@ impl<T: AcpTransport> AcpChannel<T> {
 
     /// Set one option, opening the room's session when necessary, and return
     /// all values the agent reports. Host settings override channel defaults
-    /// until `close_session`. Use `RoomKit::channel_call` for durable room state.
+    /// until `close_session` or detachment. A call finishing after detachment
+    /// retains no value and releases a session it opened (RFC §6.4).
+    /// Use `RoomKit::channel_call` for durable room state.
     ///
     /// # Errors
     /// The connection or agent's refusal; a new session whose required setup

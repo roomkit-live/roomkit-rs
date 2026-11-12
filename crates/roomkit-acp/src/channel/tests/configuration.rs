@@ -203,3 +203,99 @@ fn test_constructor_refuses_values_acp_cannot_carry() {
         ));
     }
 }
+
+// Python: tests/test_channels/test_acp_backend.py::test_a_cancelled_channel_call_keeps_the_room_s_session
+#[tokio::test]
+async fn test_a_cancelled_channel_call_keeps_the_room_s_session() {
+    let (channel, mut agents, _) = channel();
+    let kit = std::sync::Arc::new(RoomKit::new(RoomKitOptions::default()));
+    let id = ChannelId::new("claude").unwrap();
+    let room = RoomId::new("r1").unwrap();
+    kit.register_channel(channel.clone()).unwrap();
+    kit.register_channel(roomkit::testing::RecordingTransport::new(
+        ChannelId::new("ws").unwrap(),
+        roomkit::model::ChannelType::WEBSOCKET,
+        roomkit::testing::RecordingTransportOptions::default(),
+    ))
+    .unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    for name in ["ws", "claude"] {
+        kit.attach_channel(
+            &room,
+            &ChannelId::new(name).unwrap(),
+            AttachChannelOptions::default(),
+        )
+        .await
+        .unwrap();
+    }
+    let first = inbound(std::sync::Arc::clone(&kit), room.clone());
+    let mut agent = Agent::new(agents.recv().await.unwrap());
+    open(&mut agent).await;
+    let prompt = agent.read().await;
+    assert_eq!(prompt["method"], "session/prompt");
+    agent
+        .answer(&prompt, json!({"stopReason":"end_turn"}))
+        .await;
+    assert!(first.await.unwrap().error.is_none());
+    let call = tokio::spawn({
+        let kit = std::sync::Arc::clone(&kit);
+        let room = room.clone();
+        async move {
+            kit.channel_call(
+                &id,
+                &room,
+                "set_config_option",
+                ChannelCallOptions {
+                    arguments: Metadata::from_iter([
+                        ("config_id".to_owned(), json!("model")),
+                        ("value".to_owned(), json!("sonnet")),
+                    ]),
+                    ..Default::default()
+                },
+            )
+            .await
+        }
+    });
+    let setting = agent.read().await;
+    assert_eq!(setting["method"], "session/set_config_option");
+    call.abort();
+    assert!(call.await.unwrap_err().is_cancelled());
+    let next = inbound(std::sync::Arc::clone(&kit), room.clone());
+    let prompt = agent.read().await;
+    assert_eq!(prompt["method"], "session/prompt");
+    assert_eq!(prompt["params"]["sessionId"], "s1");
+    agent
+        .answer(&prompt, json!({"stopReason":"end_turn"}))
+        .await;
+    assert!(next.await.unwrap().error.is_none());
+    assert_eq!(channel.session_id(&room).as_deref(), Some("s1"));
+    let closing = tokio::spawn(async move { kit.close().await.unwrap() });
+    close(&mut agent).await;
+    closing.await.unwrap();
+}
+
+fn inbound(
+    kit: std::sync::Arc<RoomKit>,
+    room: RoomId,
+) -> tokio::task::JoinHandle<roomkit::InboundResult> {
+    tokio::spawn(async move {
+        kit.process_inbound(
+            roomkit::model::InboundMessage::new(
+                ChannelId::new("ws").unwrap(),
+                "alice",
+                roomkit::model::TextContent::new("hello"),
+            ),
+            roomkit::ProcessInboundOptions {
+                room_id: Some(room),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+    })
+}

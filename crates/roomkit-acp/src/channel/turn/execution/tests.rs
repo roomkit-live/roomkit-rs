@@ -104,7 +104,7 @@ async fn test_cancel_after_reconstruction_finishes_prevents_replacement_prompt()
     assert!(state.prompts.lock().unwrap().is_empty());
     assert!(state.cancelled.lock().unwrap().is_empty());
     assert_eq!(record.to_metadata()["acp"]["interrupted"], true);
-    hold.failed().await;
+    hold.cleanup().await;
     drop(hold);
     assert_eq!(channel.active_turns(), 0);
     assert!(channel.session_id(&room).is_none());

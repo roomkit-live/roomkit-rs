@@ -5,6 +5,7 @@ mod cancellation;
 mod client;
 mod config;
 mod connector;
+mod detachment;
 mod preparation;
 mod sessions;
 mod turn;
@@ -147,6 +148,7 @@ struct Shared<T: AcpTransport> {
     /// Each room's turn lock: one turn of a room at a time.
     rooms: Mutex<HashMap<RoomId, Arc<tokio::sync::Mutex<()>>>>,
     active: AtomicUsize,
+    closings: Mutex<tokio::task::JoinSet<()>>,
     preparations: Mutex<HashMap<RoomId, Arc<preparation::Preparation>>>,
 }
 
@@ -256,6 +258,7 @@ impl<T: AcpTransport> AcpChannel<T> {
                 cwd,
                 rooms: Mutex::new(HashMap::new()),
                 active: AtomicUsize::new(0),
+                closings: Mutex::default(),
                 preparations: Mutex::default(),
             }),
         })
@@ -442,9 +445,20 @@ impl<T: AcpTransport> Channel for AcpChannel<T> {
         Ok(())
     }
 
+    /// Forget room settings immediately and close its session after its turn (RFC §6.4).
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "detachment records local state without waiting for the agent"
+    )]
+    async fn on_room_detached(&self, room_id: RoomId) -> Result<(), ChannelError> {
+        self.detach_room(room_id);
+        Ok(())
+    }
+
     /// Closes the rooms' sessions where the agent takes `session/close`,
     /// then the transport: Python's `close()`.
     async fn close(&self) {
+        let _closings = detachment::ClosingTasks(&self.shared);
         self.shared.connector.close().await;
     }
 }

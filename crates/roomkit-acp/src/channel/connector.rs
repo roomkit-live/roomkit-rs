@@ -2,6 +2,7 @@
 //! `ACPConnectionMixin` and the room half of `ACPSessionsMixin`.
 
 mod cancellation;
+mod detachment;
 pub(super) mod release;
 mod sessions;
 
@@ -47,6 +48,7 @@ struct State<C> {
     sessions: HashMap<RoomId, String>,
     options: HashMap<RoomId, Vec<Value>>,
     config: HashMap<RoomId, Metadata>,
+    detached: HashMap<RoomId, u64>,
     /// No turn connects any more.
     closed: bool,
 }
@@ -72,6 +74,7 @@ impl<T: AcpTransport> Connector<T> {
                 sessions: HashMap::new(),
                 options: HashMap::new(),
                 config: HashMap::new(),
+                detached: HashMap::new(),
                 closed: false,
             }),
             openings: Mutex::new(HashMap::new()),

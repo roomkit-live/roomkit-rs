@@ -71,6 +71,7 @@ impl<T: AcpTransport> TurnStream<T> {
             host,
         } = ask;
         let channel_id = shared.channel_id.clone();
+        let generation = shared.connector.generation(&room_id);
         let work = run(
             shared,
             room_id.clone(),
@@ -78,6 +79,7 @@ impl<T: AcpTransport> TurnStream<T> {
             prompt,
             record.clone(),
             sender,
+            generation,
         );
         Self {
             work: Some(Box::pin(work)),
@@ -107,15 +109,19 @@ impl<T: AcpTransport> TurnStream<T> {
         Poll::Ready(())
     }
 
-    fn begin_failed_cleanup(&mut self, cx: &mut Context<'_>) -> bool {
+    fn begin_session_cleanup(&mut self, cx: &mut Context<'_>) -> bool {
         // Failed recovery closes only after the queued output was read, and
         // keeps the same room lock until its terminal item is handed over.
-        if !matches!(&self.ending, Some(Ok(Some(_))))
+        if (!matches!(&self.ending, Some(Ok(Some(_))))
+            || self.hold.as_ref().is_some_and(Hold::detached))
             && self.hold.as_ref().is_some_and(Hold::needs_cleanup)
             && let Some(mut hold) = self.hold.take()
         {
+            if matches!(&self.ending, Some(Ok(Some(_)))) {
+                hold.completed();
+            }
             self.cleanup = Some(Box::pin(async move {
-                hold.failed().await;
+                hold.cleanup().await;
                 hold
             }));
             cx.waker().wake_by_ref();
@@ -182,7 +188,7 @@ impl<T: AcpTransport> Stream for TurnStream<T> {
             Poll::Ready(None) => {}
             Poll::Pending => return Poll::Pending,
         }
-        if this.begin_failed_cleanup(cx) {
+        if this.begin_session_cleanup(cx) {
             return Poll::Pending;
         }
         this.done = true;

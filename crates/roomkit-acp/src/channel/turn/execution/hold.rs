@@ -21,6 +21,8 @@ pub(in crate::channel::turn) struct Hold<T: AcpTransport> {
     pub(super) recovering: bool,
     pub(super) preparation: Arc<crate::channel::preparation::Preparation>,
     retire: bool,
+    pub(super) generation: u64,
+    pub(super) session_generation: Option<u64>,
 }
 
 pub(super) struct Prompt<C: AcpConnection> {
@@ -43,6 +45,7 @@ impl<T: AcpTransport> Hold<T> {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(room_id.clone(), Arc::clone(&preparation));
+        let generation = shared.connector.generation(&room_id);
         Self {
             shared,
             room_id,
@@ -53,6 +56,8 @@ impl<T: AcpTransport> Hold<T> {
             recovering: false,
             preparation,
             retire: false,
+            generation,
+            session_generation: None,
         }
     }
 
@@ -64,10 +69,17 @@ impl<T: AcpTransport> Hold<T> {
 
     pub(in crate::channel::turn) fn needs_cleanup(&self) -> bool {
         self.recovering
+            || self.session_generation.is_some_and(|generation| {
+                self.shared.connector.generation(&self.room_id) != generation
+            })
     }
 
-    pub(in crate::channel::turn) async fn failed(&mut self) {
-        if !self.recovering {
+    pub(in crate::channel::turn) fn detached(&self) -> bool {
+        self.shared.connector.generation(&self.room_id) != self.generation
+    }
+
+    pub(in crate::channel::turn) async fn cleanup(&mut self) {
+        if !self.needs_cleanup() {
             return;
         }
         // Python's finished turn leaves its registry before releasing the
@@ -76,7 +88,8 @@ impl<T: AcpTransport> Hold<T> {
         if let Some(mut session) = self.shared.connector.discard(&self.room_id) {
             session.release().await;
         }
-        self.retire = true;
+        self.retire = self.recovering;
+        self.session_generation = None;
         self.recovering = false;
     }
 }
@@ -99,7 +112,7 @@ impl<T: AcpTransport> Drop for Hold<T> {
             super::super::interrupted(&self.record);
         }
         let release = self
-            .recovering
+            .needs_cleanup()
             .then(|| self.shared.connector.discard(&self.room_id))
             .flatten();
         if prompt.is_none() && release.is_none() {

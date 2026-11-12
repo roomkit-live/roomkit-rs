@@ -146,6 +146,7 @@ impl<T: AcpTransport> Connector<T> {
         id: &str,
         value: Value,
     ) -> Result<Metadata, AcpError> {
+        let generation = self.generation(room);
         let connection = self.connection().await?;
         let overlay = Metadata::from_iter([(id.to_owned(), value.clone())]);
         let (session, opened) = self.session_with(room, &connection, cwd, overlay).await?;
@@ -155,16 +156,45 @@ impl<T: AcpTransport> Connector<T> {
             set_option(&*connection, &session, id, &value).await?
         };
         let values = config::values(&options);
+        let retained = self.keep_option(
+            room,
+            generation,
+            &session,
+            id,
+            values.get(id).cloned().unwrap_or(value),
+            options,
+        );
+        if !retained
+            && opened
+            && let Some(mut discarded) = self.discard_session(room, &session)
+        {
+            discarded.release().await;
+        }
+        Ok(values)
+    }
+
+    fn keep_option(
+        &self,
+        room: &RoomId,
+        generation: u64,
+        session: &str,
+        id: &str,
+        value: Value,
+        options: Vec<Value>,
+    ) -> bool {
         let mut state = self.lock();
-        if state.sessions.get(room) == Some(&session) {
+        if state.detached.get(room).copied().unwrap_or_default() != generation {
+            return false;
+        }
+        if state.sessions.get(room).map(String::as_str) == Some(session) {
             state.options.insert(room.clone(), options);
             state
                 .config
                 .entry(room.clone())
                 .or_default()
-                .insert(id.to_owned(), values.get(id).cloned().unwrap_or(value));
+                .insert(id.to_owned(), value);
         }
-        Ok(values)
+        true
     }
 
     pub(in crate::channel) fn options(&self, room: &RoomId) -> Vec<Value> {
@@ -231,7 +261,7 @@ impl<T: AcpTransport> Connector<T> {
         true
     }
 
-    async fn opening(&self, room: &RoomId) -> tokio::sync::OwnedMutexGuard<()> {
+    pub(super) async fn opening(&self, room: &RoomId) -> tokio::sync::OwnedMutexGuard<()> {
         loop {
             let lock = Arc::clone(
                 self.openings
