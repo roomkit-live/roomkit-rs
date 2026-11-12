@@ -25,7 +25,13 @@ async fn test_close_after_reconstruction_finishes_prevents_replacement_prompt() 
         .unwrap();
     let record = ResponseMetadata::new();
     record.insert("acp", json!({"protocol_version":1}));
-    let mut hold = Hold::acquire(Arc::clone(&channel.shared), room.clone(), record.clone()).await;
+    let mut hold = Hold::acquire(
+        Arc::clone(&channel.shared),
+        room.clone(),
+        record.clone(),
+        None,
+    )
+    .await;
     hold.recovering = true;
     state.resume.notify_one();
     let session = channel
@@ -74,7 +80,13 @@ async fn test_cancel_after_reconstruction_finishes_prevents_replacement_prompt()
         .unwrap();
     let record = ResponseMetadata::new();
     record.insert("acp", json!({"protocol_version":1}));
-    let mut hold = Hold::acquire(Arc::clone(&channel.shared), room.clone(), record.clone()).await;
+    let mut hold = Hold::acquire(
+        Arc::clone(&channel.shared),
+        room.clone(),
+        record.clone(),
+        None,
+    )
+    .await;
     hold.recovering = true;
     state.resume.notify_one();
     let session = channel

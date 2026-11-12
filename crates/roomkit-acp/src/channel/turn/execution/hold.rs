@@ -36,10 +36,11 @@ impl<T: AcpTransport> Hold<T> {
         shared: Arc<Shared<T>>,
         room_id: RoomId,
         record: ResponseMetadata,
+        turn_id: Option<String>,
     ) -> Self {
         let room = shared.holding_room(&room_id).await;
         let active = shared.active();
-        let preparation = Arc::new(crate::channel::preparation::Preparation::default());
+        let preparation = Arc::new(crate::channel::preparation::Preparation::new(turn_id));
         shared
             .preparations
             .lock()
@@ -65,6 +66,10 @@ impl<T: AcpTransport> Hold<T> {
     /// output after the remote prompt returned still abandons the turn.
     pub(in crate::channel::turn) fn completed(&mut self) {
         self.recovering = false;
+    }
+
+    pub(in crate::channel::turn) fn retire_steering(&self) {
+        self.preparation.retire();
     }
 
     pub(in crate::channel::turn) fn needs_cleanup(&self) -> bool {

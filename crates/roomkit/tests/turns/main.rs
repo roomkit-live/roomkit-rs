@@ -17,6 +17,7 @@ mod host;
 mod named_hooks;
 mod result_tool;
 mod steering;
+mod steering_async;
 mod streams;
 mod stuck_target;
 mod support;

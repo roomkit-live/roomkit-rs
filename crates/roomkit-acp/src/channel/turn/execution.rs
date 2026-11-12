@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use agent_client_protocol_schema::v1::{PromptRequest, PromptResponse};
 use roomkit::ChannelError;
-use roomkit::model::{ResponseMetadata, RoomId};
+use roomkit::model::ResponseMetadata;
 use serde_json::{Map, json};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
@@ -22,16 +22,14 @@ use hold::Prompt;
 
 pub(super) async fn run<T: AcpTransport>(
     shared: Arc<Shared<T>>,
-    room_id: RoomId,
-    event_id: String,
-    prompt: String,
-    record: ResponseMetadata,
+    ask: super::Ask,
     text: mpsc::UnboundedSender<String>,
     generation: u64,
 ) -> (Result<Option<Answered>, ChannelError>, Option<Hold<T>>) {
-    let mut hold = Hold::acquire(shared, room_id, record).await;
+    let turn_id = ask.host.as_ref().map(|host| host.turn_id().to_owned());
+    let mut hold = Hold::acquire(shared, ask.room_id, ask.record, turn_id).await;
     hold.generation = generation;
-    let result = execute(&mut hold, &event_id, &prompt, &text).await;
+    let result = execute(&mut hold, &ask.event_id, &ask.text, &text).await;
     hold.preparation.finish();
     (result, Some(hold))
 }
@@ -212,7 +210,11 @@ async fn prompt_task<C: AcpConnection>(
     preparation: Arc<crate::channel::preparation::Preparation>,
 ) -> Result<Option<PromptResponse>, AcpError> {
     ready.await.map_err(|_| AcpError::ConnectionClosed)?;
-    let Some(answer) = preparation.prompt(connection.prompt(request)).await else {
+    let session = request.session_id.0.to_string();
+    let Some(answer) = preparation
+        .prompt(session, connection.prompt(request))
+        .await
+    else {
         interrupted(&record);
         return Ok(None);
     };

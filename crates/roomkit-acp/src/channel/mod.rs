@@ -8,6 +8,7 @@ mod connector;
 mod detachment;
 mod preparation;
 mod sessions;
+mod steering;
 mod turn;
 
 use std::any::Any;
@@ -434,6 +435,14 @@ impl<T: AcpTransport> Channel for AcpChannel<T> {
         arguments: Metadata,
     ) -> Result<Value, ChannelError> {
         self.call_session(&room_id, &verb, &arguments).await
+    }
+
+    async fn steer_turn_async(
+        &self,
+        directive: &roomkit::model::SteeringDirective,
+        turn_id: &str,
+    ) -> Result<Option<usize>, ChannelError> {
+        self.steer(directive, turn_id).await.map_err(turn::raised)
     }
 
     fn room_state(&self, room_id: &RoomId) -> Result<Metadata, ChannelError> {

@@ -1129,12 +1129,6 @@ params = [
 scope = "text"
 reason = "not in 0.x yet: parity stream L's later lots (RMK-1429): thinking, permissions, session setup, the catch-up and instructions, the discussion"
 
-[[missing]]
-python = "roomkit.ACPChannel"
-members = ["steer"]
-scope = "text"
-reason = "not in 0.x yet: parity stream L's later lots (RMK-1429): session setup and the kit's verbs"
-
 [[exception]]
 rust = "roomkit_mcp::McpToolProvider"
 members = ["connect", "close"]

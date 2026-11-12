@@ -8,6 +8,8 @@ mod detachment;
 mod opening;
 pub(in crate::channel) mod recovery;
 mod session_lifecycle;
+mod steering;
+mod steering_drain;
 
 use std::future::{Future, poll_fn};
 use std::pin::Pin;

@@ -329,6 +329,17 @@ pub trait Channel: Send + Sync + 'static {
         None
     }
 
+    /// Await a channel's steering operation, including a remote write.
+    /// The default preserves channels with synchronous steering.
+    #[doc(hidden)]
+    fn steer_turn_async(
+        &self,
+        directive: &SteeringDirective,
+        turn_id: &str,
+    ) -> impl Future<Output = Result<Option<usize>, ChannelError>> + Send {
+        std::future::ready(Ok(self.steer_turn(directive, turn_id)))
+    }
+
     /// The names of the tools the channel serves itself, which a tool the
     /// kit sets up on it may not take (RFC §21.1): none by default.
     ///
@@ -693,7 +704,11 @@ pub(crate) trait DynChannel: Send + Sync {
 
     fn supports_streaming_delivery_for(&self, room_id: &RoomId) -> bool;
 
-    fn steer_turn(&self, directive: &SteeringDirective, turn_id: &str) -> Option<usize>;
+    fn steer_turn_async<'a>(
+        &'a self,
+        directive: &'a SteeringDirective,
+        turn_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<usize>, ChannelError>> + Send + 'a>>;
 
     fn own_tool_names(&self) -> Vec<String>;
 
@@ -786,8 +801,12 @@ impl<C: Channel> DynChannel for C {
         Channel::supports_streaming_delivery_for(self, room_id)
     }
 
-    fn steer_turn(&self, directive: &SteeringDirective, turn_id: &str) -> Option<usize> {
-        Channel::steer_turn(self, directive, turn_id)
+    fn steer_turn_async<'a>(
+        &'a self,
+        directive: &'a SteeringDirective,
+        turn_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<usize>, ChannelError>> + Send + 'a>> {
+        Box::pin(Channel::steer_turn_async(self, directive, turn_id))
     }
 
     fn own_tool_names(&self) -> Vec<String> {

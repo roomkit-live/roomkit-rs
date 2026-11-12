@@ -7,6 +7,15 @@ use super::Connector;
 use crate::{AcpConnection, AcpError, AcpTransport};
 
 impl<T: AcpTransport> Connector<T> {
+    /// Cancel the captured turn session, even if its room has moved on.
+    pub(in crate::channel) async fn cancel_session(&self, session: String) -> Result<(), AcpError> {
+        let connection = self.lock().connection.clone();
+        if let Some(connection) = connection {
+            connection.cancel(CancelNotification::new(session)).await?;
+        }
+        Ok(())
+    }
+
     pub(in crate::channel) async fn cancel_room(&self, room: &RoomId) -> Result<bool, AcpError> {
         let target = {
             let state = self.lock();

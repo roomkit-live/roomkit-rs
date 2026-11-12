@@ -63,24 +63,12 @@ pub(super) struct TurnStream<T: AcpTransport> {
 impl<T: AcpTransport> TurnStream<T> {
     pub(super) fn new(shared: Arc<Shared<T>>, ask: Ask) -> Self {
         let (sender, text) = mpsc::unbounded_channel();
-        let Ask {
-            room_id,
-            event_id,
-            text: prompt,
-            record,
-            host,
-        } = ask;
+        let room_id = ask.room_id.clone();
+        let record = ask.record.clone();
+        let host = ask.host.clone();
         let channel_id = shared.channel_id.clone();
         let generation = shared.connector.generation(&room_id);
-        let work = run(
-            shared,
-            room_id.clone(),
-            event_id,
-            prompt,
-            record.clone(),
-            sender,
-            generation,
-        );
+        let work = run(shared, ask, sender, generation);
         Self {
             work: Some(Box::pin(work)),
             text,
@@ -187,6 +175,9 @@ impl<T: AcpTransport> Stream for TurnStream<T> {
             // The work holds a sender until it ends: the text ends then.
             Poll::Ready(None) => {}
             Poll::Pending => return Poll::Pending,
+        }
+        if let Some(hold) = &this.hold {
+            hold.retire_steering();
         }
         if this.begin_session_cleanup(cx) {
             return Poll::Pending;

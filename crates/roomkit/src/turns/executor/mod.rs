@@ -26,6 +26,7 @@ mod inputs;
 mod lifecycle;
 mod link;
 mod record;
+mod steering;
 mod work;
 
 use std::future::{Future, pending};
@@ -40,6 +41,7 @@ pub(crate) use self::lifecycle::{Lifecycle, Running};
 pub(crate) use self::link::HostLink;
 use self::link::{FrameSender, TurnFacts};
 use self::record::RecordChanges;
+use self::steering::Steering;
 use self::work::{Flow, work};
 use super::error::{TurnError, one};
 use super::pipe::{LinkFailure, MAX_MESSAGE_BYTES, PipeReceiver, Uncarried};
@@ -47,7 +49,6 @@ use super::timeouts::Beat;
 use super::wire::{ContextRest, Control, Frame, RequestRest, TurnRequest};
 use super::{CarriedRequest, MemoryTurn, Turns, lock};
 use crate::channel::DynChannel;
-use crate::steering::SteeringDirective;
 use crate::telemetry::within_turn_trace;
 use crate::turn::{self, TurnHost, TurnKit};
 use tokio::task::AbortHandle;
@@ -154,11 +155,11 @@ impl Executor {
         host.reads_trace_from(Arc::clone(&self.turn.traced));
         let flow = Arc::new(Flow::default());
         let _released = Released(Arc::clone(&link));
-        let steering = Steering {
-            channel: Arc::clone(&channel),
-            turn_id: request.turn_id.clone(),
-            sender: Arc::clone(&self.sender),
-        };
+        let mut steering = Steering::new(
+            Arc::clone(&channel),
+            request.turn_id.clone(),
+            Arc::clone(&self.sender),
+        );
         let changes = Arc::new(RecordChanges::default());
         let telemetry = self.kit.telemetry();
         let trace = request.trace.clone();
@@ -175,7 +176,7 @@ impl Executor {
         ));
         let beating = Beating::start(&self.kit, &self.sender, &self.turn);
         let cut = self
-            .watch(&mut controls, work, &flow, (&link, &steering))
+            .watch(&mut controls, work, &flow, (&link, &mut steering))
             .await;
         drop(beating);
         // What the stream's close or cut wrote: no item follows it (RFC
@@ -255,7 +256,7 @@ impl Executor {
         controls: &mut PipeReceiver<Control>,
         work: Pin<Box<dyn Future<Output = ()> + Send>>,
         flow: &Flow,
-        (link, steering): (&HostLink, &Steering),
+        (link, steering): (&HostLink, &mut Steering),
     ) -> Option<Cut> {
         let timeouts = self.turn.timeouts;
         let mut beat = Beat::new(&timeouts, true);
@@ -273,6 +274,7 @@ impl Executor {
                     None => pending().await,
                 }
             };
+            let accepts_control = !steering.pending();
             tokio::select! {
                 biased;
                 () = executor_closing(&mut closing) => {
@@ -281,7 +283,7 @@ impl Executor {
                     drop(work.take());
                     return Some(Cut::Cancelled("cancelled".to_owned()));
                 }
-                control = controls.get() => {
+                control = controls.get(), if accepts_control => {
                     beat.heard();
                     match control {
                         Ok((_, control)) => match apply(control, flow, link, steering) {
@@ -300,6 +302,7 @@ impl Executor {
                         Err(failure) => return Some(Cut::Lost(lost(&failure))),
                     }
                 }
+                () = steering.applied(), if !accepts_control => {}
                 () = working => {
                     work = None;
                     link.close();
@@ -481,29 +484,9 @@ impl Drop for Panicked {
     }
 }
 
-/// How the turn's executor steers its loops (RFC §10.6.8): through its
-/// channel, answering each `steer` with its `steer_result`.
-struct Steering {
-    channel: Arc<dyn DynChannel>,
-    turn_id: String,
-    sender: Arc<FrameSender>,
-}
-
-impl Steering {
-    /// Applies `directive` to the turn's loops, and tells the owner how
-    /// many it reached; none for a channel without steering.
-    fn apply(&self, steer_id: String, directive: &SteeringDirective) {
-        let loops = self
-            .channel
-            .steer_turn(directive, &self.turn_id)
-            .map(|loops| u64::try_from(loops).unwrap_or(u64::MAX));
-        drop(self.sender.send(&Frame::SteerResult { steer_id, loops }));
-    }
-}
-
 /// Applies one control message of the owner's; how it cuts the work, when
 /// it does.
-fn apply(control: Control, flow: &Flow, link: &HostLink, steering: &Steering) -> Option<Cut> {
+fn apply(control: Control, flow: &Flow, link: &HostLink, steering: &mut Steering) -> Option<Cut> {
     match control {
         Control::Pull { count, read } => {
             if count > 0 {
@@ -533,7 +516,7 @@ fn apply(control: Control, flow: &Flow, link: &HostLink, steering: &Steering) ->
             steer_id,
             directive,
         } => {
-            steering.apply(steer_id, &directive);
+            steering.apply(steer_id, directive);
             None
         }
         Control::ToolResult {
