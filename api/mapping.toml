@@ -1338,3 +1338,9 @@ python = "roomkit.PendingInput.__init__"
 params = ["status", "result", "reject_reason"]
 approved = "2026-11-10"
 reason = "Live outcome fields are read through accessors, not copied public fields; PendingInputOptions still supplies their constructor values. Shared state is required to preserve Python's transitions on an already-returned object (HITL 8ab1e50e-a3b2-463c-89c8-36c5bd185afc, RMK-1637)."
+
+[[exception]]
+python = "roomkit.ACPSessionInvalidatedError.__init__"
+params = ["reason"]
+approved = "2026-11-12"
+reason = "Constructor input passed to ProviderError/Exception.args, not a Python attribute; Rust keeps the reason parameter and does not invent a reason field (HITL f0cedc98-e0c2-4528-bbd5-2eb8fa1d5462, RMK-1429)."
