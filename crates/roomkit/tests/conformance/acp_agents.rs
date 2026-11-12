@@ -43,17 +43,18 @@ pub(crate) fn scripted_acp_channel(
     channel: &Value,
     id: ChannelId,
     run: &Arc<Run>,
-) -> Result<(AcpChannel<ScriptedTransport>, Wire), Unreadable> {
+) -> Result<(AcpChannel<ScriptedTransport>, Wire, Arc<AgentPipe>), Unreadable> {
     let spec = &channel["acp"];
     let cwd = spec["cwd"]
         .as_str()
         .ok_or_else(|| "acp.cwd: an absolute path".to_owned())?;
     let wire = Wire::default();
+    let pipe = Arc::new(AgentPipe::default());
     let transport = ScriptedTransport {
         agent: spec["agent"].clone(),
         wire: Arc::clone(&wire),
         run: Arc::downgrade(run),
-        serving: Mutex::new(None),
+        pipe: Arc::clone(&pipe),
         counts: Arc::default(),
     };
     let options = AcpChannelOptions {
@@ -65,7 +66,7 @@ pub(crate) fn scripted_acp_channel(
         ..AcpChannelOptions::default()
     };
     let channel = AcpChannel::new(id, cwd, options).map_err(|error| format!("acp: {error}"))?;
-    Ok((channel, wire))
+    Ok((channel, wire, pipe))
 }
 
 /// The transport handing the channel a connection to its scripted agent.
@@ -73,10 +74,38 @@ pub(crate) struct ScriptedTransport {
     agent: Value,
     wire: Wire,
     run: Weak<Run>,
-    serving: Mutex<Option<JoinHandle<()>>>,
+    pipe: Arc<AgentPipe>,
     /// The sessions and prompts the agent counts, over the whole run: a
     /// reconnect goes on counting (README, "of the run").
     counts: Arc<Counts>,
+}
+
+/// The agent's real pipe lifetime, shared with the scenario's fault step.
+#[derive(Default)]
+pub(crate) struct AgentPipe {
+    serving: Mutex<Option<(JoinHandle<()>, tokio::sync::oneshot::Sender<()>)>>,
+}
+
+impl AgentPipe {
+    pub(crate) async fn close(&self) {
+        let serving = self
+            .serving
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some((serving, stop)) = serving {
+            let _ = stop.send(());
+            drop(serving.await);
+        }
+    }
+
+    fn is_alive(&self) -> bool {
+        self.serving
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(|(task, _)| !task.is_finished())
+    }
 }
 
 #[derive(Default)]
@@ -93,11 +122,8 @@ impl AcpTransport for ScriptedTransport {
         "scripted"
     }
 
-    #[expect(
-        clippy::unused_async_trait_impl,
-        reason = "the trait's open is a future"
-    )]
     async fn open(&self, client: Arc<dyn AcpClient>) -> Result<ClientSideConnection, AcpError> {
+        self.pipe.close().await;
         let (ours, theirs) = tokio::io::duplex(1 << 20);
         let (reader, writer) = tokio::io::split(ours);
         let agent = Agent {
@@ -106,31 +132,22 @@ impl AcpTransport for ScriptedTransport {
             run: Weak::clone(&self.run),
             counts: Arc::clone(&self.counts),
         };
-        let serving = tokio::spawn(serve(Arc::new(agent), theirs));
-        if let Some(old) = self
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let serving = tokio::spawn(serve(Arc::new(agent), theirs, stopped));
+        *self
+            .pipe
             .serving
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .replace(serving)
-        {
-            old.abort();
-        }
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((serving, stop));
         Ok(ClientSideConnection::new(client, reader, writer))
     }
 
-    #[expect(
-        clippy::unused_async_trait_impl,
-        reason = "the trait's close is a future"
-    )]
     async fn close(&self) {
-        let serving = self
-            .serving
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
-        if let Some(serving) = serving {
-            serving.abort();
-        }
+        self.pipe.close().await;
+    }
+
+    fn is_alive(&self) -> bool {
+        self.pipe.is_alive()
     }
 }
 
@@ -146,12 +163,21 @@ type Writer = Arc<AsyncMutex<WriteHalf<tokio::io::DuplexStream>>>;
 /// Reads the client's messages to the end of its stream, each request
 /// answered by a task of its own, so that a prompt held at its gate does
 /// not stop the reading.
-async fn serve(agent: Arc<Agent>, stream: tokio::io::DuplexStream) {
+async fn serve(
+    agent: Arc<Agent>,
+    stream: tokio::io::DuplexStream,
+    mut stopped: tokio::sync::oneshot::Receiver<()>,
+) {
     let (reader, writer) = tokio::io::split(stream);
     let writer: Writer = Arc::new(AsyncMutex::new(writer));
     let mut lines = BufReader::new(reader).lines();
     let mut answering = tokio::task::JoinSet::new();
-    while let Ok(Some(line)) = lines.next_line().await {
+    loop {
+        let line = tokio::select! {
+            _ = &mut stopped => break,
+            line = lines.next_line() => line,
+        };
+        let Ok(Some(line)) = line else { break };
         let Ok(message) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
@@ -178,6 +204,7 @@ async fn serve(agent: Arc<Agent>, stream: tokio::io::DuplexStream) {
             Arc::clone(&writer),
         ));
     }
+    answering.shutdown().await;
 }
 
 impl Agent {

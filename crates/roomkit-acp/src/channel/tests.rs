@@ -3,6 +3,8 @@
 //! ends when it is cut.
 
 mod configuration;
+mod opening;
+mod session_lifecycle;
 
 use std::future::{Future, poll_fn};
 use std::pin::Pin;

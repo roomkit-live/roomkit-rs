@@ -381,6 +381,13 @@ async fn run_step(run: &Arc<Run>, step: &Value, path: &str) -> Vec<Value> {
         }
     } else if let Some(gate) = step["open"].as_str() {
         run.gates.open(gate);
+    } else if let Some(channel) = step["acp_disconnect"].as_str() {
+        let pipe = lock(&run.acp_pipes).get(channel).cloned();
+        if let Some(pipe) = pipe {
+            pipe.close().await;
+        } else {
+            run.problem(format!("{path}: no scripted ACP transport for {channel}"));
+        }
     } else if step.get("idle").is_some() {
         run.idle().await;
     }

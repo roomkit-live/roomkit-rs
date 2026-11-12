@@ -42,6 +42,9 @@ pub(crate) fn error_of(error: &RoomKitError) -> Option<Value> {
         RoomKitError::RemoteTurn { kind, .. } if kind == "RequestError" => {
             named("acp_request_refused")
         }
+        RoomKitError::RemoteTurn { kind, .. } if kind == "ConnectionError" => {
+            named("acp_connection_closed")
+        }
         RoomKitError::RemoteTurn { kind, message, .. }
             if kind == "ValidationError"
                 && message.starts_with("invalid ACP arguments for session/set_config_option:") =>
