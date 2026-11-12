@@ -456,6 +456,7 @@ pub enum StoreRequest {
     /// `set_private_state` under `author_register`). Answer
     /// [`StoreOutcome::Stored`], or [`Outcome::Failed`] when the room holds
     /// no such target.
+    #[doc(hidden)]
     WriteUnstored {
         /// The room.
         room_id: RoomId,

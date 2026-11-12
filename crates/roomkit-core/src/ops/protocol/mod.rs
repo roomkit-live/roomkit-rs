@@ -563,6 +563,7 @@ pub trait Operation {
     /// reach the driver until that section lets the lock go; a driver
     /// counts them among the room's lock waiters all the same. An
     /// operation of one section holds back none.
+    #[doc(hidden)]
     fn locks_held_back(&self) -> Vec<(RoomId, usize)> {
         Vec::new()
     }
