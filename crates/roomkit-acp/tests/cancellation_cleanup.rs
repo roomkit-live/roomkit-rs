@@ -11,7 +11,6 @@ use agent_client_protocol_schema::v1::{
     NewSessionResponse, PromptRequest, PromptResponse, SetSessionConfigOptionRequest,
     SetSessionConfigOptionResponse,
 };
-use roomkit::Channel;
 use roomkit::model::{ChannelId, ChannelType, InboundMessage, RoomId, TextContent};
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
