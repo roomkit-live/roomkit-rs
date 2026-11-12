@@ -113,12 +113,12 @@ impl ConversationStore for RoomReadsFail {
     }
 
     async fn list_participants(&self, room_id: &RoomId) -> Result<Vec<Participant>, StoreError> {
-        if *room_id == room() {
-            if let Some(preparation) = &self.preparation {
-                preparation
-                    .stop(preparation::Boundary::BeforeAnnounce)
-                    .await?;
-            }
+        if *room_id == room()
+            && let Some(preparation) = &self.preparation
+        {
+            preparation
+                .stop(preparation::Boundary::BeforeAnnounce)
+                .await?;
         }
         if *room_id == room() && self.held.swap(false, Ordering::SeqCst) {
             self.entered.notify_one();

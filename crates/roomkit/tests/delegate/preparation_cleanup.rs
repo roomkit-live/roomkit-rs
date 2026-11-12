@@ -221,12 +221,12 @@ async fn cancelled_preparation_does_not_retain_its_creation_hook() {
     let entered = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let weak = kit.downgrade();
-    let (seen, go) = (entered.clone(), release.clone());
+    let (seen, go) = (Arc::clone(&entered), Arc::clone(&release));
     kit.hook(
         HookTrigger::OnRoomCreated,
         move |_: RoomEvent, _: RoomContext| {
             let kit = weak.upgrade().unwrap();
-            let (seen, go) = (seen.clone(), go.clone());
+            let (seen, go) = (Arc::clone(&seen), Arc::clone(&go));
             async move {
                 seen.notify_one();
                 go.notified().await;

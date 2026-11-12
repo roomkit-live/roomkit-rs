@@ -117,25 +117,7 @@ async fn interrupted(boundary: Boundary, wait: bool, cancelled: bool) -> Vec<Str
         })
     })
     .await;
-    let heard: Arc<Mutex<Vec<&'static str>>> = Arc::default();
-    for (trigger, name) in [
-        (HookTrigger::OnTaskDelegated, "delegated"),
-        (HookTrigger::OnTaskCompleted, "completed"),
-    ] {
-        let seen = Arc::clone(&heard);
-        kit.hook(
-            trigger,
-            move |_: RoomEvent, _| {
-                seen.lock().unwrap().push(name);
-                ready(())
-            },
-            HookOptions {
-                execution: HookExecution::Async,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    }
+    let heard = observe_task_ends(&kit);
     let seen = Arc::clone(&heard);
     let options = DelegateOptions {
         wait,
@@ -168,11 +150,9 @@ async fn interrupted(boundary: Boundary, wait: bool, cancelled: bool) -> Vec<Str
         let error = tokio::time::timeout(BOUND, call)
             .await
             .unwrap()
-            .err()
-            .expect("the preparation's failure reaches its caller");
+            .unwrap_err();
         let cause = std::error::Error::source(&error)
-            .map(ToString::to_string)
-            .unwrap_or_else(|| error.to_string());
+            .map_or_else(|| error.to_string(), ToString::to_string);
         assert!(
             cause.contains("preparation failed"),
             "wrong error: {error}: {cause}"
@@ -186,7 +166,7 @@ async fn interrupted(boundary: Boundary, wait: bool, cancelled: bool) -> Vec<Str
         .unwrap();
     let mut statuses = Vec::new();
     for child in children.into_iter().filter(|child| child.id != room()) {
-        assert_eq!(child.metadata["parent_room_id"], "r");
+        assert_eq!(child.metadata.get("parent_room_id").unwrap(), "r");
         assert_eq!(
             kit.store()
                 .get_event_count(&child.id, store::GetEventCountOptions::default())
@@ -194,23 +174,29 @@ async fn interrupted(boundary: Boundary, wait: bool, cancelled: bool) -> Vec<Str
                 .unwrap(),
             u64::from(boundary == Boundary::BeforeAnnounce)
         );
-        statuses.push(child.metadata["task_status"].as_str().unwrap().to_owned());
+        statuses.push(
+            child
+                .metadata
+                .get("task_status")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        );
     }
-    assert!(
-        kit.status_bus()
-            .recent(RecentOptions::default())
-            .await
-            .is_empty()
+    assert_eq!(
+        kit.status_bus().recent(RecentOptions::default()).await,
+        vec![]
     );
     kit.close().await.unwrap();
     assert!(heard.lock().unwrap().is_empty());
     let spans = telemetry.get_spans(SpanKind::Delegation);
     assert_eq!(spans.len(), 1);
     assert_eq!(
-        spans[0].status,
+        spans.first().unwrap().status,
         if cancelled { "cancelled" } else { "error" }
     );
-    assert!(telemetry.get_active_spans().is_empty());
+    assert_eq!(telemetry.get_active_spans(), vec![]);
     assert!(
         !logs
             .0
@@ -220,4 +206,27 @@ async fn interrupted(boundary: Boundary, wait: bool, cancelled: bool) -> Vec<Str
             .any(|line| line == "the unannounced child's terminal write did not finish")
     );
     statuses
+}
+
+fn observe_task_ends(kit: &RoomKit<RoomReadsFail>) -> Arc<Mutex<Vec<&'static str>>> {
+    let heard: Arc<Mutex<Vec<&'static str>>> = Arc::default();
+    for (trigger, name) in [
+        (HookTrigger::OnTaskDelegated, "delegated"),
+        (HookTrigger::OnTaskCompleted, "completed"),
+    ] {
+        let seen = Arc::clone(&heard);
+        kit.hook(
+            trigger,
+            move |_: RoomEvent, _| {
+                seen.lock().unwrap().push(name);
+                ready(())
+            },
+            HookOptions {
+                execution: HookExecution::Async,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+    heard
 }
