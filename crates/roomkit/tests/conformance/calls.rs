@@ -368,6 +368,9 @@ async fn other_call(
     name: &str,
     spec: &Value,
 ) -> Result<Called, Unreadable> {
+    if name == "acp.close" {
+        return crate::acp_agents::control::close(run, spec).await;
+    }
     if name == "acp.cancel" {
         let id: String = field(spec, "channel_id")?;
         let channel = crate::run::lock(&run.acp_channels)

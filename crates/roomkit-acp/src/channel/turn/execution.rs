@@ -90,17 +90,11 @@ async fn open<T: AcpTransport>(
         return Ok(None);
     }
     let shared = Arc::clone(&hold.shared);
-    let opened = hold
-        .preparation
-        .run(async {
-            let connection = shared.connector.connection().await?;
-            let session = shared
-                .connector
-                .session(&hold.room_id, &connection, &shared.cwd)
-                .await?;
-            Ok::<_, AcpError>((connection, session))
-        })
-        .await;
+    let opened = tokio::select! {
+        biased;
+        () = shared.connector.closed() => return Err(Box::new(roomkit::RoomKitError::Cancelled)),
+        result = hold.preparation.run(open_room_session(&shared, &hold.room_id)) => result,
+    };
     let Some(opened) = opened else {
         interrupted(&hold.record);
         return Ok(None);
@@ -112,6 +106,20 @@ async fn open<T: AcpTransport>(
         return Ok(None);
     }
     Ok(Some(opened))
+}
+
+/// Closing the transport cannot wake a host's local MCP supplier. The caller
+/// selects the connector's close signal while this whole opening is pending.
+async fn open_room_session<T: AcpTransport>(
+    shared: &Shared<T>,
+    room: &roomkit::model::RoomId,
+) -> Result<(Arc<T::Connection>, String), AcpError> {
+    let connection = shared.connector.connection().await?;
+    let session = shared
+        .connector
+        .session(room, &connection, &shared.cwd)
+        .await?;
+    Ok((connection, session))
 }
 
 async fn rebuild<T: AcpTransport>(

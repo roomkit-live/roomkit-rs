@@ -2,6 +2,9 @@
 //! ACP agents"): served in this process over an in-memory pipe, written as
 //! raw JSON lines, so that it shares none of the channel's ACP code.
 
+#[path = "acp_agents/control.rs"]
+pub(crate) mod control;
+
 #[path = "acp_agents/mcp.rs"]
 pub(crate) mod mcp;
 

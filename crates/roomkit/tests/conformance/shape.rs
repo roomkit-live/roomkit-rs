@@ -482,6 +482,7 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
         "cancel_delivery" => &["key", "reason"],
         "steer" => &["channel_id", "directive", "room_id"],
         "acp.cancel" => &["channel_id", "room_id"],
+        "acp.close" => &["channel_id"],
         other => {
             return crate::room_queries::arguments(other)
                 .or_else(|| crate::task_calls::arguments(other))
