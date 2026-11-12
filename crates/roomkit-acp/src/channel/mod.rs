@@ -1,9 +1,11 @@
 //! The ACP agent channel (RFC §6.4): an external coding agent as a room's
 //! intelligence channel, Python's `ACPChannel`.
 
+mod cancellation;
 mod client;
 mod config;
 mod connector;
+mod preparation;
 mod sessions;
 mod turn;
 
@@ -145,6 +147,7 @@ struct Shared<T: AcpTransport> {
     /// Each room's turn lock: one turn of a room at a time.
     rooms: Mutex<HashMap<RoomId, Arc<tokio::sync::Mutex<()>>>>,
     active: AtomicUsize,
+    preparations: Mutex<HashMap<RoomId, Arc<preparation::Preparation>>>,
 }
 
 impl<T: AcpTransport> Shared<T> {
@@ -253,6 +256,7 @@ impl<T: AcpTransport> AcpChannel<T> {
                 cwd,
                 rooms: Mutex::new(HashMap::new()),
                 active: AtomicUsize::new(0),
+                preparations: Mutex::default(),
             }),
         })
     }

@@ -1131,7 +1131,7 @@ reason = "not in 0.x yet: parity stream L's later lots (RMK-1429): thinking, per
 
 [[missing]]
 python = "roomkit.ACPChannel"
-members = ["cancel", "steer"]
+members = ["steer"]
 scope = "text"
 reason = "not in 0.x yet: parity stream L's later lots (RMK-1429): session setup and the kit's verbs"
 

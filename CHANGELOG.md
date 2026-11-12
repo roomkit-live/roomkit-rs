@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Add public ACP room cancellation during connection, session setup and recovery, and avoid duplicate close requests when a release is interrupted.
+
 - Rebuild an ACP room session once after an explicitly authorized transport refusal, preserving host settings and refusing replay after turn activity; clean up interrupted recovery.
 
 - Preserve state changes reported by overlapping channel calls, including a session close that clears a configuration saved while it waited (RFC §10.6.3).

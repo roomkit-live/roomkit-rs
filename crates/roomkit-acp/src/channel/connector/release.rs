@@ -14,10 +14,11 @@ pub(in crate::channel) struct Unset<C: AcpConnection> {
 
 impl<C: AcpConnection> Unset<C> {
     pub(in crate::channel) async fn release(&mut self) {
-        if let Some(session) = &self.session {
-            release(&*self.connection, session, self.closes).await;
+        if let Some(session) = self.session.take() {
+            // Once explicit release starts, dropping its future must not
+            // issue a second close for the same remote session.
+            release(&*self.connection, &session, self.closes).await;
         }
-        self.session = None;
     }
 }
 

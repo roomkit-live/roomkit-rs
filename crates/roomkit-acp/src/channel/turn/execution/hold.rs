@@ -19,6 +19,7 @@ pub(in crate::channel::turn) struct Hold<T: AcpTransport> {
     _active: Active<T>,
     pub(super) prompt: Option<Prompt<T::Connection>>,
     pub(super) recovering: bool,
+    pub(super) preparation: Arc<crate::channel::preparation::Preparation>,
     retire: bool,
 }
 
@@ -36,6 +37,12 @@ impl<T: AcpTransport> Hold<T> {
     ) -> Self {
         let room = shared.holding_room(&room_id).await;
         let active = shared.active();
+        let preparation = Arc::new(crate::channel::preparation::Preparation::default());
+        shared
+            .preparations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(room_id.clone(), Arc::clone(&preparation));
         Self {
             shared,
             room_id,
@@ -44,6 +51,7 @@ impl<T: AcpTransport> Hold<T> {
             _active: active,
             prompt: None,
             recovering: false,
+            preparation,
             retire: false,
         }
     }
@@ -72,6 +80,11 @@ impl<T: AcpTransport> Hold<T> {
 
 impl<T: AcpTransport> Drop for Hold<T> {
     fn drop(&mut self) {
+        self.shared
+            .preparations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.room_id);
         let prompt = self
             .prompt
             .take()

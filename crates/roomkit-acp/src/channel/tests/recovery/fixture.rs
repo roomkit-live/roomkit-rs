@@ -15,6 +15,9 @@ use crate::{
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(in crate::channel) enum Stage {
+    Start,
+    InitialOpen,
+    InitialConfigured,
     Close,
     Open,
     Configured,
@@ -66,11 +69,13 @@ pub(in crate::channel) fn channel(boundary: Stage) -> (AcpChannel<Direct>, Arc<S
         "/srv/project",
         AcpChannelOptions {
             transport: Some(Direct(Arc::clone(&state))),
-            session_config: (boundary == Stage::Configured).then(|| {
-                [("model".to_owned(), json!("sonnet"))]
-                    .into_iter()
-                    .collect()
-            }),
+            session_config: matches!(boundary, Stage::Configured | Stage::InitialConfigured).then(
+                || {
+                    [("model".to_owned(), json!("sonnet"))]
+                        .into_iter()
+                        .collect()
+                },
+            ),
             ..Default::default()
         },
     )
@@ -83,11 +88,8 @@ impl AcpTransport for Direct {
     fn name(&self) -> &'static str {
         "direct"
     }
-    #[expect(
-        clippy::unused_async_trait_impl,
-        reason = "the transport trait returns a future"
-    )]
     async fn open(&self, client: Arc<dyn AcpClient>) -> Result<Connection, AcpError> {
+        self.0.hold(Stage::Start).await;
         Ok(Connection {
             state: Arc::clone(&self.0),
             client,
@@ -124,6 +126,9 @@ impl AcpConnection for Connection {
     }
     async fn new_session(&self, _: NewSessionRequest) -> Result<NewSessionResponse, AcpError> {
         let n = self.state.opened.fetch_add(1, Ordering::SeqCst) + 1;
+        if n == 1 {
+            self.state.hold(Stage::InitialOpen).await;
+        }
         if n == 2 {
             self.state.hold(Stage::Open).await;
         }
@@ -133,6 +138,9 @@ impl AcpConnection for Connection {
         &self,
         request: SetSessionConfigOptionRequest,
     ) -> Result<SetSessionConfigOptionResponse, AcpError> {
+        if request.session_id.0.as_ref() == "session-1" {
+            self.state.hold(Stage::InitialConfigured).await;
+        }
         if request.session_id.0.as_ref() == "session-2" {
             self.state.hold(Stage::Configured).await;
         }

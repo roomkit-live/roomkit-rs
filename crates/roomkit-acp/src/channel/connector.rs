@@ -1,6 +1,7 @@
 //! The channel's connection to its agent and the rooms' sessions: Python's
 //! `ACPConnectionMixin` and the room half of `ACPSessionsMixin`.
 
+mod cancellation;
 pub(super) mod release;
 mod sessions;
 

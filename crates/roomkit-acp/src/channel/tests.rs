@@ -2,6 +2,7 @@
 //! over an in-memory pipe: what a turn holds while it runs, and how it
 //! ends when it is cut.
 
+mod cancellation;
 mod configuration;
 mod opening;
 pub(in crate::channel) mod recovery;

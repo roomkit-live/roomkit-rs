@@ -30,6 +30,7 @@ pub(super) async fn run<T: AcpTransport>(
 ) -> (Result<Option<Answered>, ChannelError>, Option<Hold<T>>) {
     let mut hold = Hold::acquire(shared, room_id, record).await;
     let result = execute(&mut hold, &event_id, &prompt, &text).await;
+    hold.preparation.finish();
     (result, Some(hold))
 }
 
@@ -39,13 +40,9 @@ async fn execute<T: AcpTransport>(
     prompt: &str,
     text: &mpsc::UnboundedSender<String>,
 ) -> Result<Option<Answered>, ChannelError> {
-    let shared = Arc::clone(&hold.shared);
-    let connection = shared.connector.connection().await.map_err(raised)?;
-    let mut session = shared
-        .connector
-        .session(&hold.room_id, &connection, &shared.cwd)
-        .await
-        .map_err(raised)?;
+    let Some((connection, mut session)) = open(hold).await? else {
+        return Ok(None);
+    };
     for attempt in 0..2 {
         let started = Instant::now();
         let activity = Arc::new(AtomicBool::new(false));
@@ -77,25 +74,63 @@ async fn execute<T: AcpTransport>(
             }
             Err(error) => return Err(provider_error(&format!("ACP agent prompt failed: {error}"))),
         }
-        hold.recovering = true;
-        let rebuilt = tokio::select! {
-            biased;
-            () = shared.connector.closed() => return Ok(None),
-            result = shared.connector.rebuild(&hold.room_id, &connection, &shared.cwd) => result,
-        };
-        if shared.connector.is_closed() {
+        let Some(rebuilt) = rebuild(hold, &connection).await? else {
             return Ok(None);
-        }
-        session = rebuilt.map_err(raised)?;
-        hold.record.with_value("acp", |acp| {
-            if let Some(acp) = acp.as_object_mut() {
-                for name in ["interrupted", "stop_reason", "prompt_returned"] {
-                    acp.shift_remove(name);
-                }
-            }
-        });
+        };
+        session = rebuilt;
     }
     unreachable!("the second attempt always returns")
+}
+
+async fn open<T: AcpTransport>(
+    hold: &Hold<T>,
+) -> Result<Option<(Arc<T::Connection>, String)>, ChannelError> {
+    let shared = Arc::clone(&hold.shared);
+    let opened = hold
+        .preparation
+        .run(async {
+            let connection = shared.connector.connection().await?;
+            let session = shared
+                .connector
+                .session(&hold.room_id, &connection, &shared.cwd)
+                .await?;
+            Ok::<_, AcpError>((connection, session))
+        })
+        .await;
+    let Some(opened) = opened else {
+        interrupted(&hold.record);
+        return Ok(None);
+    };
+    opened.map(Some).map_err(raised)
+}
+
+async fn rebuild<T: AcpTransport>(
+    hold: &mut Hold<T>,
+    connection: &Arc<T::Connection>,
+) -> Result<Option<String>, ChannelError> {
+    let shared = Arc::clone(&hold.shared);
+    hold.recovering = true;
+    let rebuilt = tokio::select! {
+        biased;
+        () = shared.connector.closed() => return Ok(None),
+        result = hold.preparation.run(shared.connector.rebuild(&hold.room_id, connection, &shared.cwd)) => result,
+    };
+    if shared.connector.is_closed() {
+        return Ok(None);
+    }
+    let Some(rebuilt) = rebuilt else {
+        interrupted(&hold.record);
+        return Ok(None);
+    };
+    let session = rebuilt.map_err(raised)?;
+    hold.record.with_value("acp", |acp| {
+        if let Some(acp) = acp.as_object_mut() {
+            for name in ["interrupted", "stop_reason", "prompt_returned"] {
+                acp.shift_remove(name);
+            }
+        }
+    });
+    Ok(Some(session))
 }
 
 /// Register before the task may call the transport, including on another worker.
@@ -113,19 +148,13 @@ async fn one_prompt<T: AcpTransport>(
     meta.insert("roomkit.live/eventId".to_owned(), json!(event_id));
     let request = PromptRequest::new(session.to_owned(), vec![prompt.to_owned().into()]).meta(meta);
     let (start, ready) = oneshot::channel();
-    let task = {
-        let connection = Arc::clone(connection);
-        let record = hold.record.clone();
-        tokio::spawn(async move {
-            ready.await.map_err(|_| AcpError::ConnectionClosed)?;
-            let answer = connection.prompt(request).await;
-            match &answer {
-                Ok(answer) => answered(&record, answer),
-                Err(_) => interrupted(&record),
-            }
-            answer
-        })
-    };
+    let task = tokio::spawn(prompt_task(
+        ready,
+        Arc::clone(connection),
+        request,
+        hold.record.clone(),
+        Arc::clone(&hold.preparation),
+    ));
     if !hold.shared.connector.register_prompt(
         session,
         text.clone(),
@@ -151,7 +180,7 @@ async fn one_prompt<T: AcpTransport>(
     hold.prompt = None;
     drop(registered);
     match joined {
-        Ok(answer) => answer.map(Some),
+        Ok(answer) => answer,
         Err(failed) if failed.is_cancelled() => {
             interrupted(&hold.record);
             Ok(None)
@@ -161,6 +190,25 @@ async fn one_prompt<T: AcpTransport>(
             Err(AcpError::Runtime(failed.to_string()))
         }
     }
+}
+
+async fn prompt_task<C: AcpConnection>(
+    ready: oneshot::Receiver<()>,
+    connection: Arc<C>,
+    request: PromptRequest,
+    record: ResponseMetadata,
+    preparation: Arc<crate::channel::preparation::Preparation>,
+) -> Result<Option<PromptResponse>, AcpError> {
+    ready.await.map_err(|_| AcpError::ConnectionClosed)?;
+    let Some(answer) = preparation.prompt(connection.prompt(request)).await else {
+        interrupted(&record);
+        return Ok(None);
+    };
+    match &answer {
+        Ok(answer) => answered(&record, answer),
+        Err(_) => interrupted(&record),
+    }
+    answer.map(Some)
 }
 
 struct Registered<T: AcpTransport> {

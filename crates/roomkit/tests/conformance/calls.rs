@@ -368,6 +368,18 @@ async fn other_call(
     name: &str,
     spec: &Value,
 ) -> Result<Called, Unreadable> {
+    if name == "acp.cancel" {
+        let id: String = field(spec, "channel_id")?;
+        let channel = crate::run::lock(&run.acp_channels)
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| "acp.cancel requires an ACP channel".to_owned())?;
+        let value = channel
+            .cancel(&room_id(spec)?)
+            .await
+            .map_err(|error| format!("ACP cancel failed: {error}"))?;
+        return Ok(Ok(json!(value)));
+    }
     if name == "channel_call" {
         return crate::channel_verbs::call(run, spec).await;
     }
@@ -706,6 +718,7 @@ pub(crate) fn register_channel(
     } else if channel.get("acp").is_some() {
         let (agent, wire, pipe) =
             crate::acp_agents::scripted_acp_channel(channel, id.clone(), run)?;
+        crate::run::lock(&run.acp_channels).insert(id.to_string(), agent.clone());
         crate::run::lock(&run.acp_wires).insert(id.to_string(), wire);
         crate::run::lock(&run.acp_pipes).insert(id.to_string(), pipe);
         run.kit().register_channel(agent)
