@@ -16,7 +16,7 @@ pub(in crate::channel::turn) struct Hold<T: AcpTransport> {
     pub(super) room_id: RoomId,
     pub(super) record: ResponseMetadata,
     room: Option<OwnedMutexGuard<()>>,
-    _active: Active<T>,
+    active: Option<Active<T>>,
     pub(super) prompt: Option<Prompt<T::Connection>>,
     pub(super) recovering: bool,
     pub(super) preparation: Arc<crate::channel::preparation::Preparation>,
@@ -48,7 +48,7 @@ impl<T: AcpTransport> Hold<T> {
             room_id,
             record,
             room: Some(room),
-            _active: active,
+            active: Some(active),
             prompt: None,
             recovering: false,
             preparation,
@@ -70,6 +70,9 @@ impl<T: AcpTransport> Hold<T> {
         if !self.recovering {
             return;
         }
+        // Python's finished turn leaves its registry before releasing the
+        // replacement session. The room guard still spans that release.
+        self.active.take();
         if let Some(mut session) = self.shared.connector.discard(&self.room_id) {
             session.release().await;
         }

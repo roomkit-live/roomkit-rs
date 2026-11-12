@@ -11,6 +11,7 @@ use agent_client_protocol_schema::v1::{
     NewSessionResponse, PromptRequest, PromptResponse, SetSessionConfigOptionRequest,
     SetSessionConfigOptionResponse,
 };
+use roomkit::Channel;
 use roomkit::model::{ChannelId, ChannelType, InboundMessage, RoomId, TextContent};
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
@@ -160,6 +161,7 @@ async fn finished_preparation_is_not_cancelled_again_during_release() {
         .unwrap();
     let second = channel.cancel(&room).await.unwrap();
     assert!(channel.session_id(&room).is_none());
+    assert_eq!(channel.active_turns(), 0);
     state.release.notify_one();
     let outcome = tokio::time::timeout(Duration::from_secs(5), consuming)
         .await

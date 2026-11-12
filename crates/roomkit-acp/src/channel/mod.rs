@@ -318,8 +318,9 @@ impl<T: AcpTransport> Channel for AcpChannel<T> {
         ROOM_HISTORY
     }
 
-    /// The turns in flight: from the moment a turn holds its room until
-    /// its stream is over. Python's `active_turns`.
+    /// The registered turns in flight: Python's `active_turns`. A finished
+    /// recovery leaves this count before its terminal session cleanup,
+    /// while that cleanup still holds the room.
     fn active_turns(&self) -> usize {
         self.shared.active.load(Ordering::Acquire)
     }
