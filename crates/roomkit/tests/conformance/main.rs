@@ -17,6 +17,7 @@
 )]
 
 mod acp_agents;
+mod acp_fixture_tests;
 mod agent_model_tests;
 mod agents;
 mod ai_hooks;
