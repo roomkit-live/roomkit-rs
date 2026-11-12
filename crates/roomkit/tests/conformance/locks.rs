@@ -30,6 +30,8 @@ pub(crate) fn kit_options<S>(mut options: RoomKitOptions<S>, kit: &Value) -> Roo
             release_error: error.to_owned(),
             failing: Arc::default(),
         }));
+    } else if kit["lock_manager"]["kind"].as_str() == Some("memory") {
+        options.lock_manager = Some(Arc::new(InMemoryLockManager::default()));
     }
     options
 }
