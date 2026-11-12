@@ -12,9 +12,9 @@ use agent_client_protocol_schema::v1::{
     ContentBlock, PermissionOptionKind, RequestPermissionOutcome, RequestPermissionRequest,
     RequestPermissionResponse, SelectedPermissionOutcome, SessionNotification, SessionUpdate,
 };
-use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
 
+use super::updates::Sink;
 use crate::client::AcpClient;
 use crate::error::AcpError;
 
@@ -32,18 +32,18 @@ impl Turns {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The turn prompting `session` from now on, which takes its text.
+    /// The turn prompting `session` from now on, which takes its output.
     pub(super) fn register(
         &self,
         session: &str,
-        text: mpsc::UnboundedSender<String>,
+        updates: Sink,
         prompt: AbortHandle,
         activity: Arc<AtomicBool>,
     ) {
         self.lock().insert(
             session.to_owned(),
             Registered {
-                text,
+                updates,
                 prompt,
                 activity,
             },
@@ -63,13 +63,13 @@ impl Turns {
             .collect()
     }
 
-    /// The turn holding `text` stops prompting `session`; a later turn
+    /// The turn holding `updates` stops prompting `session`; a later turn
     /// registered under the same session keeps its own.
-    pub(super) fn unregister(&self, session: &str, text: &mpsc::UnboundedSender<String>) {
+    pub(super) fn unregister(&self, session: &str, updates: &Sink) {
         let mut turns = self.lock();
         if turns
             .get(session)
-            .is_some_and(|turn| turn.text.same_channel(text))
+            .is_some_and(|turn| turn.updates.same_channel(updates))
         {
             turns.remove(session);
         }
@@ -78,7 +78,13 @@ impl Turns {
     fn text(&self, session: &str, text: String) {
         if let Some(turn) = self.lock().get(session) {
             // A turn whose stream went takes nothing more.
-            let _gone = turn.text.send(text);
+            turn.updates.text(text);
+        }
+    }
+
+    fn thought(&self, session: &str, text: String) {
+        if let Some(turn) = self.lock().get(session) {
+            turn.updates.thought(text);
         }
     }
 
@@ -91,7 +97,7 @@ impl Turns {
 
 /// A turn prompting a session: where its text goes, and its prompt.
 struct Registered {
-    text: mpsc::UnboundedSender<String>,
+    updates: Sink,
     prompt: AbortHandle,
     activity: Arc<AtomicBool>,
 }
@@ -109,13 +115,17 @@ impl AcpClient for ChannelClient {
         Box::pin(async move {
             let session = notification.session_id.0.to_string();
             self.turns.activity(&session);
-            // What the agent says goes to the turn prompting its session;
-            // the other updates are the next lots' (thinking, tools, plans).
-            if let SessionUpdate::AgentMessageChunk(chunk) = notification.update
+            if let SessionUpdate::AgentMessageChunk(chunk) = notification.update {
+                if let ContentBlock::Text(text) = chunk.content
+                    && !text.text.is_empty()
+                {
+                    self.turns.text(&session, text.text);
+                }
+            } else if let SessionUpdate::AgentThoughtChunk(chunk) = notification.update
                 && let ContentBlock::Text(text) = chunk.content
                 && !text.text.is_empty()
             {
-                self.turns.text(&session, text.text);
+                self.turns.thought(&session, text.text);
             }
         })
     }

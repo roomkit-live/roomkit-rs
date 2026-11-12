@@ -103,7 +103,7 @@ impl<T: AcpTransport> Connector<T> {
     pub(super) fn register_prompt(
         &self,
         session: &str,
-        text: tokio::sync::mpsc::UnboundedSender<String>,
+        text: super::updates::Sink,
         prompt: tokio::task::AbortHandle,
         activity: Arc<std::sync::atomic::AtomicBool>,
     ) -> bool {

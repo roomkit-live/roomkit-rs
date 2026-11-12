@@ -19,6 +19,7 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 
 use super::Shared;
+use super::updates::{Sink, ThinkingWindow};
 use crate::error::AcpError;
 use crate::transport::AcpTransport;
 
@@ -31,6 +32,7 @@ pub(super) struct Ask {
     /// The kit's turn, which `ON_AI_RESPONSE` fires through; none outside a
     /// kit, where nothing fires.
     pub(super) host: Option<TurnHost>,
+    pub(super) answers_room: bool,
 }
 
 /// How the turn's prompt ended, once it returned.
@@ -48,7 +50,9 @@ type Work<T> =
 /// then runs as it is read, the agent's text handed on as it comes.
 pub(super) struct TurnStream<T: AcpTransport> {
     work: Option<Work<T>>,
-    text: mpsc::UnboundedReceiver<String>,
+    text: mpsc::UnboundedReceiver<ResponseItem>,
+    thinking: Vec<String>,
+    thinking_window: Arc<ThinkingWindow>,
     said: Vec<String>,
     ending: Option<Result<Option<Answered>, ChannelError>>,
     hold: Option<Hold<T>>,
@@ -68,10 +72,19 @@ impl<T: AcpTransport> TurnStream<T> {
         let host = ask.host.clone();
         let channel_id = shared.channel_id.clone();
         let generation = shared.connector.generation(&room_id);
+        let thinking_window = Arc::new(ThinkingWindow::new(
+            host.clone().filter(|_| ask.answers_room),
+            room_id.clone(),
+            channel_id.clone(),
+            shared.publish_thinking_text,
+        ));
+        let sender = Sink::new(sender, Arc::clone(&thinking_window));
         let work = run(shared, ask, sender, generation);
         Self {
             work: Some(Box::pin(work)),
             text,
+            thinking: Vec::new(),
+            thinking_window,
             said: Vec::new(),
             ending: None,
             hold: None,
@@ -81,6 +94,14 @@ impl<T: AcpTransport> TurnStream<T> {
             record,
             host,
             done: false,
+        }
+    }
+
+    fn observe_item(&mut self, item: &ResponseItem) {
+        if let ResponseItem::Text(text) = item {
+            self.said.push(text.clone());
+        } else if let ResponseItem::Thinking(text) = item {
+            self.thinking.push(text.clone());
         }
     }
 
@@ -137,6 +158,7 @@ impl<T: AcpTransport> TurnStream<T> {
             loop_end_reason: end.and_then(|end| end.as_str().map(str::to_owned)),
             latency_ms,
             streaming: true,
+            thinking: self.thinking.concat(),
             segments,
             ..AiResponseEvent::new(self.channel_id.clone(), content)
         };
@@ -168,14 +190,15 @@ impl<T: AcpTransport> Stream for TurnStream<T> {
             this.hold = hold;
         }
         match this.text.poll_recv(cx) {
-            Poll::Ready(Some(text)) => {
-                this.said.push(text.clone());
-                return Poll::Ready(Some(Ok(ResponseItem::Text(text))));
+            Poll::Ready(Some(item)) => {
+                this.observe_item(&item);
+                return Poll::Ready(Some(Ok(item)));
             }
             // The work holds a sender until it ends: the text ends then.
             Poll::Ready(None) => {}
             Poll::Pending => return Poll::Pending,
         }
+        this.thinking_window.finish();
         if let Some(hold) = &this.hold {
             hold.retire_steering();
         }
@@ -199,6 +222,12 @@ impl<T: AcpTransport> Stream for TurnStream<T> {
         // go, as Python's turn lets them go when its stream ends.
         this.hold = None;
         ending
+    }
+}
+
+impl<T: AcpTransport> Drop for TurnStream<T> {
+    fn drop(&mut self) {
+        self.thinking_window.finish();
     }
 }
 

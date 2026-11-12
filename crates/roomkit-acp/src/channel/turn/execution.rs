@@ -10,11 +10,12 @@ use agent_client_protocol_schema::v1::{PromptRequest, PromptResponse};
 use roomkit::ChannelError;
 use roomkit::model::ResponseMetadata;
 use serde_json::{Map, json};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use super::{Answered, activity_error, answered, interrupted, provider_error, raised, usage_of};
 use crate::channel::Shared;
+use crate::channel::updates::Sink;
 use crate::connection::AcpConnection;
 use crate::error::AcpError;
 use crate::transport::AcpTransport;
@@ -23,7 +24,7 @@ use hold::Prompt;
 pub(super) async fn run<T: AcpTransport>(
     shared: Arc<Shared<T>>,
     ask: super::Ask,
-    text: mpsc::UnboundedSender<String>,
+    text: Sink,
     generation: u64,
 ) -> (Result<Option<Answered>, ChannelError>, Option<Hold<T>>) {
     let turn_id = ask.host.as_ref().map(|host| host.turn_id().to_owned());
@@ -38,7 +39,7 @@ async fn execute<T: AcpTransport>(
     hold: &mut Hold<T>,
     event_id: &str,
     prompt: &str,
-    text: &mpsc::UnboundedSender<String>,
+    text: &Sink,
 ) -> Result<Option<Answered>, ChannelError> {
     let Some((connection, mut session)) = open(hold).await? else {
         return Ok(None);
@@ -159,7 +160,7 @@ async fn one_prompt<T: AcpTransport>(
     session: &str,
     event_id: &str,
     prompt: &str,
-    text: &mpsc::UnboundedSender<String>,
+    text: &Sink,
     activity: &Arc<AtomicBool>,
 ) -> Result<Option<PromptResponse>, AcpError> {
     let mut meta = Map::new();
@@ -236,7 +237,7 @@ async fn prompt_task<C: AcpConnection>(
 struct Registered<T: AcpTransport> {
     shared: Arc<Shared<T>>,
     session: String,
-    text: mpsc::UnboundedSender<String>,
+    text: Sink,
 }
 
 impl<T: AcpTransport> Drop for Registered<T> {

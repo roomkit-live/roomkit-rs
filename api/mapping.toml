@@ -1122,7 +1122,6 @@ reason = "the Python ACP SDK's message queue, None from SDK 0.12.1 on: the conne
 [[missing]]
 python = "roomkit.ACPChannel.__init__"
 params = [
-    "publish_thinking_text",
     "external_tool_handler", "room_history", "context_contributor",
     "name", "role", "description", "instructions",
 ]

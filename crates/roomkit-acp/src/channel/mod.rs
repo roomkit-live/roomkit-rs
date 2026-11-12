@@ -10,6 +10,7 @@ mod preparation;
 mod sessions;
 mod steering;
 mod turn;
+mod updates;
 
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
@@ -59,6 +60,8 @@ pub struct AcpChannelOptions<T = StdioAcpTransport> {
     pub additional_directories: Option<Vec<PathBuf>>,
     /// Fixed or per-room MCP descriptors declared on every session opening (RFC §6.4).
     pub mcp_servers: Option<McpServers>,
+    /// Publish a bounded thought preview to room subscribers; false by default.
+    pub publish_thinking_text: bool,
     /// Variables added to a spawned agent's environment (a
     /// [`StdioAcpTransportOptions`]'s); refused with a `transport`.
     pub env: Option<BTreeMap<String, String>>,
@@ -79,6 +82,7 @@ impl<T> Default for AcpChannelOptions<T> {
             transport: None,
             additional_directories: None,
             mcp_servers: None,
+            publish_thinking_text: false,
             env: None,
             inherit_env: None,
             authentication_method: None,
@@ -98,6 +102,7 @@ impl<T> fmt::Debug for AcpChannelOptions<T> {
             )
             .field("transport", &self.transport.is_some())
             .field("mcp_servers", &self.mcp_servers)
+            .field("publish_thinking_text", &self.publish_thinking_text)
             .field(
                 "additional_directories",
                 &self.additional_directories.as_ref().map(Vec::len),
@@ -158,6 +163,7 @@ pub struct AcpChannel<T: AcpTransport = StdioAcpTransport> {
 struct Shared<T: AcpTransport> {
     channel_id: ChannelId,
     cwd: PathBuf,
+    publish_thinking_text: bool,
     connector: Connector<T>,
     /// Each room's turn lock: one turn of a room at a time.
     rooms: Mutex<HashMap<RoomId, Arc<tokio::sync::Mutex<()>>>>,
@@ -217,6 +223,7 @@ impl<T: AcpTransport> AcpChannel<T> {
             transport,
             additional_directories,
             mcp_servers,
+            publish_thinking_text,
             env,
             inherit_env,
             authentication_method,
@@ -276,6 +283,7 @@ impl<T: AcpTransport> AcpChannel<T> {
                 ),
                 channel_id,
                 cwd,
+                publish_thinking_text,
                 rooms: Mutex::new(HashMap::new()),
                 active: AtomicUsize::new(0),
                 closings: Mutex::default(),
@@ -424,6 +432,7 @@ impl<T: AcpTransport> Channel for AcpChannel<T> {
                 text,
                 record: record.clone(),
                 host: host.clone(),
+                answers_room: updates::answers_room(&event),
             },
         );
         match host {

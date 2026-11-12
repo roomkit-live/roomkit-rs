@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Stream ACP thoughts and report them in completed turns; publish private-by-default bounded previews and close thinking indicators on completion, failure or abandonment.
+
 - ACP sessions receive fixed or per-room MCP servers on every opening, including reconnects and authorized rebuilds; closing the channel cancels a pending initial supplier.
 
 - Declare ACP additional directories on every room session and normalize session paths lexically as Python does, without resolving parent segments.

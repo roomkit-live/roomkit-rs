@@ -66,6 +66,7 @@ impl Channel for Reading {
                 text: "hello".to_owned(),
                 record: record.clone(),
                 host: Some(host.clone()),
+                answers_room: true,
             },
         );
         let first = poll_fn(|cx| Pin::new(&mut stream).poll_next(cx))

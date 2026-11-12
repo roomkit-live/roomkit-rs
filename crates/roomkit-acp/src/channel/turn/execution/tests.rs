@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 
 use super::{Hold, one_prompt};
 use crate::channel::tests::recovery::fixture::{Stage, channel};
+use crate::channel::updates::{Sink, ThinkingWindow};
 
 // Python: tests/test_channels/test_acp_recovery.py::test_close_after_reconstruction_finishes_prevents_replacement_prompt
 #[tokio::test]
@@ -43,6 +44,15 @@ async fn test_close_after_reconstruction_finishes_prevents_replacement_prompt() 
     assert_eq!(session, "session-2");
     channel.close().await;
     let (text, _receiver) = mpsc::unbounded_channel();
+    let text = Sink::new(
+        text,
+        Arc::new(ThinkingWindow::new(
+            None,
+            room.clone(),
+            channel.shared.channel_id.clone(),
+            false,
+        )),
+    );
     let activity = Arc::new(AtomicBool::new(false));
     assert!(
         one_prompt(
@@ -98,6 +108,15 @@ async fn test_cancel_after_reconstruction_finishes_prevents_replacement_prompt()
     assert_eq!(session, "session-2");
     assert!(channel.cancel(&room).await.unwrap());
     let (text, _receiver) = mpsc::unbounded_channel();
+    let text = Sink::new(
+        text,
+        Arc::new(ThinkingWindow::new(
+            None,
+            room.clone(),
+            channel.shared.channel_id.clone(),
+            false,
+        )),
+    );
     let activity = Arc::new(AtomicBool::new(false));
     assert!(
         one_prompt(

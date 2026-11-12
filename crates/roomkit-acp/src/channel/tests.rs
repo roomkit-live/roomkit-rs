@@ -161,6 +161,7 @@ fn turn<T: AcpTransport>(channel: &AcpChannel<T>, room: &str) -> (TurnStream<T>,
         text: "hello".to_owned(),
         record: record.clone(),
         host: None,
+        answers_room: true,
     };
     (TurnStream::new(Arc::clone(&channel.shared), ask), record)
 }
@@ -521,6 +522,7 @@ async fn a_program_that_is_missing_fails_the_turn_as_file_not_found() {
         text: "hello".to_owned(),
         record,
         host: None,
+        answers_room: true,
     };
     let mut stream = TurnStream::new(Arc::clone(&channel.shared), ask);
     let failure = loop {

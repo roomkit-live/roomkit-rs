@@ -5,6 +5,9 @@
 #[path = "acp_agents/control.rs"]
 pub(crate) mod control;
 
+#[path = "acp_agents/thinking.rs"]
+pub(crate) mod thinking;
+
 #[path = "acp_agents/mcp.rs"]
 pub(crate) mod mcp;
 
@@ -34,6 +37,7 @@ pub(crate) const ACP: &[&str] = &[
     "transport",
     "additional_directories",
     "mcp_servers",
+    "publish_thinking_text",
 ];
 /// The members of its `agent`.
 pub(crate) const AGENT: &[&str] = &[
@@ -54,6 +58,7 @@ pub(crate) const INITIALIZE: &[&str] = &[
 pub(crate) const PROMPT: &[&str] = &[
     "gate",
     "updates",
+    "after_updates_gate",
     "permission",
     "stop_reason",
     "usage",
@@ -97,6 +102,7 @@ pub(crate) fn scripted_acp_channel(
         transport: Some(transport),
         additional_directories: directories(spec)?,
         mcp_servers: mcp::servers(spec, id.as_str(), run)?,
+        publish_thinking_text: thinking::publishes(spec)?,
         session_config: spec
             .get("session_config")
             .and_then(Value::as_object)
@@ -354,6 +360,15 @@ impl Agent {
     }
 }
 
+impl Agent {
+    async fn after_updates(&self, prompt: &Value) {
+        if let (Some(gate), Some(run)) = (prompt["after_updates_gate"].as_str(), self.run.upgrade())
+        {
+            run.gates.hold(gate).await;
+        }
+    }
+}
+
 async fn answer(agent: Arc<Agent>, message: Value, prompt: Option<Value>, writer: Writer) {
     let method = message["method"].as_str().unwrap_or_default();
     let params = &message["params"];
@@ -374,6 +389,7 @@ async fn answer(agent: Arc<Agent>, message: Value, prompt: Option<Value>, writer
                 });
                 send(&writer, &update).await;
             }
+            agent.after_updates(&prompt).await;
             if let Some(permission) = prompt.get("permission") {
                 let mut permission = permission.as_object().unwrap().clone();
                 permission.insert("sessionId".to_owned(), params["sessionId"].clone());
