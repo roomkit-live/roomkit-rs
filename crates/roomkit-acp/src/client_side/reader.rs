@@ -2,7 +2,9 @@
 //! given to its request, an update queued on its session, a request
 //! answered by a task of its own.
 
+use std::future::{Future, poll_fn};
 use std::sync::Arc;
+use std::task::Poll;
 
 use agent_client_protocol_schema::v1::{
     CreateTerminalRequest, KillTerminalRequest, ReadTextFileRequest, ReleaseTerminalRequest,
@@ -59,7 +61,7 @@ pub(super) async fn read<R: AsyncRead + Unpin>(shared: Arc<Shared>, reader: R, s
             Line::Skipped => {}
             Line::Ends => break,
             Line::Message(message) => {
-                if take(&shared, &message, &mut working).is_err() {
+                if take(&shared, &message, &mut working).await.is_err() {
                     break;
                 }
             }
@@ -110,7 +112,7 @@ fn message_of(line: &[u8]) -> Line {
 /// Takes one of the agent's messages: a request answered by a task of
 /// `working`, a session update queued on its session, a response given to
 /// the request it answers. `Ended` when it ends the connection.
-fn take(
+async fn take(
     shared: &Arc<Shared>,
     message: &Map<String, Value>,
     working: &mut JoinSet<()>,
@@ -130,7 +132,7 @@ fn take(
         Some(id) => {
             let shared = Arc::clone(shared);
             let id = id.clone();
-            working.spawn(async move {
+            let request = Box::pin(async move {
                 let response = match serve(&shared, &method, params).await {
                     Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
                     Err(error) => {
@@ -140,10 +142,29 @@ fn take(
                 // An agent that went cannot be answered.
                 let _unanswered = shared.send(&response).await;
             });
+            start_request(request, working).await;
         }
         None => notified(shared, &method, params, working),
     }
     Ok(())
+}
+
+/// Start the callback before reading the next wire message, without waiting
+/// for its answer. A permission already received must count as turn activity
+/// before a following prompt response can authorize recovery. After the first
+/// suspension its task runs independently, so approval or reentrant requests
+/// never hold the reader. Catch panics as a spawned task did before this poll.
+async fn start_request(
+    request: std::pin::Pin<Box<dyn Future<Output = ()> + Send>>,
+    working: &mut JoinSet<()>,
+) {
+    let mut request = Box::pin(caught(request));
+    let complete = poll_fn(|cx| Poll::Ready(request.as_mut().poll(cx).is_ready())).await;
+    if !complete {
+        working.spawn(async move {
+            let _panicked = request.await;
+        });
+    }
 }
 
 /// The answer to the agent's request `method`: the client's for a

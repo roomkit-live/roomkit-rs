@@ -47,6 +47,10 @@ pub trait AcpConnection: Send + Sync + 'static {
     /// `session/prompt`: one prompt turn. It returns once the agent answers
     /// and every session update the agent sent before its answer was taken
     /// by the client, the Python SDK's order.
+    /// A transport that knows the session was refused before execution may
+    /// return [`crate::AcpSessionInvalidatedError`]. Its default forbids replay;
+    /// only explicit host authorization permits one room-session rebuild.
+    /// An agent's wire error never grants this authorization.
     fn prompt(
         &self,
         request: PromptRequest,

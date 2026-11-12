@@ -26,6 +26,7 @@ tracing.workspace = true
 whoami.workspace = true
 
 [dev-dependencies]
+agent-client-protocol-schema.workspace = true
 # The conformance runner's paced model, which the suite includes from
 # roomkit.
 futures-core.workspace = true

@@ -41,6 +41,7 @@ opentelemetry_sdk = { workspace = true, optional = true }
 opentelemetry = ["dep:opentelemetry", "dep:opentelemetry_sdk"]
 
 [dev-dependencies]
+agent-client-protocol-schema.workspace = true
 pretty_assertions.workspace = true
 # The conformance runner's scripted agent (roomkit-specs conformance/README.md,
 # "Scripted agents"): roomkit-ai's AI channel over a scripted model.

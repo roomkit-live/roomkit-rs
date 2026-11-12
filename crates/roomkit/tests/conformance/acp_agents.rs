@@ -2,6 +2,9 @@
 //! ACP agents"): served in this process over an in-memory pipe, written as
 //! raw JSON lines, so that it shares none of the channel's ACP code.
 
+#[path = "acp_agents/refusals.rs"]
+mod refusals;
+
 use std::sync::{Arc, Mutex, Weak};
 
 use roomkit::model::ChannelId;
@@ -17,7 +20,7 @@ use crate::calls::Unreadable;
 use crate::run::Run;
 
 /// The members of a channel's `acp` the runner reads.
-pub(crate) const ACP: &[&str] = &["cwd", "agent", "session_config"];
+pub(crate) const ACP: &[&str] = &["cwd", "agent", "session_config", "transport"];
 /// The members of its `agent`.
 pub(crate) const AGENT: &[&str] = &[
     "initialize",
@@ -29,7 +32,14 @@ pub(crate) const AGENT: &[&str] = &[
 /// The members of its `initialize`.
 pub(crate) const INITIALIZE: &[&str] = &["protocol_version", "closes_sessions", "agent_info"];
 /// The members of one of its `prompts`.
-pub(crate) const PROMPT: &[&str] = &["gate", "updates", "stop_reason", "usage", "error"];
+pub(crate) const PROMPT: &[&str] = &[
+    "gate",
+    "updates",
+    "permission",
+    "stop_reason",
+    "usage",
+    "error",
+];
 
 /// Members of a scripted session reply.
 pub(crate) const SESSION_REPLY: &[&str] = &["gate", "result", "error"];
@@ -56,6 +66,13 @@ pub(crate) fn scripted_acp_channel(
         run: Arc::downgrade(run),
         pipe: Arc::clone(&pipe),
         counts: Arc::default(),
+        refusals: Arc::new(Mutex::new(
+            spec["transport"]["refuse_prompt"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter(),
+        )),
     };
     let options = AcpChannelOptions {
         transport: Some(transport),
@@ -71,6 +88,7 @@ pub(crate) fn scripted_acp_channel(
 
 /// The transport handing the channel a connection to its scripted agent.
 pub(crate) struct ScriptedTransport {
+    refusals: Arc<Mutex<std::vec::IntoIter<Value>>>,
     agent: Value,
     wire: Wire,
     run: Weak<Run>,
@@ -83,6 +101,7 @@ pub(crate) struct ScriptedTransport {
 /// The agent's real pipe lifetime, shared with the scenario's fault step.
 #[derive(Default)]
 pub(crate) struct AgentPipe {
+    pub(crate) attempts: Wire,
     serving: Mutex<Option<(JoinHandle<()>, tokio::sync::oneshot::Sender<()>)>>,
 }
 
@@ -116,13 +135,13 @@ struct Counts {
 }
 
 impl AcpTransport for ScriptedTransport {
-    type Connection = ClientSideConnection;
+    type Connection = refusals::Refusing;
 
     fn name(&self) -> &'static str {
         "scripted"
     }
 
-    async fn open(&self, client: Arc<dyn AcpClient>) -> Result<ClientSideConnection, AcpError> {
+    async fn open(&self, client: Arc<dyn AcpClient>) -> Result<Self::Connection, AcpError> {
         self.pipe.close().await;
         let (ours, theirs) = tokio::io::duplex(1 << 20);
         let (reader, writer) = tokio::io::split(ours);
@@ -139,7 +158,11 @@ impl AcpTransport for ScriptedTransport {
             .serving
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((serving, stop));
-        Ok(ClientSideConnection::new(client, reader, writer))
+        Ok(refusals::Refusing {
+            connection: ClientSideConnection::new(client, reader, writer),
+            refusals: Arc::clone(&self.refusals),
+            attempts: Arc::clone(&self.pipe.attempts),
+        })
     }
 
     async fn close(&self) {
@@ -307,6 +330,16 @@ async fn answer(agent: Arc<Agent>, message: Value, prompt: Option<Value>, writer
                     "params": { "sessionId": params["sessionId"], "update": update },
                 });
                 send(&writer, &update).await;
+            }
+            if let Some(permission) = prompt.get("permission") {
+                let mut permission = permission.as_object().unwrap().clone();
+                permission.insert("sessionId".to_owned(), params["sessionId"].clone());
+                send(
+                    &writer,
+                    &json!({"jsonrpc":"2.0", "id":format!("permission-{}", message["id"]),
+                    "method":"session/request_permission", "params":permission}),
+                )
+                .await;
             }
             if let Some(error) = prompt.get("error") {
                 Err(error.clone())

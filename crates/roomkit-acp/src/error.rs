@@ -10,6 +10,9 @@ use serde_json::Value;
 #[derive(Clone, Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum AcpError {
+    /// A host transport refused before execution; never decoded from JSON-RPC.
+    #[error(transparent)]
+    SessionInvalidated(#[from] crate::AcpSessionInvalidatedError),
     /// The agent answered a request with a JSON-RPC error: the SDK's
     /// `RequestError`, its code, message and data as the agent sent them,
     /// its text the message alone, as `str()` reads a `RequestError`.
@@ -108,6 +111,7 @@ impl AcpError {
                 data,
             } => serde_json::json!({ "code": code, "message": message, "data": data }),
             Self::ConnectionClosed
+            | Self::SessionInvalidated(_)
             | Self::Value(_)
             | Self::Type(_)
             | Self::SetupRefused { .. }

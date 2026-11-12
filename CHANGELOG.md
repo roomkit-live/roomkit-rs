@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Rebuild an ACP room session once after an explicitly authorized transport refusal, preserving host settings and refusing replay after turn activity; clean up interrupted recovery.
+
 - Preserve state changes reported by overlapping channel calls, including a session close that clears a configuration saved while it waited (RFC §10.6.3).
 
 - ACP room sessions now support initial configuration and the host's configuration, descriptor, setting and close verbs, with durable room settings through `channel_call`.

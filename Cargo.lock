@@ -1940,6 +1940,7 @@ dependencies = [
 name = "roomkit"
 version = "0.1.0"
 dependencies = [
+ "agent-client-protocol-schema",
  "futures-core",
  "getrandom 0.4.3",
  "jiff",
@@ -2091,6 +2092,7 @@ dependencies = [
 name = "roomkit-postgres"
 version = "0.1.0"
 dependencies = [
+ "agent-client-protocol-schema",
  "blake2",
  "bytes",
  "deadpool-postgres",
@@ -2131,6 +2133,7 @@ dependencies = [
 name = "roomkit-sqlite"
 version = "0.1.0"
 dependencies = [
+ "agent-client-protocol-schema",
  "futures-core",
  "pretty_assertions",
  "roomkit",

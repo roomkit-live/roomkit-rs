@@ -1,7 +1,7 @@
 //! The channel's connection to its agent and the rooms' sessions: Python's
 //! `ACPConnectionMixin` and the room half of `ACPSessionsMixin`.
 
-mod release;
+pub(super) mod release;
 mod sessions;
 
 use std::collections::HashMap;
@@ -36,6 +36,7 @@ pub(super) struct Connector<T: AcpTransport> {
     state: Mutex<State<T::Connection>>,
     /// Each room's lock its session is opened under.
     openings: Mutex<HashMap<RoomId, Arc<tokio::sync::Mutex<()>>>>,
+    closed: tokio::sync::Notify,
 }
 
 struct State<C> {
@@ -73,11 +74,43 @@ impl<T: AcpTransport> Connector<T> {
                 closed: false,
             }),
             openings: Mutex::new(HashMap::new()),
+            closed: tokio::sync::Notify::new(),
         }
     }
 
     fn lock(&self) -> MutexGuard<'_, State<T::Connection>> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub(super) fn is_closed(&self) -> bool {
+        self.lock().closed
+    }
+
+    /// Closing and prompt admission share the state lock. Once close marks
+    /// it closed, no replacement prompt can enter the turn registry.
+    pub(super) fn register_prompt(
+        &self,
+        session: &str,
+        text: tokio::sync::mpsc::UnboundedSender<String>,
+        prompt: tokio::task::AbortHandle,
+        activity: Arc<std::sync::atomic::AtomicBool>,
+    ) -> bool {
+        let state = self.lock();
+        if state.closed {
+            return false;
+        }
+        self.turns.register(session, text, prompt, activity);
+        true
+    }
+
+    /// Subscribe before reading the flag, so a concurrent close cannot be missed.
+    pub(super) async fn closed(&self) {
+        let notified = self.closed.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if !self.is_closed() {
+            notified.await;
+        }
     }
 
     /// The live connection, opened and initialized when there is none, or
@@ -230,6 +263,7 @@ impl<T: AcpTransport> Connector<T> {
                 state.sessions.drain().map(|(_, session)| session).collect();
             (state.connection.take(), sessions, state.closes_sessions)
         };
+        self.closed.notify_waiters();
         let mut teardown = Teardown {
             transport: Some(Arc::clone(&self.transport)),
         };

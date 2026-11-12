@@ -30,3 +30,10 @@ fn acp_channel_options_defaults_as_python() {
     // roomkit.ACPChannel.__init__(session_config) = None
     assert!(defaults.session_config.is_none());
 }
+
+#[test]
+fn acp_session_invalidated_error_options_defaults_as_python() {
+    let defaults = roomkit_acp::AcpSessionInvalidatedErrorOptions::default();
+    // roomkit.ACPSessionInvalidatedError.__init__(recovery_authorized) = False
+    assert!(!defaults.recovery_authorized);
+}

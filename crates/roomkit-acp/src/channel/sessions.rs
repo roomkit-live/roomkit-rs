@@ -91,6 +91,16 @@ fn no_arguments(arguments: &Metadata) -> Result<(), ChannelError> {
 }
 
 impl<T: AcpTransport> Shared<T> {
+    pub(super) fn retire_room(&self, room: &RoomId, lock: &Arc<tokio::sync::Mutex<()>>) {
+        let mut rooms = self.rooms.lock().unwrap_or_else(PoisonError::into_inner);
+        if rooms
+            .get(room)
+            .is_some_and(|current| Arc::ptr_eq(current, lock))
+        {
+            rooms.remove(room);
+        }
+    }
+
     pub(super) async fn holding_room(&self, room: &RoomId) -> tokio::sync::OwnedMutexGuard<()> {
         loop {
             let lock = self.room_lock(room);

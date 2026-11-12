@@ -6,14 +6,14 @@ use agent_client_protocol_schema::v1::CloseSessionRequest;
 use std::sync::Arc;
 
 /// A session not retained by the channel is released even if setup is cancelled.
-pub(super) struct Unset<C: AcpConnection> {
-    pub(super) connection: Arc<C>,
-    pub(super) session: Option<String>,
-    pub(super) closes: bool,
+pub(in crate::channel) struct Unset<C: AcpConnection> {
+    pub(in crate::channel) connection: Arc<C>,
+    pub(in crate::channel) session: Option<String>,
+    pub(in crate::channel) closes: bool,
 }
 
 impl<C: AcpConnection> Unset<C> {
-    pub(super) async fn release(&mut self) {
+    pub(in crate::channel) async fn release(&mut self) {
         if let Some(session) = &self.session {
             release(&*self.connection, session, self.closes).await;
         }

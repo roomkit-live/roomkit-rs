@@ -4,6 +4,8 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use agent_client_protocol_schema::v1::{
@@ -36,9 +38,16 @@ impl Turns {
         session: &str,
         text: mpsc::UnboundedSender<String>,
         prompt: AbortHandle,
+        activity: Arc<AtomicBool>,
     ) {
-        self.lock()
-            .insert(session.to_owned(), Registered { text, prompt });
+        self.lock().insert(
+            session.to_owned(),
+            Registered {
+                text,
+                prompt,
+                activity,
+            },
+        );
     }
 
     /// Stops each prompt in flight, as Python's close cancels its runners:
@@ -72,17 +81,24 @@ impl Turns {
             let _gone = turn.text.send(text);
         }
     }
+
+    fn activity(&self, session: &str) {
+        if let Some(turn) = self.lock().get(session) {
+            turn.activity.store(true, Ordering::Release);
+        }
+    }
 }
 
 /// A turn prompting a session: where its text goes, and its prompt.
 struct Registered {
     text: mpsc::UnboundedSender<String>,
     prompt: AbortHandle,
+    activity: Arc<AtomicBool>,
 }
 
 /// The client the channel opens its transport with.
 pub(super) struct ChannelClient {
-    pub(super) turns: std::sync::Arc<Turns>,
+    pub(super) turns: Arc<Turns>,
 }
 
 impl AcpClient for ChannelClient {
@@ -92,6 +108,7 @@ impl AcpClient for ChannelClient {
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
             let session = notification.session_id.0.to_string();
+            self.turns.activity(&session);
             // What the agent says goes to the turn prompting its session;
             // the other updates are the next lots' (thinking, tools, plans).
             if let SessionUpdate::AgentMessageChunk(chunk) = notification.update
@@ -108,7 +125,10 @@ impl AcpClient for ChannelClient {
         request: RequestPermissionRequest,
     ) -> Pin<Box<dyn Future<Output = Result<RequestPermissionResponse, AcpError>> + Send + '_>>
     {
-        Box::pin(async move { Ok(rejected(&request)) })
+        Box::pin(async move {
+            self.turns.activity(&request.session_id.0);
+            Ok(rejected(&request))
+        })
     }
 }
 

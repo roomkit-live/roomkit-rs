@@ -14,6 +14,33 @@ use crate::error::AcpError;
 use crate::transport::AcpTransport;
 
 impl<T: AcpTransport> Connector<T> {
+    /// Retire live descriptors but preserve host choices for a replacement.
+    pub(in crate::channel) fn discard(&self, room: &RoomId) -> Option<Unset<T::Connection>> {
+        let mut state = self.lock();
+        state.options.remove(room);
+        let session = state.sessions.remove(room)?;
+        Some(Unset {
+            connection: Arc::clone(state.connection.as_ref()?),
+            session: Some(session),
+            closes: state.closes_sessions,
+        })
+    }
+
+    pub(in crate::channel) async fn rebuild(
+        &self,
+        room: &RoomId,
+        connection: &Arc<T::Connection>,
+        cwd: &Path,
+    ) -> Result<String, AcpError> {
+        if let Some(mut discarded) = self.discard(room) {
+            discarded.release().await;
+        }
+        if self.is_closed() {
+            return Err(AcpError::Runtime("ACPChannel is closed".to_owned()));
+        }
+        self.session(room, connection, cwd).await
+    }
+
     pub(in crate::channel) async fn session(
         &self,
         room: &RoomId,

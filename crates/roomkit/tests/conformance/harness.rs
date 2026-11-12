@@ -485,6 +485,11 @@ async fn observe(run: &Arc<Run>, step_outcomes: Vec<Value>) -> Observed {
         }
         observed.models.insert(channel.clone(), requests);
     }
+    for (channel, pipe) in lock(&run.acp_pipes).iter() {
+        observed
+            .acp_prompts
+            .insert(channel.clone(), lock(&pipe.attempts).clone());
+    }
     for (channel, wire) in lock(&run.acp_wires).iter() {
         let received = lock(wire).clone();
         observed.acp_wire.insert(channel.clone(), received);

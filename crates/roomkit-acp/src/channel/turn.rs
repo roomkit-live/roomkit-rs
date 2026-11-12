@@ -1,24 +1,24 @@
 //! One ACP turn: a prompt sent to the room's session, streamed until the
 //! agent ends it (Python's `ACPTurnMixin`).
 
+mod execution;
+use execution::{Hold, run};
+
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use agent_client_protocol_schema::v1::{
-    CancelNotification, PromptRequest, PromptResponse, StopReason,
-};
+use agent_client_protocol_schema::v1::{PromptResponse, StopReason};
 use futures_core::Stream;
 use roomkit::model::{ChannelId, Metadata, ResponseMetadata, RoomId};
 use roomkit::{ChannelError, ClassedError, ResponseItem, TurnHost};
 use roomkit_ai::{AiResponseEvent, ProviderError, ProviderErrorOptions, response_transcript};
-use serde_json::{Map, Value, json};
-use tokio::sync::{OwnedMutexGuard, mpsc};
+use serde_json::{Value, json};
+use tokio::sync::mpsc;
 use tokio::time::Instant;
 
-use super::{Active, Shared};
-use crate::connection::AcpConnection;
+use super::Shared;
 use crate::error::AcpError;
 use crate::transport::AcpTransport;
 
@@ -39,14 +39,6 @@ struct Answered {
     started: Instant,
 }
 
-/// What the turn holds until its stream is over, as Python's turn holds
-/// them around its whole stream: the room's turn lock, its count among the
-/// channel's turns in flight.
-struct Hold<T: AcpTransport> {
-    _room: OwnedMutexGuard<()>,
-    _active: Active<T>,
-}
-
 /// The turn's work, as its stream polls it: its outcome, and what it holds
 /// once it took the room.
 type Work<T> =
@@ -60,6 +52,7 @@ pub(super) struct TurnStream<T: AcpTransport> {
     said: Vec<String>,
     ending: Option<Result<Option<Answered>, ChannelError>>,
     hold: Option<Hold<T>>,
+    cleanup: Option<Pin<Box<dyn Future<Output = Hold<T>> + Send>>>,
     channel_id: ChannelId,
     room_id: RoomId,
     record: ResponseMetadata,
@@ -92,12 +85,43 @@ impl<T: AcpTransport> TurnStream<T> {
             said: Vec::new(),
             ending: None,
             hold: None,
+            cleanup: None,
             channel_id,
             room_id,
             record,
             host,
             done: false,
         }
+    }
+
+    fn poll_cleanup(&mut self, cx: &mut Context<'_>) -> Poll<()> {
+        if let Some(cleanup) = &mut self.cleanup {
+            match cleanup.as_mut().poll(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(hold) => {
+                    self.cleanup = None;
+                    self.hold = Some(hold);
+                }
+            }
+        }
+        Poll::Ready(())
+    }
+
+    fn begin_failed_cleanup(&mut self, cx: &mut Context<'_>) -> bool {
+        // Failed recovery closes only after the queued output was read, and
+        // keeps the same room lock until its terminal item is handed over.
+        if !matches!(&self.ending, Some(Ok(Some(_))))
+            && self.hold.as_ref().is_some_and(Hold::needs_cleanup)
+            && let Some(mut hold) = self.hold.take()
+        {
+            self.cleanup = Some(Box::pin(async move {
+                hold.failed().await;
+                hold
+            }));
+            cx.waker().wake_by_ref();
+            return true;
+        }
+        false
     }
 
     /// Reports the turn that ran to its end to `ON_AI_RESPONSE`'s hooks,
@@ -139,6 +163,9 @@ impl<T: AcpTransport> Stream for TurnStream<T> {
         if this.done {
             return Poll::Ready(None);
         }
+        if this.poll_cleanup(cx).is_pending() {
+            return Poll::Pending;
+        }
         if let Some(work) = this.work.as_mut()
             && let Poll::Ready((ending, hold)) = work.as_mut().poll(cx)
         {
@@ -155,10 +182,16 @@ impl<T: AcpTransport> Stream for TurnStream<T> {
             Poll::Ready(None) => {}
             Poll::Pending => return Poll::Pending,
         }
+        if this.begin_failed_cleanup(cx) {
+            return Poll::Pending;
+        }
         this.done = true;
         let ending = match this.ending.take() {
             Some(Ok(Some(answered))) => {
                 this.report(&answered);
+                if let Some(hold) = &mut this.hold {
+                    hold.completed();
+                }
                 Poll::Ready(None)
             }
             Some(Err(failure)) => Poll::Ready(Some(Err(failure))),
@@ -170,116 +203,6 @@ impl<T: AcpTransport> Stream for TurnStream<T> {
         this.hold = None;
         ending
     }
-}
-
-/// The turn's work, under the room's turn lock: the connection, the room's
-/// session, the prompt; the text the agent says goes to `text` as it comes.
-async fn run<T: AcpTransport>(
-    shared: Arc<Shared<T>>,
-    room_id: RoomId,
-    event_id: String,
-    prompt: String,
-    record: ResponseMetadata,
-    text: mpsc::UnboundedSender<String>,
-) -> (Result<Option<Answered>, ChannelError>, Option<Hold<T>>) {
-    let room = shared.holding_room(&room_id).await;
-    let active = shared.active();
-    let (outcome, room) = prompted(&shared, &room_id, event_id, prompt, &record, &text, room).await;
-    let hold = room.map(|room| Hold {
-        _room: room,
-        _active: active,
-    });
-    (outcome, hold)
-}
-
-/// The connection, the room's session and the prompt, holding `room`, the
-/// room's turn lock, which it hands back once the prompt ended. The prompt
-/// runs as a task of its own, as Python's runner does: it ends, and writes
-/// its end on the record, whether the stream is read or not.
-async fn prompted<T: AcpTransport>(
-    shared: &Arc<Shared<T>>,
-    room_id: &RoomId,
-    event_id: String,
-    prompt: String,
-    record: &ResponseMetadata,
-    text: &mpsc::UnboundedSender<String>,
-    room: OwnedMutexGuard<()>,
-) -> (
-    Result<Option<Answered>, ChannelError>,
-    Option<OwnedMutexGuard<()>>,
-) {
-    let connection = match shared.connector.connection().await {
-        Ok(connection) => connection,
-        Err(error) => return (Err(raised(error)), Some(room)),
-    };
-    let session = match shared
-        .connector
-        .session(room_id, &connection, &shared.cwd)
-        .await
-    {
-        Ok(session) => session,
-        Err(error) => return (Err(raised(error)), Some(room)),
-    };
-    let registered = Registered {
-        shared: Arc::clone(shared),
-        session: session.clone(),
-        text: text.clone(),
-    };
-    let started = Instant::now();
-    let mut meta = Map::new();
-    meta.insert("roomkit.live/eventId".to_owned(), json!(event_id));
-    let request = PromptRequest::new(session.clone(), vec![prompt.into()]).meta(meta);
-    let task = {
-        let connection = Arc::clone(&connection);
-        let record = record.clone();
-        tokio::spawn(async move {
-            let answer = connection.prompt(request).await;
-            match &answer {
-                Ok(answer) => answered(&record, answer),
-                // The prompt never returned, so no stop reason exists to
-                // record: the turn ended on the way.
-                Err(_) => interrupted(&record),
-            }
-            answer
-        })
-    };
-    shared
-        .connector
-        .turns
-        .register(&session, text.clone(), task.abort_handle());
-    let mut prompting = Prompting {
-        task: Some(task),
-        connection,
-        session,
-        record: record.clone(),
-        room: Some(room),
-    };
-    let Some(task) = prompting.task.as_mut() else {
-        return (Err(provider_error("ACP agent prompt failed")), None);
-    };
-    let joined = task.await;
-    let room = prompting.finish();
-    drop(registered);
-    let outcome = match joined {
-        Ok(Ok(answer)) => Ok(Some(Answered {
-            usage: usage_of(&answer),
-            started,
-        })),
-        Ok(Err(error)) => Err(provider_error(&format!("ACP agent prompt failed: {error}"))),
-        // Stopped by the channel's close: the turn ends quietly, marked
-        // interrupted, as Python's cancelled runner ends it.
-        Err(failed) if failed.is_cancelled() => {
-            interrupted(record);
-            Ok(None)
-        }
-        Err(failed) => {
-            interrupted(record);
-            Err(provider_error(&format!(
-                "ACP agent prompt failed: {failed}"
-            )))
-        }
-    };
-    (outcome, room)
 }
 
 /// The prompt's end on the turn's record (RFC §6.4): it returned, and the
@@ -337,13 +260,32 @@ fn usage_of(answer: &PromptResponse) -> Metadata {
 /// The turn's failure as Python raises it: a `ProviderError` of the
 /// provider `acp`.
 fn provider_error(message: &str) -> ChannelError {
-    let error = ProviderError::new(
+    reported_provider(provider_failure(message))
+}
+
+fn activity_error(cause: crate::AcpSessionInvalidatedError) -> ChannelError {
+    reported_provider(
+        provider_failure("ACP session invalidated after turn activity; recovery refused")
+            .with_source(cause),
+    )
+}
+
+fn provider_failure(message: &str) -> ProviderError {
+    ProviderError::new(
         message,
         ProviderErrorOptions {
             provider: "acp".to_owned(),
             ..ProviderErrorOptions::default()
         },
-    );
+    )
+}
+
+fn reported_provider(error: ProviderError) -> ChannelError {
+    let attributes = provider_attributes(&error);
+    Box::new(ClassedError::new("ProviderError", error).with_attributes(attributes))
+}
+
+fn provider_attributes(error: &ProviderError) -> Metadata {
     let mut attributes = Metadata::new();
     attributes.insert("retryable".to_owned(), Value::from(error.retryable));
     attributes.insert("provider".to_owned(), Value::from(error.provider.clone()));
@@ -352,7 +294,11 @@ fn provider_error(message: &str) -> ChannelError {
         "context_overflow".to_owned(),
         Value::from(error.context_overflow),
     );
-    Box::new(ClassedError::new("ProviderError", error).with_attributes(attributes))
+    attributes.insert(
+        "before_request".to_owned(),
+        Value::Bool(error.before_request),
+    );
+    attributes
 }
 
 /// A failure before the prompt (the connection, the handshake, the
@@ -367,6 +313,15 @@ pub(super) fn raised(error: AcpError) -> ChannelError {
             "RequestError"
         }
         AcpError::ConnectionClosed => "ConnectionError",
+        AcpError::SessionInvalidated(error) => {
+            attributes = provider_attributes(error);
+            attributes.insert(
+                "recovery_authorized".to_owned(),
+                Value::Bool(error.recovery_authorized),
+            );
+            attributes.insert("provider".to_owned(), json!("acp"));
+            "ACPSessionInvalidatedError"
+        }
         AcpError::Value(_) => "ValueError",
         AcpError::Type(_) => "TypeError",
         // Python's OSError subclass for the spawn's failure.
@@ -384,66 +339,4 @@ pub(super) fn raised(error: AcpError) -> ChannelError {
         AcpError::Runtime(_) | AcpError::SetupRefused { .. } => "RuntimeError",
     };
     Box::new(ClassedError::new(class, error).with_attributes(attributes))
-}
-
-/// The turn prompting its session, until its prompt ended: it unregisters
-/// its own entry alone, as Python pops only its own turn.
-struct Registered<T: AcpTransport> {
-    shared: Arc<Shared<T>>,
-    session: String,
-    text: mpsc::UnboundedSender<String>,
-}
-
-impl<T: AcpTransport> Drop for Registered<T> {
-    fn drop(&mut self) {
-        self.shared
-            .connector
-            .turns
-            .unregister(&self.session, &self.text);
-    }
-}
-
-/// A prompt out, and the room's turn lock its turn holds. Dropped before
-/// the prompt ended (its reader went, the turn was cut), the prompt is
-/// stopped, the turn marked interrupted, and the agent told to cancel it,
-/// the room's lock released only once that is written, so that the room's
-/// next prompt comes after the cancel: Python awaits the cancel within the
-/// room's lock. A prompt that ended already is left as it ended.
-struct Prompting<C: AcpConnection> {
-    task: Option<tokio::task::JoinHandle<Result<PromptResponse, AcpError>>>,
-    connection: Arc<C>,
-    session: String,
-    record: ResponseMetadata,
-    room: Option<OwnedMutexGuard<()>>,
-}
-
-impl<C: AcpConnection> Prompting<C> {
-    /// The prompt ended: the room's lock, handed back.
-    fn finish(&mut self) -> Option<OwnedMutexGuard<()>> {
-        self.task = None;
-        self.room.take()
-    }
-}
-
-impl<C: AcpConnection> Drop for Prompting<C> {
-    fn drop(&mut self) {
-        let Some(task) = self.task.take() else {
-            return;
-        };
-        if task.is_finished() {
-            return;
-        }
-        task.abort();
-        interrupted(&self.record);
-        let connection = Arc::clone(&self.connection);
-        let session = std::mem::take(&mut self.session);
-        let room = self.room.take();
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            runtime.spawn(async move {
-                // An agent already gone has nothing to cancel.
-                let _gone = connection.cancel(CancelNotification::new(session)).await;
-                drop(room);
-            });
-        }
-    }
 }

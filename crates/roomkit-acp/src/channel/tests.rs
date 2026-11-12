@@ -4,6 +4,7 @@
 
 mod configuration;
 mod opening;
+pub(in crate::channel) mod recovery;
 mod session_lifecycle;
 
 use std::future::{Future, poll_fn};
@@ -145,7 +146,7 @@ fn channel() -> (
     (channel, opened, closed)
 }
 
-fn turn(channel: &AcpChannel<Piped>, room: &str) -> (TurnStream<Piped>, ResponseMetadata) {
+fn turn<T: AcpTransport>(channel: &AcpChannel<T>, room: &str) -> (TurnStream<T>, ResponseMetadata) {
     let record = ResponseMetadata::new();
     record.insert("acp", json!({ "protocol_version": 1 }));
     let ask = Ask {
@@ -159,7 +160,7 @@ fn turn(channel: &AcpChannel<Piped>, room: &str) -> (TurnStream<Piped>, Response
 }
 
 /// Polls `stream` once.
-async fn poll_once(stream: &mut TurnStream<Piped>) {
+async fn poll_once<T: AcpTransport>(stream: &mut TurnStream<T>) {
     let mut polled = false;
     poll_fn(|cx| {
         if !polled {
@@ -172,7 +173,7 @@ async fn poll_once(stream: &mut TurnStream<Piped>) {
 }
 
 /// Reads `stream` to its end: its texts, and whether it ended failing.
-async fn drained(stream: &mut TurnStream<Piped>) -> (Vec<String>, bool) {
+async fn drained<T: AcpTransport>(stream: &mut TurnStream<T>) -> (Vec<String>, bool) {
     let mut texts = Vec::new();
     loop {
         let item = poll_fn(|cx| Pin::new(&mut *stream).poll_next(cx)).await;

@@ -376,6 +376,7 @@ const EXPECT: &[&str] = &[
     "lifecycle",
     "models",
     "acp_wire",
+    "acp_prompts",
     "streamed",
     "room_callbacks",
     "participants",
@@ -681,6 +682,21 @@ fn optional(value: &Value, known: &[&str], path: &str, found: &mut Vec<String>) 
 fn scripted_acp(acp: &Value, path: &str, found: &mut Vec<String>) {
     use crate::acp_agents::{ACP, AGENT, INITIALIZE, PROMPT, SESSION_REPLY};
     optional(acp, ACP, path, found);
+    let transport = &acp["transport"];
+    optional(
+        transport,
+        &["refuse_prompt"],
+        &format!("{path}.transport"),
+        found,
+    );
+    for (index, refusal) in items(&transport["refuse_prompt"]) {
+        optional(
+            refusal,
+            &["reason", "recovery_authorized", "after_prompt"],
+            &format!("{path}.transport.refuse_prompt[{index}]"),
+            found,
+        );
+    }
     let agent = &acp["agent"];
     optional(agent, AGENT, &format!("{path}.agent"), found);
     optional(
