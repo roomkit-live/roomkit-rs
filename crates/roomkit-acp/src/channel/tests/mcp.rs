@@ -81,7 +81,7 @@ async fn test_any_iterable_of_servers_still_works() {
         }
         agent
     };
-    let (_, mut agent) = tokio::time::timeout(PATIENCE, async { tokio::join!(exercise, serve) })
+    let ((), mut agent) = tokio::time::timeout(PATIENCE, async { tokio::join!(exercise, serve) })
         .await
         .unwrap();
     assert_eq!(consumed.load(Ordering::SeqCst), 2);
