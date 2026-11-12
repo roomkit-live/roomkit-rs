@@ -308,6 +308,7 @@ const REACTION: &[&str] = &[
     "when",
     "repeat",
     "gate",
+    "delay_ms",
     "do",
     "fail",
     "respond",

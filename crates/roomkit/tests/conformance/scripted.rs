@@ -161,7 +161,7 @@ fn message_subject(message: &InboundMessage, room_id: &str) -> Value {
     })
 }
 
-/// Holds at the reaction's gate, runs its actions, then raises its failure.
+/// Holds at the reaction's gate, waits its delay, runs its actions, then fails.
 pub(crate) async fn perform(
     run: &Arc<Run>,
     reaction: &Value,
@@ -169,6 +169,11 @@ pub(crate) async fn perform(
 ) -> Result<(), ScriptedFailure> {
     if let Some(gate) = reaction.get("gate").and_then(Value::as_str) {
         run.gates.hold(gate).await;
+    }
+    if let Some(delay) = reaction.get("delay_ms").and_then(Value::as_u64)
+        && delay > 0
+    {
+        tokio::time::sleep(Duration::from_millis(delay)).await;
     }
     for action in reaction
         .get("do")
