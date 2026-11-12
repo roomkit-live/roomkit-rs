@@ -217,36 +217,7 @@ async fn answers_under_the_close(
             .await
             .unwrap();
     }
-    let handles: Arc<Mutex<Vec<DeliveryHandle>>> = Arc::default();
-    let (hook_kit, hook_handles) = (kit.clone(), Arc::clone(&handles));
-    let spec = HookOptions {
-        name: "side".to_owned(),
-        needs_lock,
-        ..Default::default()
-    };
-    kit.hook(
-        HookTrigger::BeforeBroadcast,
-        move |event: RoomEvent, _| {
-            let (kit, handles) = (hook_kit.clone(), Arc::clone(&hook_handles));
-            let side_entered = Arc::clone(&side_entered);
-            async move {
-                if text_of(&event.content) == "hello" {
-                    let deferred = ProcessInboundOptions {
-                        defer_delivery: true,
-                        ..into(room_id())
-                    };
-                    let side = kit.process_inbound(message("side"), deferred).await?;
-                    handles.lock().unwrap().push(side.delivery.unwrap());
-                    if side_first {
-                        side_entered.notified().await;
-                    }
-                }
-                Ok(HookResult::allow(AllowOptions::default()))
-            }
-        },
-        spec,
-    )
-    .unwrap();
+    let handles = adopt_side(&kit, needs_lock, side_first, side_entered);
     let outer_kit = kit.clone();
     let outer = tokio::spawn(async move {
         outer_kit
@@ -285,6 +256,47 @@ async fn answers_under_the_close(
         let texts = texts.map(|event| text_of(&event.content)).collect();
         (texts, result.cancellation_reason)
     })
+}
+
+/// Register the adopted call, optionally holding the parent until its
+/// initial delivery has entered the channel.
+fn adopt_side(
+    kit: &RoomKit,
+    needs_lock: bool,
+    side_first: bool,
+    side_entered: Arc<Notify>,
+) -> Arc<Mutex<Vec<DeliveryHandle>>> {
+    let handles: Arc<Mutex<Vec<DeliveryHandle>>> = Arc::default();
+    let (hook_kit, hook_handles) = (kit.clone(), Arc::clone(&handles));
+    let spec = HookOptions {
+        name: "side".to_owned(),
+        needs_lock,
+        ..Default::default()
+    };
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _| {
+            let (kit, handles) = (hook_kit.clone(), Arc::clone(&hook_handles));
+            let side_entered = Arc::clone(&side_entered);
+            async move {
+                if text_of(&event.content) == "hello" {
+                    let deferred = ProcessInboundOptions {
+                        defer_delivery: true,
+                        ..into(room_id())
+                    };
+                    let side = kit.process_inbound(message("side"), deferred).await?;
+                    handles.lock().unwrap().push(side.delivery.unwrap());
+                    if side_first {
+                        side_entered.notified().await;
+                    }
+                }
+                Ok(HookResult::allow(AllowOptions::default()))
+            }
+        },
+        spec,
+    )
+    .unwrap();
+    handles
 }
 
 /// A `BEFORE_BROADCAST` observer starts after its event's commit, even when
