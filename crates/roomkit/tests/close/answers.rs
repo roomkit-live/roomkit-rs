@@ -29,6 +29,8 @@ use roomkit_core::rules::transcoding::text_of;
 /// cuts it, and that answers nothing.
 struct Stuck {
     started: Arc<Notify>,
+    side_entered: Arc<Notify>,
+    parent_committed: Arc<Notify>,
 }
 
 impl Stuck {
@@ -82,9 +84,18 @@ impl Channel for Stuck {
         _binding: ChannelBinding,
         _context: RoomContext,
     ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        let initial_side = text_of(&event.content) == "side";
+        let side_entered = Arc::clone(&self.side_entered);
+        let parent_committed = Arc::clone(&self.parent_committed);
         let stuck = text_of(&event.content) == "You said: side";
         let started = Arc::clone(&self.started);
         async move {
+            if initial_side {
+                side_entered.notify_one();
+                // The adopted set may start while the parent is still in its
+                // hook. Its answer must follow the parent's place in the lane.
+                parent_committed.notified().await;
+            }
             if stuck {
                 started.notify_one();
                 std::future::pending::<()>().await;
@@ -124,7 +135,7 @@ impl Channel for Stuck {
 async fn a_call_the_close_aborts_reads_the_answers_its_cascade_stored() {
     for needs_lock in [true, false] {
         assert_eq!(
-            answers_under_the_close(needs_lock).await,
+            answers_under_the_close(needs_lock, false).await,
             cut(["hello", "side"])
         );
     }
@@ -139,10 +150,20 @@ async fn a_call_the_close_aborts_reads_the_answers_its_cascade_stored() {
 async fn a_call_the_close_aborts_reads_its_answers_on_threads() {
     for needs_lock in [true, false] {
         assert_eq!(
-            answers_under_the_close(needs_lock).await,
+            answers_under_the_close(needs_lock, false).await,
             cut(["hello", "side"])
         );
     }
+}
+
+/// An adopted set may start before the parent hook returns. Both answers
+/// must still be committed before the close cuts their unfinished calls.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_side_delivery_started_before_its_parent_still_leaves_both_answers_to_close() {
+    assert_eq!(
+        answers_under_the_close(false, true).await,
+        cut(["hello", "side"])
+    );
 }
 
 /// The echoes of `texts`, each read with the close's cut.
@@ -158,10 +179,15 @@ fn said<const N: usize>(texts: [&str; N]) -> [Vec<String>; N] {
 /// What the call `hello` and the adopted call's handle read of their
 /// answers and of their cut, once the close aborted them, the adopting hook
 /// under the lock or off it (`needs_lock`).
-async fn answers_under_the_close(needs_lock: bool) -> [(Vec<String>, Option<String>); 2] {
+async fn answers_under_the_close(
+    needs_lock: bool,
+    side_first: bool,
+) -> [(Vec<String>, Option<String>); 2] {
     let started = Arc::new(Notify::new());
+    let side_entered = Arc::new(Notify::new());
     let kit = RoomKit::new(RoomKitOptions::default());
-    let parent_stored = observe_stored_parent(&kit);
+    let parent_committed = observe_stored(&kit, "hello", "parent-committed");
+    let parent_stored = observe_stored(&kit, "You said: hello", "parent-answer-stored");
     kit.register_channel(RecordingTransport::new(
         channel("sms"),
         ChannelType::SMS,
@@ -176,6 +202,8 @@ async fn answers_under_the_close(needs_lock: bool) -> [(Vec<String>, Option<Stri
     .unwrap();
     kit.register_channel(Stuck {
         started: Arc::clone(&started),
+        side_entered: Arc::clone(&side_entered),
+        parent_committed,
     })
     .unwrap();
     kit.create_room(CreateRoomOptions {
@@ -200,6 +228,7 @@ async fn answers_under_the_close(needs_lock: bool) -> [(Vec<String>, Option<Stri
         HookTrigger::BeforeBroadcast,
         move |event: RoomEvent, _| {
             let (kit, handles) = (hook_kit.clone(), Arc::clone(&hook_handles));
+            let side_entered = Arc::clone(&side_entered);
             async move {
                 if text_of(&event.content) == "hello" {
                     let deferred = ProcessInboundOptions {
@@ -208,6 +237,9 @@ async fn answers_under_the_close(needs_lock: bool) -> [(Vec<String>, Option<Stri
                     };
                     let side = kit.process_inbound(message("side"), deferred).await?;
                     handles.lock().unwrap().push(side.delivery.unwrap());
+                    if side_first {
+                        side_entered.notified().await;
+                    }
                 }
                 Ok(HookResult::allow(AllowOptions::default()))
             }
@@ -255,10 +287,9 @@ async fn answers_under_the_close(needs_lock: bool) -> [(Vec<String>, Option<Stri
     })
 }
 
-/// The adopted delivery can run before the parent's answer is committed.
-/// A `BEFORE_BROADCAST` observer starts after its commit, even when the
-/// delivery lane still waits on the adopted turn (RFC §9.2, §9.5.1).
-fn observe_stored_parent(kit: &RoomKit) -> Arc<Notify> {
+/// A `BEFORE_BROADCAST` observer starts after its event's commit, even when
+/// the delivery lane still waits on an adopted turn (RFC §9.2, §9.5.1).
+fn observe_stored(kit: &RoomKit, text: &'static str, name: &str) -> Arc<Notify> {
     let stored = Arc::new(Notify::new());
     let signal = Arc::clone(&stored);
     kit.hook(
@@ -266,13 +297,13 @@ fn observe_stored_parent(kit: &RoomKit) -> Arc<Notify> {
         move |event: RoomEvent, _| {
             let signal = Arc::clone(&signal);
             async move {
-                if text_of(&event.content) == "You said: hello" {
+                if text_of(&event.content) == text {
                     signal.notify_one();
                 }
             }
         },
         HookOptions {
-            name: "parent-stored".to_owned(),
+            name: name.to_owned(),
             execution: HookExecution::Async,
             ..HookOptions::default()
         },
