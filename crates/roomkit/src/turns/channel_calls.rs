@@ -108,7 +108,10 @@ impl Turns {
         call: &ChannelCall,
         ready: Result<(), ChannelError>,
     ) -> ChannelResult {
-        let before = ready.and_then(|()| channel.room_state(&call.room_id));
+        let before = ready.and_then(|()| {
+            self.call_states
+                .track(channel, &call.room_id, &call.call_id)
+        });
         let (result, room_state) = match before {
             Ok(before) => {
                 let result = channel
@@ -118,8 +121,8 @@ impl Turns {
                         call.arguments.clone(),
                     )
                     .await;
-                match channel.room_state(&call.room_id) {
-                    Ok(after) => (result, (after != before).then_some(after)),
+                match before.changed(channel) {
+                    Ok(changed) => (result, changed),
                     Err(error) => (Err(error), None),
                 }
             }

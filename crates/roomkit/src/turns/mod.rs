@@ -31,6 +31,7 @@
 mod public_options;
 pub use public_options::{HookOptions, RoomHookOptions, TakesOptions};
 
+mod call_state;
 mod channel_calls;
 mod detach_state;
 pub(crate) use detach_state::{DetachTicket, PendingDetaches};
@@ -120,6 +121,7 @@ pub(crate) struct Turns {
     /// Each room's last turn of each channel the owner submitted.
     records: Mutex<RoomRecords>,
     rooms: Arc<rooms::ExecutorRooms>,
+    call_states: call_state::CallStates,
     pub(crate) pending_detaches: Arc<PendingDetaches>,
     /// How many of the turns' streams the owner reads now.
     reads: Mutex<usize>,
@@ -150,6 +152,7 @@ impl Default for Turns {
             executor_lifecycle: Arc::default(),
             records: Mutex::new(RoomRecords::default()),
             rooms: Arc::default(),
+            call_states: call_state::CallStates::default(),
             pending_detaches: Arc::default(),
             reads: Mutex::new(0),
             reads_changed: Notify::new(),

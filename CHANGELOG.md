@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Preserve state changes reported by overlapping channel calls, including a session close that clears a configuration saved while it waited (RFC §10.6.3).
+
 - ACP room sessions now support initial configuration and the host's configuration, descriptor, setting and close verbs, with durable room settings through `channel_call`.
 
 - Keep a delegation's partially prepared child room and mark its task failed or cancelled before announcement, including creation that finishes after caller cancellation, without reporting a task completion (RFC §23.3).
