@@ -459,7 +459,7 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
         "set_agent_response_policy" => &["room_id", "policy"],
         "send_greeting" => &["room_id", "channel_id", "agent_id", "greeting"],
         "register_channel" => &["channel"],
-        "unregister_channel" => &["channel_id"],
+        "unregister_channel" | "acp.close" => &["channel_id"],
         "register_hook" | "kit_executor.hook" | "kit_executor.room_hook" => &["hook"],
         "kit_executor.remove_room_hook" => &["name"],
         "enable_room_hook" | "disable_room_hook" | "remove_room_hook" => &["room_id", "name"],
@@ -482,7 +482,6 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
         "cancel_delivery" => &["key", "reason"],
         "steer" => &["channel_id", "directive", "room_id"],
         "acp.cancel" => &["channel_id", "room_id"],
-        "acp.close" => &["channel_id"],
         other => {
             return crate::room_queries::arguments(other)
                 .or_else(|| crate::task_calls::arguments(other))
