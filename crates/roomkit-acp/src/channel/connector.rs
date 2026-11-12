@@ -7,6 +7,7 @@ pub(super) mod release;
 mod sessions;
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use agent_client_protocol_schema::ProtocolVersion;
@@ -32,6 +33,7 @@ pub(super) struct Connector<T: AcpTransport> {
     authentication_method: Option<String>,
     channel_id: ChannelId,
     setup: Metadata,
+    additional_directories: Vec<PathBuf>,
     pub(super) turns: Arc<Turns>,
     /// One connection at a time.
     connecting: Arc<tokio::sync::Mutex<()>>,
@@ -59,12 +61,14 @@ impl<T: AcpTransport> Connector<T> {
         authentication_method: Option<String>,
         channel_id: ChannelId,
         setup: Metadata,
+        additional_directories: Vec<PathBuf>,
     ) -> Self {
         Self {
             transport: Arc::new(transport),
             authentication_method,
             channel_id,
             setup,
+            additional_directories,
             turns: Arc::new(Turns::default()),
             connecting: Arc::new(tokio::sync::Mutex::new(())),
             state: Mutex::new(State {

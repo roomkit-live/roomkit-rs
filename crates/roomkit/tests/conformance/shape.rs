@@ -683,6 +683,7 @@ fn optional(value: &Value, known: &[&str], path: &str, found: &mut Vec<String>) 
 fn scripted_acp(acp: &Value, path: &str, found: &mut Vec<String>) {
     use crate::acp_agents::{ACP, AGENT, INITIALIZE, PROMPT, SESSION_REPLY};
     optional(acp, ACP, path, found);
+    acp_directories(acp, path, found);
     let transport = &acp["transport"];
     optional(
         transport,
@@ -723,6 +724,18 @@ fn scripted_acp(acp: &Value, path: &str, found: &mut Vec<String>) {
             &format!("{path}.agent.prompts[{index}]"),
             found,
         );
+    }
+}
+
+fn acp_directories(acp: &Value, path: &str, found: &mut Vec<String>) {
+    if let Some(value) = acp.get("additional_directories")
+        && !value
+            .as_array()
+            .is_some_and(|values| values.iter().all(Value::is_string))
+    {
+        found.push(format!(
+            "{path}.additional_directories: expected an array of strings"
+        ));
     }
 }
 
@@ -1201,6 +1214,27 @@ fn provider_result(output: &Value, path: &str, found: &mut Vec<String>) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // Python: tests/conformance/test_acp_fixture.py::test_directory_fixture_rejects_malformed_lists
+    #[test]
+    fn test_directory_fixture_rejects_malformed_lists() {
+        for directories in [
+            json!(null),
+            json!("/srv/shared"),
+            json!({}),
+            json!([1]),
+            json!(["/srv/shared", false]),
+        ] {
+            let scenario = json!({"setup":{"channels":[{"id":"agent","type":"ai","acp":{
+                "cwd":"/srv/project", "agent":{}, "additional_directories":directories
+            }}]}});
+            assert!(
+                unknown_members(&scenario)
+                    .iter()
+                    .any(|problem| problem.contains("additional_directories"))
+            );
+        }
+    }
 
     #[test]
     fn malformed_provider_receipts_are_refused_before_execution() {

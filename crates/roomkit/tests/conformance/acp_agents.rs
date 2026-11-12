@@ -5,6 +5,7 @@
 #[path = "acp_agents/refusals.rs"]
 mod refusals;
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 
 use roomkit::model::ChannelId;
@@ -20,7 +21,13 @@ use crate::calls::Unreadable;
 use crate::run::Run;
 
 /// The members of a channel's `acp` the runner reads.
-pub(crate) const ACP: &[&str] = &["cwd", "agent", "session_config", "transport"];
+pub(crate) const ACP: &[&str] = &[
+    "cwd",
+    "agent",
+    "session_config",
+    "transport",
+    "additional_directories",
+];
 /// The members of its `agent`.
 pub(crate) const AGENT: &[&str] = &[
     "initialize",
@@ -76,6 +83,7 @@ pub(crate) fn scripted_acp_channel(
     };
     let options = AcpChannelOptions {
         transport: Some(transport),
+        additional_directories: directories(spec)?,
         session_config: spec
             .get("session_config")
             .and_then(Value::as_object)
@@ -84,6 +92,25 @@ pub(crate) fn scripted_acp_channel(
     };
     let channel = AcpChannel::new(id, cwd, options).map_err(|error| format!("acp: {error}"))?;
     Ok((channel, wire, pipe))
+}
+
+fn directories(spec: &Value) -> Result<Option<Vec<PathBuf>>, Unreadable> {
+    let Some(value) = spec.get("additional_directories") else {
+        return Ok(None);
+    };
+    let values = value
+        .as_array()
+        .ok_or_else(|| "acp.additional_directories: expected an array".to_owned())?;
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(PathBuf::from)
+                .ok_or_else(|| "acp.additional_directories: expected directory strings".into())
+        })
+        .collect::<Result<Vec<_>, Unreadable>>()
+        .map(Some)
 }
 
 /// The transport handing the channel a connection to its scripted agent.

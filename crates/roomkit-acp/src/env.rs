@@ -66,12 +66,39 @@ pub(crate) fn resolve_spawn_env(
 pub(crate) fn absolute_path(value: &Path, field_name: &str) -> Result<PathBuf, AcpError> {
     let expanded = expand_user(value);
     if expanded.is_absolute() {
-        Ok(expanded)
+        Ok(normalize_path(&expanded))
     } else {
         Err(AcpError::Value(format!(
             "{field_name} must be an absolute path"
         )))
     }
+}
+
+/// Match `pathlib.Path` lexically; the agent's paths need not exist locally.
+fn normalize_path(value: &Path) -> PathBuf {
+    #[cfg(unix)]
+    {
+        let bytes = value.as_os_str().as_encoded_bytes();
+        if bytes.starts_with(b"//") && !bytes.starts_with(b"///") {
+            // POSIX preserves exactly two leading slashes, unlike Rust's components.
+            let mut normalized = PathBuf::from("//");
+            normalized.extend(value.components().skip(1));
+            return normalized;
+        }
+    }
+    value.components().collect()
+}
+
+/// Validate every declared root without resolving it on the client's filesystem.
+pub(crate) fn absolute_paths(
+    values: Option<Vec<PathBuf>>,
+    field_name: &str,
+) -> Result<Vec<PathBuf>, AcpError> {
+    values
+        .unwrap_or_default()
+        .iter()
+        .map(|value| absolute_path(value, field_name))
+        .collect()
 }
 
 fn expand_user(value: &Path) -> PathBuf {

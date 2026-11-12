@@ -80,7 +80,11 @@ impl<T: AcpTransport> Connector<T> {
         meta.insert("roomkit.live/roomId".to_owned(), json!(room.as_str()));
         meta.insert("roomkit.live/sessionScope".to_owned(), json!("room"));
         let answer = connection
-            .new_session(NewSessionRequest::new(cwd).meta(meta))
+            .new_session(
+                NewSessionRequest::new(cwd)
+                    .additional_directories(self.additional_directories.clone())
+                    .meta(meta),
+            )
             .await?;
         let id = answer.session_id.0.to_string();
         let mut unset = Unset {

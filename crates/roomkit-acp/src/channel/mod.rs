@@ -37,7 +37,7 @@ use self::connector::{Connector, PROTOCOL_VERSION};
 /// default.
 const ROOM_HISTORY: usize = 20;
 use self::turn::{Ask, TurnStream};
-use crate::env::absolute_path;
+use crate::env::{absolute_path, absolute_paths};
 use crate::error::AcpError;
 use crate::stdio::{StdioAcpTransport, StdioAcpTransportOptions};
 use crate::text::acp_event_text;
@@ -53,6 +53,9 @@ pub struct AcpChannelOptions<T = StdioAcpTransport> {
     pub command: Option<Vec<String>>,
     /// How to reach an agent this channel does not spawn.
     pub transport: Option<T>,
+    /// Additional absolute directories declared to every session (RFC Appendix A.9.1).
+    /// These are paths on the agent's machine; they do not change `cwd`.
+    pub additional_directories: Option<Vec<PathBuf>>,
     /// Variables added to a spawned agent's environment (a
     /// [`StdioAcpTransportOptions`]'s); refused with a `transport`.
     pub env: Option<BTreeMap<String, String>>,
@@ -71,6 +74,7 @@ impl<T> Default for AcpChannelOptions<T> {
         Self {
             command: None,
             transport: None,
+            additional_directories: None,
             env: None,
             inherit_env: None,
             authentication_method: None,
@@ -89,6 +93,10 @@ impl<T> fmt::Debug for AcpChannelOptions<T> {
                 &self.command.as_ref().and_then(|command| command.first()),
             )
             .field("transport", &self.transport.is_some())
+            .field(
+                "additional_directories",
+                &self.additional_directories.as_ref().map(Vec::len),
+            )
             .field(
                 "env",
                 &self.env.as_ref().map(|env| env.keys().collect::<Vec<_>>()),
@@ -202,6 +210,7 @@ impl<T: AcpTransport> AcpChannel<T> {
         let AcpChannelOptions {
             command,
             transport,
+            additional_directories,
             env,
             inherit_env,
             authentication_method,
@@ -247,6 +256,8 @@ impl<T: AcpTransport> AcpChannel<T> {
                 })?
             }
         };
+        let additional_directories =
+            absolute_paths(additional_directories, "additional_directories")?;
         Ok(Self {
             shared: Arc::new(Shared {
                 connector: Connector::new(
@@ -254,6 +265,7 @@ impl<T: AcpTransport> AcpChannel<T> {
                     authentication_method,
                     channel_id.clone(),
                     setup,
+                    additional_directories,
                 ),
                 channel_id,
                 cwd,
