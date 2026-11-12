@@ -106,6 +106,8 @@ async fn interrupted_preparation_keeps_no_child_task_pending() {
 }
 
 async fn interrupted(boundary: Boundary, wait: bool, cancelled: bool) -> Vec<String> {
+    let logs = Logs::default();
+    let _logging = tracing::subscriber::set_default(logs.clone());
     let telemetry = Arc::new(MockTelemetryProvider::default());
     let kit = kit_configured(RoomKitOptions {
         telemetry: Some(Arc::clone(&telemetry).into()),
@@ -209,5 +211,13 @@ async fn interrupted(boundary: Boundary, wait: bool, cancelled: bool) -> Vec<Str
         if cancelled { "cancelled" } else { "error" }
     );
     assert!(telemetry.get_active_spans().is_empty());
+    assert!(
+        !logs
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|line| line == "the unannounced child's terminal write did not finish")
+    );
     statuses
 }

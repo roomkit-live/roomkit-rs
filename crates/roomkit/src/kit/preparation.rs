@@ -64,14 +64,14 @@ impl<S: ConversationStore> Preparing<S> {
         let mut result = DelegatedTaskResult::of(&task, status);
         result.duration_ms = task.elapsed_ms();
         task.end_span(&result);
-        let mut pending = PendingEnd {
+        let pending = PendingEnd {
             task_id: task.id.clone(),
             unfinished: true,
         };
         Box::pin(async move {
             kit.inner.tasks.calls_over_within(creation).await;
             record_unannounced_end(&kit, &result).await;
-            pending.unfinished = false;
+            pending.finished();
         })
     }
 }
@@ -102,6 +102,12 @@ struct PendingEnd {
     unfinished: bool,
 }
 
+impl PendingEnd {
+    fn finished(mut self) {
+        self.unfinished = false;
+    }
+}
+
 impl Drop for PendingEnd {
     fn drop(&mut self) {
         if self.unfinished {
@@ -125,7 +131,7 @@ async fn record_unannounced_end<S: ConversationStore>(
                 .and_then(serde_json::Value::as_str)
                 == Some(result.task_id.as_str()) =>
         {
-            kit.record_task_end(result).await
+            kit.record_task_end(result).await;
         }
         Ok(_) => (),
         Err(error) => tracing::warn!(target: "roomkit::tasks", task = %result.task_id, %error,
