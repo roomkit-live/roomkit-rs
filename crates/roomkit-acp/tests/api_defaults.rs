@@ -23,6 +23,8 @@ fn acp_channel_options_defaults_as_python() {
     assert!(defaults.transport.is_none());
     // roomkit.ACPChannel.__init__(additional_directories) = None
     assert!(defaults.additional_directories.is_none());
+    // roomkit.ACPChannel.__init__(mcp_servers) = None
+    assert!(defaults.mcp_servers.is_none());
     // roomkit.ACPChannel.__init__(env) = None
     assert!(defaults.env.is_none());
     // roomkit.ACPChannel.__init__(inherit_env) = None

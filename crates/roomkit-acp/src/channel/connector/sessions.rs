@@ -76,16 +76,8 @@ impl<T: AcpTransport> Connector<T> {
         cwd: &Path,
         overlay: Metadata,
     ) -> Result<(String, bool), AcpError> {
-        let mut meta = Metadata::new();
-        meta.insert("roomkit.live/roomId".to_owned(), json!(room.as_str()));
-        meta.insert("roomkit.live/sessionScope".to_owned(), json!("room"));
-        let answer = connection
-            .new_session(
-                NewSessionRequest::new(cwd)
-                    .additional_directories(self.additional_directories.clone())
-                    .meta(meta),
-            )
-            .await?;
+        let request = self.session_request(room, cwd).await?;
+        let answer = connection.new_session(request).await?;
         let id = answer.session_id.0.to_string();
         let mut unset = Unset {
             connection: Arc::clone(connection),
@@ -111,6 +103,24 @@ impl<T: AcpTransport> Connector<T> {
         state.options.insert(room.clone(), options);
         unset.session = None;
         Ok((id, true))
+    }
+
+    async fn session_request(
+        &self,
+        room: &RoomId,
+        cwd: &Path,
+    ) -> Result<NewSessionRequest, AcpError> {
+        let servers = match &self.mcp_servers {
+            Some(source) => source.resolve(room).await?,
+            None => Vec::new(),
+        };
+        let mut meta = Metadata::new();
+        meta.insert("roomkit.live/roomId".to_owned(), json!(room.as_str()));
+        meta.insert("roomkit.live/sessionScope".to_owned(), json!("room"));
+        Ok(NewSessionRequest::new(cwd)
+            .additional_directories(self.additional_directories.clone())
+            .mcp_servers(servers)
+            .meta(meta))
     }
 
     async fn configure(

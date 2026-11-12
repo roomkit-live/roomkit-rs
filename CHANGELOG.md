@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- ACP sessions receive fixed or per-room MCP servers on every opening, including reconnects and authorized rebuilds.
+
 - Declare ACP additional directories on every room session and normalize session paths lexically as Python does, without resolving parent segments.
 
 - Steer ACP turns by id with Cancel, awaiting the remote write while turn work continues and preserving the agent's outcome.

@@ -276,31 +276,23 @@ impl Comparison<'_> {
                 &format!("models.{channel}"),
             );
         }
-        for (channel, expected) in expect["acp_wire"].as_object().into_iter().flatten() {
-            let requests = self
-                .observed
-                .acp_wire
-                .get(channel)
-                .cloned()
-                .unwrap_or_default();
-            self.check(
-                expected,
-                Some(&Value::Array(requests)),
-                &format!("acp_wire.{channel}"),
-            );
-        }
-        for (channel, expected) in expect["acp_prompts"].as_object().into_iter().flatten() {
-            let requests = self
-                .observed
-                .acp_prompts
-                .get(channel)
-                .cloned()
-                .unwrap_or_default();
-            self.check(
-                expected,
-                Some(&Value::Array(requests)),
-                &format!("acp_prompts.{channel}"),
-            );
+        self.acp();
+    }
+
+    fn acp(&mut self) {
+        for (kind, recorded) in [
+            ("acp_wire", &self.observed.acp_wire),
+            ("acp_prompts", &self.observed.acp_prompts),
+            ("acp_mcp_requests", &self.observed.acp_mcp_requests),
+        ] {
+            for (channel, expected) in self.expect[kind].as_object().into_iter().flatten() {
+                let requests = recorded.get(channel).cloned().unwrap_or_default();
+                self.check(
+                    expected,
+                    Some(&Value::Array(requests)),
+                    &format!("{kind}.{channel}"),
+                );
+            }
         }
     }
 

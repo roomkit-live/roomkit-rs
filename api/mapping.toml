@@ -1122,7 +1122,7 @@ reason = "the Python ACP SDK's message queue, None from SDK 0.12.1 on: the conne
 [[missing]]
 python = "roomkit.ACPChannel.__init__"
 params = [
-    "mcp_servers", "publish_thinking_text",
+    "publish_thinking_text",
     "external_tool_handler", "room_history", "context_contributor",
     "name", "role", "description", "instructions",
 ]
@@ -1338,3 +1338,9 @@ python = "roomkit.ACPSessionInvalidatedError.__init__"
 params = ["reason"]
 approved = "2026-11-12"
 reason = "Constructor input passed to ProviderError/Exception.args, not a Python attribute; Rust keeps the reason parameter and does not invent a reason field (HITL f0cedc98-e0c2-4528-bbd5-2eb8fa1d5462, RMK-1429)."
+
+[[exception]]
+rust = "roomkit_acp::McpServers"
+approved = "2026-11-12"
+reason = "Python's mcp_servers union of a fixed SDK descriptor list and a per-room callable: enum Fixed/ForRoom and From<Vec<McpServer>> (HITL 5ce911d3)"
+

@@ -39,6 +39,7 @@ const ROOM_HISTORY: usize = 20;
 use self::turn::{Ask, TurnStream};
 use crate::env::{absolute_path, absolute_paths};
 use crate::error::AcpError;
+use crate::mcp::McpServers;
 use crate::stdio::{StdioAcpTransport, StdioAcpTransportOptions};
 use crate::text::acp_event_text;
 use crate::transport::AcpTransport;
@@ -56,6 +57,8 @@ pub struct AcpChannelOptions<T = StdioAcpTransport> {
     /// Additional absolute directories declared to every session (RFC Appendix A.9.1).
     /// These are paths on the agent's machine; they do not change `cwd`.
     pub additional_directories: Option<Vec<PathBuf>>,
+    /// Fixed or per-room MCP descriptors declared on every session opening (RFC §6.4).
+    pub mcp_servers: Option<McpServers>,
     /// Variables added to a spawned agent's environment (a
     /// [`StdioAcpTransportOptions`]'s); refused with a `transport`.
     pub env: Option<BTreeMap<String, String>>,
@@ -75,6 +78,7 @@ impl<T> Default for AcpChannelOptions<T> {
             command: None,
             transport: None,
             additional_directories: None,
+            mcp_servers: None,
             env: None,
             inherit_env: None,
             authentication_method: None,
@@ -93,6 +97,7 @@ impl<T> fmt::Debug for AcpChannelOptions<T> {
                 &self.command.as_ref().and_then(|command| command.first()),
             )
             .field("transport", &self.transport.is_some())
+            .field("mcp_servers", &self.mcp_servers)
             .field(
                 "additional_directories",
                 &self.additional_directories.as_ref().map(Vec::len),
@@ -211,6 +216,7 @@ impl<T: AcpTransport> AcpChannel<T> {
             command,
             transport,
             additional_directories,
+            mcp_servers,
             env,
             inherit_env,
             authentication_method,
@@ -266,6 +272,7 @@ impl<T: AcpTransport> AcpChannel<T> {
                     channel_id.clone(),
                     setup,
                     additional_directories,
+                    mcp_servers,
                 ),
                 channel_id,
                 cwd,

@@ -2,6 +2,9 @@
 //! ACP agents"): served in this process over an in-memory pipe, written as
 //! raw JSON lines, so that it shares none of the channel's ACP code.
 
+#[path = "acp_agents/mcp.rs"]
+pub(crate) mod mcp;
+
 #[path = "acp_agents/refusals.rs"]
 mod refusals;
 
@@ -27,6 +30,7 @@ pub(crate) const ACP: &[&str] = &[
     "session_config",
     "transport",
     "additional_directories",
+    "mcp_servers",
 ];
 /// The members of its `agent`.
 pub(crate) const AGENT: &[&str] = &[
@@ -37,7 +41,12 @@ pub(crate) const AGENT: &[&str] = &[
     "close_sessions",
 ];
 /// The members of its `initialize`.
-pub(crate) const INITIALIZE: &[&str] = &["protocol_version", "closes_sessions", "agent_info"];
+pub(crate) const INITIALIZE: &[&str] = &[
+    "protocol_version",
+    "closes_sessions",
+    "agent_info",
+    "mcp_capabilities",
+];
 /// The members of one of its `prompts`.
 pub(crate) const PROMPT: &[&str] = &[
     "gate",
@@ -84,6 +93,7 @@ pub(crate) fn scripted_acp_channel(
     let options = AcpChannelOptions {
         transport: Some(transport),
         additional_directories: directories(spec)?,
+        mcp_servers: mcp::servers(spec, id.as_str(), run)?,
         session_config: spec
             .get("session_config")
             .and_then(Value::as_object)
@@ -325,6 +335,9 @@ impl Agent {
         let mut capabilities = Map::new();
         if spec["closes_sessions"].as_bool().unwrap_or(true) {
             capabilities.insert("sessionCapabilities".to_owned(), json!({ "close": {} }));
+        }
+        if let Some(mcp) = spec.get("mcp_capabilities") {
+            capabilities.insert("mcpCapabilities".to_owned(), mcp.clone());
         }
         let version = spec
             .get("protocol_version")

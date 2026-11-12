@@ -116,6 +116,8 @@ the mapping and its tests. The check does not generate or update this document.
 | `roomkit_acp::ClientSideConnection` | — | Whole type |
 | `roomkit_acp::AcpClient` | — | Whole type |
 | `roomkit_acp::AcpError` | — | Whole type |
+| `roomkit_acp::McpServers` | `ACPChannel(mcp_servers=)` | Fixed SDK list or per-room callback enum; `From<Vec<McpServer>>` (HITL 5ce911d3) |
+| `roomkit_acp::McpServersForRoom` | `MCPServersForRoom` | Named callback returning a future; sync suppliers use `future::ready` (HITL 5ce911d3) |
 | — | `roomkit.ACPTransport.open` | `queue` |
 | `roomkit_mcp::McpToolProvider` | — | `connect`, `close` |
 | `roomkit_ai::MockAiProvider` | — | `calls` |

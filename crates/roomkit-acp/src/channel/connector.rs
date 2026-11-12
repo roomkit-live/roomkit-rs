@@ -21,6 +21,7 @@ use serde_json::Value;
 use super::client::{ChannelClient, Turns};
 use crate::connection::AcpConnection;
 use crate::error::AcpError;
+use crate::mcp::McpServers;
 use crate::transport::AcpTransport;
 
 /// The protocol's version RoomKit speaks: the stable ACP v1.
@@ -34,6 +35,7 @@ pub(super) struct Connector<T: AcpTransport> {
     channel_id: ChannelId,
     setup: Metadata,
     additional_directories: Vec<PathBuf>,
+    mcp_servers: Option<McpServers>,
     pub(super) turns: Arc<Turns>,
     /// One connection at a time.
     connecting: Arc<tokio::sync::Mutex<()>>,
@@ -62,6 +64,7 @@ impl<T: AcpTransport> Connector<T> {
         channel_id: ChannelId,
         setup: Metadata,
         additional_directories: Vec<PathBuf>,
+        mcp_servers: Option<McpServers>,
     ) -> Self {
         Self {
             transport: Arc::new(transport),
@@ -69,6 +72,7 @@ impl<T: AcpTransport> Connector<T> {
             channel_id,
             setup,
             additional_directories,
+            mcp_servers,
             turns: Arc::new(Turns::default()),
             connecting: Arc::new(tokio::sync::Mutex::new(())),
             state: Mutex::new(State {
