@@ -231,9 +231,13 @@ impl Normalizer {
 
     fn object(&mut self, object: &Map<String, Value>) -> Value {
         // A participant's or an identity's id is the scenario's own (RFC
-        // §5.5, §5.6), never an event's: kept as written.
-        let own_id =
-            object.contains_key("identification") || object.contains_key("channel_addresses");
+        // §5.5, §5.6), and an ACP option's id, are not event ids.
+        let own_id = object.contains_key("identification")
+            || object.contains_key("channel_addresses")
+            || (matches!(
+                object.get("type").and_then(Value::as_str),
+                Some("select" | "boolean")
+            ) && object.contains_key("currentValue"));
         let mut result = Map::new();
         for (key, item) in object {
             let index = item
@@ -352,4 +356,32 @@ fn instant_key(text: &str) -> (String, String) {
     let body = text.trim_end_matches('Z');
     let (whole, fraction) = body.split_once('.').unwrap_or((body, ""));
     (whole.to_owned(), format!("{fraction:0<9}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Normalizer, Observed};
+    use serde_json::json;
+
+    #[test]
+    fn acp_option_ids_are_not_event_ids() {
+        let options = json!([
+            {"id":"model","type":"select","currentValue":"opus"},
+            {"id":"fast","type":"boolean","currentValue":true},
+        ]);
+        let observed = Observed {
+            steps: vec![json!({"result": options})],
+            ..Observed::default()
+        };
+        let mut normalizer = Normalizer::new(&observed);
+        assert_eq!(normalizer.value(&options), options);
+        assert_eq!(
+            normalizer.value(&json!({"configId":"model"})),
+            json!({"configId":"model"})
+        );
+        assert_eq!(
+            normalizer.value(&json!({"event_id":"unrecorded"})),
+            json!({"event_id":"$e1"})
+        );
+    }
 }

@@ -2,6 +2,8 @@
 //! over an in-memory pipe: what a turn holds while it runs, and how it
 //! ends when it is cut.
 
+mod configuration;
+
 use std::future::{Future, poll_fn};
 use std::pin::Pin;
 use std::sync::Arc;

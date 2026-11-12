@@ -39,6 +39,15 @@ pub(crate) fn visibility_input_error(spec: &Value) -> Option<Value> {
 )]
 pub(crate) fn error_of(error: &RoomKitError) -> Option<Value> {
     Some(match error {
+        RoomKitError::RemoteTurn { kind, .. } if kind == "RequestError" => {
+            named("acp_request_refused")
+        }
+        RoomKitError::RemoteTurn { kind, message, .. }
+            if kind == "ValidationError"
+                && message.starts_with("invalid ACP arguments for session/set_config_option:") =>
+        {
+            named("invalid_argument")
+        }
         RoomKitError::RoomNotFound(_) => named("room_not_found"),
         RoomKitError::ChannelNotRegistered { .. } => named("channel_not_registered"),
         RoomKitError::ChannelNotFound { .. } => named("channel_not_bound"),
@@ -63,6 +72,13 @@ pub(crate) fn error_of(error: &RoomKitError) -> Option<Value> {
         RoomKitError::Value(_)
         | RoomKitError::ChannelAlreadyRegistered(_)
         | RoomKitError::ToolNameCollision(_) => named("invalid_argument"),
+        RoomKitError::Runtime(message)
+            if message.starts_with("ACP session for room ")
+                && message
+                    .contains("it is not prompted. Set another value with set_config_option") =>
+        {
+            named("acp_setup_refused")
+        }
         RoomKitError::Runtime(message)
             if message.contains("setup_handoff() already called")
                 || message.contains("setup_delegation() already called") =>

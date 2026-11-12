@@ -1,6 +1,9 @@
 //! The channel's connection to its agent and the rooms' sessions: Python's
 //! `ACPConnectionMixin` and the room half of `ACPSessionsMixin`.
 
+mod release;
+mod sessions;
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -8,10 +11,9 @@ use agent_client_protocol_schema::ProtocolVersion;
 use agent_client_protocol_schema::v1::{
     AuthenticateRequest, CancelNotification, ClientCapabilities, CloseSessionRequest,
     FileSystemCapabilities, Implementation, InitializeRequest, InitializeResponse,
-    NewSessionRequest,
 };
-use roomkit::model::RoomId;
-use serde_json::{Map, Value, json};
+use roomkit::model::{ChannelId, Metadata, RoomId};
+use serde_json::Value;
 
 use super::client::{ChannelClient, Turns};
 use crate::connection::AcpConnection;
@@ -26,6 +28,8 @@ pub(super) const PROTOCOL_VERSION: u16 = 1;
 pub(super) struct Connector<T: AcpTransport> {
     pub(super) transport: Arc<T>,
     authentication_method: Option<String>,
+    channel_id: ChannelId,
+    setup: Metadata,
     pub(super) turns: Arc<Turns>,
     /// One connection at a time.
     connecting: Arc<tokio::sync::Mutex<()>>,
@@ -39,15 +43,24 @@ struct State<C> {
     agent_info: Option<Value>,
     closes_sessions: bool,
     sessions: HashMap<RoomId, String>,
+    options: HashMap<RoomId, Vec<Value>>,
+    config: HashMap<RoomId, Metadata>,
     /// No turn connects any more.
     closed: bool,
 }
 
 impl<T: AcpTransport> Connector<T> {
-    pub(super) fn new(transport: T, authentication_method: Option<String>) -> Self {
+    pub(super) fn new(
+        transport: T,
+        authentication_method: Option<String>,
+        channel_id: ChannelId,
+        setup: Metadata,
+    ) -> Self {
         Self {
             transport: Arc::new(transport),
             authentication_method,
+            channel_id,
+            setup,
             turns: Arc::new(Turns::default()),
             connecting: Arc::new(tokio::sync::Mutex::new(())),
             state: Mutex::new(State {
@@ -55,6 +68,8 @@ impl<T: AcpTransport> Connector<T> {
                 agent_info: None,
                 closes_sessions: true,
                 sessions: HashMap::new(),
+                options: HashMap::new(),
+                config: HashMap::new(),
                 closed: false,
             }),
             openings: Mutex::new(HashMap::new()),
@@ -87,7 +102,9 @@ impl<T: AcpTransport> Connector<T> {
             // The agent behind the old connection is gone, its sessions
             // with it: a reconnect never resumes them.
             self.transport.close().await;
-            self.lock().sessions.clear();
+            let mut state = self.lock();
+            state.sessions.clear();
+            state.options.clear();
         }
         let client = Arc::new(ChannelClient {
             turns: Arc::clone(&self.turns),
@@ -178,42 +195,6 @@ impl<T: AcpTransport> Connector<T> {
         Ok((connection, answer))
     }
 
-    /// The room's session, opened on `connection` when it has none, one
-    /// opening of the room's at a time: `session/new` with the channel's
-    /// directory and the room in its `_meta`, scope `room`.
-    pub(super) async fn session(
-        &self,
-        room_id: &RoomId,
-        connection: &T::Connection,
-        cwd: &std::path::Path,
-    ) -> Result<String, AcpError> {
-        if let Some(session) = self.lock().sessions.get(room_id) {
-            return Ok(session.clone());
-        }
-        let opening = Arc::clone(
-            self.openings
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .entry(room_id.clone())
-                .or_default(),
-        );
-        let _opening = opening.lock().await;
-        if let Some(session) = self.lock().sessions.get(room_id) {
-            return Ok(session.clone());
-        }
-        let mut meta = Map::new();
-        meta.insert("roomkit.live/roomId".to_owned(), json!(room_id.as_str()));
-        meta.insert("roomkit.live/sessionScope".to_owned(), json!("room"));
-        let answer = connection
-            .new_session(NewSessionRequest::new(cwd).meta(meta))
-            .await?;
-        let session = answer.session_id.0.to_string();
-        self.lock()
-            .sessions
-            .insert(room_id.clone(), session.clone());
-        Ok(session)
-    }
-
     /// The room's session, if it has one.
     pub(super) fn session_of(&self, room_id: &RoomId) -> Option<String> {
         self.lock().sessions.get(room_id).cloned()
@@ -243,6 +224,8 @@ impl<T: AcpTransport> Connector<T> {
                 return;
             }
             state.closed = true;
+            state.options.clear();
+            state.config.clear();
             let sessions: Vec<String> =
                 state.sessions.drain().map(|(_, session)| session).collect();
             (state.connection.take(), sessions, state.closes_sessions)

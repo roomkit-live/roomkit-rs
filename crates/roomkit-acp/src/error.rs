@@ -30,6 +30,18 @@ pub enum AcpError {
     /// An argument was refused: Python's `ValueError`, in its words.
     #[error("{0}")]
     Value(String),
+    /// A configuration value has a type ACP cannot carry (Python `TypeError`).
+    #[error("{0}")]
+    Type(String),
+    /// Required session configuration failed; the agent's refusal is retained as the cause.
+    #[error("{message}")]
+    SetupRefused {
+        /// The option and the ways to replace or forget it.
+        message: String,
+        /// The agent's original error.
+        #[source]
+        source: Box<AcpError>,
+    },
     /// The agent's program could not be started: Python's `OSError` from
     /// the spawn. The program is named, never its arguments, which may hold
     /// secrets.
@@ -40,6 +52,14 @@ pub enum AcpError {
         /// Why it could not start.
         #[source]
         source: Arc<std::io::Error>,
+    },
+    /// A local protocol request has invalid arguments: the SDK's validation error.
+    #[error("invalid ACP arguments for {method}: {reason}")]
+    InvalidRequest {
+        /// The request's method.
+        method: String,
+        /// The argument contract the caller failed to meet.
+        reason: String,
     },
     /// The agent's answer is not the response the protocol defines for its
     /// request: the SDK's validation error.
@@ -89,8 +109,11 @@ impl AcpError {
             } => serde_json::json!({ "code": code, "message": message, "data": data }),
             Self::ConnectionClosed
             | Self::Value(_)
+            | Self::Type(_)
+            | Self::SetupRefused { .. }
             | Self::Spawn { .. }
             | Self::InvalidResponse { .. }
+            | Self::InvalidRequest { .. }
             | Self::Runtime(_) => serde_json::json!({
                 "code": INTERNAL_ERROR,
                 "message": "Internal error",

@@ -678,7 +678,7 @@ fn optional(value: &Value, known: &[&str], path: &str, found: &mut Vec<String>) 
 
 /// A scripted ACP agent's members (README, "Scripted ACP agents").
 fn scripted_acp(acp: &Value, path: &str, found: &mut Vec<String>) {
-    use crate::acp_agents::{ACP, AGENT, INITIALIZE, PROMPT};
+    use crate::acp_agents::{ACP, AGENT, INITIALIZE, PROMPT, SESSION_REPLY};
     optional(acp, ACP, path, found);
     let agent = &acp["agent"];
     optional(agent, AGENT, &format!("{path}.agent"), found);
@@ -688,6 +688,16 @@ fn scripted_acp(acp: &Value, path: &str, found: &mut Vec<String>) {
         &format!("{path}.agent.initialize"),
         found,
     );
+    for kind in ["new_sessions", "set_config_options", "close_sessions"] {
+        for (index, reply) in items(&agent[kind]) {
+            optional(
+                reply,
+                SESSION_REPLY,
+                &format!("{path}.agent.{kind}[{index}]"),
+                found,
+            );
+        }
+    }
     for (index, prompt) in items(&agent["prompts"]) {
         optional(
             prompt,

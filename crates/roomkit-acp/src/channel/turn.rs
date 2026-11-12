@@ -182,7 +182,7 @@ async fn run<T: AcpTransport>(
     record: ResponseMetadata,
     text: mpsc::UnboundedSender<String>,
 ) -> (Result<Option<Answered>, ChannelError>, Option<Hold<T>>) {
-    let room = shared.room_lock(&room_id).lock_owned().await;
+    let room = shared.holding_room(&room_id).await;
     let active = shared.active();
     let (outcome, room) = prompted(&shared, &room_id, event_id, prompt, &record, &text, room).await;
     let hold = room.map(|room| Hold {
@@ -358,7 +358,7 @@ fn provider_error(message: &str) -> ChannelError {
 /// A failure before the prompt (the connection, the handshake, the
 /// session's opening) under the Python class it stands for (the names
 /// table, `AcpError`).
-fn raised(error: AcpError) -> ChannelError {
+pub(super) fn raised(error: AcpError) -> ChannelError {
     let mut attributes = Metadata::new();
     let class = match &error {
         AcpError::Rpc { code, data, .. } => {
@@ -368,6 +368,7 @@ fn raised(error: AcpError) -> ChannelError {
         }
         AcpError::ConnectionClosed => "ConnectionError",
         AcpError::Value(_) => "ValueError",
+        AcpError::Type(_) => "TypeError",
         // Python's OSError subclass for the spawn's failure.
         AcpError::Spawn { source, .. } => {
             let kind = source.kind();
@@ -379,8 +380,8 @@ fn raised(error: AcpError) -> ChannelError {
                 "OSError"
             }
         }
-        AcpError::InvalidResponse { .. } => "ValidationError",
-        AcpError::Runtime(_) => "RuntimeError",
+        AcpError::InvalidResponse { .. } | AcpError::InvalidRequest { .. } => "ValidationError",
+        AcpError::Runtime(_) | AcpError::SetupRefused { .. } => "RuntimeError",
     };
     Box::new(ClassedError::new(class, error).with_attributes(attributes))
 }

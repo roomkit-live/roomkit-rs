@@ -27,4 +27,6 @@ fn acp_channel_options_defaults_as_python() {
     assert!(defaults.inherit_env.is_none());
     // roomkit.ACPChannel.__init__(authentication_method) = None
     assert!(defaults.authentication_method.is_none());
+    // roomkit.ACPChannel.__init__(session_config) = None
+    assert!(defaults.session_config.is_none());
 }

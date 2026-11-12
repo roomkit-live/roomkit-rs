@@ -2,7 +2,9 @@
 //! intelligence channel, Python's `ACPChannel`.
 
 mod client;
+mod config;
 mod connector;
+mod sessions;
 mod turn;
 
 use std::any::Any;
@@ -56,6 +58,8 @@ pub struct AcpChannelOptions<T = StdioAcpTransport> {
     /// The ACP authentication method the channel authenticates with, once
     /// connected.
     pub authentication_method: Option<String>,
+    /// Initial string or boolean option values, applied before each session is prompted.
+    pub session_config: Option<Metadata>,
 }
 
 impl<T> Default for AcpChannelOptions<T> {
@@ -66,6 +70,7 @@ impl<T> Default for AcpChannelOptions<T> {
             env: None,
             inherit_env: None,
             authentication_method: None,
+            session_config: None,
         }
     }
 }
@@ -86,6 +91,13 @@ impl<T> fmt::Debug for AcpChannelOptions<T> {
             )
             .field("inherit_env", &self.inherit_env)
             .field("authentication_method", &self.authentication_method)
+            .field(
+                "session_config",
+                &self
+                    .session_config
+                    .as_ref()
+                    .map(|config| config.keys().collect::<Vec<_>>()),
+            )
             .finish()
     }
 }
@@ -187,7 +199,9 @@ impl<T: AcpTransport> AcpChannel<T> {
             env,
             inherit_env,
             authentication_method,
+            session_config,
         } = options;
+        let setup = config::validate(session_config.unwrap_or_default())?;
         let transport = match (command, transport) {
             (Some(_), Some(_)) => {
                 return Err(AcpError::Value(
@@ -229,9 +243,14 @@ impl<T: AcpTransport> AcpChannel<T> {
         };
         Ok(Self {
             shared: Arc::new(Shared {
+                connector: Connector::new(
+                    transport,
+                    authentication_method,
+                    channel_id.clone(),
+                    setup,
+                ),
                 channel_id,
                 cwd,
-                connector: Connector::new(transport, authentication_method),
                 rooms: Mutex::new(HashMap::new()),
                 active: AtomicUsize::new(0),
             }),
@@ -397,6 +416,25 @@ impl<T: AcpTransport> Channel for AcpChannel<T> {
         _context: RoomContext,
     ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
         std::future::ready(Ok(ChannelOutput::empty()))
+    }
+
+    /// Run a configuration verb on this room's local session (RFC §10.6.3).
+    async fn channel_call(
+        &self,
+        room_id: RoomId,
+        verb: String,
+        arguments: Metadata,
+    ) -> Result<Value, ChannelError> {
+        self.call_session(&room_id, &verb, &arguments).await
+    }
+
+    fn room_state(&self, room_id: &RoomId) -> Result<Metadata, ChannelError> {
+        Ok(self.shared.connector.room_state(room_id))
+    }
+
+    fn restore_room_state(&self, room_id: &RoomId, state: Metadata) -> Result<(), ChannelError> {
+        self.shared.connector.restore_room_state(room_id, &state);
+        Ok(())
     }
 
     /// Closes the rooms' sessions where the agent takes `session/close`,

@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- ACP room sessions now support initial configuration and the host's configuration, descriptor, setting and close verbs, with durable room settings through `channel_call`.
+
 - Keep a delegation's partially prepared child room and mark its task failed or cancelled before announcement, including creation that finishes after caller cancellation, without reporting a task completion (RFC §23.3).
 
 - Preserve PostgreSQL channel attachment order across updates and restarts, keeping the first streaming target stable; reattaching a removed channel places it last.

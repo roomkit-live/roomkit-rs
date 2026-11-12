@@ -1122,7 +1122,7 @@ reason = "the Python ACP SDK's message queue, None from SDK 0.12.1 on: the conne
 [[missing]]
 python = "roomkit.ACPChannel.__init__"
 params = [
-    "additional_directories", "mcp_servers", "session_config", "publish_thinking_text",
+    "additional_directories", "mcp_servers", "publish_thinking_text",
     "external_tool_handler", "room_history", "context_contributor",
     "name", "role", "description", "instructions",
 ]
@@ -1131,7 +1131,7 @@ reason = "not in 0.x yet: parity stream L's later lots (RMK-1429): thinking, per
 
 [[missing]]
 python = "roomkit.ACPChannel"
-members = ["cancel", "close_session", "config_options", "session_config", "set_config_option", "steer"]
+members = ["cancel", "steer"]
 scope = "text"
 reason = "not in 0.x yet: parity stream L's later lots (RMK-1429): session setup and the kit's verbs"
 

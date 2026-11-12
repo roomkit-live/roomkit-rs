@@ -17,13 +17,22 @@ use crate::calls::Unreadable;
 use crate::run::Run;
 
 /// The members of a channel's `acp` the runner reads.
-pub(crate) const ACP: &[&str] = &["cwd", "agent"];
+pub(crate) const ACP: &[&str] = &["cwd", "agent", "session_config"];
 /// The members of its `agent`.
-pub(crate) const AGENT: &[&str] = &["initialize", "prompts"];
+pub(crate) const AGENT: &[&str] = &[
+    "initialize",
+    "prompts",
+    "new_sessions",
+    "set_config_options",
+    "close_sessions",
+];
 /// The members of its `initialize`.
 pub(crate) const INITIALIZE: &[&str] = &["protocol_version", "closes_sessions", "agent_info"];
 /// The members of one of its `prompts`.
 pub(crate) const PROMPT: &[&str] = &["gate", "updates", "stop_reason", "usage", "error"];
+
+/// Members of a scripted session reply.
+pub(crate) const SESSION_REPLY: &[&str] = &["gate", "result", "error"];
 
 /// What the agent received, in order: each `{method, params}`.
 pub(crate) type Wire = Arc<Mutex<Vec<Value>>>;
@@ -49,6 +58,10 @@ pub(crate) fn scripted_acp_channel(
     };
     let options = AcpChannelOptions {
         transport: Some(transport),
+        session_config: spec
+            .get("session_config")
+            .and_then(Value::as_object)
+            .cloned(),
         ..AcpChannelOptions::default()
     };
     let channel = AcpChannel::new(id, cwd, options).map_err(|error| format!("acp: {error}"))?;
@@ -70,6 +83,7 @@ pub(crate) struct ScriptedTransport {
 struct Counts {
     sessions: Mutex<u64>,
     prompts: Mutex<usize>,
+    replies: Mutex<std::collections::HashMap<String, usize>>,
 }
 
 impl AcpTransport for ScriptedTransport {
@@ -152,7 +166,11 @@ async fn serve(agent: Arc<Agent>, stream: tokio::io::DuplexStream) {
         if message.get("id").is_none() {
             continue;
         }
-        let prompt = (method == "session/prompt").then(|| agent.next_prompt());
+        let prompt = if method == "session/prompt" {
+            Some(agent.next_prompt())
+        } else {
+            agent.next_reply(&method)
+        };
         answering.spawn(answer(
             Arc::clone(&agent),
             message,
@@ -163,6 +181,53 @@ async fn serve(agent: Arc<Agent>, stream: tokio::io::DuplexStream) {
 }
 
 impl Agent {
+    fn next_reply(&self, method: &str) -> Option<Value> {
+        let kind = match method {
+            "session/new" => "new_sessions",
+            "session/set_config_option" => "set_config_options",
+            "session/close" => "close_sessions",
+            _ => return None,
+        };
+        let mut counts = self
+            .counts
+            .replies
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let count = counts.entry(kind.to_owned()).or_default();
+        let reply = self.spec[kind]
+            .as_array()
+            .and_then(|replies| replies.get(*count))
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        *count += 1;
+        Some(reply)
+    }
+
+    async fn session_reply(&self, method: &str, reply: &Value) -> Result<Value, Value> {
+        let mut result = Map::new();
+        if method == "session/new" {
+            let mut sessions = self
+                .counts
+                .sessions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *sessions += 1;
+            result.insert("sessionId".to_owned(), json!(format!("session-{sessions}")));
+        } else if method == "session/set_config_option" {
+            result.insert("configOptions".to_owned(), json!([]));
+        }
+        if let (Some(gate), Some(run)) = (reply["gate"].as_str(), self.run.upgrade()) {
+            run.gates.hold(gate).await;
+        }
+        if let Some(error) = reply.get("error") {
+            return Err(error.clone());
+        }
+        if let Some(fields) = reply["result"].as_object() {
+            result.extend(fields.clone());
+        }
+        Ok(Value::Object(result))
+    }
+
     fn next_prompt(&self) -> Value {
         let mut prompts = self
             .counts
@@ -201,14 +266,8 @@ async fn answer(agent: Arc<Agent>, message: Value, prompt: Option<Value>, writer
     let params = &message["params"];
     let outcome: Result<Value, Value> = match (method, prompt) {
         ("initialize", _) => Ok(agent.initialized(params)),
-        ("session/new", _) => {
-            let mut sessions = agent
-                .counts
-                .sessions
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            *sessions += 1;
-            Ok(json!({ "sessionId": format!("session-{sessions}") }))
+        ("session/new" | "session/set_config_option" | "session/close", Some(reply)) => {
+            agent.session_reply(method, &reply).await
         }
         ("session/prompt", Some(prompt)) => {
             if let (Some(gate), Some(run)) = (prompt["gate"].as_str(), agent.run.upgrade()) {
@@ -233,7 +292,6 @@ async fn answer(agent: Arc<Agent>, message: Value, prompt: Option<Value>, writer
                 Ok(result)
             }
         }
-        ("session/close", _) => Ok(json!({})),
         (other, _) => Err(json!({
             "code": -32601,
             "message": "Method not found",
