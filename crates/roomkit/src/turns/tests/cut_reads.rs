@@ -15,6 +15,7 @@ use roomkit_core::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
     EventContent, HookResult, InboundMessage, RoomContext, RoomEvent, TextContent,
 };
+use roomkit_core::ops::{CheckTimers, EffectId, KitConfig, Next, Operation, SequentialEnvironment};
 use serde_json::{Value, json};
 use tokio::time::Instant;
 
@@ -495,6 +496,57 @@ async fn a_turn_submitted_after_its_delivery_was_cut_receives_the_reason() {
     );
     kit.close().await.unwrap();
     assert_eq!(*controls.lock().unwrap(), vec![json!("before_submission")]);
+}
+
+/// An effect id, the first an operation issues: any id serves here.
+fn effect() -> EffectId {
+    let mut operation = CheckTimers::new(Arc::new(KitConfig::new()), room_id(), None);
+    match operation.poll(&SequentialEnvironment::default()).next {
+        Next::Effects(effects) => effects.first().unwrap().id,
+        Next::Waiting | Next::Ready(_) => panic!("a timer check asks for the lock first"),
+    }
+}
+
+// RFC §10.1 "Explicit delivery cancellation": a turn being handed to its
+// executor is cut, never left running (RMK-1679). The run gives a call up as
+// its driver's `give_up` does, the turn it awaits cut, its task aborted, its
+// effect answered, while that call, polled on another worker, has not
+// submitted its turn yet: an abort lands at the call's next await only, past
+// the submission. The turn submitted then is cut as it arrives, its channel
+// never runs it, and the run holds it to join its end: with the reason of the
+// delivery's cut when one was asked for, as a turn handed over after that cut
+// receives it, the run's own otherwise.
+#[tokio::test]
+async fn a_turn_its_given_up_call_still_submits_is_cut_as_it_arrives() {
+    for (asked, reason) in [
+        (None, "cancelled"),
+        (Some("caller_cancelled"), "caller_cancelled"),
+    ] {
+        let agent = Waiting::new(Duration::ZERO);
+        let kit = kit_with(agent.clone()).await;
+        let controls = cancel_controls(&kit);
+        let (run, _adoptions) = crate::context::RunShared::new();
+        let call = effect();
+        let cut = Arc::new(crate::delivery_keys::CancelRequest::default());
+        run.calling(call);
+        run.cancels_with(call, Arc::clone(&cut));
+        if let Some(asked) = asked {
+            cut.request(asked);
+        }
+        assert!(run.cut_turn(call).is_none(), "no turn submitted yet");
+        run.answered(call);
+        let (_turn, _following) = submitted_turn(&kit, |turn| run.turn_submitted(call, turn)).await;
+        let late = run.turns_cut_late();
+        assert_eq!(late.len(), 1, "the run joins the turn cut late");
+        for turn in late {
+            tokio::time::timeout(Duration::from_secs(5), turn.ended())
+                .await
+                .unwrap();
+        }
+        kit.close().await.unwrap();
+        assert_eq!(agent.ends(), Vec::<&str>::new());
+        assert_eq!(*controls.lock().unwrap(), vec![json!(reason)]);
+    }
 }
 
 #[tokio::test]

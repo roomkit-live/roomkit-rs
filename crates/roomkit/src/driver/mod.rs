@@ -990,12 +990,10 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         // Told before the run can end: its caller's end waits for the
         // closing, however the task that closes ends.
         let closing = (!unread.is_empty()).then(|| record.closes_unread());
-        let ending = inbound::end_once_over(
-            record,
-            self.cut.clone(),
-            self.shared.read_turns(),
-            (unread, closing),
-        );
+        let mut cut = self.cut.clone();
+        cut.extend(self.shared.turns_cut_late());
+        let ending =
+            inbound::end_once_over(record, cut, self.shared.read_turns(), (unread, closing));
         drop(self.inner.tasks.spawn_alone(Kind::Turn, ending));
     }
 
@@ -1052,7 +1050,10 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     /// over.
     async fn join_given_up(&mut self) {
         while self.calls.join_next().await.is_some() {}
-        for turn in std::mem::take(&mut self.cut) {
+        // Every call given up is over: the turns they submitted after it,
+        // cut as they arrived, are all known now.
+        let cut_late = self.shared.turns_cut_late();
+        for turn in std::mem::take(&mut self.cut).into_iter().chain(cut_late) {
             turn.ended().await;
         }
         // A turn whose stream the run read, over without its executor's

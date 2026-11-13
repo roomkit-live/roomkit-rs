@@ -22,6 +22,9 @@ use crate::room_turns::Queued;
 use crate::stream::KeptStream;
 use crate::turns::{Canceller, OwedEnd};
 
+/// The reason a turn's call given up cuts it with.
+const GIVEN_UP: &str = "cancelled";
+
 /// What a run holds now, as the calls it makes read it.
 #[derive(Debug, Default)]
 struct Holdings {
@@ -59,8 +62,9 @@ pub(crate) struct RunShared {
     /// The signal each read of a stream is stopped with, by its effect.
     stops: Mutex<HashMap<EffectId, watch::Sender<bool>>>,
     /// The turns the run's calls submitted and await the output of, by
-    /// their effect: a call given up cuts its turn at once.
-    turns: Mutex<HashMap<EffectId, Canceller>>,
+    /// their effect: a call given up cuts its turn at once, or as it
+    /// submits it.
+    turns: Mutex<AwaitedTurns>,
     /// Which delivery cuts the turn or stream read of each effect.
     cancellations: Mutex<HashMap<EffectId, Arc<CancelRequest>>>,
     /// The turns asked that wait their place in their channel's line in
@@ -75,6 +79,24 @@ pub(crate) struct RunShared {
     /// turn owes its end, by the read's effect, until the read takes it:
     /// the entry's own cleanup, which its cut reads (RFC §10.6.8).
     entry_reads: Mutex<HashMap<EffectId, ReadTurns>>,
+}
+
+/// The turns a run's calls await, and the calls given up before theirs.
+#[derive(Debug, Default)]
+struct AwaitedTurns {
+    /// The turns submitted, by their call's effect, until their output is
+    /// read.
+    submitted: HashMap<EffectId, Canceller>,
+    /// The calls given up while they ran, before they submitted a turn, each
+    /// with the delivery's cut it followed: an abort lands at a call's next
+    /// await only, past a submission it is making on another worker, and
+    /// that turn is cut as it arrives (RFC §10.1 "Explicit delivery
+    /// cancellation": a turn being handed to its executor is cut, never left
+    /// running).
+    given_up: HashMap<EffectId, Option<Arc<CancelRequest>>>,
+    /// The turns cut as they arrived, whose end the run joins as it joins
+    /// the turns it cut itself.
+    cut_late: Vec<Canceller>,
 }
 
 /// Whether each turn whose stream a run read owes its end (RFC §10.6.8),
@@ -123,7 +145,7 @@ impl RunShared {
             tenure_changes: Notify::new(),
             streams: Mutex::new(HashMap::new()),
             stops: Mutex::new(HashMap::new()),
-            turns: Mutex::new(HashMap::new()),
+            turns: Mutex::new(AwaitedTurns::default()),
             cancellations: Mutex::new(HashMap::new()),
             queued: Mutex::new(HashMap::new()),
             read_turns: ReadTurns::default(),
@@ -198,10 +220,7 @@ impl RunShared {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clear();
-        self.turns
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clear();
+        *self.awaited_turns() = AwaitedTurns::default();
         self.queued
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -229,7 +248,15 @@ impl RunShared {
             .remove(&effect)
     }
 
-    /// The call of `effect` submitted a turn, which `turn` cuts.
+    fn awaited_turns(&self) -> MutexGuard<'_, AwaitedTurns> {
+        self.turns.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The call of `effect` submitted a turn, which `turn` cuts: at once
+    /// when the call was given up meanwhile, before the turn's executor
+    /// runs a step, with the reason of the delivery's cut it followed, if
+    /// that cut was asked for, as a turn handed over after its delivery's
+    /// cut receives it.
     pub(crate) fn turn_submitted(
         &self,
         effect: EffectId,
@@ -238,10 +265,24 @@ impl RunShared {
         let following = self
             .cancellation(effect)
             .map(|cancel| cancel.follows(&turn));
-        self.turns
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(effect, turn);
+        let given_up = {
+            let mut awaited = self.awaited_turns();
+            match awaited.given_up.remove(&effect) {
+                Some(followed) => {
+                    awaited.cut_late.push(turn.clone());
+                    Some((turn, followed))
+                }
+                None => {
+                    awaited.submitted.insert(effect, turn);
+                    None
+                }
+            }
+        };
+        // Sending a control may invoke a transport tap: no lock held.
+        if let Some((turn, followed)) = given_up {
+            let reason = followed.and_then(|cut| cut.reason());
+            turn.cancel(reason.as_deref().unwrap_or(GIVEN_UP));
+        }
         following
     }
 
@@ -264,22 +305,32 @@ impl RunShared {
 
     /// The call of `effect` read its turn's output.
     pub(crate) fn turn_answered(&self, effect: EffectId) {
-        self.turns
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&effect);
+        self.awaited_turns().submitted.remove(&effect);
     }
 
     /// Cuts the turn the call of `effect` awaits, if any (RFC §10.1
-    /// "Explicit delivery cancellation"): what awaits its end.
+    /// "Explicit delivery cancellation"): what awaits its end. A call that
+    /// still runs and submitted none yet has the turn it submits cut as it
+    /// arrives.
     pub(crate) fn cut_turn(&self, effect: EffectId) -> Option<Canceller> {
-        let turn = self
-            .turns
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&effect)?;
-        turn.cancel("cancelled");
+        let still_calling = self.is_calling(effect);
+        let followed = self.cancellation(effect);
+        let turn = {
+            let mut awaited = self.awaited_turns();
+            let turn = awaited.submitted.remove(&effect);
+            if turn.is_none() && still_calling {
+                awaited.given_up.insert(effect, followed);
+            }
+            turn
+        }?;
+        turn.cancel(GIVEN_UP);
         Some(turn)
+    }
+
+    /// The turns cut as they arrived, their call given up before it
+    /// submitted them, whose end the run joins.
+    pub(crate) fn turns_cut_late(&self) -> Vec<Canceller> {
+        self.awaited_turns().cut_late.clone()
     }
 
     /// Where each read of the run tells whether its turn owes its end.
