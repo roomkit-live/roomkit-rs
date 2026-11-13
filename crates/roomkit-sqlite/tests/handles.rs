@@ -221,7 +221,10 @@ async fn a_write_held_past_the_unwind_does_not_hold_the_close_of_the_kit_s_sqlit
     );
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     while open_handles(file.path()) > 0 {
-        assert!(tokio::time::Instant::now() < deadline, "the file stays open");
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the file stays open"
+        );
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
 }

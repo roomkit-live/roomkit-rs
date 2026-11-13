@@ -552,8 +552,12 @@ async fn a_room_named_like_a_verification_key_holds_no_verification() {
     let named = room(&format!("verification::{}", alice.as_str()));
     let section = kit.lock_manager().locked(&named).await.unwrap();
     let sms = ChannelId::new("sms").unwrap();
-    let request =
-        kit.request_verification(&alice, &room_id, &sms, RequestVerificationOptions::default());
+    let request = kit.request_verification(
+        &alice,
+        &room_id,
+        &sms,
+        RequestVerificationOptions::default(),
+    );
     let answered = tokio::time::timeout(Duration::from_secs(1), request).await;
     section.release().await.unwrap();
     let (request, _) = answered
