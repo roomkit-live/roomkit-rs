@@ -922,9 +922,11 @@ impl ConversationStore for SqliteStore {
     }
 
     /// Closes the file, once the operation under way is done: Python's
-    /// `close()`, which the kit's close calls. Every later operation, of
-    /// this store or its clones, fails [`StoreError::Unavailable`]
-    /// (`SQLiteStore is closed`). A second close does nothing.
+    /// `close()` as the kit's close runs it, which gives that operation a
+    /// second, then returns, the file closing once it ends (RFC §12.10.4).
+    /// Every later operation, of this store or its clones, fails
+    /// [`StoreError::Unavailable`] (`SQLiteStore is closed`). A second close
+    /// does nothing.
     async fn close(&self) {
         if self.file.closed.swap(true, Ordering::AcqRel) {
             return;

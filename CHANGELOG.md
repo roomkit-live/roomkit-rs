@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- The kit's close returns within its bound while a `SqliteStore` write still holds the file: the write under way, and those waiting for their turn, get one second, the bound a PostgreSQL pool's connections get, where a write waiting for another process's lock on the file held the close up to SQLite's 5-second busy timeout; past it the close returns and says so in the log, the write runs on, and the file closes once it ends. A write that held its turn as the close began is no longer refused (RFC §12.10.4).
+
 - Share the ACP turn's response-metadata record with tool and response hooks, including interrupted reports, while preserving nested turns' records.
 
 - Persist ACP tool updates and close interrupted calls; report each outcome once, preserve text segments and keep observers on the turn's reentry budget.

@@ -5,6 +5,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use roomkit::StoreError;
 use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior};
@@ -19,6 +20,10 @@ pub(crate) const CLOSED: &str = "SQLiteStore is closed";
 /// How many read-only connections serve reads at once: enough for the reads
 /// of a few rooms' passes together, few enough that each stays warm.
 const READERS: usize = 4;
+
+/// How long a close gives the operation still on the writer: Python's
+/// `_close_timeout`.
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// A file's connections. Writes run one at a time on the writer, in the
 /// order they come; reads run on read-only connections beside it, each in
@@ -36,8 +41,9 @@ pub(crate) struct Database {
 struct Inner {
     path: PathBuf,
     writer: Mutex<Option<Connection>>,
-    /// One permit: the writer's turn, waited for asynchronously.
-    write_turn: Semaphore,
+    /// One permit: the writer's turn, waited for asynchronously, and held
+    /// with the writer until the work on it is done, though its caller be cut.
+    write_turn: Arc<Semaphore>,
     /// The read-only connections not in use.
     idle_readers: Mutex<Vec<Connection>>,
     /// [`READERS`] permits: a reader's turn.
@@ -69,7 +75,7 @@ impl Database {
                 reads_on_writer: in_memory(&path),
                 path,
                 writer: Mutex::new(Some(connection)),
-                write_turn: Semaphore::new(1),
+                write_turn: Arc::new(Semaphore::new(1)),
                 idle_readers: Mutex::new(Vec::new()),
                 read_turns: Semaphore::new(READERS),
                 closed: AtomicBool::new(false),
@@ -78,15 +84,24 @@ impl Database {
     }
 
     /// Closes the connections, once the operations holding them are done:
-    /// every later one fails, and so does one still waiting for its turn.
+    /// every later one fails, and so does a read still waiting for its turn.
+    /// The write holding the writer, and those already waiting for it, end
+    /// first, as the operations Python's store already gave its thread, within
+    /// [`CLOSE_TIMEOUT`], as Python's close when the kit's close runs it (RFC
+    /// §12.10.4): past it, the close returns, and the file closes once the
+    /// write under way ends (a write waiting for another process's lock on the
+    /// file).
     pub(crate) async fn close(&self) {
-        self.inner.closed.store(true, Ordering::Release);
+        if self.inner.closed.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let turn = tokio::time::timeout(CLOSE_TIMEOUT, self.inner.write_turn.acquire()).await;
         self.inner.write_turn.close();
         self.inner.read_turns.close();
         let inner = Arc::clone(&self.inner);
         // A connection closed on a thread that stopped is closed all the
         // same, when its last handle drops.
-        let _closed = tokio::task::spawn_blocking(move || {
+        let closing = tokio::task::spawn_blocking(move || {
             let writer = inner
                 .writer
                 .lock()
@@ -99,8 +114,18 @@ impl Database {
                     .unwrap_or_else(PoisonError::into_inner),
             );
             drop((writer, readers));
-        })
-        .await;
+        });
+        if turn.is_ok() {
+            // No write holds the writer.
+            drop(closing.await);
+        } else {
+            tracing::warn!(
+                target: "roomkit.store.sqlite",
+                "SQLiteStore closed with an operation still running on its connection \
+                 after {:.1} s: the file closes once it ends",
+                CLOSE_TIMEOUT.as_secs_f64(),
+            );
+        }
     }
 
     /// Runs `work` on the writer, on a blocking thread, once it is its turn.
@@ -109,11 +134,14 @@ impl Database {
         T: Send + 'static,
         W: FnOnce(&mut Connection) -> Result<T, Failure> + Send + 'static,
     {
-        let Ok(turn) = self.inner.write_turn.acquire().await else {
+        let Ok(turn) = Arc::clone(&self.inner.write_turn).acquire_owned().await else {
             return Err(StoreError::unavailable(CLOSED));
         };
         let inner = Arc::clone(&self.inner);
         let outcome = tokio::task::spawn_blocking(move || {
+            // The turn goes with the work: a caller cut meanwhile leaves the
+            // work running on the writer, and the close waits for it.
+            let _turn = turn;
             // A panic while the connection was held rolled its transaction
             // back as it unwound, so the connection keeps serving.
             let mut held = inner.writer.lock().unwrap_or_else(PoisonError::into_inner);
@@ -124,7 +152,6 @@ impl Database {
         })
         .await
         .map_err(StoreError::unavailable)?;
-        drop(turn);
         outcome.map_err(StoreError::from)
     }
 

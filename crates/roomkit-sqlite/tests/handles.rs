@@ -10,10 +10,13 @@
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
 mod support;
+#[path = "../../roomkit/tests/support/warnings.rs"]
+mod warnings;
 
 use std::path::Path;
+use std::time::Duration;
 
-use roomkit::model::{ChannelId, ChannelType, RoomEvent, RoomId};
+use roomkit::model::{ChannelId, ChannelType, Room, RoomEvent, RoomId};
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, GetBindingOptions, GetRoomOptions,
@@ -23,6 +26,7 @@ use roomkit::{
 use roomkit_sqlite::{SqliteStore, SqliteStoreOptions};
 
 use crate::support::TempFile;
+use crate::warnings::Warnings;
 
 /// The handles this process holds open on `path`'s database, its journal
 /// files included.
@@ -169,4 +173,55 @@ async fn a_kit_read_after_its_close_answers_that_the_kit_is_closed() {
         (reads, stored.as_str()),
         ([true, true, true, true], "SQLiteStore is closed")
     );
+}
+
+// Python: tests/test_kit_close.py::test_a_write_held_past_the_unwind_does_not_hold_the_close_of_the_kit_s_sqlite_file
+/// A write waiting for the file's write lock, which another process holds,
+/// holds the store's writer past its caller's cut: the kit's close gives it a
+/// moment, names it, and returns (RFC §12.10.4); the file closes once the
+/// write ends. Python's call is cut by the kit's close past its grace, 50 ms
+/// there; here the test cuts it, the kit's grace being 5 s.
+#[tokio::test]
+async fn a_write_held_past_the_unwind_does_not_hold_the_close_of_the_kit_s_sqlite_file() {
+    let file = TempFile::new("held-write");
+    let store = SqliteStore::new(SqliteStoreOptions {
+        path: file.path().into(),
+    });
+    let kit = RoomKit::new(RoomKitOptions::with_store(store.clone()));
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(RoomId::new("room_1").unwrap()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    // Another process's write in progress: the store's write waits for the
+    // file's lock, its busy timeout 5 s.
+    let other = rusqlite::Connection::open(file.path()).unwrap();
+    other.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let writing = tokio::spawn(async move {
+        store
+            .create_room(Room::new(RoomId::new("room_2").unwrap()))
+            .await
+    });
+    tokio::task::yield_now().await;
+    // The write's caller is cut once its write is under way, as the kit's
+    // close cuts a call: the write runs on in SQLite.
+    writing.abort();
+    let (warnings, _capture) = Warnings::capture();
+    let closed = tokio::time::timeout(Duration::from_secs(2), kit.close()).await;
+    drop(other);
+    closed
+        .expect("the kit's close waited for the write")
+        .unwrap();
+    assert_eq!(
+        warnings
+            .containing("SQLiteStore closed with an operation still running")
+            .len(),
+        1
+    );
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    while open_handles(file.path()) > 0 {
+        assert!(tokio::time::Instant::now() < deadline, "the file stays open");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
 }
