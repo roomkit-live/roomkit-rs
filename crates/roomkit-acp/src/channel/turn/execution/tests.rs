@@ -66,11 +66,13 @@ async fn test_close_after_reconstruction_finishes_prevents_replacement_prompt() 
             &mut hold,
             &connection,
             &session,
-            "event-1",
-            "hello",
+            super::PromptInput {
+                event_id: "event-1",
+                text: "hello",
+                seen: crate::channel::context::Seen::default(),
+            },
             &text,
             &activity,
-            crate::channel::context::Seen::default(),
         )
         .await
         .unwrap()
@@ -138,11 +140,13 @@ async fn test_cancel_after_reconstruction_finishes_prevents_replacement_prompt()
             &mut hold,
             &connection,
             &session,
-            "event-1",
-            "hello",
+            super::PromptInput {
+                event_id: "event-1",
+                text: "hello",
+                seen: crate::channel::context::Seen::default(),
+            },
             &text,
             &activity,
-            crate::channel::context::Seen::default(),
         )
         .await
         .unwrap()

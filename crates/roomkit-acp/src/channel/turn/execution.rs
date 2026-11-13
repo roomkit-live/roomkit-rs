@@ -59,15 +59,17 @@ async fn execute<T: AcpTransport>(
             hold,
             &connection,
             &session,
-            event_id,
-            &prompt,
+            PromptInput {
+                event_id,
+                text: &prompt,
+                seen: crate::channel::context::Seen {
+                    index: Some(input.seen_index()),
+                    labelled,
+                    instructed,
+                },
+            },
             text,
             &activity,
-            crate::channel::context::Seen {
-                index: Some(input.seen_index()),
-                labelled,
-                instructed,
-            },
         )
         .await;
         match outcome {
@@ -165,21 +167,27 @@ async fn rebuild<T: AcpTransport>(
     Ok(Some(session))
 }
 
+/// One prompt's text and the session state its normal return acknowledges.
+struct PromptInput<'a> {
+    event_id: &'a str,
+    text: &'a str,
+    seen: crate::channel::context::Seen,
+}
+
 /// Register before the task may call the transport, including on another worker.
 /// The connection contract drains preceding updates before returning its result.
 async fn one_prompt<T: AcpTransport>(
     hold: &mut Hold<T>,
     connection: &Arc<T::Connection>,
     session: &str,
-    event_id: &str,
-    prompt: &str,
+    input: PromptInput<'_>,
     text: &Sink,
     activity: &Arc<AtomicBool>,
-    seen: crate::channel::context::Seen,
 ) -> Result<Option<PromptResponse>, AcpError> {
     let mut meta = Map::new();
-    meta.insert("roomkit.live/eventId".to_owned(), json!(event_id));
-    let request = PromptRequest::new(session.to_owned(), vec![prompt.to_owned().into()]).meta(meta);
+    meta.insert("roomkit.live/eventId".to_owned(), json!(input.event_id));
+    let request =
+        PromptRequest::new(session.to_owned(), vec![input.text.to_owned().into()]).meta(meta);
     let (start, ready) = oneshot::channel();
     let task = tokio::spawn(prompt_task(
         ready,
@@ -187,7 +195,7 @@ async fn one_prompt<T: AcpTransport>(
         request,
         hold.record.clone(),
         Arc::clone(&hold.preparation),
-        acknowledgement::on_return(hold, connection, session, seen),
+        acknowledgement::on_return(hold, connection, session, input.seen),
     ));
     if !hold.shared.connector.register_prompt(
         session,
