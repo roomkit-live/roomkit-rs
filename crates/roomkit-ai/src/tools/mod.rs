@@ -14,6 +14,7 @@
 //! - [`ToolPolicy`]: allow and deny patterns (RFC §21.1).
 
 mod builder;
+mod external_rows;
 mod handler;
 pub(crate) mod owner;
 mod policy;

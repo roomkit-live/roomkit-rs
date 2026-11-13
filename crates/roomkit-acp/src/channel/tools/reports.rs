@@ -36,12 +36,13 @@ impl Reports {
             .unwrap_or_else(PoisonError::into_inner)
             .take();
         if let Some((host, mut receiver)) = waiting {
-            tokio::spawn(keep_context(async move {
+            let worker_host = host.clone();
+            tokio::spawn(keep_context(host.external_agent_context(async move {
                 while let Some((report, done)) = receiver.recv().await {
-                    host.report_external_tool_call(&report).await;
+                    worker_host.report_external_tool_call(&report).await;
                     let _gone = done.send(());
                 }
-            }));
+            })));
         }
     }
 

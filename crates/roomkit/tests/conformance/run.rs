@@ -566,6 +566,7 @@ impl Run {
         trigger: &str,
         room_id: &str,
         tool_call: &Value,
+        context: &RoomContext,
     ) {
         if !self.recording.load(Ordering::SeqCst) {
             return;
@@ -575,6 +576,7 @@ impl Run {
             "room_id": room_id,
             "event": null,
             "tool_call": tool_call,
+            "context_room": context.room,
         });
         let mut observed = lock(&self.observed);
         observed

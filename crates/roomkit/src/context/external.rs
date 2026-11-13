@@ -56,6 +56,7 @@ mod tests {
                 effect,
                 Work {
                     response_depth: Some(4),
+                    delivering: Some(room.clone()),
                     ..Work::default()
                 },
             ))

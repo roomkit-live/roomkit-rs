@@ -1538,6 +1538,7 @@ impl ToolHook {
             &self.trigger,
             &room_id,
             &tool_call_record(&event),
+            &context,
         );
         let Some(reaction) = self.reactions.pick(&json!({ "room_id": room_id })) else {
             return Ok(allow());

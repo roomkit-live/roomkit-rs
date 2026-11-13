@@ -2,6 +2,7 @@
 
 use roomkit::ToolCallReport;
 use roomkit::model::{Metadata, ToolCall, ToolCallContent, ToolCallOutcome, ToolCallStatus};
+use roomkit_ai::ToolResult;
 use serde_json::{Value, json};
 use tokio::time::Instant;
 
@@ -70,7 +71,7 @@ impl Call {
             (true, false) => ToolCallOutcome::Failed,
             (false, false) => ToolCallOutcome::Served,
         };
-        let row = self.end_row(outcome);
+        let mut row = self.end_row(outcome);
         let body = if interrupted {
             // Cancellation's envelope uses Python's default ASCII escaping.
             roomkit_ai::dumps(
@@ -91,6 +92,7 @@ impl Call {
             .chars()
             .take(500)
             .collect();
+        bound_row(&mut row);
         End {
             row,
             report,
@@ -109,7 +111,11 @@ impl Call {
         let error = if interrupted {
             Some(TURN_ENDED.to_owned())
         } else {
-            (failed && !result.is_null()).then(|| result_text(&result))
+            (failed && !result.is_null()).then(|| {
+                let (bounded, _) =
+                    ToolResult::Json(result.clone()).into_external_event_payload(None);
+                result_text(&bounded)
+            })
         };
         let mut row = self.start();
         row.result = result;
@@ -129,8 +135,64 @@ impl Call {
     }
 }
 
+fn bound_row(row: &mut ToolCallContent) {
+    let result = ToolResult::Json(std::mem::take(&mut row.result));
+    let (result, structured) =
+        result.into_external_event_payload(row.structured_content.take().map(Value::Object));
+    row.result = result;
+    row.structured_content = structured.and_then(|value| {
+        let Value::Object(fields) = value else {
+            return None;
+        };
+        Some(fields)
+    });
+}
+
 pub(super) struct End {
     pub(super) row: ToolCallContent,
     pub(super) report: ToolCallReport,
     pub(super) preview: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Python: tests/test_channels/test_acp.py::TestACPChannel::
+    // test_a_tool_end_keeps_a_bounded_share_of_acp_images
+    #[test]
+    fn test_a_tool_end_keeps_a_bounded_share_of_acp_images() {
+        let shot = "A".repeat(300 * 1024);
+        let image = json!({"type": "image", "data": shot, "mimeType": "image/png"});
+        let mut call = Call::new("bounded");
+        call.merge(&json!({
+            "rawOutput": [image.clone(), image.clone(), image.clone()],
+            "content": [{"type": "content", "content": image}]
+        }));
+        let end = call.end(false, false);
+        let kept = json!([end.row.result, end.row.structured_content]).to_string();
+        assert_eq!(kept.matches(&shot).count(), 1);
+        assert_eq!(kept.matches("not kept in the event").count(), 3);
+        // The agent already read its raw result; its observer receives that.
+        assert_eq!(
+            end.report.result.as_str().unwrap().matches(&shot).count(),
+            3
+        );
+    }
+
+    // Python: tests/test_channels/test_acp.py::TestACPChannel::
+    // test_a_failed_acp_tool_error_is_bounded_too
+    #[test]
+    fn test_a_failed_acp_tool_error_is_bounded_too() {
+        let shot = "A".repeat(300 * 1024);
+        let image = json!({"type": "image", "data": shot, "mimeType": "image/png"});
+        let mut call = Call::new("failed");
+        call.merge(&json!({"rawOutput": [image.clone(), image.clone(), image], "content": []}));
+        let end = call.end(true, false);
+        assert_eq!(end.row.status, ToolCallStatus::Failed);
+        let error = end.row.error.as_ref().unwrap();
+        assert_eq!(error.matches(&shot).count(), 1);
+        assert_eq!(error.matches("not kept in the event").count(), 2);
+        assert_eq!(end.report.result, Value::String(error.clone()));
+    }
 }

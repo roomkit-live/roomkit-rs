@@ -94,6 +94,8 @@ pub(crate) fn turn_in_scope() -> Option<TurnHost> {
 pub struct TurnHost {
     shared: Arc<Shared>,
     room_hooks: Arc<[String]>,
+    /// The room snapshot built when this external tool report fires.
+    tool_report_context: Option<Arc<RoomContext>>,
 }
 
 struct Shared {
@@ -823,7 +825,7 @@ impl TurnHost {
                 spec.clone(),
                 Arc::clone(handler),
                 event.clone(),
-                self.shared.context.clone(),
+                self.reported_tool_context(),
             );
             let observing = execution.clone().observing(floor, observing);
             let (host, spec) = (self.clone(), spec.clone());
@@ -1212,6 +1214,8 @@ pub(crate) struct OwnerCall {
 }
 
 pub(crate) trait TurnKit: Send + Sync {
+    fn external_tool_context(&self, room_id: RoomId) -> BoxFuture<'static, Option<RoomContext>>;
+
     fn room_hook_names(&self, room: &RoomId) -> Vec<String>;
     fn defines_room_hooks(&self, names: &[String]) -> bool;
 
@@ -1369,6 +1373,10 @@ pub(crate) trait TurnKit: Send + Sync {
 }
 
 impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
+    fn external_tool_context(&self, room_id: RoomId) -> BoxFuture<'static, Option<RoomContext>> {
+        external_tools::current_context(Weak::clone(self), room_id)
+    }
+
     fn room_hook_names(&self, room: &RoomId) -> Vec<String> {
         self.upgrade()
             .map(|inner| inner.config().hooks.enabled_room_hooks(room))
@@ -1711,6 +1719,7 @@ pub(crate) fn host(
     response_depth: u32,
 ) -> TurnHost {
     TurnHost {
+        tool_report_context: None,
         room_hooks: Arc::default(),
         shared: Arc::new(Shared {
             room_id: context.room.id.clone(),

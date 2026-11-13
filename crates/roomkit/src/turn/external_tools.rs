@@ -2,30 +2,61 @@
 //! their own rewrites, but observers still hear what the agent consumed.
 
 use super::{
-    HookExecution, HookTrigger, ToolCallChain, ToolCallOutcome, ToolCallReport, TurnHost, hooks,
+    Arc, BoxFuture, ConversationStore, HookExecution, HookTrigger, Inner, RoomContext, RoomId,
+    ToolCallChain, ToolCallOutcome, ToolCallReport, TurnHost, Weak, hooks,
 };
 
 impl TurnHost {
+    /// Captures an external agent's callback context while its own stream
+    /// is being read. The copy keeps live admission and budget accounting,
+    /// but only the inherited depth: ACP does not run the local AI loop.
+    /// Capture once, before the stream ends, so a late report never removes
+    /// a still-running parent's depth in place of its own expired frame.
+    #[doc(hidden)]
+    pub fn external_agent_context<F: Future>(
+        &self,
+        future: F,
+    ) -> impl Future<Output = F::Output> + use<F> {
+        crate::context::ExecutionContext::current()
+            .external_agent(self.room_id())
+            .scope(future)
+    }
+
     /// Reports an external call (RFC §9.3), as Python's executor wiring
     /// `report_tool_call`: run the SYNC chain for a call that ran, discard
     /// its verdict, then report the original outcome to ASYNC observers.
     /// Cancelled or refused calls reach the observers alone.
     #[doc(hidden)]
     pub async fn report_external_tool_call(&self, report: &ToolCallReport) {
-        crate::context::ExecutionContext::current()
-            .external_agent(self.room_id())
-            .scope(self.external_tool_report(report))
-            .await;
-    }
-
-    async fn external_tool_report(&self, report: &ToolCallReport) {
+        let mut reporting = self.clone();
+        if !self.hooks(HookTrigger::OnToolCall).is_empty() {
+            let context = self
+                .shared
+                .kit
+                .external_tool_context(self.room_id().clone())
+                .await;
+            let Some(context) = context else {
+                // As Python: no stale hook context on a failed room read,
+                // but the framework still hears the call's one outcome.
+                self.emit_tool_call(&self.event_of(report));
+                return;
+            };
+            reporting.tool_report_context = Some(Arc::new(context));
+        }
         if !matches!(
             report.outcome,
             Some(ToolCallOutcome::Cancelled | ToolCallOutcome::Refused)
         ) {
-            self.external_call_chain(report).await;
+            reporting.external_call_chain(report).await;
         }
-        self.report_tool_call(report);
+        reporting.report_tool_call(report);
+    }
+
+    pub(super) fn reported_tool_context(&self) -> RoomContext {
+        self.tool_report_context
+            .as_deref()
+            .unwrap_or(&self.shared.context)
+            .clone()
     }
 
     async fn external_call_chain(&self, report: &ToolCallReport) {
@@ -37,9 +68,9 @@ impl TurnHost {
         {
             let ran = hooks::run_traced(
                 spec,
-                std::sync::Arc::clone(handler),
+                Arc::clone(handler),
                 chain.current.clone(),
-                self.shared.context.clone(),
+                self.reported_tool_context(),
                 |_| None,
             )
             .await;
@@ -49,4 +80,21 @@ impl TurnHost {
             }
         }
     }
+}
+
+pub(super) fn current_context<S: ConversationStore>(
+    kit: Weak<Inner<S>>,
+    room_id: RoomId,
+) -> BoxFuture<'static, Option<RoomContext>> {
+    Box::pin(async move {
+        let inner = kit.upgrade()?;
+        let recent = inner.config().recent_events().read_by_the_caller();
+        match crate::driver::load_context(&*inner.store, &room_id, recent).await {
+            Ok(context) => context,
+            Err(error) => {
+                tracing::warn!(target: "roomkit::hooks", %room_id, %error, "no context for an external tool report");
+                None
+            }
+        }
+    })
 }
