@@ -45,6 +45,7 @@ fn turn(
     TurnStream::new(
         Arc::clone(&channel.shared),
         Ask {
+            standalone: false,
             room_id: input.trigger.room_id.clone(),
             event_id: input.trigger.id.to_string(),
             input,

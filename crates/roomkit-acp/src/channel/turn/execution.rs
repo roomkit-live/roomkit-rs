@@ -2,7 +2,9 @@
 
 mod acknowledgement;
 mod hold;
+mod opening;
 pub(super) use hold::Hold;
+use opening::{open, rebuild};
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -30,6 +32,7 @@ pub(super) async fn run<T: AcpTransport>(
 ) -> (Result<Option<Answered>, ChannelError>, Option<Hold<T>>) {
     let turn_id = ask.host.as_ref().map(|host| host.turn_id().to_owned());
     let mut hold = Hold::acquire(shared, ask.room_id, ask.record, turn_id).await;
+    hold.standalone = ask.standalone;
     hold.generation = generation;
     let result = execute(&mut hold, &ask.event_id, &ask.input, &text).await;
     hold.preparation.finish();
@@ -46,13 +49,7 @@ async fn execute<T: AcpTransport>(
         return Ok(None);
     };
     for attempt in 0..2 {
-        let seen = hold.shared.connector.seen(&hold.room_id);
-        let (prompt, labelled, instructed) = input.prompt(
-            &hold.shared.channel_id,
-            seen,
-            hold.shared.room_history,
-            hold.shared.instructions.as_deref(),
-        );
+        let (prompt, seen) = prepared_prompt(hold, input);
         let started = Instant::now();
         let activity = Arc::new(AtomicBool::new(false));
         let outcome = one_prompt(
@@ -62,11 +59,7 @@ async fn execute<T: AcpTransport>(
             PromptInput {
                 event_id,
                 text: &prompt,
-                seen: crate::channel::context::Seen {
-                    index: Some(input.seen_index()),
-                    labelled,
-                    instructed,
-                },
+                seen,
             },
             text,
             &activity,
@@ -84,7 +77,7 @@ async fn execute<T: AcpTransport>(
                 if activity.load(Ordering::Acquire) {
                     return Err(activity_error(error));
                 }
-                if attempt != 0 || !error.recovery_authorized {
+                if hold.standalone || attempt != 0 || !error.recovery_authorized {
                     return Err(raised(error.into()));
                 }
             }
@@ -98,73 +91,30 @@ async fn execute<T: AcpTransport>(
     unreachable!("the second attempt always returns")
 }
 
-async fn open<T: AcpTransport>(
-    hold: &mut Hold<T>,
-) -> Result<Option<(Arc<T::Connection>, String)>, ChannelError> {
-    if hold.detached() {
-        interrupted(&hold.record);
-        return Ok(None);
+fn prepared_prompt<T: AcpTransport>(
+    hold: &Hold<T>,
+    input: &crate::channel::context::Input,
+) -> (String, crate::channel::context::Seen) {
+    if hold.standalone {
+        return (
+            input.standalone_prompt(hold.shared.instructions.as_deref()),
+            crate::channel::context::Seen::default(),
+        );
     }
-    let shared = Arc::clone(&hold.shared);
-    let opened = tokio::select! {
-        biased;
-        () = shared.connector.closed() => return Err(Box::new(roomkit::RoomKitError::Cancelled)),
-        result = hold.preparation.run(open_room_session(&shared, &hold.room_id)) => result,
-    };
-    let Some(opened) = opened else {
-        interrupted(&hold.record);
-        return Ok(None);
-    };
-    let opened = opened.map_err(raised)?;
-    hold.session_generation = Some(hold.generation);
-    if hold.detached() {
-        interrupted(&hold.record);
-        return Ok(None);
-    }
-    Ok(Some(opened))
-}
-
-/// Closing the transport cannot wake a host's local MCP supplier. The caller
-/// selects the connector's close signal while this whole opening is pending.
-async fn open_room_session<T: AcpTransport>(
-    shared: &Shared<T>,
-    room: &roomkit::model::RoomId,
-) -> Result<(Arc<T::Connection>, String), AcpError> {
-    let connection = shared.connector.connection().await?;
-    let session = shared
-        .connector
-        .session(room, &connection, &shared.cwd)
-        .await?;
-    Ok((connection, session))
-}
-
-async fn rebuild<T: AcpTransport>(
-    hold: &mut Hold<T>,
-    connection: &Arc<T::Connection>,
-) -> Result<Option<String>, ChannelError> {
-    let shared = Arc::clone(&hold.shared);
-    hold.recovering = true;
-    let rebuilt = tokio::select! {
-        biased;
-        () = shared.connector.closed() => return Ok(None),
-        result = hold.preparation.run(shared.connector.rebuild(&hold.room_id, connection, &shared.cwd)) => result,
-    };
-    if shared.connector.is_closed() {
-        return Ok(None);
-    }
-    let Some(rebuilt) = rebuilt else {
-        interrupted(&hold.record);
-        return Ok(None);
-    };
-    let session = rebuilt.map_err(raised)?;
-    hold.record.with_value("acp", |acp| {
-        if let Some(acp) = acp.as_object_mut() {
-            for name in ["interrupted", "stop_reason", "prompt_returned"] {
-                acp.shift_remove(name);
-            }
-        }
-    });
-    Ok(Some(session))
+    let (prompt, labelled, instructed) = input.prompt(
+        &hold.shared.channel_id,
+        hold.shared.connector.seen(&hold.room_id),
+        hold.shared.room_history,
+        hold.shared.instructions.as_deref(),
+    );
+    (
+        prompt,
+        crate::channel::context::Seen {
+            index: Some(input.seen_index()),
+            labelled,
+            instructed,
+        },
+    )
 }
 
 /// One prompt's text and the session state its normal return acknowledges.

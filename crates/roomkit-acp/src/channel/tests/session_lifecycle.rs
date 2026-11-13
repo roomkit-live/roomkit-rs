@@ -15,7 +15,7 @@ use super::{Agent, PATIENCE, channel};
 use crate::AcpError;
 
 #[path = "../../../../roomkit/tests/support/warnings.rs"]
-mod warnings;
+pub(super) mod warnings;
 
 /// Register the future's waiter without giving a timer the ordering decision.
 pub(super) async fn pending<F: Future>(mut future: Pin<&mut F>) {

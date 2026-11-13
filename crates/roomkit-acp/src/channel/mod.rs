@@ -206,7 +206,7 @@ struct Shared<T: AcpTransport> {
     role: Option<String>,
     description: Option<String>,
     instructions: Option<String>,
-    connector: Connector<T>,
+    connector: Arc<Connector<T>>,
     /// Each room's turn lock: one turn of a room at a time.
     rooms: Mutex<HashMap<RoomId, Arc<tokio::sync::Mutex<()>>>>,
     active: AtomicUsize,
@@ -323,7 +323,7 @@ impl<T: AcpTransport> AcpChannel<T> {
             absolute_paths(additional_directories, "additional_directories")?;
         Ok(Self {
             shared: Arc::new(Shared {
-                connector: Connector::new(
+                connector: Arc::new(Connector::new(
                     transport,
                     authentication_method,
                     channel_id.clone(),
@@ -331,7 +331,7 @@ impl<T: AcpTransport> AcpChannel<T> {
                     additional_directories,
                     mcp_servers,
                     external_tool_handler,
-                ),
+                )),
                 channel_id,
                 cwd,
                 publish_thinking_text,
@@ -481,21 +481,17 @@ impl<T: AcpTransport> Channel for AcpChannel<T> {
             return Ok(ChannelOutput::empty());
         }
         if event.r#type == EventType::Instruction {
-            // A standalone instruction's session of its own comes with
-            // parity stream L's lot 8.
-            if is_standalone(&event) {
-                return Ok(ChannelOutput::empty());
-            }
             // The application's direction, never a participant's line (RFC
             // §10.1.1 step 6).
             text = mark_instruction(&text);
         }
-        let record = ResponseMetadata::new();
-        record.insert("acp", json!({ "protocol_version": PROTOCOL_VERSION }));
+        let standalone = is_standalone(&event);
+        let record = turn::response_metadata(standalone);
         let host = current_turn_host();
         let stream = TurnStream::new(
             Arc::clone(&self.shared),
             Ask {
+                standalone,
                 room_id: context.room.id.clone(),
                 event_id: event.id.to_string(),
                 input: context::Input {

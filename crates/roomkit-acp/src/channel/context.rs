@@ -50,6 +50,10 @@ pub(in crate::channel) struct Input {
 }
 
 impl Input {
+    pub(in crate::channel) fn standalone_prompt(&self, instructions: Option<&str>) -> String {
+        self.sections("", &self.text, instructions)
+    }
+
     pub(in crate::channel) fn seen_index(&self) -> u64 {
         self.context
             .recent_events

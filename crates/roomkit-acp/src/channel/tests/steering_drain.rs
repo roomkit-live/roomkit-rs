@@ -61,6 +61,7 @@ impl Channel for Reading {
         let mut stream = TurnStream::new(
             Arc::clone(&self.inner.shared),
             Ask {
+                standalone: false,
                 room_id: context.room.id.clone(),
                 event_id: event.id.to_string(),
                 input: crate::channel::context::Input {

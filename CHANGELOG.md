@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Standalone ACP instructions use fresh turn sessions, preserve room history and configuration, and release their sessions on completion, cancellation or abandonment.
+
 - ACP channels accept and expose the agent's name, role and description, preserving Python's unset and exact string values.
 
 - ACP channels send standing application instructions once per acknowledged session, repeating them after recovery and rejecting copied runtime headers.

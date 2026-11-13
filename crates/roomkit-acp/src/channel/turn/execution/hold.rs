@@ -7,6 +7,7 @@ use roomkit::model::{ResponseMetadata, RoomId};
 use tokio::sync::OwnedMutexGuard;
 use tokio::task::AbortHandle;
 
+use crate::channel::connector::standalone::TurnSession;
 use crate::channel::{Active, Shared};
 use crate::connection::AcpConnection;
 use crate::transport::AcpTransport;
@@ -23,6 +24,8 @@ pub(in crate::channel::turn) struct Hold<T: AcpTransport> {
     retire: bool,
     pub(super) generation: u64,
     pub(super) session_generation: Option<u64>,
+    pub(super) standalone: bool,
+    pub(super) temporary: Option<TurnSession<T>>,
 }
 
 pub(super) struct Prompt<C: AcpConnection> {
@@ -59,6 +62,8 @@ impl<T: AcpTransport> Hold<T> {
             retire: false,
             generation,
             session_generation: None,
+            standalone: false,
+            temporary: None,
         }
     }
 
@@ -73,10 +78,22 @@ impl<T: AcpTransport> Hold<T> {
     }
 
     pub(in crate::channel::turn) fn needs_cleanup(&self) -> bool {
-        self.recovering
-            || self.session_generation.is_some_and(|generation| {
-                self.shared.connector.generation(&self.room_id) != generation
-            })
+        self.temporary.is_some() || self.needs_room_cleanup()
+    }
+
+    pub(in crate::channel::turn) fn standalone(&self) -> bool {
+        self.standalone
+    }
+
+    fn needs_room_cleanup(&self) -> bool {
+        // A standalone turn releases only its temporary session. Detachment's
+        // queued closer releases the room session after this turn unlocks it,
+        // so a slow room close cannot hold the standalone response open.
+        !self.standalone
+            && (self.recovering
+                || self.session_generation.is_some_and(|generation| {
+                    self.shared.connector.generation(&self.room_id) != generation
+                }))
     }
 
     pub(in crate::channel::turn) fn detached(&self) -> bool {
@@ -90,7 +107,12 @@ impl<T: AcpTransport> Hold<T> {
         // Python's finished turn leaves its registry before releasing the
         // replacement session. The room guard still spans that release.
         self.active.take();
-        if let Some(mut session) = self.shared.connector.discard(&self.room_id) {
+        if let Some(mut session) = self.temporary.take() {
+            session.release().await;
+        }
+        if self.needs_room_cleanup()
+            && let Some(mut session) = self.shared.connector.discard(&self.room_id)
+        {
             session.release().await;
         }
         self.retire = self.recovering;
@@ -117,10 +139,11 @@ impl<T: AcpTransport> Drop for Hold<T> {
             super::super::interrupted(&self.record);
         }
         let release = self
-            .needs_cleanup()
+            .needs_room_cleanup()
             .then(|| self.shared.connector.discard(&self.room_id))
             .flatten();
-        if prompt.is_none() && release.is_none() {
+        let temporary = self.temporary.take();
+        if prompt.is_none() && release.is_none() && temporary.is_none() {
             if (self.recovering || self.retire)
                 && let Some(room) = &self.room
             {
@@ -140,6 +163,9 @@ impl<T: AcpTransport> Drop for Hold<T> {
                         .connection
                         .cancel(CancelNotification::new(prompt.session))
                         .await;
+                }
+                if let Some(mut temporary) = temporary {
+                    temporary.release().await;
                 }
                 if let Some(mut release) = release {
                     release.release().await;

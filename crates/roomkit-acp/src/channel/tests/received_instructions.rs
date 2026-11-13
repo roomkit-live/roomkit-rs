@@ -83,6 +83,7 @@ async fn check_received() {
     let mut next = TurnStream::new(
         Arc::clone(&channel.shared),
         Ask {
+            standalone: false,
             room_id: RoomId::new("room-1").unwrap(),
             event_id: "next".to_owned(),
             input,

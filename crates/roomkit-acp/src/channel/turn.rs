@@ -24,8 +24,22 @@ use super::updates::{Sink, ThinkingWindow};
 use crate::error::AcpError;
 use crate::transport::AcpTransport;
 
+pub(super) fn response_metadata(standalone: bool) -> ResponseMetadata {
+    let record = ResponseMetadata::new();
+    let mut acp = Metadata::from_iter([(
+        "protocol_version".to_owned(),
+        json!(super::PROTOCOL_VERSION),
+    )]);
+    if standalone {
+        acp.insert("standalone".to_owned(), json!(true));
+    }
+    record.insert("acp", Value::Object(acp));
+    record
+}
+
 /// What a turn asks: its room, its event, its text, and the record it writes.
 pub(super) struct Ask {
+    pub(super) standalone: bool,
     pub(super) room_id: RoomId,
     pub(super) event_id: String,
     pub(super) input: super::context::Input,
@@ -138,6 +152,7 @@ impl<T: AcpTransport> TurnStream<T> {
         // Failed recovery closes only after the queued output was read, and
         // keeps the same room lock until its terminal item is handed over.
         if (!matches!(&self.ending, Some(Ok(Some(_))))
+            || self.hold.as_ref().is_some_and(Hold::standalone)
             || self.hold.as_ref().is_some_and(Hold::detached))
             && self.hold.as_ref().is_some_and(Hold::needs_cleanup)
             && let Some(mut hold) = self.hold.take()

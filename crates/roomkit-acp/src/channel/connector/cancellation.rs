@@ -19,10 +19,13 @@ impl<T: AcpTransport> Connector<T> {
     pub(in crate::channel) async fn cancel_room(&self, room: &RoomId) -> Result<bool, AcpError> {
         let target = {
             let state = self.lock();
-            state
-                .connection
-                .clone()
-                .zip(state.sessions.get(room).cloned())
+            state.connection.clone().zip(
+                state
+                    .turn_sessions
+                    .get(room)
+                    .or_else(|| state.sessions.get(room))
+                    .cloned(),
+            )
         };
         let Some((connection, session)) = target else {
             return Ok(false);

@@ -6,6 +6,7 @@ mod context;
 mod detachment;
 pub(super) mod release;
 mod sessions;
+pub(super) mod standalone;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -52,6 +53,7 @@ struct State<C> {
     agent_info: Option<Value>,
     closes_sessions: bool,
     sessions: HashMap<RoomId, String>,
+    turn_sessions: HashMap<RoomId, String>,
     seen: HashMap<RoomId, super::context::Seen>,
     options: HashMap<RoomId, Vec<Value>>,
     config: HashMap<RoomId, Metadata>,
@@ -85,6 +87,7 @@ impl<T: AcpTransport> Connector<T> {
                 agent_info: None,
                 closes_sessions: true,
                 sessions: HashMap::new(),
+                turn_sessions: HashMap::new(),
                 seen: HashMap::new(),
                 options: HashMap::new(),
                 config: HashMap::new(),
@@ -155,6 +158,7 @@ impl<T: AcpTransport> Connector<T> {
             self.transport.close().await;
             let mut state = self.lock();
             state.sessions.clear();
+            state.turn_sessions.clear();
             state.seen.clear();
             self.turns.clear_rooms();
             state.options.clear();
@@ -282,8 +286,9 @@ impl<T: AcpTransport> Connector<T> {
             state.options.clear();
             state.config.clear();
             state.seen.clear();
-            let sessions: Vec<String> =
+            let mut sessions: Vec<String> =
                 state.sessions.drain().map(|(_, session)| session).collect();
+            sessions.extend(state.turn_sessions.drain().map(|(_, session)| session));
             (state.connection.take(), sessions, state.closes_sessions)
         };
         self.closed.notify_waiters();

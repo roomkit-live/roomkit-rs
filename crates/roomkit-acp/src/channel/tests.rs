@@ -13,6 +13,7 @@ mod opening;
 mod record;
 pub(in crate::channel) mod recovery;
 mod session_lifecycle;
+mod standalone;
 mod steering;
 mod steering_drain;
 
@@ -177,6 +178,7 @@ fn turn<T: AcpTransport>(channel: &AcpChannel<T>, room: &str) -> (TurnStream<T>,
     let record = ResponseMetadata::new();
     record.insert("acp", json!({ "protocol_version": 1 }));
     let ask = Ask {
+        standalone: false,
         room_id: RoomId::new(room).unwrap(),
         event_id: format!("{room}-event"),
         input: test_input(room),
@@ -215,7 +217,10 @@ async fn drained<T: AcpTransport>(stream: &mut TurnStream<T>) -> (Vec<String>, b
 }
 
 /// Drives `stream` until `agent` returns, polling the stream meanwhile.
-async fn while_agent<F: Future>(stream: &mut TurnStream<Piped>, agent: F) -> F::Output {
+async fn while_agent<T: AcpTransport, F: Future>(
+    stream: &mut TurnStream<T>,
+    agent: F,
+) -> F::Output {
     tokio::pin!(agent);
     loop {
         tokio::select! {
@@ -538,6 +543,7 @@ async fn a_program_that_is_missing_fails_the_turn_as_file_not_found() {
         AcpChannel::new(ChannelId::new("claude").unwrap(), "/srv", options).unwrap();
     let record = ResponseMetadata::new();
     let ask = Ask {
+        standalone: false,
         room_id: RoomId::new("room-1").unwrap(),
         event_id: "e".to_owned(),
         input: test_input("room-1"),

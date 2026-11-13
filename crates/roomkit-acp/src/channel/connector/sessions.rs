@@ -78,7 +78,7 @@ impl<T: AcpTransport> Connector<T> {
         cwd: &Path,
         overlay: Metadata,
     ) -> Result<(String, bool), AcpError> {
-        let request = self.session_request(room, cwd).await?;
+        let request = self.session_request(room, cwd, "room").await?;
         let answer = connection.new_session(request).await?;
         let id = answer.session_id.0.to_string();
         let mut unset = Unset {
@@ -108,10 +108,11 @@ impl<T: AcpTransport> Connector<T> {
         Ok((id, true))
     }
 
-    async fn session_request(
+    pub(super) async fn session_request(
         &self,
         room: &RoomId,
         cwd: &Path,
+        scope: &str,
     ) -> Result<NewSessionRequest, AcpError> {
         let servers = match &self.mcp_servers {
             Some(source) => source.resolve(room).await?,
@@ -119,14 +120,14 @@ impl<T: AcpTransport> Connector<T> {
         };
         let mut meta = Metadata::new();
         meta.insert("roomkit.live/roomId".to_owned(), json!(room.as_str()));
-        meta.insert("roomkit.live/sessionScope".to_owned(), json!("room"));
+        meta.insert("roomkit.live/sessionScope".to_owned(), json!(scope));
         Ok(NewSessionRequest::new(cwd)
             .additional_directories(self.additional_directories.clone())
             .mcp_servers(servers)
             .meta(meta))
     }
 
-    async fn configure(
+    pub(super) async fn configure(
         &self,
         room: &RoomId,
         connection: &T::Connection,
@@ -326,7 +327,7 @@ impl<T: AcpTransport> Drop for RetireOpening<'_, T> {
 }
 
 /// Request construction is inside setup's refusal boundary, as in the Python SDK.
-async fn set_option<C: AcpConnection>(
+pub(super) async fn set_option<C: AcpConnection>(
     connection: &C,
     session: &str,
     id: &str,
