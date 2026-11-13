@@ -61,9 +61,14 @@ impl Channel for Reading {
         let mut stream = TurnStream::new(
             Arc::clone(&self.inner.shared),
             Ask {
-                room_id: context.room.id,
+                room_id: context.room.id.clone(),
                 event_id: event.id.to_string(),
-                text: "hello".to_owned(),
+                input: crate::channel::context::Input {
+                    context,
+                    trigger: event,
+                    text: "hello".to_owned(),
+                    blocks: Vec::new(),
+                },
                 record: record.clone(),
                 host: Some(host.clone()),
                 answers_room: true,

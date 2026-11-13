@@ -2,6 +2,9 @@
 //! ACP agents"): served in this process over an in-memory pipe, written as
 //! raw JSON lines, so that it shares none of the channel's ACP code.
 
+#[path = "acp_agents/context.rs"]
+pub(crate) mod context;
+
 #[path = "acp_agents/control.rs"]
 pub(crate) mod control;
 
@@ -44,6 +47,8 @@ pub(crate) const ACP: &[&str] = &[
     "mcp_servers",
     "publish_thinking_text",
     "external_tool_handler",
+    "room_history",
+    "context_contributor",
 ];
 /// The members of its `agent`.
 pub(crate) const AGENT: &[&str] = &[
@@ -111,6 +116,8 @@ pub(crate) fn scripted_acp_channel(
         mcp_servers: mcp::servers(spec, id.as_str(), run)?,
         publish_thinking_text: thinking::publishes(spec)?,
         external_tool_handler: handler::build(spec, id.as_str(), run)?,
+        room_history: context::history(spec)?,
+        context_contributor: context::build(spec, id.as_str(), run)?,
         session_config: spec
             .get("session_config")
             .and_then(Value::as_object)

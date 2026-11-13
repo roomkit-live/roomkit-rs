@@ -100,6 +100,8 @@ pub(crate) struct ContextRest {
     #[serde(default)]
     pub(crate) participants: Vec<roomkit_core::model::Participant>,
     #[serde(default)]
+    pub(crate) history_start_index: Option<u64>,
+    #[serde(default)]
     pub(crate) author_register: Option<Metadata>,
 }
 

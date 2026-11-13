@@ -18,6 +18,7 @@ impl<T: AcpTransport> Connector<T> {
     pub(in crate::channel) fn discard(&self, room: &RoomId) -> Option<Unset<T::Connection>> {
         let mut state = self.lock();
         state.options.remove(room);
+        state.seen.remove(room);
         let session = state.sessions.remove(room)?;
         self.turns.forget(&session);
         Some(Unset {
@@ -256,6 +257,7 @@ impl<T: AcpTransport> Connector<T> {
             let mut state = self.lock();
             state.config.remove(room);
             state.options.remove(room);
+            state.seen.remove(room);
             (
                 state.sessions.remove(room),
                 state.connection.clone(),

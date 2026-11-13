@@ -5,6 +5,7 @@ mod cancellation;
 mod client;
 mod config;
 mod connector;
+mod context;
 mod detachment;
 mod permissions;
 mod preparation;
@@ -38,8 +39,9 @@ use self::connector::{Connector, PROTOCOL_VERSION};
 
 /// The room messages a channel declares it reads: Python's `room_history`
 /// default.
-const ROOM_HISTORY: usize = 20;
+const ROOM_HISTORY: i64 = 20;
 use self::turn::{Ask, TurnStream};
+use crate::context::AcpContextContributor;
 use crate::env::{absolute_path, absolute_paths};
 use crate::error::AcpError;
 use crate::mcp::McpServers;
@@ -66,6 +68,10 @@ pub struct AcpChannelOptions<T = StdioAcpTransport> {
     pub publish_thinking_text: bool,
     /// Optional permission and report handler; absent rejects every permission.
     pub external_tool_handler: Option<Arc<dyn roomkit_ai::ExternalToolHandler>>,
+    /// Missed room messages carried into a prompt; 20 by default, zero disables it.
+    pub room_history: i64,
+    /// Optional async host blocks, resolved separately for every eligible turn.
+    pub context_contributor: Option<AcpContextContributor>,
     /// Variables added to a spawned agent's environment (a
     /// [`StdioAcpTransportOptions`]'s); refused with a `transport`.
     pub env: Option<BTreeMap<String, String>>,
@@ -88,6 +94,8 @@ impl<T> Default for AcpChannelOptions<T> {
             mcp_servers: None,
             publish_thinking_text: false,
             external_tool_handler: None,
+            room_history: ROOM_HISTORY,
+            context_contributor: None,
             env: None,
             inherit_env: None,
             authentication_method: None,
@@ -111,6 +119,8 @@ impl<T> fmt::Debug for AcpChannelOptions<T> {
                 &self.external_tool_handler.is_some(),
             )
             .field("mcp_servers", &self.mcp_servers)
+            .field("room_history", &self.room_history)
+            .field("context_contributor", &self.context_contributor)
             .field("publish_thinking_text", &self.publish_thinking_text)
             .field(
                 "additional_directories",
@@ -173,6 +183,8 @@ struct Shared<T: AcpTransport> {
     channel_id: ChannelId,
     cwd: PathBuf,
     publish_thinking_text: bool,
+    room_history: usize,
+    context_contributor: Option<AcpContextContributor>,
     connector: Connector<T>,
     /// Each room's turn lock: one turn of a room at a time.
     rooms: Mutex<HashMap<RoomId, Arc<tokio::sync::Mutex<()>>>>,
@@ -234,11 +246,14 @@ impl<T: AcpTransport> AcpChannel<T> {
             mcp_servers,
             publish_thinking_text,
             external_tool_handler,
+            room_history,
+            context_contributor,
             env,
             inherit_env,
             authentication_method,
             session_config,
         } = options;
+        let room_history = context::history_count(room_history)?;
         let setup = config::validate(session_config.unwrap_or_default())?;
         let transport = match (command, transport) {
             (Some(_), Some(_)) => {
@@ -295,6 +310,8 @@ impl<T: AcpTransport> AcpChannel<T> {
                 channel_id,
                 cwd,
                 publish_thinking_text,
+                room_history,
+                context_contributor,
                 rooms: Mutex::new(HashMap::new()),
                 active: AtomicUsize::new(0),
                 closings: Mutex::default(),
@@ -366,7 +383,7 @@ impl<T: AcpTransport> Channel for AcpChannel<T> {
     /// The room messages the channel reads, its catch-up's window (RFC
     /// §19.3.2): Python's `room_history`, 20 by default.
     fn recent_events_window(&self) -> usize {
-        ROOM_HISTORY
+        self.shared.room_history
     }
 
     /// The registered turns in flight: Python's `active_turns`. A finished
@@ -428,7 +445,10 @@ impl<T: AcpTransport> Channel for AcpChannel<T> {
             return Ok(ChannelOutput::empty());
         }
         let mut text = acp_event_text(&event);
-        if is_blank(&text) {
+        let blocks =
+            context::contributed_blocks(self.shared.context_contributor.as_ref(), &context, &event)
+                .await;
+        if is_blank(&text) && blocks.is_empty() {
             return Ok(ChannelOutput::empty());
         }
         if event.r#type == EventType::Instruction {
@@ -449,7 +469,12 @@ impl<T: AcpTransport> Channel for AcpChannel<T> {
             Ask {
                 room_id: context.room.id.clone(),
                 event_id: event.id.to_string(),
-                text,
+                input: context::Input {
+                    context,
+                    trigger: event.clone(),
+                    text,
+                    blocks,
+                },
                 record: record.clone(),
                 host: host.clone(),
                 answers_room: updates::answers_room(&event),

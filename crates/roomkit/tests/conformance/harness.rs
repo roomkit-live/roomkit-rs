@@ -492,6 +492,7 @@ async fn observe(run: &Arc<Run>, step_outcomes: Vec<Value>) -> Observed {
     }
     collect_acp_permissions(run, &mut observed);
     collect_acp_mcp(run, &mut observed);
+    collect_acp_context(run, &mut observed);
     for (channel, wire) in lock(&run.acp_wires).iter() {
         let received = lock(wire).clone();
         observed.acp_wire.insert(channel.clone(), received);
@@ -606,6 +607,14 @@ fn collect_acp_mcp(run: &Run, observed: &mut Observed) {
     for (channel, requests) in lock(&run.acp_mcp_requests).iter() {
         observed
             .acp_mcp_requests
+            .insert(channel.clone(), lock(requests).clone());
+    }
+}
+
+fn collect_acp_context(run: &Run, observed: &mut Observed) {
+    for (channel, requests) in lock(&run.acp_context_requests).iter() {
+        observed
+            .acp_context_requests
             .insert(channel.clone(), lock(requests).clone());
     }
 }

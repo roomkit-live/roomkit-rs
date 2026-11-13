@@ -30,7 +30,7 @@ pub(super) async fn run<T: AcpTransport>(
     let turn_id = ask.host.as_ref().map(|host| host.turn_id().to_owned());
     let mut hold = Hold::acquire(shared, ask.room_id, ask.record, turn_id).await;
     hold.generation = generation;
-    let result = execute(&mut hold, &ask.event_id, &ask.text, &text).await;
+    let result = execute(&mut hold, &ask.event_id, &ask.input, &text).await;
     hold.preparation.finish();
     (result, Some(hold))
 }
@@ -38,13 +38,16 @@ pub(super) async fn run<T: AcpTransport>(
 async fn execute<T: AcpTransport>(
     hold: &mut Hold<T>,
     event_id: &str,
-    prompt: &str,
+    input: &crate::channel::context::Input,
     text: &Sink,
 ) -> Result<Option<Answered>, ChannelError> {
     let Some((connection, mut session)) = open(hold).await? else {
         return Ok(None);
     };
     for attempt in 0..2 {
+        let seen = hold.shared.connector.seen(&hold.room_id);
+        let (prompt, labelled) =
+            input.prompt(&hold.shared.channel_id, seen, hold.shared.room_history);
         let started = Instant::now();
         let activity = Arc::new(AtomicBool::new(false));
         let outcome = one_prompt(
@@ -52,13 +55,19 @@ async fn execute<T: AcpTransport>(
             &connection,
             &session,
             event_id,
-            prompt,
+            &prompt,
             text,
             &activity,
         )
         .await;
         match outcome {
             Ok(Some(answer)) => {
+                hold.shared.connector.acknowledged(
+                    &hold.room_id,
+                    &session,
+                    input.seen_index(),
+                    labelled,
+                );
                 return Ok(Some(Answered {
                     usage: usage_of(&answer),
                     started,

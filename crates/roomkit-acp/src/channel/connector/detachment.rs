@@ -36,6 +36,7 @@ impl<T: AcpTransport> Connector<T> {
             return None;
         }
         state.options.remove(room);
+        state.seen.remove(room);
         let session = state.sessions.remove(room)?;
         self.turns.forget(&session);
         Some(Unset {

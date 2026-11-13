@@ -17,6 +17,10 @@ fn stdio_acp_transport_options_defaults_as_python() {
 #[test]
 fn acp_channel_options_defaults_as_python() {
     let defaults = AcpChannelOptions::<StdioAcpTransport>::default();
+    // roomkit.ACPChannel.__init__(room_history) = 20
+    assert_eq!(defaults.room_history, 20);
+    // roomkit.ACPChannel.__init__(context_contributor) = None
+    assert!(defaults.context_contributor.is_none());
     // roomkit.ACPChannel.__init__(external_tool_handler) = None
     assert!(defaults.external_tool_handler.is_none());
     // roomkit.ACPChannel.__init__(command) = None

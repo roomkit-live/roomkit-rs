@@ -49,12 +49,8 @@ pub(crate) fn commit(
     event.index = room.event_count;
     room.event_count = room.event_count.saturating_add(1);
     room.latest_index = Some(event.index);
-    let history = &mut context.recent_events;
-    history.push(event.clone());
-    let excess = history
-        .len()
-        .saturating_sub(cx.config.recent_events_limit(&context.bindings));
-    history.drain(..excess);
+    context.recent_events.push(event.clone());
+    context.trim_history(cx.config.recent_events_limit(&context.bindings));
     Some(StoreRequest::Commit {
         event: Box::new(event),
         target: None,

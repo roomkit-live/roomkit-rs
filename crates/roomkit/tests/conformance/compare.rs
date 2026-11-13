@@ -286,6 +286,7 @@ impl Comparison<'_> {
             ("acp_handlers", &self.observed.acp_handlers),
             ("acp_prompts", &self.observed.acp_prompts),
             ("acp_mcp_requests", &self.observed.acp_mcp_requests),
+            ("acp_context_requests", &self.observed.acp_context_requests),
         ] {
             for (channel, expected) in self.expect[kind].as_object().into_iter().flatten() {
                 let requests = recorded.get(channel).cloned().unwrap_or_default();

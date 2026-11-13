@@ -380,6 +380,7 @@ const EXPECT: &[&str] = &[
     "acp_handlers",
     "acp_prompts",
     "acp_mcp_requests",
+    "acp_context_requests",
     "streamed",
     "room_callbacks",
     "participants",
@@ -688,6 +689,7 @@ fn scripted_acp(acp: &Value, path: &str, found: &mut Vec<String>) {
     optional(acp, ACP, path, found);
     acp_directories(acp, path, found);
     crate::acp_agents::mcp::validate(acp, path, found);
+    crate::acp_agents::context::validate(acp, path, found);
     crate::acp_agents::handler::validate(acp, path, found);
     crate::acp_agents::thinking::validate(acp, path, found);
     let transport = &acp["transport"];

@@ -141,7 +141,7 @@ fn unstored(
         };
         Write::Unstored(cx.io.issue_locked(request, event.room_id.clone()))
     });
-    join_newest(&mut context.recent_events, &event);
+    join_newest(&mut context, &event);
     let changed = written.map(|target| {
         Box::new(Changed {
             target,
@@ -179,23 +179,20 @@ fn committed(context: &RoomContext, event: &RoomEvent, now: Timestamp) -> RoomCo
     room.event_count = room.event_count.saturating_add(1);
     room.latest_index = Some(event.index);
     room.timers.last_activity_at = Some(now);
-    join_newest(&mut committed.recent_events, event);
+    join_newest(&mut committed, event);
     committed
 }
 
-/// `history`, the room's events its pass read, with `event`, as committed,
+/// `context`, the room's events its pass read, with `event`, as committed,
 /// its newest in place of a copy it holds, the oldest dropped past
 /// [`RECENT_EVENTS_LIMIT`]: the Python implementation's `committed_in`,
 /// which a delivery set's context and a change's mutation trigger read
 /// (RFC §10.2, §10.3). The window the pass read is not the cap: a window of
 /// 50 holds 51 events once `event` joins it.
-pub(super) fn join_newest(history: &mut Vec<RoomEvent>, event: &RoomEvent) {
-    history.retain(|recent| recent.id != event.id);
-    let excess = history
-        .len()
-        .saturating_sub(RECENT_EVENTS_LIMIT.saturating_sub(1));
-    history.drain(..excess);
-    history.push(event.clone());
+pub(super) fn join_newest(context: &mut RoomContext, event: &RoomEvent) {
+    context.recent_events.retain(|recent| recent.id != event.id);
+    context.recent_events.push(event.clone());
+    context.trim_history(RECENT_EVENTS_LIMIT);
 }
 
 /// Commits `event` blocked by `blocked_by` (RFC §10.1 steps 10 and 11): the
@@ -293,14 +290,16 @@ mod tests {
     fn events(count: usize) -> Vec<RoomEvent> {
         (0..count)
             .map(|index| {
-                RoomEvent::at(
+                let mut event = RoomEvent::at(
                     EventId::new(format!("evt_{index}")).unwrap(),
                     RoomId::new("r").unwrap(),
                     EventType::Message,
                     EventSource::new(ChannelId::new("sms").unwrap(), ChannelType::SMS),
                     TextContent::new("hi"),
                     Timestamp::UNIX_EPOCH,
-                )
+                );
+                event.index = u64::try_from(index).unwrap();
+                event
             })
             .collect()
     }
@@ -332,21 +331,42 @@ mod tests {
     /// them; at the ceiling the oldest gives way (RMK-1130).
     #[test]
     fn a_committed_event_joins_its_context_as_python_s_committed_in_holds_it() {
-        let mut window = events(50);
-        let mut ceiling = events(RECENT_EVENTS_LIMIT);
+        let context = |count| {
+            let mut context = RoomContext::new(crate::model::Room::at(
+                RoomId::new("r").unwrap(),
+                Timestamp::UNIX_EPOCH,
+            ));
+            context.recent_events = events(count);
+            context.history_start_index = Some(0);
+            context
+        };
+        let mut window = context(50);
+        let mut ceiling = context(RECENT_EVENTS_LIMIT);
         let newest = events(RECENT_EVENTS_LIMIT + 1).pop().unwrap();
         join_newest(&mut window, &newest);
         join_newest(&mut ceiling, &newest);
-        let mut again = events(3);
-        let copy = again[1].clone();
+        let mut again = context(3);
+        let copy = again.recent_events[1].clone();
         join_newest(&mut again, &copy);
         assert_eq!(
-            [ids(&window), ids(&ceiling), ids(&again)],
+            [
+                ids(&window.recent_events),
+                ids(&ceiling.recent_events),
+                ids(&again.recent_events)
+            ],
             [
                 (51, Some("evt_0".into()), Some("evt_2000".into())),
                 (2000, Some("evt_1".into()), Some("evt_2000".into())),
                 (3, Some("evt_0".into()), Some("evt_1".into())),
             ]
+        );
+        assert_eq!(
+            [
+                window.history_start_index,
+                ceiling.history_start_index,
+                again.history_start_index
+            ],
+            [Some(0), Some(1), Some(0)]
         );
     }
 }

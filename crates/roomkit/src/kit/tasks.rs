@@ -479,6 +479,7 @@ impl<S: ConversationStore> RoomKit<S> {
             participants,
             recent_events,
             author_register,
+            history_start_index: None,
         };
         Ok(conversation_block(&context, readers, count))
     }

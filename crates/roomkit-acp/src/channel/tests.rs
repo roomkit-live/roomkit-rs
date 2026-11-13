@@ -4,6 +4,7 @@
 
 mod cancellation;
 mod configuration;
+mod context;
 mod detachment;
 mod directories;
 mod handler_lifecycle;
@@ -154,13 +155,31 @@ fn channel() -> (
     (channel, opened, closed)
 }
 
+fn test_input(room: &str) -> super::context::Input {
+    use roomkit::model::{
+        ChannelType, EventSource, Room, RoomContext, RoomEvent, TextContent, Timestamp,
+    };
+    let room_id = RoomId::new(room).unwrap();
+    let trigger = RoomEvent::new(
+        room_id.clone(),
+        EventSource::new(ChannelId::new("ws").unwrap(), ChannelType::WEBSOCKET),
+        TextContent::new("hello"),
+    );
+    super::context::Input {
+        context: RoomContext::new(Room::at(room_id, Timestamp::UNIX_EPOCH)),
+        trigger,
+        text: "hello".to_owned(),
+        blocks: Vec::new(),
+    }
+}
+
 fn turn<T: AcpTransport>(channel: &AcpChannel<T>, room: &str) -> (TurnStream<T>, ResponseMetadata) {
     let record = ResponseMetadata::new();
     record.insert("acp", json!({ "protocol_version": 1 }));
     let ask = Ask {
         room_id: RoomId::new(room).unwrap(),
         event_id: format!("{room}-event"),
-        text: "hello".to_owned(),
+        input: test_input(room),
         record: record.clone(),
         host: None,
         answers_room: true,
@@ -521,7 +540,7 @@ async fn a_program_that_is_missing_fails_the_turn_as_file_not_found() {
     let ask = Ask {
         room_id: RoomId::new("room-1").unwrap(),
         event_id: "e".to_owned(),
-        text: "hello".to_owned(),
+        input: test_input("room-1"),
         record,
         host: None,
         answers_room: true,

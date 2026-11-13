@@ -19,6 +19,8 @@
 //! know them ([`visible_events`]). The history then crosses to the turn's
 //! executor whole, so a turn run apart reads the same rows.
 
+pub(crate) mod window;
+
 use roomkit_core::model::{ChannelBinding, EventType, RoomContext, RoomEvent, RoomId};
 use roomkit_core::rules::transcript::TOOL_MEMORY_ONLY;
 use roomkit_core::rules::visible_events;
@@ -51,9 +53,10 @@ pub(crate) async fn turn_context<S: ConversationStore>(
 ) -> RoomContext {
     let read_through = context.recent_events.iter().map(|known| known.index).max();
     match read(store, binding, event, window, read_through).await {
-        Ok(history) => {
+        Ok((history, history_start_index)) => {
             let whole = RoomContext {
                 recent_events: history,
+                history_start_index,
                 ..context
             };
             let recent_events = visible_events(&whole, &binding.channel_id);
@@ -147,19 +150,15 @@ async fn read<S: ConversationStore>(
     event: &RoomEvent,
     window: usize,
     read_through: Option<u64>,
-) -> Result<Vec<RoomEvent>, StoreError> {
+) -> Result<(Vec<RoomEvent>, Option<u64>), StoreError> {
     let messages = EventFilter {
         event_types: Some(vec![EventType::Message]),
         include_blocked: true,
         ..EventFilter::default()
     };
     let rows = tool_rows(binding);
-    let mut history = store
-        .list_events(
-            &event.room_id,
-            messages_up_to(event, messages, window, read_through),
-        )
-        .await?;
+    let options = messages_up_to(event, messages, window, read_through);
+    let (mut history, history_start_index) = read_messages(store, event, options, window).await?;
     if !matches!(event.r#type, EventType::Message | EventType::Instruction) {
         history.push(stored(store, event).await);
     }
@@ -198,7 +197,27 @@ async fn read<S: ConversationStore>(
     history.extend(replayed);
     history.sort_by_key(|event| event.index);
     history.dedup_by(|later, earlier| later.id == earlier.id);
-    Ok(history)
+    Ok((history, history_start_index))
+}
+
+async fn read_messages<S: ConversationStore>(
+    store: &S,
+    event: &RoomEvent,
+    mut options: ListEventsOptions,
+    window: usize,
+) -> Result<(Vec<RoomEvent>, Option<u64>), StoreError> {
+    // The existing selection includes the trigger besides its past window.
+    // At zero it still reads that trigger, but requests no extra sentinel.
+    if window == 0 {
+        return store
+            .list_events(&event.room_id, options)
+            .await
+            .map(|events| (events, None));
+    }
+    let limit = usize::try_from(options.limit).unwrap_or(usize::MAX);
+    options.limit = options.limit.saturating_add(1);
+    let events = store.list_events(&event.room_id, options).await?;
+    Ok(window::bounded(events, limit))
 }
 
 /// `binding`'s channel's own tool-call rows.
@@ -364,6 +383,30 @@ mod tests {
 
     fn room_id() -> RoomId {
         RoomId::new("room_1").unwrap()
+    }
+
+    // Python: tests/test_context_history_boundary.py; fresh turn history must
+    // recompute the boundary, before the channel's visibility removes rows.
+    #[tokio::test]
+    async fn a_fresh_turn_keeps_its_actual_history_boundary_after_visibility() {
+        let mut events: Vec<_> = (0..4).map(|index| event(index, None)).collect();
+        events[1].visibility = roomkit_core::model::Visibility::Transport;
+        let store = store(events.clone()).await;
+        let agent = binding("agent", ChannelType::AI);
+        for (window, boundary) in [
+            (0, None),
+            (1, Some(2)),
+            (2, Some(1)),
+            (3, Some(0)),
+            (4, Some(0)),
+        ] {
+            let mut context = RoomContext::new(Room::new(room_id()));
+            context.history_start_index = Some(999);
+            context.recent_events = events.clone();
+            let read = turn_context(&store, &agent, &events[3], context, window).await;
+            assert_eq!(read.history_start_index, boundary);
+            assert!(!read.recent_events.iter().any(|event| event.index == 1));
+        }
     }
 
     fn binding(channel: &str, channel_type: ChannelType) -> ChannelBinding {

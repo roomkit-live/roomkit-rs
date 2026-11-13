@@ -22,6 +22,12 @@ pub struct RoomContext {
     /// The room's latest events, in timeline order.
     #[serde(default)]
     pub recent_events: Vec<RoomEvent>,
+    /// Lower index from which the loaded conversation tail is complete.
+    /// Zero means the whole conversation; a positive value is a bounded
+    /// read's oldest retained conversation index. Visibility filtering keeps
+    /// the boundary. None leaves it unknown, as in older/hand-built contexts.
+    #[serde(default)]
+    pub history_start_index: Option<u64>,
     /// The room's register of authors, which ranks the sources whose names
     /// read alike (RFC §6.4, §10.1 step 12, gap G-089): the room's private
     /// state under `author_register` (RFC §14.1 `get_private_state`), kept
@@ -32,6 +38,18 @@ pub struct RoomContext {
 }
 
 impl RoomContext {
+    /// Keep a carried tail's lower boundary honest when its cap drops rows.
+    pub(crate) fn trim_history(&mut self, limit: usize) {
+        let excess = self.recent_events.len().saturating_sub(limit);
+        if excess > 0 {
+            self.recent_events.drain(..excess);
+            self.history_start_index = self.recent_events.first().map(|event| event.index);
+        }
+        if limit == 0 {
+            self.history_start_index = None;
+        }
+    }
+
     /// The context of `room` with no binding, participant or event.
     pub fn new(room: Room) -> Self {
         Self {
@@ -39,6 +57,7 @@ impl RoomContext {
             bindings: Vec::new(),
             participants: Vec::new(),
             recent_events: Vec::new(),
+            history_start_index: None,
             author_register: None,
         }
     }
@@ -102,6 +121,27 @@ mod tests {
             .iter()
             .map(|binding| binding.channel_id.to_string())
             .collect()
+    }
+
+    // Python: tests/test_context_history_boundary.py::test_the_optional_boundary_survives_serialization_and_rejects_negative_indices
+    #[test]
+    fn the_optional_boundary_survives_serialization_and_rejects_negative_indices() {
+        let mut context = context();
+        context.history_start_index = Some(7);
+        let mut value = serde_json::to_value(&context).unwrap();
+        assert_eq!(
+            serde_json::from_value::<RoomContext>(value.clone()).unwrap(),
+            context
+        );
+        value.as_object_mut().unwrap().remove("history_start_index");
+        assert_eq!(
+            serde_json::from_value::<RoomContext>(value.clone())
+                .unwrap()
+                .history_start_index,
+            None
+        );
+        value["history_start_index"] = serde_json::json!(-1);
+        assert!(serde_json::from_value::<RoomContext>(value).is_err());
     }
 
     /// Python's `get_binding`, `other_channels` and `channels_by_type`.

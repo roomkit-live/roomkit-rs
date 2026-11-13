@@ -972,6 +972,18 @@ pub fn json_text_line(line: &str) -> String {
     speakers::json_text_line(line)
 }
 
+/// Shared renderer for a channel's labelled request, including Unicode line breaks.
+#[doc(hidden)]
+pub fn labelled_text(text: &str, label: &str) -> String {
+    labelled_lines(text, label)
+}
+
+/// Sanitize copies of the turn-notes header without removing a genuine catch-up header.
+#[doc(hidden)]
+pub fn without_notes_header_copies(text: &str) -> String {
+    without_header_copies(text)
+}
+
 /// `text` with every double quote mark but `"` made a single one and the
 /// marks that reorder text dropped, as inside a quote (RFC §6.4): what
 /// [`json_text_line`] reads a line as before it writes it, for a string

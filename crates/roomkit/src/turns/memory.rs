@@ -176,6 +176,7 @@ impl Request<'_> {
                 bindings: &self.context.bindings,
                 participants: &self.context.participants,
                 recent_events: history,
+                history_start_index: self.context.history_start_index,
                 author_register: self.context.author_register.as_ref(),
             },
             strategy_turn: false,
@@ -214,6 +215,7 @@ struct ContextOut<'a> {
     participants: &'a [Participant],
     #[serde(skip_serializing_if = "Option::is_none")]
     recent_events: Option<&'a [RoomEvent]>,
+    history_start_index: Option<u64>,
     author_register: Option<&'a Metadata>,
 }
 

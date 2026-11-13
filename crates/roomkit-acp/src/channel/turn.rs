@@ -28,7 +28,7 @@ use crate::transport::AcpTransport;
 pub(super) struct Ask {
     pub(super) room_id: RoomId,
     pub(super) event_id: String,
-    pub(super) text: String,
+    pub(super) input: super::context::Input,
     pub(super) record: ResponseMetadata,
     /// The kit's turn, which `ON_AI_RESPONSE` fires through; none outside a
     /// kit, where nothing fires.

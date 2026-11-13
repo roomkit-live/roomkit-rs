@@ -642,6 +642,7 @@ impl Arrival {
             Some(receiver) => permissions::context_for(receiver, &context),
             None => RoomContext {
                 recent_events: Vec::new(),
+                history_start_index: None,
                 ..context
             },
         })

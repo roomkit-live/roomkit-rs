@@ -72,6 +72,7 @@ pub(crate) struct Observed {
     pub(crate) acp_permissions: BTreeMap<String, Vec<Value>>,
     pub(crate) acp_prompts: BTreeMap<String, Vec<Value>>,
     pub(crate) acp_mcp_requests: BTreeMap<String, Vec<Value>>,
+    pub(crate) acp_context_requests: BTreeMap<String, Vec<Value>>,
     /// Per room, the participants the store holds.
     pub(crate) participants: BTreeMap<String, Vec<Value>>,
     /// The scripted resolver's calls, in order.

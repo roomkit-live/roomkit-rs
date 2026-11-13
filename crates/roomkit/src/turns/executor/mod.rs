@@ -563,6 +563,7 @@ fn parse(carried: CarriedRequest) -> Result<TurnRequest, String> {
         room,
         bindings,
         participants,
+        history_start_index,
         author_register,
     } = rest.context;
     let mut context = roomkit_core::model::RoomContext::new(room);
@@ -570,6 +571,7 @@ fn parse(carried: CarriedRequest) -> Result<TurnRequest, String> {
     context.participants = participants;
     context.author_register = author_register;
     context.recent_events = carried.history;
+    context.history_start_index = history_start_index;
     Ok(TurnRequest {
         turn_id: rest.turn_id,
         room_id: rest.room_id,

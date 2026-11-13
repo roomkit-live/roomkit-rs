@@ -1,5 +1,6 @@
 //! Recovery boundaries that require native transport gates and stream dropping.
 
+mod context;
 pub(in crate::channel) mod fixture;
 
 use std::future::poll_fn;

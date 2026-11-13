@@ -2,6 +2,7 @@
 //! `ACPConnectionMixin` and the room half of `ACPSessionsMixin`.
 
 mod cancellation;
+mod context;
 mod detachment;
 pub(super) mod release;
 mod sessions;
@@ -51,6 +52,7 @@ struct State<C> {
     agent_info: Option<Value>,
     closes_sessions: bool,
     sessions: HashMap<RoomId, String>,
+    seen: HashMap<RoomId, super::context::Seen>,
     options: HashMap<RoomId, Vec<Value>>,
     config: HashMap<RoomId, Metadata>,
     detached: HashMap<RoomId, u64>,
@@ -83,6 +85,7 @@ impl<T: AcpTransport> Connector<T> {
                 agent_info: None,
                 closes_sessions: true,
                 sessions: HashMap::new(),
+                seen: HashMap::new(),
                 options: HashMap::new(),
                 config: HashMap::new(),
                 detached: HashMap::new(),
@@ -152,6 +155,7 @@ impl<T: AcpTransport> Connector<T> {
             self.transport.close().await;
             let mut state = self.lock();
             state.sessions.clear();
+            state.seen.clear();
             self.turns.clear_rooms();
             state.options.clear();
         }
@@ -277,6 +281,7 @@ impl<T: AcpTransport> Connector<T> {
             state.closed = true;
             state.options.clear();
             state.config.clear();
+            state.seen.clear();
             let sessions: Vec<String> =
                 state.sessions.drain().map(|(_, session)| session).collect();
             (state.connection.take(), sessions, state.closes_sessions)

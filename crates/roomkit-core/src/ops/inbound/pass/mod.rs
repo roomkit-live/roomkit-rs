@@ -186,7 +186,7 @@ impl PassResult {
                 if let Some(changed) = changed {
                     super::commit::adopt(&mut changed.context, &stored);
                 }
-                super::commit::join_newest(&mut context.recent_events, &stored);
+                super::commit::join_newest(context, &stored);
                 **event = stored;
             }
             Self::Blocked { event, .. } | Self::Stored { event, .. } => **event = stored,

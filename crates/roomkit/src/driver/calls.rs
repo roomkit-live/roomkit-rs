@@ -320,14 +320,14 @@ pub(crate) async fn load_context<S: ConversationStore>(
     };
     // Nothing bound reads history and no hook is registered: no read.
     let limit = recent_events.limit(&bindings);
-    let recent_events = if limit == 0 {
-        Vec::new()
+    let (recent_events, history_start_index) = if limit == 0 {
+        (Vec::new(), None)
     } else {
         let options = GetConversationOptions {
-            limit: u64::try_from(limit).unwrap_or(u64::MAX),
+            limit: u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1),
             after_index: None,
         };
-        store.get_conversation(room_id, options).await?
+        crate::history::window::bounded(store.get_conversation(room_id, options).await?, limit)
     };
     let author_register = store.get_private_state(room_id, AUTHOR_REGISTER).await?;
     Ok(Some(RoomContext {
@@ -336,6 +336,7 @@ pub(crate) async fn load_context<S: ConversationStore>(
         participants,
         recent_events,
         author_register,
+        history_start_index,
     }))
 }
 

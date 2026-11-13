@@ -33,6 +33,7 @@ pub(in crate::channel) struct State {
     pub(in crate::channel) resume: Notify,
     armed: AtomicBool,
     pub(in crate::channel) opened: AtomicUsize,
+    pub(in crate::channel) refuse_at: AtomicUsize,
     pub(in crate::channel) prompts: std::sync::Mutex<Vec<PromptRequest>>,
     pub(in crate::channel) closed: std::sync::Mutex<Vec<String>>,
     pub(in crate::channel) cancelled: std::sync::Mutex<Vec<String>>,
@@ -54,32 +55,33 @@ pub(in crate::channel) struct Connection {
 }
 
 pub(in crate::channel) fn channel(boundary: Stage) -> (AcpChannel<Direct>, Arc<State>) {
+    with_options(boundary, AcpChannelOptions::default())
+}
+
+pub(in crate::channel) fn with_options(
+    boundary: Stage,
+    mut options: AcpChannelOptions<Direct>,
+) -> (AcpChannel<Direct>, Arc<State>) {
     let state = Arc::new(State {
         stage: boundary,
         reached: Notify::new(),
         resume: Notify::new(),
         armed: AtomicBool::new(true),
         opened: AtomicUsize::new(0),
+        refuse_at: AtomicUsize::new(1),
         prompts: std::sync::Mutex::new(Vec::new()),
         closed: std::sync::Mutex::new(Vec::new()),
         cancelled: std::sync::Mutex::new(Vec::new()),
     });
-    let channel = AcpChannel::new(
-        ChannelId::new("claude").unwrap(),
-        "/srv/project",
-        AcpChannelOptions {
-            transport: Some(Direct(Arc::clone(&state))),
-            session_config: matches!(boundary, Stage::Configured | Stage::InitialConfigured).then(
-                || {
-                    [("model".to_owned(), json!("sonnet"))]
-                        .into_iter()
-                        .collect()
-                },
-            ),
-            ..Default::default()
-        },
-    )
-    .unwrap();
+    options.transport = Some(Direct(Arc::clone(&state)));
+    options.session_config =
+        matches!(boundary, Stage::Configured | Stage::InitialConfigured).then(|| {
+            [("model".to_owned(), json!("sonnet"))]
+                .into_iter()
+                .collect()
+        });
+    let channel =
+        AcpChannel::new(ChannelId::new("claude").unwrap(), "/srv/project", options).unwrap();
     (channel, state)
 }
 
@@ -178,7 +180,7 @@ impl AcpConnection for Connection {
             prompts.push(request.clone());
             prompts.len()
         };
-        if count == 1 {
+        if count == self.state.refuse_at.load(Ordering::SeqCst) {
             if self.state.stage == Stage::Permission {
                 let request = serde_json::from_value(json!({"sessionId":request.session_id,"toolCall":{"toolCallId":"tool-1","title":"Write"},"options":[{"optionId":"no","name":"No","kind":"reject_once"}]})).unwrap();
                 let reply = self.client.request_permission(request).await?;
