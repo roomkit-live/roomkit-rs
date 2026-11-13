@@ -10,4 +10,5 @@ mod records;
 mod support;
 mod trace;
 mod verb_depth;
+mod verb_reentry;
 mod window;

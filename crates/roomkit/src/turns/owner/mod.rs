@@ -86,8 +86,9 @@ pub(super) enum Main {
 pub(super) struct OwnerState {
     pub(super) turn: Arc<MemoryTurn>,
     pub(super) facts: Facts,
-    /// The context of the owner's call last waiting on the turn: a verb the
-    /// turn asks runs in a copy of it (RFC §10.6.5).
+    /// The context of the owner's call last waiting on the turn, the call
+    /// that submitted it until another waits: a verb the turn asks, or a
+    /// call of the owner's tools, runs in a copy of it (RFC §10.6.5).
     pub(super) waiting: Mutex<TurnContext>,
     /// The arguments each call runs with once its gate fixed them, by its
     /// start's frame (`tool_args`).
@@ -187,6 +188,15 @@ impl WeakCanceller {
 }
 
 /// The owner's side of `turn`, and the pump to run as a task of the kit's.
+///
+/// Its waiting context starts as the context of the call that submits the
+/// turn, before the pump or the turn runs: that call waits on the turn's
+/// output next, so a call the turn makes to the owner holds that call's
+/// reentrancy (RFC §10.6.5, §10.1 step 18) even when, on several workers,
+/// the pump serves it before the submitting call reaches the output. Served
+/// in an empty context, an event the turn's call sends into the turn's room
+/// would wait for its delivery, behind the set that waits on the turn
+/// (RMK-1693).
 pub(crate) fn open(
     turn: Arc<MemoryTurn>,
     frames: PipeReceiver<Frame>,
@@ -197,7 +207,7 @@ pub(crate) fn open(
     let state = Arc::new(OwnerState {
         turn,
         facts,
-        waiting: Mutex::new(TurnContext::default()),
+        waiting: Mutex::new(TurnContext::current()),
         ran_with: Mutex::new(HashMap::new()),
         told_ends: Mutex::new(HashMap::new()),
         granted: AtomicU64::new(0),

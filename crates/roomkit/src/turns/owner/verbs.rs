@@ -209,11 +209,9 @@ async fn post_status(
 }
 
 /// Runs `post`, which reads its poster's depth as it posts, at least as
-/// deep as the turn's response while the turn runs (RFC §8.3), whether a
-/// call waits on the turn yet or not: the context the owner serves a verb
-/// in is the waiting call's, empty until the call that submitted the turn
-/// reaches its output, which on several workers can come after the verb
-/// (RMK-1552).
+/// deep as the turn's response while the turn runs (RFC §8.3), whatever
+/// call waits on the turn: a waiting context made outside every turn, or
+/// kept past its call's end, lends the verb no depth (RMK-1552).
 async fn within_the_turn_s_floor<T>(scope: &Scope<'_>, post: impl FnOnce() -> T) -> T {
     let posting = async move { post() };
     match scope.floor {
