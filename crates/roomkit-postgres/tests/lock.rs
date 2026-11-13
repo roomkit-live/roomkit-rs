@@ -591,19 +591,12 @@ impl Channel for Holding {
     }
 }
 
-/// In the holder's process, run again by a test: opens a store and a manager of
-/// its own on the test's schema, as another process of the deployment does,
-/// sends one message to the room, whose `src` and `out` the test attached, and
-/// holds `hold` until it is killed. `false` in the test's own process.
-async fn holds_in_this_process(hold: Hold) -> bool {
-    let (Ok(dsn), Ok(room_id), Some(out)) = (
-        std::env::var(HOLDER_DSN),
-        std::env::var(HOLDER_ROOM),
-        std::env::var_os(HOLDER_OUT),
-    ) else {
-        return false;
-    };
-    let out = std::path::PathBuf::from(out);
+/// Longer than any test waits: neither the hook nor the locked phase ends the hold.
+const HOLD_FOR: Duration = Duration::from_secs(600);
+
+/// The holder's kit: a store and a manager of its own on `dsn`, as another
+/// process of the deployment opens them, with `src` registered.
+async fn holder_kit(dsn: String) -> RoomKit<PostgresStore> {
     let store = PostgresStore::new(PostgresStoreOptions {
         dsn: Some(dsn.clone()),
         ..PostgresStoreOptions::default()
@@ -617,6 +610,7 @@ async fn holds_in_this_process(hold: Hold) -> bool {
     locks.init().await.unwrap();
     let kit = RoomKit::new(RoomKitOptions {
         lock_manager: Some(Arc::new(locks)),
+        process_timeout: HOLD_FOR,
         ..RoomKitOptions::with_store(store)
     });
     kit.register_channel(RecordingTransport::new(
@@ -625,6 +619,29 @@ async fn holds_in_this_process(hold: Hold) -> bool {
         RecordingTransportOptions::default(),
     ))
     .unwrap();
+    kit
+}
+
+/// In the holder's process, run again by a test: sends one message to the
+/// room, whose `src` and `out` the test attached, and holds `hold` until it is
+/// killed or its standard input, the test's pipe, closes. `false` in the test's
+/// own process.
+async fn holds_in_this_process(hold: Hold) -> bool {
+    let (Ok(dsn), Ok(room_id), Some(out)) = (
+        std::env::var(HOLDER_DSN),
+        std::env::var(HOLDER_ROOM),
+        std::env::var_os(HOLDER_OUT),
+    ) else {
+        return false;
+    };
+    // The test's end of the pipe closes with its process, killed or not: the
+    // holder never outlives it.
+    std::thread::spawn(|| {
+        let _ended = std::io::Read::read_to_end(&mut std::io::stdin(), &mut Vec::new());
+        std::process::exit(0);
+    });
+    let out = std::path::PathBuf::from(out);
+    let kit = holder_kit(dsn).await;
     match hold {
         Hold::RoomLock => {
             kit.register_channel(RecordingTransport::new(
@@ -635,7 +652,7 @@ async fn holds_in_this_process(hold: Hold) -> bool {
             .unwrap();
             let options = HookOptions {
                 execution: HookExecution::Sync,
-                timeout: Duration::from_secs(600),
+                timeout: HOLD_FOR,
                 ..HookOptions::default()
             };
             let hold_the_room = move |_event: RoomEvent, _context: RoomContext| {
@@ -663,7 +680,8 @@ async fn holds_in_this_process(hold: Hold) -> bool {
     true
 }
 
-/// The test binary run again as `test`'s holder, killed when dropped.
+/// The test binary run again as `test`'s holder, killed when dropped. Its
+/// standard input is a pipe from this process: it ends with it, killed or not.
 struct Holder {
     child: std::process::Child,
     out: std::path::PathBuf,
@@ -675,13 +693,15 @@ impl Holder {
     fn start(test: &str, schema: &TempSchema, room_id: &RoomId) -> Self {
         let out = std::env::temp_dir().join(format!("{}-holder.out", schema.name()));
         let child = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", test, "--test-threads=1"])
+            // Its panic on its standard error, which a failed start reports.
+            .args(["--exact", test, "--test-threads=1", "--nocapture"])
             .env(
                 HOLDER_DSN,
                 format!("{}&application_name={HOLDER_APP}", schema.dsn()),
             )
             .env(HOLDER_ROOM, room_id.as_str())
             .env(HOLDER_OUT, &out)
+            .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped())
             .spawn()
@@ -795,23 +815,27 @@ async fn until_waited_on(schema: &TempSchema, key: i64) -> Vec<(i32, bool, bool)
     sessions
 }
 
-/// Returns once the server lists no lock of the session `pid`; fails after ten
-/// seconds.
+/// Returns once the server ended the session `pid`: it lists neither the
+/// session nor any lock of it; fails after ten seconds.
 async fn until_gone(schema: &TempSchema, pid: i32) {
     let watcher = schema.client().await;
-    let mut held = 0_i64;
+    let mut listed = 0_i64;
     for _ in 0..1000 {
-        held = watcher
-            .query_one("SELECT count(*) FROM pg_locks WHERE pid = $1", &[&pid])
+        listed = watcher
+            .query_one(
+                "SELECT (SELECT count(*) FROM pg_locks WHERE pid = $1) \
+                 + (SELECT count(*) FROM pg_stat_activity WHERE pid = $1)",
+                &[&pid],
+            )
             .await
             .unwrap()
             .get(0);
-        if held == 0 {
+        if listed == 0 {
             return;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    assert_eq!(held, 0, "the killed session {pid} still holds locks");
+    assert_eq!(listed, 0, "the killed session {pid} is still listed");
 }
 
 /// A kit on `schema` with a store and a manager of its own, as another process of
@@ -942,9 +966,10 @@ async fn a_room_lock_a_killed_process_held_is_released_and_the_room_goes_on() {
 
 // Python: tests/test_postgres_multiprocess.py::test_a_delivery_claim_a_killed_process_held_leaves_its_index_skipped
 /// RK-13.5-005: a process committed index N and holds the room's delivery claim,
-/// delivering N, when it is killed. The server drops the claim with its sessions;
-/// this process's next message, N+1, waits on the hole at N for
-/// `delivery_gap_timeout`, skips it with `delivery_skipped`, and is delivered once,
+/// delivering N. This process's next message, N+1, waits on the hole at N for
+/// `delivery_gap_timeout`, then on the claim on the server: a live owner's delivery
+/// is never skipped. The holder killed, the server drops the claim with its
+/// sessions; the lane skips N with `delivery_skipped`, and N+1 is delivered once,
 /// the cursor at N+1.
 #[tokio::test]
 async fn a_delivery_claim_a_killed_process_held_leaves_its_index_skipped() {
@@ -964,21 +989,36 @@ async fn a_delivery_claim_a_killed_process_held_leaves_its_index_skipped() {
     let lost: u64 = said.trim_start_matches("delivering ").parse().unwrap();
     let claim = advisory_key(&format!("\0__delivery__:{}", room_id.as_str()));
     let holder_pid = held_by_the_holder(&schema, claim).await;
-
-    let signal = holder.kill();
-    until_gone(&schema, holder_pid).await;
     let store = schema.initialized_store().await;
     let before = store.get_room(&room_id).await.unwrap().unwrap();
     let started = tokio::time::Instant::now();
-    let (message, options) = after_the_kill(&room_id);
-    let result = tokio::time::timeout(
-        Duration::from_secs(10),
-        kit.process_inbound(message, options),
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    let sending = tokio::spawn({
+        let (kit, (message, options)) = (kit.clone(), after_the_kill(&room_id));
+        async move { kit.process_inbound(message, options).await }
+    });
+    let waiting = until_waited_on(&schema, claim).await;
+    // The holder's session holds it, one of this kit's waits on it.
+    assert_eq!(
+        waiting
+            .iter()
+            .map(|&(pid, granted, holder)| (pid == holder_pid, granted, holder))
+            .collect::<Vec<_>>(),
+        [(true, true, true), (false, false, false)]
+    );
+    // Its gap timeout past, the lane skipped nothing of the live owner's.
+    assert!(!sending.is_finished());
+    assert_eq!(tap.events().len(), 0);
+    let held = store.get_room(&room_id).await.unwrap().unwrap();
+    assert_eq!(held.delivered_index, i64::try_from(lost).unwrap() - 1);
+
+    let signal = holder.kill();
+    let result = tokio::time::timeout(Duration::from_secs(10), sending)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
     let waited = started.elapsed();
+    until_gone(&schema, holder_pid).await;
     let after = store.get_room(&room_id).await.unwrap().unwrap();
     kit.close().await.unwrap();
     store.close().await;
