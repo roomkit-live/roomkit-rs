@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Share the ACP turn's response-metadata record with tool and response hooks, including interrupted reports, while preserving nested turns' records.
+
 - Persist ACP tool updates and close interrupted calls; report each outcome once, preserve text segments and keep observers on the turn's reentry budget.
 
 - Stream ACP thoughts and report them in completed turns; publish private-by-default bounded previews and close thinking indicators on completion, failure or abandonment.

@@ -27,7 +27,7 @@ use roomkit::model::{
     EventType, InboundMessage, Metadata, ResponseMetadata, RoomContext, RoomEvent, RoomId,
     TextContent,
 };
-use roomkit::{Channel, ChannelError, ClassedError, ResponseItem, current_turn_host};
+use roomkit::{Channel, ChannelError, ClassedError, ResponseItem, TurnRecord, current_turn_host};
 use roomkit_core::rules::edits::opens_no_turn;
 use roomkit_core::rules::instructions::is_standalone;
 use roomkit_core::rules::transcript::{is_blank, mark_instruction};
@@ -436,6 +436,11 @@ impl<T: AcpTransport> Channel for AcpChannel<T> {
                 answers_room: updates::answers_room(&event),
             },
         );
+        // Capture the record when the stream runs, along with the delivery
+        // context its tool reports already carry. Never borrow a parent's.
+        let scope = TurnRecord::default();
+        scope.adopt(record.clone());
+        let stream = scope.scope_stream(stream);
         match host {
             // Within the kit, the turn is one stream, read as it is written.
             Some(host) => Ok(ChannelOutput {
@@ -505,8 +510,8 @@ impl<T: AcpTransport> Channel for AcpChannel<T> {
 /// `trigger`, the turn's record on it, as an AI channel's turn is read
 /// outside one (HITL c2e5eb96); a failure with nothing said is the turn's
 /// error, one after some text the output's.
-async fn buffered<T: AcpTransport>(
-    mut stream: TurnStream<T>,
+async fn buffered<S: futures_core::Stream<Item = Result<ResponseItem, ChannelError>> + Unpin>(
+    mut stream: S,
     trigger: &RoomEvent,
     source: EventSource,
     record: ResponseMetadata,
