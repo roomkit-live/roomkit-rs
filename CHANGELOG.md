@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A completed turn publisher no longer releases a replacement drain, preserving the order of tool events on multiple workers.
+
 - A completed ACP prompt from a replaced connection no longer advances the replacement session's history cursor or speaker-label acknowledgement, even when session identifiers are reused; the old prompt keeps its result.
 
 - ACP prompts prepend host-contributed context and missed room conversation, with visibility, session cursors and explicit truncation; a complete history remains complete across lifecycle records, hidden messages and executor serialization.

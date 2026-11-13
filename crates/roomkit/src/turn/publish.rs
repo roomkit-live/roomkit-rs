@@ -72,11 +72,29 @@ impl Publisher {
 
 /// Reopens the drain when its task ended early, a backend that panicked: the
 /// next event queued starts another.
-struct Draining(Arc<Publisher>);
+struct Draining {
+    publisher: Arc<Publisher>,
+    finished: bool,
+}
+
+impl Draining {
+    fn next(&mut self) -> Option<EphemeralEvent> {
+        let next = self.publisher.next();
+        self.finished = next.is_none();
+        next
+    }
+}
 
 impl Drop for Draining {
     fn drop(&mut self) {
-        let mut queued = self.0.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if self.finished {
+            return;
+        }
+        let mut queued = self
+            .publisher
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         queued.draining = false;
     }
 }
@@ -120,8 +138,11 @@ async fn drain(
     kit: Arc<dyn TurnKit>,
     (room, channel): (RoomId, ChannelId),
 ) {
-    let _ended = Draining(Arc::clone(&publisher));
-    while let Some(event) = publisher.next() {
+    let mut draining = Draining {
+        publisher: Arc::clone(&publisher),
+        finished: false,
+    };
+    while let Some(event) = draining.next() {
         if !kit.reaches_room(&room, &channel).await {
             tracing::debug!(target: "roomkit::turns", room_id = %room, "its answer does not reach the room: an ephemeral is not published");
             continue;
@@ -131,3 +152,6 @@ async fn drain(
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
