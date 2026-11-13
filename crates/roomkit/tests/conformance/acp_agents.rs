@@ -11,6 +11,9 @@ pub(crate) mod thinking;
 #[path = "acp_agents/mcp.rs"]
 pub(crate) mod mcp;
 
+#[path = "acp_agents/permissions.rs"]
+pub(crate) mod permissions;
+
 #[path = "acp_agents/refusals.rs"]
 mod refusals;
 
@@ -60,6 +63,7 @@ pub(crate) const PROMPT: &[&str] = &[
     "updates",
     "after_updates_gate",
     "permission",
+    "permission_steps",
     "stop_reason",
     "usage",
     "error",
@@ -148,6 +152,7 @@ pub(crate) struct ScriptedTransport {
 #[derive(Default)]
 pub(crate) struct AgentPipe {
     pub(crate) attempts: Wire,
+    pub(crate) permissions: Arc<permissions::Exchanges>,
     serving: Mutex<Option<(JoinHandle<()>, tokio::sync::oneshot::Sender<()>)>>,
 }
 
@@ -196,6 +201,7 @@ impl AcpTransport for ScriptedTransport {
             wire: Arc::clone(&self.wire),
             run: Weak::clone(&self.run),
             counts: Arc::clone(&self.counts),
+            permissions: Arc::clone(&self.pipe.permissions),
         };
         let (stop, stopped) = tokio::sync::oneshot::channel();
         let serving = tokio::spawn(serve(Arc::new(agent), theirs, stopped));
@@ -222,6 +228,7 @@ impl AcpTransport for ScriptedTransport {
 
 struct Agent {
     spec: Value,
+    permissions: Arc<permissions::Exchanges>,
     wire: Wire,
     run: Weak<Run>,
     counts: Arc<Counts>,
@@ -251,6 +258,7 @@ async fn serve(
             continue;
         };
         let Some(method) = message["method"].as_str().map(str::to_owned) else {
+            agent.permissions.accept(&message);
             continue;
         };
         agent
@@ -369,6 +377,61 @@ impl Agent {
     }
 }
 
+impl Agent {
+    async fn prompt_reply(
+        &self,
+        message: &Value,
+        prompt: &Value,
+        writer: &Writer,
+    ) -> Result<Value, Value> {
+        let session = &message["params"]["sessionId"];
+        if let (Some(gate), Some(run)) = (prompt["gate"].as_str(), self.run.upgrade()) {
+            run.gates.hold(gate).await;
+        }
+        send_updates(writer, session, &prompt["updates"]).await;
+        self.after_updates(prompt).await;
+        if let Some(permission) = prompt.get("permission") {
+            let mut params = permission.clone();
+            params["sessionId"] = session.clone();
+            send(
+                writer,
+                &json!({"jsonrpc":"2.0", "id":format!("permission-{}", message["id"]),
+                "method":"session/request_permission", "params":params}),
+            )
+            .await;
+        }
+        for step in prompt["permission_steps"].as_array().into_iter().flatten() {
+            self.permissions
+                .exchange(session, &step["request"], writer)
+                .await;
+            send_updates(writer, session, &step["updates"]).await;
+        }
+        if let Some(error) = prompt.get("error") {
+            return Err(error.clone());
+        }
+        let stop = prompt
+            .get("stop_reason")
+            .cloned()
+            .unwrap_or_else(|| json!("end_turn"));
+        let mut result = json!({"stopReason": stop});
+        if let Some(usage) = prompt.get("usage") {
+            result["usage"] = usage.clone();
+        }
+        Ok(result)
+    }
+}
+
+async fn send_updates(writer: &Writer, session: &Value, updates: &Value) {
+    for update in updates.as_array().into_iter().flatten() {
+        send(
+            writer,
+            &json!({"jsonrpc":"2.0", "method":"session/update",
+            "params":{"sessionId":session,"update":update}}),
+        )
+        .await;
+    }
+}
+
 async fn answer(agent: Arc<Agent>, message: Value, prompt: Option<Value>, writer: Writer) {
     let method = message["method"].as_str().unwrap_or_default();
     let params = &message["params"];
@@ -377,40 +440,7 @@ async fn answer(agent: Arc<Agent>, message: Value, prompt: Option<Value>, writer
         ("session/new" | "session/set_config_option" | "session/close", Some(reply)) => {
             agent.session_reply(method, &reply).await
         }
-        ("session/prompt", Some(prompt)) => {
-            if let (Some(gate), Some(run)) = (prompt["gate"].as_str(), agent.run.upgrade()) {
-                run.gates.hold(gate).await;
-            }
-            for update in prompt["updates"].as_array().into_iter().flatten() {
-                let update = json!({
-                    "jsonrpc": "2.0",
-                    "method": "session/update",
-                    "params": { "sessionId": params["sessionId"], "update": update },
-                });
-                send(&writer, &update).await;
-            }
-            agent.after_updates(&prompt).await;
-            if let Some(permission) = prompt.get("permission") {
-                let mut permission = permission.as_object().unwrap().clone();
-                permission.insert("sessionId".to_owned(), params["sessionId"].clone());
-                send(
-                    &writer,
-                    &json!({"jsonrpc":"2.0", "id":format!("permission-{}", message["id"]),
-                    "method":"session/request_permission", "params":permission}),
-                )
-                .await;
-            }
-            if let Some(error) = prompt.get("error") {
-                Err(error.clone())
-            } else {
-                let stop = prompt.get("stop_reason").cloned();
-                let mut result = json!({ "stopReason": stop.unwrap_or_else(|| json!("end_turn")) });
-                if let Some(usage) = prompt.get("usage") {
-                    result["usage"] = usage.clone();
-                }
-                Ok(result)
-            }
-        }
+        ("session/prompt", Some(prompt)) => agent.prompt_reply(&message, &prompt, &writer).await,
         (other, _) => Err(json!({
             "code": -32601,
             "message": "Method not found",

@@ -68,6 +68,7 @@ pub(crate) struct Observed {
     pub(crate) models: BTreeMap<String, Vec<Value>>,
     /// What each scripted ACP agent received, by its channel.
     pub(crate) acp_wire: BTreeMap<String, Vec<Value>>,
+    pub(crate) acp_permissions: BTreeMap<String, Vec<Value>>,
     pub(crate) acp_prompts: BTreeMap<String, Vec<Value>>,
     pub(crate) acp_mcp_requests: BTreeMap<String, Vec<Value>>,
     /// Per room, the participants the store holds.

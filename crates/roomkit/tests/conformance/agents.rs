@@ -1600,6 +1600,7 @@ fn tool_call_record(event: &ToolCallEvent) -> Value {
         "result": event.result.as_ref().map(hook_result),
         "is_error": event.is_error,
         "refused": event.refused,
+        "refused_but_ran": event.refused_but_ran,
         "cancelled": event.cancelled,
         "error_detail": event.error_detail,
     })

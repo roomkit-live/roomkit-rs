@@ -376,6 +376,7 @@ const EXPECT: &[&str] = &[
     "lifecycle",
     "models",
     "acp_wire",
+    "acp_permissions",
     "acp_prompts",
     "acp_mcp_requests",
     "streamed",
@@ -721,6 +722,11 @@ fn scripted_acp(acp: &Value, path: &str, found: &mut Vec<String>) {
         }
     }
     for (index, prompt) in items(&agent["prompts"]) {
+        crate::acp_agents::permissions::validate(
+            prompt,
+            &format!("{path}.agent.prompts[{index}]"),
+            found,
+        );
         optional(
             prompt,
             PROMPT,

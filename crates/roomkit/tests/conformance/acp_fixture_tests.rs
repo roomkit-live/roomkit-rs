@@ -29,3 +29,26 @@ async fn test_expected_callback_error_does_not_hide_exhaustion() {
         );
     }
 }
+
+// Python: tests/conformance/test_acp_fixture.py::test_permission_fixture_rejects_malformed_steps
+#[test]
+fn test_permission_fixture_rejects_malformed_steps() {
+    for steps in [
+        json!(null),
+        json!({}),
+        json!([null]),
+        json!([{}]),
+        json!([{"request":{}}]),
+        json!([{"request":{"toolCall":{},"options":[]}}]),
+        json!([{"request":{"toolCall":{"toolCallId":"t"},"options":[{}]}}]),
+        json!([{"request":{"toolCall":{"toolCallId":"t"},"options":[]},"updates":null}]),
+    ] {
+        let scenario = json!({"setup":{"channels":[{"id":"agent","type":"ai",
+            "acp":{"cwd":"/srv/project","agent":{"prompts":[{"permission_steps":steps}]}}}]}});
+        assert!(
+            crate::shape::unknown_members(&scenario)
+                .iter()
+                .any(|error| error.contains("permission_steps"))
+        );
+    }
+}

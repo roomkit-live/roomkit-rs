@@ -490,6 +490,7 @@ async fn observe(run: &Arc<Run>, step_outcomes: Vec<Value>) -> Observed {
             .acp_prompts
             .insert(channel.clone(), lock(&pipe.attempts).clone());
     }
+    collect_acp_permissions(run, &mut observed);
     collect_acp_mcp(run, &mut observed);
     for (channel, wire) in lock(&run.acp_wires).iter() {
         let received = lock(wire).clone();
@@ -585,6 +586,14 @@ fn walk_rooms(value: &Value, found: &mut BTreeSet<String>) {
         }
         Value::Array(items) => items.iter().for_each(|item| walk_rooms(item, found)),
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+    }
+}
+
+fn collect_acp_permissions(run: &Run, observed: &mut Observed) {
+    for (channel, pipe) in lock(&run.acp_pipes).iter() {
+        observed
+            .acp_permissions
+            .insert(channel.clone(), lock(&pipe.permissions.received).clone());
     }
 }
 
