@@ -1,6 +1,7 @@
 //! Session-scoped acknowledgement, retired with the session itself.
 
 use roomkit::model::RoomId;
+use std::sync::Arc;
 
 use super::Connector;
 use crate::channel::context::Seen;
@@ -14,12 +15,21 @@ impl<T: AcpTransport> Connector<T> {
     pub(in crate::channel) fn acknowledged(
         &self,
         room: &RoomId,
+        connection: &Arc<T::Connection>,
         session: &str,
         index: u64,
         labelled: bool,
     ) {
         let mut state = self.lock();
-        if state.sessions.get(room).map(String::as_str) != Some(session) {
+        // Each handshake gets a new Arc, even if the transport's connection
+        // value shares state or reuses the wire's session identifiers.
+        if state.closed
+            || !state
+                .connection
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, connection))
+            || state.sessions.get(room).map(String::as_str) != Some(session)
+        {
             return;
         }
         let seen = state.seen.entry(room.clone()).or_default();

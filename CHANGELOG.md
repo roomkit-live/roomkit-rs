@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A completed ACP prompt from a replaced connection no longer advances the replacement session's history cursor or speaker-label acknowledgement, even when session identifiers are reused; the old prompt keeps its result.
+
 - ACP prompts prepend host-contributed context and missed room conversation, with visibility, session cursors and explicit truncation; a complete history remains complete across lifecycle records, hidden messages and executor serialization.
 
 - A message, an injection, a post or a greeting a hook sends into its room under the room's lock is delivered once that hook's body is over, whatever the body awaits after the call returned: its delivery waits in the room's lane until the hook returns, times out or is given up, or until the kit's close seals the lane, which delivers it from its place when that place is the first, and drops it otherwise, as any set it seals. Its delivery key names it until then, and a cancellation by key made meanwhile starts none of its turns (RFC §9.5.1 Reentrance).

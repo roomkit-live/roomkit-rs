@@ -64,6 +64,7 @@ async fn execute<T: AcpTransport>(
             Ok(Some(answer)) => {
                 hold.shared.connector.acknowledged(
                     &hold.room_id,
+                    &connection,
                     &session,
                     input.seen_index(),
                     labelled,

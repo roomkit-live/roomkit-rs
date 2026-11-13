@@ -57,9 +57,9 @@ pub(super) fn block(
             )
         };
     }
-    let shown = &missed[missed.len().saturating_sub(limit)..];
+    let shown = missed.iter().skip(missed.len().saturating_sub(limit));
     let mut lines = vec![header(shown.len(), missed.len(), unloaded)];
-    lines.extend(shown.iter().enumerate().map(|(index, event)| {
+    lines.extend(shown.enumerate().map(|(index, event)| {
         let label = if event.source.channel_id == *channel {
             "you (in a separate session)".to_owned()
         } else {
