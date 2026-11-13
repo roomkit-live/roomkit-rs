@@ -13,14 +13,15 @@ use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelBinding, ChannelId, ChannelOutput, ChannelType, EventContent, EventType, InboundMessage,
-    RoomContext, RoomEvent, RoomId, TextContent,
+    ChannelBinding, ChannelId, ChannelOutput, ChannelType, EventContent, EventType, IdentityId,
+    InboundMessage, Room, RoomContext, RoomEvent, RoomId, TextContent,
 };
 use roomkit::testing::{EventTap, RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelError, ConversationStore, CreateRoomOptions,
-    HookExecution, HookOptions, HookTrigger, InMemoryLockManager, ProcessInboundOptions, RoomKit,
-    RoomKitError, RoomKitOptions, RoomLockManager,
+    HookExecution, HookOptions, HookTrigger, InMemoryLockManager, ProcessInboundOptions,
+    RequestVerificationOptions, RoomKit, RoomKitError, RoomKitOptions, RoomLockManager,
+    SendEventOptions,
 };
 use roomkit_postgres::{
     PostgresAdvisoryLockManager, PostgresAdvisoryLockManagerOptions, PostgresStore,
@@ -493,6 +494,157 @@ async fn two_kits_process_one_room_with_no_index_given_twice() {
     assert_eq!(stored.latest_index, indexes.last().copied());
     first.close().await.unwrap();
     second.close().await.unwrap();
+}
+
+// Key spaces (RK-13.5-004): a room's delivery claim and an identity's
+// verification go through the advisory manager among the rooms' keys, each
+// led by a NUL character. The server keeps one space of keys for every kind
+// and every schema: each test names rooms of its own.
+
+/// A kit on the in-memory store whose locks are advisory, on a pool of the
+/// manager's own.
+async fn advisory_kit(schema: &TempSchema) -> RoomKit {
+    let kit = RoomKit::new(RoomKitOptions {
+        lock_manager: Some(Arc::new(manager(schema).await)),
+        ..RoomKitOptions::default()
+    });
+    kit.register_channel(RecordingTransport::new(
+        ChannelId::new("src").unwrap(),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    ))
+    .unwrap();
+    kit
+}
+
+/// Creates `room_id` with `channels` attached.
+async fn room_with(kit: &RoomKit, room_id: &RoomId, channels: &[&str]) {
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id.clone()),
+        ..CreateRoomOptions::default()
+    })
+    .await
+    .unwrap();
+    for id in channels {
+        kit.attach_channel(
+            room_id,
+            &ChannelId::new(*id).unwrap(),
+            AttachChannelOptions::default(),
+        )
+        .await
+        .unwrap();
+    }
+}
+
+// Python: tests/test_identity_verification.py::test_a_room_named_like_a_verification_key_holds_no_verification
+/// A section of the room `verification::alice` leaves alice's verification
+/// free.
+#[tokio::test]
+async fn a_room_named_like_a_verification_key_holds_no_verification() {
+    if dsn().is_none() {
+        return;
+    }
+    let schema = TempSchema::new().await;
+    let kit = advisory_kit(&schema).await;
+    let room_id = room(&format!("room-{}", schema.name()));
+    room_with(&kit, &room_id, &[]).await;
+    let alice = IdentityId::new(format!("alice-{}", schema.name())).unwrap();
+    let named = room(&format!("verification::{}", alice.as_str()));
+    let section = kit.lock_manager().locked(&named).await.unwrap();
+    let sms = ChannelId::new("sms").unwrap();
+    let request =
+        kit.request_verification(&alice, &room_id, &sms, RequestVerificationOptions::default());
+    let answered = tokio::time::timeout(Duration::from_secs(1), request).await;
+    section.release().await.unwrap();
+    let (request, _) = answered
+        .expect("alice's verification waits on no room's lock")
+        .unwrap();
+    assert_eq!(request.identity_id, alice);
+    kit.close().await.unwrap();
+}
+
+// Python: tests/test_lanes_multiworker.py::test_a_room_named_like_a_delivery_claim_holds_no_claim
+/// A section of the room `__delivery__:r1` leaves r1's deliveries free.
+#[tokio::test]
+async fn a_room_named_like_a_delivery_claim_holds_no_claim() {
+    if dsn().is_none() {
+        return;
+    }
+    let schema = TempSchema::new().await;
+    let kit = advisory_kit(&schema).await;
+    let out = RecordingTransport::new(
+        ChannelId::new("out").unwrap(),
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(out.clone()).unwrap();
+    let room_id = room(&format!("room-{}", schema.name()));
+    room_with(&kit, &room_id, &["src", "out"]).await;
+    let named = room(&format!("__delivery__:{}", room_id.as_str()));
+    let section = kit.lock_manager().locked(&named).await.unwrap();
+    let message = InboundMessage::new(ChannelId::new("src").unwrap(), "u", TextContent::new("hi"));
+    let options = ProcessInboundOptions {
+        room_id: Some(room_id.clone()),
+        ..ProcessInboundOptions::default()
+    };
+    let delivered = tokio::time::timeout(Duration::from_secs(1), async {
+        kit.process_inbound(message, options).await.unwrap();
+        while out.texts().is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await;
+    section.release().await.unwrap();
+    delivered.expect("the room's delivery waits on no room's lock");
+    kit.close().await.unwrap();
+}
+
+// Python: tests/test_lanes_multiworker.py::test_a_stored_room_whose_id_holds_nul_takes_no_room_lock
+/// A room no `create_room` made, written to the store straight, whose id holds
+/// a NUL character takes no room lock: its lock would be another room's
+/// delivery claim, which another kit holds meanwhile.
+#[tokio::test]
+async fn a_stored_room_whose_id_holds_nul_takes_no_room_lock() {
+    if dsn().is_none() {
+        return;
+    }
+    let schema = TempSchema::new().await;
+    let kit = advisory_kit(&schema).await;
+    let src = ChannelId::new("src").unwrap();
+    let nul_room = room(&format!("\0__delivery__:room-{}", schema.name()));
+    kit.store()
+        .create_room(Room::new(nul_room.clone()))
+        .await
+        .unwrap();
+    let claim = kit.lock_manager().locked(&nul_room).await.unwrap();
+    let within = Duration::from_secs(1);
+    let attached = tokio::time::timeout(
+        within,
+        kit.attach_channel(&nul_room, &src, AttachChannelOptions::default()),
+    )
+    .await;
+    let binding = ChannelBinding::new(src.clone(), nul_room.clone(), ChannelType::SMS);
+    kit.store().add_binding(binding).await.unwrap();
+    let sent = tokio::time::timeout(
+        within,
+        kit.send_event(
+            &nul_room,
+            &src,
+            TextContent::new("hi"),
+            SendEventOptions::default(),
+        ),
+    )
+    .await;
+    claim.release().await.unwrap();
+    let attached = attached.expect("the NUL room's attach waited on the claim");
+    let sent = sent.expect("the NUL room's send waited on the claim");
+    for refused in [attached.err(), sent.err()] {
+        assert!(
+            matches!(&refused, Some(RoomKitError::Value(message)) if message.contains("NUL")),
+            "{refused:?}"
+        );
+    }
+    kit.close().await.unwrap();
 }
 
 /// Beside the store, an in-process lock is told; the advisory lock is not.
