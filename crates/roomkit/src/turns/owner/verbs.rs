@@ -6,13 +6,14 @@
 //! A host acts for its turn's room, in that room's organization: a verb
 //! that names another room, or another organization, is refused, as the
 //! Python implementation refuses it (`ValueError`), and so is an argument
-//! the verb does not take. During the turn, the event is at least as deep
-//! as the turn's response (RFC §8.3) and draws on the budget of the
-//! delivery the turn's reader runs, as the owner's own code would. After
-//! it, the verb is work the turn began, accepted only from the executor of
-//! the room's last turn of the channel, for that very turn, and a new
-//! arrival at the depth its arguments name, in the room's organization as
-//! the store holds it (Python's `call_between_turns`).
+//! the verb does not take. During the turn, the event, and a status's
+//! publication, is at least as deep as the turn's response (RFC §8.3), and
+//! the event draws on the budget of the delivery the turn's reader runs, as
+//! the owner's own code would. After it, the verb is work the turn began,
+//! accepted only from the executor of the room's last turn of the channel,
+//! for that very turn, and a new arrival at the depth its arguments name,
+//! in the room's organization as the store holds it (Python's
+//! `call_between_turns`).
 
 use std::sync::Arc;
 
@@ -21,6 +22,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use super::Facts;
+use crate::context::ExecutionContext;
 use crate::error::repr;
 use crate::orchestration::StatusEntry;
 use crate::turn::TurnKit;
@@ -49,7 +51,8 @@ const TASK_ACTION: &str = "task";
 const RUN_ENTRY: &str = "task_run";
 
 /// What a verb acts for: its turn's room and organization, and the depth an
-/// event it sends is at least while the turn runs (`None` once it is over).
+/// event it sends, or a status it posts, is at least while the turn runs
+/// (`None` once it is over).
 struct Scope<'a> {
     room_id: &'a RoomId,
     organization_id: Option<&'a str>,
@@ -100,7 +103,9 @@ async fn run_verb(
             }
             send(kit, room_id, event).await
         }
-        POST_STATUS => post_status(kit, scope, decoded(verb, arguments)?).map(|()| Value::Null),
+        POST_STATUS => post_status(kit, scope, decoded(verb, arguments)?)
+            .await
+            .map(|()| Value::Null),
         UPDATE_ROOM_METADATA => {
             let args: UpdateRoomMetadata = decoded(verb, arguments)?;
             within_its_room(scope, &args.room_id, args.organization_id.as_deref())?;
@@ -158,8 +163,9 @@ async fn run_verb(
 /// Posts a host's status on the kit's bus (RFC §19.8): it names its turn's
 /// room, never another, and it is never one the framework alone posts, a
 /// task's or a worker run's entry, as the Python implementation refuses
-/// them.
-fn post_status(
+/// them. During the turn, it is published at least as deep as the turn's
+/// response.
+async fn post_status(
     kit: &Arc<dyn TurnKit>,
     scope: &Scope<'_>,
     args: PostStatus,
@@ -197,8 +203,26 @@ fn post_status(
         args.detail,
         Some(metadata),
     );
-    kit.post_status(entry)
+    within_the_turn_s_floor(scope, || kit.post_status(entry))
+        .await
         .map_err(|error| Box::new(kit_error(&error)))
+}
+
+/// Runs `post`, which reads its poster's depth as it posts, at least as
+/// deep as the turn's response while the turn runs (RFC §8.3), whether a
+/// call waits on the turn yet or not: the context the owner serves a verb
+/// in is the waiting call's, empty until the call that submitted the turn
+/// reaches its output, which on several workers can come after the verb
+/// (RMK-1552).
+async fn within_the_turn_s_floor<T>(scope: &Scope<'_>, post: impl FnOnce() -> T) -> T {
+    let posting = async move { post() };
+    match scope.floor {
+        Some(floor) => {
+            let within = ExecutionContext::current().at_least(floor);
+            within.scope(posting).await
+        }
+        None => posting.await,
+    }
 }
 
 /// A verb's arguments, read as the record of `verb`; an argument the record

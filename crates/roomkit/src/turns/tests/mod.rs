@@ -9,4 +9,5 @@ mod never_started;
 mod records;
 mod support;
 mod trace;
+mod verb_depth;
 mod window;
