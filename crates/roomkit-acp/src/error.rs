@@ -10,6 +10,9 @@ use serde_json::Value;
 #[derive(Clone, Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum AcpError {
+    /// A handler service failed during startup, retaining its error class.
+    #[error("{}", external_error(.0).1)]
+    ExternalTool(roomkit_ai::ToolError),
     /// A host transport refused before execution; never decoded from JSON-RPC.
     #[error(transparent)]
     SessionInvalidated(#[from] crate::AcpSessionInvalidatedError),
@@ -110,7 +113,8 @@ impl AcpError {
                 message,
                 data,
             } => serde_json::json!({ "code": code, "message": message, "data": data }),
-            Self::ConnectionClosed
+            Self::ExternalTool(_)
+            | Self::ConnectionClosed
             | Self::SessionInvalidated(_)
             | Self::Value(_)
             | Self::Type(_)
@@ -135,3 +139,14 @@ pub(crate) const INVALID_PARAMS: i32 = -32602;
 
 /// JSON-RPC's code for a failure while serving a request.
 pub(crate) const INTERNAL_ERROR: i32 = -32603;
+
+pub(crate) fn external_error(error: &roomkit_ai::ToolError) -> (&str, &str) {
+    use roomkit_ai::ToolError;
+    match error {
+        ToolError::Raised { kind, message } => (kind, message),
+        ToolError::Refused(message) => ("ToolRefusedError", message),
+        ToolError::Failed(message) => ("ToolError", message),
+        ToolError::UnservedToolCall(message) => ("UnservedToolCallError", message),
+        _ => ("ToolError", "external handler failed"),
+    }
+}

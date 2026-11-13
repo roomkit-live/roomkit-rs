@@ -85,6 +85,7 @@ impl<T: AcpTransport> TurnStream<T> {
             room_id.clone(),
             channel_id.clone(),
             ask.answers_room,
+            shared.connector.handler.handler.clone(),
         ));
         let sender = Sink::new(sender, Arc::clone(&thinking_window), Arc::clone(&tools));
         let work = run(shared, ask, sender, generation);
@@ -362,6 +363,7 @@ pub(super) fn raised(error: AcpError) -> ChannelError {
             attributes.insert("data".to_owned(), data.clone().unwrap_or(Value::Null));
             "RequestError"
         }
+        AcpError::ExternalTool(error) => super::permissions::error_parts(error).0,
         AcpError::ConnectionClosed => "ConnectionError",
         AcpError::SessionInvalidated(error) => {
             attributes = provider_attributes(error);
@@ -388,5 +390,5 @@ pub(super) fn raised(error: AcpError) -> ChannelError {
         AcpError::InvalidResponse { .. } | AcpError::InvalidRequest { .. } => "ValidationError",
         AcpError::Runtime(_) | AcpError::SetupRefused { .. } => "RuntimeError",
     };
-    Box::new(ClassedError::new(class, error).with_attributes(attributes))
+    Box::new(ClassedError::new(class.to_owned(), error).with_attributes(attributes))
 }

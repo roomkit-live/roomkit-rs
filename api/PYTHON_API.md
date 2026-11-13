@@ -13,6 +13,11 @@ the mapping and its tests. The check does not generate or update this document.
 
 | Rust name | Python name | Members or parameters |
 | --- | --- | --- |
+| `roomkit_ai::ExternalToolHandler` | — | `state` |
+| `roomkit_ai::ExternalToolHandlerState` | — | Whole type |
+| `roomkit_ai::ExternalToolFuture` | — | Whole type |
+| `roomkit_ai::FireBeforeHookOptions` | — | Whole type |
+| `roomkit_ai::FireOnToolHookOptions` | — | Whole type |
 | `roomkit::ConversationStore` | — | `is_process_local` |
 | `roomkit::ConversationStore` | — | `set_telemetry` |
 | `roomkit::store::ConversationStore` | — | `set_telemetry` |
@@ -180,3 +185,17 @@ the mapping and its tests. The check does not generate or update this document.
 | `roomkit::RoomKitError` | `roomkit.RoomNotFoundError`, `roomkit.RoomAlreadyExistsError`, `roomkit.RoomClosedError`, `roomkit.TransitionRefusedError`, `roomkit.ProcessTimeoutError`, `roomkit.ChangeRefusedError`, `roomkit.ReentrantCallError`, `roomkit.ReentryLoopCapError`, `roomkit.ChannelNotFoundError`, `roomkit.ChannelNotRegisteredError`, `roomkit.ChannelAlreadyRegisteredError`, `roomkit.ParticipantNotFoundError`, `roomkit.IdentityNotFoundError`, `roomkit.AddressLinkedError`, `roomkit.EventNotFoundError`, `roomkit.HumanInputRejectedError`, `roomkit.ToolNameCollisionError`, `roomkit.VerificationRefusedError`, `roomkit.IdempotencyKeyTakenError`, `roomkit.ProviderDeliveryError`, `roomkit.KitClosedError`, `roomkit.ShutdownCancelledError`, `roomkit.RemoteTurnError`, `roomkit.TurnLinkError` |
 | `roomkit::StoreError` | `roomkit.RoomAlreadyExistsError`, `roomkit.RoomNotFoundError`, `roomkit.ParticipantExistsError`, `roomkit.ParticipantNotFoundError`, `roomkit.IdentityNotFoundError`, `roomkit.AddressLinkedError`, `roomkit.EventNotFoundError`, `roomkit.TaskNotFoundError`, `roomkit.IdempotencyKeyTakenError` |
 | `roomkit_ai::SkillError` | `roomkit.skills.SkillDiscoveryError`, `roomkit.skills.SkillParseError`, `roomkit.skills.SkillValidationError`, `roomkit.skills.SkillManifestTooLargeError` |
+
+## External tool handlers
+
+`roomkit_ai::ExternalToolHandler` is the object-safe form of Python's ABC. A custom
+handler embeds `ExternalToolHandlerState` and returns it from `state()`: this holds
+the inherited channel identity and the `fire_before_hook` / `fire_on_tool_hook`
+helpers. The trait's default cancellation and refusal reports delegate to that
+state. `ExternalToolFuture` boxes each asynchronous callback; method-specific
+options structs carry Python's keyword parameters with the same defaults.
+
+The handler's state belongs to the handler, not to a global registry or a task.
+Registration sets its identity and callbacks together; sharing an instance makes
+the last registration authoritative, with a warning when its channel changes.
+This language form was approved in HITL 915d07a5-8f40-4b74-8f9f-16087e3b9b92.

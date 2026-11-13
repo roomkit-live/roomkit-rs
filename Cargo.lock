@@ -2034,6 +2034,7 @@ dependencies = [
  "axum",
  "futures-util",
  "roomkit",
+ "roomkit-acp",
  "roomkit-ai",
  "roomkit-anthropic",
  "roomkit-mcp",

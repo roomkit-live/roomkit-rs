@@ -143,6 +143,7 @@ pub(crate) struct Run {
     pub(crate) acp_channels:
         Mutex<BTreeMap<String, roomkit_acp::AcpChannel<crate::acp_agents::ScriptedTransport>>>,
     pub(crate) acp_wires: Mutex<BTreeMap<String, crate::acp_agents::Wire>>,
+    pub(crate) acp_handlers: Mutex<BTreeMap<String, crate::acp_agents::Wire>>,
     pub(crate) acp_mcp_requests: Mutex<BTreeMap<String, crate::acp_agents::Wire>>,
     pub(crate) acp_pipes: Mutex<BTreeMap<String, Arc<crate::acp_agents::AgentPipe>>>,
     /// The Chat Completions rendering of a model that names one, by the
@@ -226,6 +227,7 @@ impl Run {
             acp_channels: Mutex::default(),
             acp_wires: Mutex::default(),
             acp_mcp_requests: Mutex::default(),
+            acp_handlers: Mutex::default(),
             acp_pipes: Mutex::default(),
             chat_dialects: Mutex::default(),
             backend: Mutex::default(),

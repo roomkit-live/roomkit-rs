@@ -32,6 +32,22 @@ Hosts supply credentials and decide which providers, tools, transports and store
 to expose. The framework does not read an application's secret files implicitly.
 Closing the kit and adapters is part of the host's resource lifecycle.
 
+## External tool handlers
+
+`AcpChannelOptions::external_tool_handler` accepts an `Arc<dyn ExternalToolHandler>`.
+`PolicyExternalToolHandler` checks the tool policy before the registered
+`BEFORE_TOOL_USE` hooks. Applications can implement a handler to wait for approval
+and delegate reporting through its embedded `ExternalToolHandlerState`.
+The service starts after the connection handshake and stops once after transport
+closure. A reconnect retains the running service.
+
+ACP only accepts approval or refusal: replacement arguments or a replacement
+result are refused because the protocol cannot apply them. A result the agent
+produces despite refusal remains observable as `refused_but_ran`. Reports preserve
+their turn's context and reach observers once even when the handler raises after
+delegation. The runtime supplies the hook bridge; it does not depend on the AI or
+ACP crates.
+
 ## Contracts and verification
 
 The [RoomKit specification](https://github.com/roomkit-live/roomkit-specs) defines

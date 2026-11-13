@@ -364,3 +364,84 @@ fn setup_delegation_options_defaults_as_python() {
     // roomkit.tasks.setup_delegation(tool) = None
     assert!(defaults.tool.is_none());
 }
+
+#[test]
+fn external_handler_keyword_defaults_as_python() {
+    let defaults = roomkit_ai::ProcessToolCallOptions::default();
+    // roomkit.tools.ExternalToolHandler.process_tool_call(tool_call_id) = ''
+    // roomkit.tools.PolicyExternalToolHandler.process_tool_call(tool_call_id) = ''
+    assert_eq!(defaults.tool_call_id, "");
+    // roomkit.tools.ExternalToolHandler.process_tool_call(job_id) = None
+    // roomkit.tools.PolicyExternalToolHandler.process_tool_call(job_id) = None
+    assert!(defaults.job_id.is_none());
+    // roomkit.tools.ExternalToolHandler.process_tool_call(session_id) = None
+    // roomkit.tools.PolicyExternalToolHandler.process_tool_call(session_id) = None
+    assert!(defaults.session_id.is_none());
+    // roomkit.tools.ExternalToolHandler.process_tool_call(tenant_id) = None
+    // roomkit.tools.PolicyExternalToolHandler.process_tool_call(tenant_id) = None
+    assert!(defaults.tenant_id.is_none());
+    // roomkit.tools.ExternalToolHandler.process_tool_call(room_id) = None
+    // roomkit.tools.PolicyExternalToolHandler.process_tool_call(room_id) = None
+    assert!(defaults.room_id.is_none());
+    let defaults = roomkit_ai::OnToolResultOptions::default();
+    // roomkit.tools.ExternalToolHandler.on_tool_result(is_error) = False
+    // roomkit.tools.PolicyExternalToolHandler.on_tool_result(is_error) = False
+    assert!(!defaults.is_error);
+    // roomkit.tools.ExternalToolHandler.on_tool_result(tool_call_id) = ''
+    // roomkit.tools.PolicyExternalToolHandler.on_tool_result(tool_call_id) = ''
+    assert_eq!(defaults.tool_call_id, "");
+    // roomkit.tools.ExternalToolHandler.on_tool_result(job_id) = None
+    // roomkit.tools.PolicyExternalToolHandler.on_tool_result(job_id) = None
+    assert!(defaults.job_id.is_none());
+    // roomkit.tools.ExternalToolHandler.on_tool_result(room_id) = None
+    // roomkit.tools.PolicyExternalToolHandler.on_tool_result(room_id) = None
+    assert!(defaults.room_id.is_none());
+    // roomkit.tools.ExternalToolHandler.on_tool_result(refused_but_ran) = False
+    // roomkit.tools.PolicyExternalToolHandler.on_tool_result(refused_but_ran) = False
+    assert!(!defaults.refused_but_ran);
+    // roomkit.tools.ExternalToolHandler.on_tool_result(error_detail) = None
+    // roomkit.tools.PolicyExternalToolHandler.on_tool_result(error_detail) = None
+    assert!(defaults.error_detail.is_none());
+    let defaults = roomkit_ai::OnToolCancelledOptions::default();
+    // roomkit.tools.ExternalToolHandler.on_tool_cancelled(tool_call_id) = ''
+    // roomkit.tools.PolicyExternalToolHandler.on_tool_cancelled(tool_call_id) = ''
+    assert_eq!(defaults.tool_call_id, "");
+    // roomkit.tools.ExternalToolHandler.on_tool_cancelled(job_id) = None
+    // roomkit.tools.PolicyExternalToolHandler.on_tool_cancelled(job_id) = None
+    assert!(defaults.job_id.is_none());
+    // roomkit.tools.ExternalToolHandler.on_tool_cancelled(room_id) = None
+    // roomkit.tools.PolicyExternalToolHandler.on_tool_cancelled(room_id) = None
+    assert!(defaults.room_id.is_none());
+    let defaults = roomkit_ai::OnToolRefusedOptions::default();
+    // roomkit.tools.ExternalToolHandler.on_tool_refused(tool_call_id) = ''
+    // roomkit.tools.PolicyExternalToolHandler.on_tool_refused(tool_call_id) = ''
+    assert_eq!(defaults.tool_call_id, "");
+    // roomkit.tools.ExternalToolHandler.on_tool_refused(job_id) = None
+    // roomkit.tools.PolicyExternalToolHandler.on_tool_refused(job_id) = None
+    assert!(defaults.job_id.is_none());
+    // roomkit.tools.ExternalToolHandler.on_tool_refused(room_id) = None
+    // roomkit.tools.PolicyExternalToolHandler.on_tool_refused(room_id) = None
+    assert!(defaults.room_id.is_none());
+    // roomkit.tools.ExternalToolHandler.on_tool_refused(detail) = None
+    // roomkit.tools.PolicyExternalToolHandler.on_tool_refused(detail) = None
+    assert!(defaults.detail.is_none());
+    let decision = roomkit_ai::ToolDecision::new(true);
+    // roomkit.tools.ToolDecision.__init__(modified_input) = None
+    assert!(decision.modified_input.is_none());
+    // roomkit.tools.ToolDecision.__init__(result) = None
+    assert!(decision.result.is_none());
+    // roomkit.tools.ToolDecision.__init__(reason) = ''
+    assert_eq!(decision.reason, "");
+    // roomkit.tools.ToolDecision.__init__(detail) = None
+    assert!(decision.detail.is_none());
+}
+
+#[test]
+fn external_policy_default_as_python() {
+    // roomkit.tools.PolicyExternalToolHandler.__init__(policy) = None
+    assert!(
+        roomkit_ai::PolicyExternalToolHandlerOptions::default()
+            .policy
+            .is_none()
+    );
+}

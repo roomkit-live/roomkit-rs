@@ -377,6 +377,7 @@ const EXPECT: &[&str] = &[
     "models",
     "acp_wire",
     "acp_permissions",
+    "acp_handlers",
     "acp_prompts",
     "acp_mcp_requests",
     "streamed",
@@ -687,6 +688,7 @@ fn scripted_acp(acp: &Value, path: &str, found: &mut Vec<String>) {
     optional(acp, ACP, path, found);
     acp_directories(acp, path, found);
     crate::acp_agents::mcp::validate(acp, path, found);
+    crate::acp_agents::handler::validate(acp, path, found);
     crate::acp_agents::thinking::validate(acp, path, found);
     let transport = &acp["transport"];
     optional(

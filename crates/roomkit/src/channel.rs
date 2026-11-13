@@ -620,6 +620,12 @@ pub trait Channel: Send + Sync + 'static {
         None
     }
 
+    /// Registration bridge for an adapter's external tool handler.
+    #[doc(hidden)]
+    fn external_tool_bridge(&self) -> Option<crate::external_tools::ExternalToolBridge> {
+        None
+    }
+
     /// Takes `registration`, the token of the channel's registration on
     /// its [`human_input_handler`](Self::human_input_handler), which the
     /// kit takes once it registered the channel, as Python's
@@ -773,6 +779,7 @@ pub(crate) trait DynChannel: Send + Sync {
 
     fn close(&self) -> BoxFuture<'_, ()>;
 
+    fn external_tool_bridge(&self) -> Option<crate::external_tools::ExternalToolBridge>;
     fn human_input_registered(&self, registration: u64);
 }
 
@@ -906,6 +913,10 @@ impl<C: Channel> DynChannel for C {
 
     fn close(&self) -> BoxFuture<'_, ()> {
         Box::pin(Channel::close(self))
+    }
+
+    fn external_tool_bridge(&self) -> Option<crate::external_tools::ExternalToolBridge> {
+        Channel::external_tool_bridge(self)
     }
 
     fn human_input_registered(&self, registration: u64) {

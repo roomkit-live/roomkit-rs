@@ -1,6 +1,7 @@
 //! ACP observers keep their turn's record across nested scopes and termination.
 
 mod abandoned;
+mod external_handler;
 
 use super::{Agent, PATIENCE, channel};
 use roomkit::model::{

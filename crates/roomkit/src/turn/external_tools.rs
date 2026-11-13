@@ -52,6 +52,25 @@ impl TurnHost {
         reporting.report_tool_call(report);
     }
 
+    /// A failure decided by the channel itself reaches observers alone.
+    #[doc(hidden)]
+    pub async fn observe_external_tool_call(&self, report: &ToolCallReport) {
+        let mut reporting = self.clone();
+        if !self.hooks(HookTrigger::OnToolCall).is_empty() {
+            let Some(context) = self
+                .shared
+                .kit
+                .external_tool_context(self.room_id().clone())
+                .await
+            else {
+                self.emit_tool_call(&self.event_of(report));
+                return;
+            };
+            reporting.tool_report_context = Some(Arc::new(context));
+        }
+        reporting.report_tool_call(report);
+    }
+
     pub(super) fn reported_tool_context(&self) -> RoomContext {
         self.tool_report_context
             .as_deref()

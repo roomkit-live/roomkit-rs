@@ -57,8 +57,9 @@ impl Sink {
         }
     }
 
-    pub(super) fn refuse_tool(&self, update: &Value) {
-        self.tools.refuse(update);
+    /// Permission callbacks outlive the prompt; they must not keep its text sender open.
+    pub(super) fn tools(&self) -> Arc<Tools> {
+        Arc::clone(&self.tools)
     }
 }
 

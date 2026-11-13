@@ -23,9 +23,39 @@ use crate::error::AcpError;
 #[derive(Default)]
 pub(super) struct Turns {
     by_session: Mutex<HashMap<String, Registered>>,
+    rooms: Mutex<HashMap<String, roomkit::model::RoomId>>,
 }
 
 impl Turns {
+    pub(super) fn remember(&self, session: &str, room: &roomkit::model::RoomId) {
+        self.rooms
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(session.to_owned(), room.clone());
+    }
+
+    pub(super) fn forget(&self, session: &str) {
+        self.rooms
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(session);
+    }
+
+    pub(super) fn clear_rooms(&self) {
+        self.rooms
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+    }
+
+    fn room(&self, session: &str) -> Option<roomkit::model::RoomId> {
+        self.rooms
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(session)
+            .cloned()
+    }
+
     fn lock(&self) -> MutexGuard<'_, HashMap<String, Registered>> {
         self.by_session
             .lock()
@@ -79,6 +109,10 @@ impl Turns {
         self.lock().get(session).map(|turn| turn.updates.clone())
     }
 
+    fn tools(&self, session: &str) -> Option<Arc<super::tools::Tools>> {
+        self.lock().get(session).map(|turn| turn.updates.tools())
+    }
+
     fn activity(&self, session: &str) {
         if let Some(turn) = self.lock().get(session) {
             turn.activity.store(true, Ordering::Release);
@@ -96,6 +130,7 @@ struct Registered {
 /// The client the channel opens its transport with.
 pub(super) struct ChannelClient {
     pub(super) turns: Arc<Turns>,
+    pub(super) handler: Option<Arc<dyn roomkit_ai::ExternalToolHandler>>,
 }
 
 impl AcpClient for ChannelClient {
@@ -140,12 +175,13 @@ impl AcpClient for ChannelClient {
     {
         Box::pin(async move {
             self.turns.activity(&request.session_id.0);
-            if let Some(sink) = self.turns.updates(&request.session_id.0)
-                && let Ok(update) = serde_json::to_value(&request.tool_call)
-            {
-                sink.refuse_tool(&update);
-            }
-            Ok(rejected(&request))
+            let update = serde_json::to_value(&request.tool_call).unwrap_or_default();
+            let decision = if let Some(tools) = self.turns.tools(&request.session_id.0) {
+                tools.decide(&update, &request.session_id.0).await
+            } else {
+                self.decide_outside_turn(&request, &update).await
+            };
+            Ok(answer(&request, decision.approved))
         })
     }
 }
@@ -153,13 +189,21 @@ impl AcpClient for ChannelClient {
 /// The answer to a permission request with no external tool handler to
 /// decide it, as Python's `_permission_response` refuses it: the agent's
 /// `reject_once` option, else its `reject_always`, else `cancelled`.
-fn rejected(request: &RequestPermissionRequest) -> RequestPermissionResponse {
-    let reject = [
-        PermissionOptionKind::RejectOnce,
-        PermissionOptionKind::RejectAlways,
-    ]
-    .iter()
-    .find_map(|kind| request.options.iter().find(|option| option.kind == *kind));
+fn answer(request: &RequestPermissionRequest, approved: bool) -> RequestPermissionResponse {
+    let preferred = if approved {
+        [
+            PermissionOptionKind::AllowOnce,
+            PermissionOptionKind::AllowAlways,
+        ]
+    } else {
+        [
+            PermissionOptionKind::RejectOnce,
+            PermissionOptionKind::RejectAlways,
+        ]
+    };
+    let reject = preferred
+        .iter()
+        .find_map(|kind| request.options.iter().find(|option| option.kind == *kind));
     let outcome = match reject {
         Some(option) => RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
             option.option_id.clone(),
@@ -167,4 +211,40 @@ fn rejected(request: &RequestPermissionRequest) -> RequestPermissionResponse {
         None => RequestPermissionOutcome::Cancelled,
     };
     RequestPermissionResponse::new(outcome)
+}
+
+impl ChannelClient {
+    async fn decide_outside_turn(
+        &self,
+        request: &RequestPermissionRequest,
+        update: &serde_json::Value,
+    ) -> super::permissions::Decision {
+        let call = roomkit::model::ToolCall::new(
+            update
+                .get("toolCallId")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default(),
+            update
+                .get("title")
+                .and_then(serde_json::Value::as_str)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("tool"),
+            update
+                .get("rawInput")
+                .and_then(serde_json::Value::as_object)
+                .cloned()
+                .unwrap_or_default(),
+        );
+        let handler = self.handler.clone();
+        let session = request.session_id.0.to_string();
+        let room = self.turns.room(&session);
+        let mut task = tokio::task::JoinSet::new();
+        task.spawn(async move {
+            super::permissions::decide(handler.as_deref(), &call, &session, room).await
+        });
+        task.join_next()
+            .await
+            .and_then(Result::ok)
+            .unwrap_or_default()
+    }
 }

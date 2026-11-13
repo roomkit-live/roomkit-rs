@@ -40,6 +40,7 @@ use crate::turns::wire::{
 use crate::turns::{HostLink, TurnError, send_event_arguments};
 use crate::{DelegateOptions, RoomKit, SendEventOptions, UpdateRoomMetadataOptions};
 
+mod external_handler;
 mod external_tools;
 mod inputs;
 mod loop_hooks;

@@ -3,6 +3,7 @@
 mod call;
 mod closing;
 mod encoding;
+mod handler;
 mod reports;
 
 use std::sync::{Mutex, PoisonError};
@@ -61,8 +62,9 @@ impl Tools {
         room_id: RoomId,
         channel_id: ChannelId,
         answers_room: bool,
+        handler: Option<std::sync::Arc<dyn roomkit_ai::ExternalToolHandler>>,
     ) -> Self {
-        let reports = Reports::new(host.clone());
+        let reports = Reports::new(host.clone(), handler, room_id.clone());
         Self {
             state: Mutex::default(),
             host: host.filter(|_| answers_room),
@@ -101,13 +103,27 @@ impl Tools {
         None
     }
 
-    /// A permission alone names a call without announcing it. Closing the
-    /// turn will report its decision even if the agent never sends an update.
-    pub(super) fn refuse(&self, update: &Value) {
+    /// Keep the call before awaiting approval, so teardown can cancel it.
+    pub(super) async fn decide(
+        &self,
+        update: &Value,
+        session: &str,
+    ) -> super::permissions::Decision {
+        let call = {
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            state.merge(update).map(|call| call.request.clone())
+        };
+        let Some(call) = call else {
+            return super::permissions::Decision::default();
+        };
+        let id = call.id.clone();
+        let decision = self.reports.decide(call, session).await;
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(call) = state.merge(update) {
-            call.rejected = true;
+        if let Some(call) = state.calls.iter_mut().find(|call| call.request.id == id) {
+            call.rejected = !decision.approved;
+            call.decision = Some(decision.clone());
         }
+        decision
     }
 
     fn start(&self, call: &Call, sender: &mpsc::UnboundedSender<ResponseItem>) {
@@ -126,7 +142,7 @@ impl Tools {
             "tool_calls": [{"id": end.row.tool_id, "name": end.row.tool_name,
                 "result": end.preview, "status": end.row.status}], "round": 0, "duration_ms": end.row.duration_ms
         }));
-        self.reports.send(end.report)
+        self.reports.send(end.report, end.observe_only)
     }
 
     /// Finishing is idempotent, including a Drop racing an arriving update.
@@ -139,7 +155,7 @@ impl Tools {
         let mut rows = Vec::new();
         let mut pending = Vec::new();
         for call in &mut state.calls {
-            if call.finished {
+            if call.finished || (!call.started && call.decision.is_none()) {
                 continue;
             }
             if !call.started {

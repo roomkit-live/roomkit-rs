@@ -54,6 +54,9 @@ impl<S: ConversationStore> RoomKit<S> {
             declaration.channel_type.clone(),
         );
         let channel_id = declaration.channel_id.clone();
+        let external = channel
+            .external_tool_bridge()
+            .map(|bridge| (channel_id.clone(), bridge));
         let auto_greeting = greeting::auto_greeting_agent(&declaration, channel.as_ref());
         let human_input =
             human_input.map(|handler| (channel_id.clone(), handler, Arc::clone(&channel)));
@@ -77,6 +80,9 @@ impl<S: ConversationStore> RoomKit<S> {
             let registration = handler.register(channel_id.as_str())?;
             channel.human_input_registered(registration);
             self.inner.wire_human_input(&channel_id, &handler);
+        }
+        if let Some((channel_id, bridge)) = external {
+            self.inner.wire_external_tools(&channel_id, &bridge);
         }
         drop(self.inner.emit(registered));
         Ok(())

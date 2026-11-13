@@ -6,6 +6,7 @@ mod cancellation;
 mod configuration;
 mod detachment;
 mod directories;
+mod handler_lifecycle;
 mod mcp;
 mod opening;
 mod record;

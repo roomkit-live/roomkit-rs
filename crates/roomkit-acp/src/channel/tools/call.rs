@@ -15,6 +15,7 @@ pub(super) struct Call {
     pub(super) started: bool,
     pub(super) finished: bool,
     pub(super) rejected: bool,
+    pub(super) decision: Option<crate::channel::permissions::Decision>,
     since: Instant,
     result: Value,
     display: Option<Value>,
@@ -27,6 +28,7 @@ impl Call {
             started: false,
             finished: false,
             rejected: false,
+            decision: None,
             since: Instant::now(),
             result: Value::Null,
             display: None,
@@ -69,7 +71,13 @@ impl Call {
     pub(super) fn end(&mut self, failed: bool, interrupted: bool) -> End {
         self.finished = true;
         let outcome = match (failed, interrupted) {
-            _ if self.rejected && (failed || interrupted) => ToolCallOutcome::Refused,
+            _ if self.rejected && (failed || interrupted) => {
+                if self.decision.as_ref().is_some_and(|d| d.failure.is_some()) {
+                    ToolCallOutcome::Failed
+                } else {
+                    ToolCallOutcome::Refused
+                }
+            }
             (_, true) => ToolCallOutcome::Cancelled,
             (true, false) => ToolCallOutcome::Failed,
             (false, false) => ToolCallOutcome::Served,
@@ -85,7 +93,12 @@ impl Call {
             .take(500)
             .collect();
         bound_row(&mut row);
+        let observe_only = self.decision.as_ref().is_some_and(|decision| {
+            outcome == ToolCallOutcome::Refused && decision.channel_refused
+                || decision.failure.is_some() && failed
+        });
         End {
+            observe_only,
             row,
             report,
             preview,
@@ -112,6 +125,10 @@ impl Call {
         let mut report =
             ToolCallReport::new(self.request.clone()).ended(outcome, Value::String(body));
         report.refused_but_ran = row.refused_but_ran;
+        report.error_detail = self
+            .decision
+            .as_ref()
+            .and_then(|d| d.failure.clone().or(d.refusal_detail.clone()));
         report
     }
 
@@ -143,9 +160,16 @@ impl Call {
     fn end_error(&self, result: &Value, failed: bool, interrupted: bool) -> Option<String> {
         if interrupted {
             Some(if self.rejected {
-                roomkit_ai::dumps(
-                    &json!({"error": format!("Tool '{}' was denied", self.request.name)}),
-                )
+                let decision = self.decision.as_ref();
+                decision
+                    .and_then(|d| d.failure_error.clone())
+                    .unwrap_or_else(|| {
+                        let reason = decision
+                            .and_then(|d| d.refusal.clone())
+                            .filter(|r| !r.is_empty())
+                            .unwrap_or_else(|| format!("Tool '{}' was denied", self.request.name));
+                        roomkit_ai::dumps(&json!({"error": reason}))
+                    })
             } else {
                 TURN_ENDED.to_owned()
             })
@@ -173,6 +197,7 @@ fn bound_row(row: &mut ToolCallContent) {
 }
 
 pub(super) struct End {
+    pub(super) observe_only: bool,
     pub(super) row: ToolCallContent,
     pub(super) report: ToolCallReport,
     pub(super) preview: String,

@@ -37,6 +37,7 @@ impl<T: AcpTransport> Connector<T> {
         }
         state.options.remove(room);
         let session = state.sessions.remove(room)?;
+        self.turns.forget(&session);
         Some(Unset {
             connection: state.connection.clone()?,
             session: Some(session),

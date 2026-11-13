@@ -1122,7 +1122,7 @@ reason = "the Python ACP SDK's message queue, None from SDK 0.12.1 on: the conne
 [[missing]]
 python = "roomkit.ACPChannel.__init__"
 params = [
-    "external_tool_handler", "room_history", "context_contributor",
+    "room_history", "context_contributor",
     "name", "role", "description", "instructions",
 ]
 scope = "text"
@@ -1342,4 +1342,32 @@ reason = "Constructor input passed to ProviderError/Exception.args, not a Python
 rust = "roomkit_acp::McpServers"
 approved = "2026-11-12"
 reason = "Python's mcp_servers union of a fixed SDK descriptor list and a per-room callable: enum Fixed/ForRoom and From<Vec<McpServer>> (HITL 5ce911d3)"
+
+
+# External handler subclass state and boxed callbacks (HITL 915d07a5).
+[[exception]]
+rust = "roomkit_ai::ExternalToolHandler"
+members = ["state"]
+approved = "2026-11-13"
+reason = "Rust traits inherit no storage: custom handlers embed ExternalToolHandlerState and return it from state, preserving Python's inherited identity and hook helpers (HITL 915d07a5-8f40-4b74-8f9f-16087e3b9b92)"
+
+[[exception]]
+rust = "roomkit_ai::ExternalToolHandlerState"
+approved = "2026-11-13"
+reason = "Python's inherited handler storage and protected helpers, embedded explicitly by a Rust implementor (HITL 915d07a5-8f40-4b74-8f9f-16087e3b9b92)"
+
+[[exception]]
+rust = "roomkit_ai::ExternalToolFuture"
+approved = "2026-11-13"
+reason = "Object-safe asynchronous handler callbacks return a boxed future, as other callback traits (HITL 915d07a5-8f40-4b74-8f9f-16087e3b9b92)"
+
+[[exception]]
+rust = "roomkit_ai::FireBeforeHookOptions"
+approved = "2026-11-13"
+reason = "Named keyword arguments of Python's protected _fire_before_hook helper (HITL 915d07a5-8f40-4b74-8f9f-16087e3b9b92)"
+
+[[exception]]
+rust = "roomkit_ai::FireOnToolHookOptions"
+approved = "2026-11-13"
+reason = "Named keyword arguments of Python's protected _fire_on_tool_hook helper (HITL 915d07a5-8f40-4b74-8f9f-16087e3b9b92)"
 

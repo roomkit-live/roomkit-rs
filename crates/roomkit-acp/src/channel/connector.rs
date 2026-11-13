@@ -37,6 +37,7 @@ pub(super) struct Connector<T: AcpTransport> {
     additional_directories: Vec<PathBuf>,
     mcp_servers: Option<McpServers>,
     pub(super) turns: Arc<Turns>,
+    pub(super) handler: Arc<super::permissions::HandlerService>,
     /// One connection at a time.
     connecting: Arc<tokio::sync::Mutex<()>>,
     state: Mutex<State<T::Connection>>,
@@ -65,6 +66,7 @@ impl<T: AcpTransport> Connector<T> {
         setup: Metadata,
         additional_directories: Vec<PathBuf>,
         mcp_servers: Option<McpServers>,
+        handler: Option<Arc<dyn roomkit_ai::ExternalToolHandler>>,
     ) -> Self {
         Self {
             transport: Arc::new(transport),
@@ -74,6 +76,7 @@ impl<T: AcpTransport> Connector<T> {
             additional_directories,
             mcp_servers,
             turns: Arc::new(Turns::default()),
+            handler: Arc::new(super::permissions::HandlerService::new(handler)),
             connecting: Arc::new(tokio::sync::Mutex::new(())),
             state: Mutex::new(State {
                 connection: None,
@@ -149,10 +152,12 @@ impl<T: AcpTransport> Connector<T> {
             self.transport.close().await;
             let mut state = self.lock();
             state.sessions.clear();
+            self.turns.clear_rooms();
             state.options.clear();
         }
         let client = Arc::new(ChannelClient {
             turns: Arc::clone(&self.turns),
+            handler: self.handler.handler.clone(),
         });
         // A turn dropped part-way through the handshake closes what it
         // opened, as Python's closes on any exception, still under the
@@ -237,6 +242,7 @@ impl<T: AcpTransport> Connector<T> {
                 .authenticate(AuthenticateRequest::new(method.clone()))
                 .await?;
         }
+        self.handler.start().await?;
         Ok((connection, answer))
     }
 
@@ -278,6 +284,9 @@ impl<T: AcpTransport> Connector<T> {
         self.closed.notify_waiters();
         let mut teardown = Teardown {
             transport: Some(Arc::clone(&self.transport)),
+            handler: Arc::clone(&self.handler),
+            connecting: Arc::clone(&self.connecting),
+            turns: Arc::clone(&self.turns),
         };
         if let Some(connection) = connection {
             let prompting = self.turns.stop();
@@ -286,11 +295,13 @@ impl<T: AcpTransport> Connector<T> {
             let _late =
                 tokio::time::timeout(SHUTDOWN_GRACE, goodbye(connection, prompting, closing)).await;
         }
-        teardown.transport = None;
         // Under the connecting lock, as Python's teardown: a handshake under
         // way, or the close of one that was cut, ends first.
         let _connecting = self.connecting.lock().await;
         self.transport.close().await;
+        self.handler.stop().await;
+        self.turns.clear_rooms();
+        teardown.transport = None;
     }
 }
 
@@ -324,6 +335,9 @@ async fn goodbye<C: AcpConnection>(
 /// caller is cancelled.
 struct Teardown<T: AcpTransport> {
     transport: Option<Arc<T>>,
+    handler: Arc<super::permissions::HandlerService>,
+    connecting: Arc<tokio::sync::Mutex<()>>,
+    turns: Arc<Turns>,
 }
 
 impl<T: AcpTransport> Drop for Teardown<T> {
@@ -332,7 +346,15 @@ impl<T: AcpTransport> Drop for Teardown<T> {
             return;
         };
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            runtime.spawn(async move { transport.close().await });
+            let handler = Arc::clone(&self.handler);
+            let connecting = Arc::clone(&self.connecting);
+            let turns = Arc::clone(&self.turns);
+            runtime.spawn(async move {
+                let _connecting = connecting.lock().await;
+                transport.close().await;
+                handler.stop().await;
+                turns.clear_rooms();
+            });
         }
     }
 }

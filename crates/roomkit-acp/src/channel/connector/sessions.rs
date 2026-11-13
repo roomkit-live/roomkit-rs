@@ -19,6 +19,7 @@ impl<T: AcpTransport> Connector<T> {
         let mut state = self.lock();
         state.options.remove(room);
         let session = state.sessions.remove(room)?;
+        self.turns.forget(&session);
         Some(Unset {
             connection: Arc::clone(state.connection.as_ref()?),
             session: Some(session),
@@ -100,6 +101,7 @@ impl<T: AcpTransport> Connector<T> {
             return Err(AcpError::Runtime("ACPChannel is closed".to_owned()));
         }
         state.sessions.insert(room.clone(), id.clone());
+        self.turns.remember(&id, room);
         state.options.insert(room.clone(), options);
         unset.session = None;
         Ok((id, true))
@@ -263,6 +265,7 @@ impl<T: AcpTransport> Connector<T> {
         let Some(session) = session else {
             return false;
         };
+        self.turns.forget(&session);
         if let Some(connection) = connection {
             Unset {
                 connection,

@@ -59,6 +59,8 @@ mod driver;
 mod environment;
 mod error;
 mod events;
+#[doc(hidden)]
+pub mod external_tools;
 mod gaps;
 mod history;
 mod hooks;

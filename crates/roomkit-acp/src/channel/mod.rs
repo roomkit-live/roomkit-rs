@@ -6,6 +6,7 @@ mod client;
 mod config;
 mod connector;
 mod detachment;
+mod permissions;
 mod preparation;
 mod sessions;
 mod steering;
@@ -63,6 +64,8 @@ pub struct AcpChannelOptions<T = StdioAcpTransport> {
     pub mcp_servers: Option<McpServers>,
     /// Publish a bounded thought preview to room subscribers; false by default.
     pub publish_thinking_text: bool,
+    /// Optional permission and report handler; absent rejects every permission.
+    pub external_tool_handler: Option<Arc<dyn roomkit_ai::ExternalToolHandler>>,
     /// Variables added to a spawned agent's environment (a
     /// [`StdioAcpTransportOptions`]'s); refused with a `transport`.
     pub env: Option<BTreeMap<String, String>>,
@@ -84,6 +87,7 @@ impl<T> Default for AcpChannelOptions<T> {
             additional_directories: None,
             mcp_servers: None,
             publish_thinking_text: false,
+            external_tool_handler: None,
             env: None,
             inherit_env: None,
             authentication_method: None,
@@ -102,6 +106,10 @@ impl<T> fmt::Debug for AcpChannelOptions<T> {
                 &self.command.as_ref().and_then(|command| command.first()),
             )
             .field("transport", &self.transport.is_some())
+            .field(
+                "external_tool_handler",
+                &self.external_tool_handler.is_some(),
+            )
             .field("mcp_servers", &self.mcp_servers)
             .field("publish_thinking_text", &self.publish_thinking_text)
             .field(
@@ -225,6 +233,7 @@ impl<T: AcpTransport> AcpChannel<T> {
             additional_directories,
             mcp_servers,
             publish_thinking_text,
+            external_tool_handler,
             env,
             inherit_env,
             authentication_method,
@@ -281,6 +290,7 @@ impl<T: AcpTransport> AcpChannel<T> {
                     setup,
                     additional_directories,
                     mcp_servers,
+                    external_tool_handler,
                 ),
                 channel_id,
                 cwd,
@@ -328,6 +338,15 @@ impl<T: AcpTransport> fmt::Debug for AcpChannel<T> {
 }
 
 impl<T: AcpTransport> Channel for AcpChannel<T> {
+    fn external_tool_bridge(&self) -> Option<roomkit::external_tools::ExternalToolBridge> {
+        self.shared
+            .connector
+            .handler
+            .handler
+            .as_ref()
+            .map(|handler| handler.state().bridge())
+    }
+
     fn channel_id(&self) -> ChannelId {
         self.shared.channel_id.clone()
     }

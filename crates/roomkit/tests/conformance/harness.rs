@@ -590,6 +590,11 @@ fn walk_rooms(value: &Value, found: &mut BTreeSet<String>) {
 }
 
 fn collect_acp_permissions(run: &Run, observed: &mut Observed) {
+    for (channel, calls) in lock(&run.acp_handlers).iter() {
+        observed
+            .acp_handlers
+            .insert(channel.clone(), lock(calls).clone());
+    }
     for (channel, pipe) in lock(&run.acp_pipes).iter() {
         observed
             .acp_permissions

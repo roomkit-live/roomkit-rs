@@ -14,6 +14,7 @@
 //! - [`ToolPolicy`]: allow and deny patterns (RFC §21.1).
 
 mod builder;
+mod external;
 mod external_rows;
 mod handler;
 pub(crate) mod owner;
@@ -36,6 +37,12 @@ use serde_json::Value;
 
 #[doc(hidden)]
 pub use self::builder::Tools;
+pub use self::external::{
+    BeforeToolDecision, ExternalToolFuture, ExternalToolHandler, ExternalToolHandlerState,
+    FireBeforeHookOptions, FireOnToolHookOptions, OnToolCancelledOptions, OnToolRefusedOptions,
+    OnToolResultOptions, PolicyExternalToolHandler, PolicyExternalToolHandlerOptions,
+    ProcessToolCallOptions, ToolDecision,
+};
 pub use self::handler::{
     Tool, ToolCallContext, ToolEntry, ToolFuture, ToolHandler, compose_tool_handlers,
     current_response_metadata, current_tool_actor_id, current_tool_call,

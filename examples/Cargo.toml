@@ -39,6 +39,7 @@ tokio-tungstenite.workspace = true
 [dev-dependencies]
 # The MCP example's (mcp_tools.rs), which starts itself as its MCP server.
 roomkit-mcp.workspace = true
+roomkit-acp.workspace = true
 tokio = { workspace = true, features = ["process", "signal"] }
 
 [lints]
@@ -49,6 +50,10 @@ workspace = true
 # directory, so an example missing here fails the gate.
 
 # The RFC's Appendix B flows.
+
+[[example]]
+name = "acp_external_handler"
+path = "acp_external_handler.rs"
 
 [[example]]
 name = "echo_room"

@@ -283,6 +283,7 @@ impl Comparison<'_> {
         for (kind, recorded) in [
             ("acp_wire", &self.observed.acp_wire),
             ("acp_permissions", &self.observed.acp_permissions),
+            ("acp_handlers", &self.observed.acp_handlers),
             ("acp_prompts", &self.observed.acp_prompts),
             ("acp_mcp_requests", &self.observed.acp_mcp_requests),
         ] {

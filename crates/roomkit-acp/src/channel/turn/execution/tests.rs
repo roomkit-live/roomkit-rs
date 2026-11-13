@@ -57,6 +57,7 @@ async fn test_close_after_reconstruction_finishes_prevents_replacement_prompt() 
             room.clone(),
             channel.shared.channel_id.clone(),
             true,
+            None,
         )),
     );
     let activity = Arc::new(AtomicBool::new(false));
@@ -127,6 +128,7 @@ async fn test_cancel_after_reconstruction_finishes_prevents_replacement_prompt()
             room.clone(),
             channel.shared.channel_id.clone(),
             true,
+            None,
         )),
     );
     let activity = Arc::new(AtomicBool::new(false));

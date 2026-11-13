@@ -14,6 +14,8 @@ pub(crate) mod mcp;
 #[path = "acp_agents/permissions.rs"]
 pub(crate) mod permissions;
 
+#[path = "acp_agents/handler.rs"]
+pub(crate) mod handler;
 #[path = "acp_agents/refusals.rs"]
 mod refusals;
 
@@ -41,6 +43,7 @@ pub(crate) const ACP: &[&str] = &[
     "additional_directories",
     "mcp_servers",
     "publish_thinking_text",
+    "external_tool_handler",
 ];
 /// The members of its `agent`.
 pub(crate) const AGENT: &[&str] = &[
@@ -107,6 +110,7 @@ pub(crate) fn scripted_acp_channel(
         additional_directories: directories(spec)?,
         mcp_servers: mcp::servers(spec, id.as_str(), run)?,
         publish_thinking_text: thinking::publishes(spec)?,
+        external_tool_handler: handler::build(spec, id.as_str(), run)?,
         session_config: spec
             .get("session_config")
             .and_then(Value::as_object)
