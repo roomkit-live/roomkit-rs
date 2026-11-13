@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use roomkit::model::{ChannelId, EventId, EventType, RoomContext, RoomEvent};
 use roomkit_core::rules::transcript::{
     SPEAKER_ATTRIBUTION_NOTE, fence, is_blank, labelled_text, people_count, turn_labels,
-    turn_sources, without_notes_header_copies,
+    turn_notes, turn_sources, without_notes_header_copies,
 };
 use roomkit_core::rules::visible_events;
 
@@ -113,6 +113,7 @@ impl Input {
                 .filter(|text| !is_blank(text))
                 .map(without_notes_header_copies),
         );
+        sections.extend(turn_notes(&roomkit::discussion_notes(&self.trigger)));
         sections.join("\n\n")
     }
 

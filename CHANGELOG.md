@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- ACP prompts append trusted Discussion notes after the request and replace copied notes headers outside that boundary.
+
 - Standalone ACP instructions use fresh turn sessions, preserve room history and configuration, and release their sessions on completion, cancellation or abandonment.
 
 - ACP channels accept and expose the agent's name, role and description, preserving Python's unset and exact string values.

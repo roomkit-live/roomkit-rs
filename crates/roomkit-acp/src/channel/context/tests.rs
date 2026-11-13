@@ -1,5 +1,7 @@
 //! Formatter boundaries that the integration runner does not fabricate.
 
+mod discussion;
+
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelType, EventId,
     EventSource, EventType, Room, RoomContext, RoomEvent, RoomId, TextContent, Timestamp,
