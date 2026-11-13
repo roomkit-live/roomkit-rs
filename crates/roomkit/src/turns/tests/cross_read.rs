@@ -124,16 +124,21 @@ fn the_fixture_is_the_one_its_generator_wrote() {
 }
 
 /// RFC §1.4, §10.6.3: every message Python's in-memory backend carried for
-/// the turn is read, and writing it back loses none of its members and adds
-/// none: both implementations model a channel's capabilities with the same
-/// members since step 5, lot 2 (its audio and video formats and durations,
-/// no `rate_limit`).
+/// the turn is read, and writing it back loses none of its members. This
+/// historical fixture predates the optional history boundary: its absence
+/// reads as unknown, written as null. That is the only added member.
 #[test]
 fn every_message_python_carried_reads_and_rewrites_with_nothing_lost() {
     let (mut lost, mut added) = (Vec::new(), BTreeSet::new());
     let lines = lines();
     for (line, (family, message)) in lines.iter().enumerate() {
         let after = rewritten(family, message);
+        if family == "request" {
+            assert_eq!(
+                after.pointer("/context/history_start_index"),
+                Some(&Value::Null)
+            );
+        }
         differences(
             &format!("{line}:{family}"),
             message,
@@ -150,6 +155,31 @@ fn every_message_python_carried_reads_and_rewrites_with_nothing_lost() {
     let added: BTreeSet<String> = added.iter().map(|path| member(path)).collect();
     assert_eq!(
         (lines.len(), lost, added),
-        (29, BTreeSet::new(), BTreeSet::new())
+        (
+            29,
+            BTreeSet::new(),
+            BTreeSet::from(["context.history_start_index".to_owned()])
+        )
     );
+}
+
+/// Python: tests/test_context_history_boundary.py::test_the_optional_boundary_survives_serialization_and_rejects_negative_indices
+/// An explicitly supplied boundary survives the same request codec; this
+/// extends the historical request, not its claim of Python provenance.
+#[test]
+fn an_explicit_history_boundary_survives_the_request_codec() {
+    let (_, request) = lines()
+        .into_iter()
+        .find(|(family, _)| family == "request")
+        .unwrap();
+    for boundary in [None, Some(0), Some(7)] {
+        let mut message = request.clone();
+        message["context"]["history_start_index"] = serde_json::json!(boundary);
+        let parsed: TurnRequest = serde_json::from_value(message.clone()).unwrap();
+        assert_eq!(parsed.context.history_start_index, boundary);
+        let after = serde_json::to_value(parsed).unwrap();
+        let (mut lost, mut added) = (Vec::new(), BTreeSet::new());
+        differences("request", &message, &after, &mut lost, &mut added);
+        assert_eq!((lost, added), (Vec::new(), BTreeSet::new()));
+    }
 }
