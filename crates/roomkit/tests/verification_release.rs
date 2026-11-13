@@ -33,6 +33,9 @@ use roomkit::{
 use serde_json::Value;
 use tokio::sync::watch;
 
+#[path = "support/hook_release.rs"]
+mod hook_release;
+
 const ALICE: &str = "+15550000001";
 const KEY: &str = "task-42";
 const HELD_KEY: &str = "roomkit:verification_held";
@@ -299,4 +302,59 @@ async fn the_handle_does_not_reach_a_held_message_once_its_delivery_set_ran() {
 
     assert_eq!(answers(&kit).await, 1);
     kit.close().await.unwrap();
+}
+
+// Python: tests/test_verification_release_cancel.py::test_a_release_from_a_hook_whose_work_then_closes_the_room_is_answered_by_no_agent[memory]
+/// The released answer leaves its place in the lane once the hook's work is
+/// over, on the room as that work left it: closed, it refuses the answer
+/// before any agent runs (RFC §11.7.6).
+#[tokio::test]
+async fn a_release_from_a_hook_whose_work_then_closes_the_room_is_answered_by_no_agent() {
+    let released = hook_release::a_hook_releases(InMemoryStore::new(), true).await;
+
+    assert_eq!(
+        (
+            released.note.blocked,
+            released.note.reason.as_deref(),
+            released.asked.clone(),
+            released.refused.clone()
+        ),
+        (
+            true,
+            Some("room_closed"),
+            Vec::<String>::new(),
+            vec!["inbound".to_owned(), "regenerate".to_owned()]
+        )
+    );
+    released.kit.close().await.unwrap();
+}
+
+// Python: tests/test_verification_release_cancel.py::test_a_release_from_a_hook_whose_work_then_lets_its_event_through_is_answered_first[memory]
+/// The released answer's place in the lane is ahead of the hook's event's
+/// delivery: the released message is answered first (RFC §11.7.6).
+#[tokio::test]
+async fn a_release_from_a_hook_whose_work_then_lets_its_event_through_is_answered_first() {
+    let released = hook_release::a_hook_releases(InMemoryStore::new(), false).await;
+    let note = released.note.event.clone().unwrap();
+    let replies = released.replies().await;
+
+    assert_eq!(
+        (
+            released.note.blocked,
+            released.asked.clone(),
+            replies
+                .iter()
+                .map(|reply| reply.responds_to.clone())
+                .collect::<Vec<_>>(),
+            released.refused.clone()
+        ),
+        (
+            false,
+            vec!["Wire 500 to Bob".to_owned(), "Verified by phone".to_owned()],
+            vec![Some(released.held.id.clone()), Some(note.id.clone())],
+            Vec::<String>::new()
+        )
+    );
+    assert!(note.index < replies[0].index);
+    released.kit.close().await.unwrap();
 }
