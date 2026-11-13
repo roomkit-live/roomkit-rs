@@ -7,6 +7,7 @@ mod config;
 mod connector;
 mod context;
 mod detachment;
+mod identity;
 mod permissions;
 mod preparation;
 mod sessions;
@@ -72,6 +73,12 @@ pub struct AcpChannelOptions<T = StdioAcpTransport> {
     pub room_history: i64,
     /// Optional async host blocks, resolved separately for every eligible turn.
     pub context_contributor: Option<AcpContextContributor>,
+    /// The agent's display name; absent by default.
+    pub name: Option<String>,
+    /// The agent's role; absent by default.
+    pub role: Option<String>,
+    /// What the agent does; absent by default.
+    pub description: Option<String>,
     /// Standing application instructions sent until a session's first normal RPC return.
     pub instructions: Option<String>,
     /// Variables added to a spawned agent's environment (a
@@ -98,6 +105,9 @@ impl<T> Default for AcpChannelOptions<T> {
             external_tool_handler: None,
             room_history: ROOM_HISTORY,
             context_contributor: None,
+            name: None,
+            role: None,
+            description: None,
             instructions: None,
             env: None,
             inherit_env: None,
@@ -124,6 +134,9 @@ impl<T> fmt::Debug for AcpChannelOptions<T> {
             .field("mcp_servers", &self.mcp_servers)
             .field("room_history", &self.room_history)
             .field("context_contributor", &self.context_contributor)
+            .field("name", &self.name.is_some())
+            .field("role", &self.role.is_some())
+            .field("description", &self.description.is_some())
             .field("instructions", &self.instructions.is_some())
             .field("publish_thinking_text", &self.publish_thinking_text)
             .field(
@@ -189,6 +202,9 @@ struct Shared<T: AcpTransport> {
     publish_thinking_text: bool,
     room_history: usize,
     context_contributor: Option<AcpContextContributor>,
+    name: Option<String>,
+    role: Option<String>,
+    description: Option<String>,
     instructions: Option<String>,
     connector: Connector<T>,
     /// Each room's turn lock: one turn of a room at a time.
@@ -253,6 +269,9 @@ impl<T: AcpTransport> AcpChannel<T> {
             external_tool_handler,
             room_history,
             context_contributor,
+            name,
+            role,
+            description,
             instructions,
             env,
             inherit_env,
@@ -318,6 +337,9 @@ impl<T: AcpTransport> AcpChannel<T> {
                 publish_thinking_text,
                 room_history,
                 context_contributor,
+                name,
+                role,
+                description,
                 instructions: instructions.filter(|value| !is_blank(value)),
                 rooms: Mutex::new(HashMap::new()),
                 active: AtomicUsize::new(0),

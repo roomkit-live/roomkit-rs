@@ -1119,14 +1119,6 @@ params = ["queue"]
 approved = "2026-11-06"
 reason = "the Python ACP SDK's message queue, None from SDK 0.12.1 on: the connection roomkit-acp writes has none (HITL 3592a76c; architecture: ACP)"
 
-[[missing]]
-python = "roomkit.ACPChannel.__init__"
-params = [
-    "name", "role", "description",
-]
-scope = "text"
-reason = "not in 0.x yet: parity stream L's later lots (RMK-1429): thinking, permissions, session setup, the catch-up and instructions, the discussion"
-
 [[exception]]
 rust = "roomkit_mcp::McpToolProvider"
 members = ["connect", "close"]

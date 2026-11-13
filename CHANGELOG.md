@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- ACP channels accept and expose the agent's name, role and description, preserving Python's unset and exact string values.
+
 - ACP channels send standing application instructions once per acknowledged session, repeating them after recovery and rejecting copied runtime headers.
 - A received ACP reply acknowledges its session even if the response reader stops before consuming the terminal item.
 - A completed turn publisher no longer releases a replacement drain, preserving the order of tool events on multiple workers.
