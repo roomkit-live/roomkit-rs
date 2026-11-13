@@ -43,6 +43,7 @@ fn answer(sim: &mut Sim, task: &RoomEvent, answer: &str) -> InboundResult {
         bindings: sim.bindings.clone(),
         participants: Vec::new(),
         recent_events: vec![task.clone()],
+        history_start_index: None,
         author_register: None,
     };
     let responses = TurnResponses {

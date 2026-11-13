@@ -2515,6 +2515,7 @@ mod an_adoption {
             bindings: sim.bindings.clone(),
             participants: Vec::new(),
             recent_events: Vec::new(),
+            history_start_index: None,
             author_register: None,
         };
         inbound

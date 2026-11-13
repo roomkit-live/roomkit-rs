@@ -133,7 +133,10 @@ mod tests {
             serde_json::from_value::<RoomContext>(value.clone()).unwrap(),
             context
         );
-        value.as_object_mut().unwrap().remove("history_start_index");
+        value
+            .as_object_mut()
+            .unwrap()
+            .shift_remove("history_start_index");
         assert_eq!(
             serde_json::from_value::<RoomContext>(value.clone())
                 .unwrap()

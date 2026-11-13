@@ -96,33 +96,6 @@ struct Callback {
     run: Weak<Run>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Python: tests/conformance/test_acp_context_fixture.py
-    #[test]
-    fn malformed_context_and_history_are_fixture_failures() {
-        for spec in [
-            json!(null),
-            json!({}),
-            json!({"responses":null}),
-            json!({"responses":[null]}),
-            json!({"responses":[{"blocks":"not a list"}]}),
-            json!({"responses":[{"blocks":[12]}]}),
-            json!({"responses":[{"blocks":[],"error":"both"}]}),
-            json!({"responses":[{"error":12}]}),
-            json!({"responses":[{"blocks":[],"gate":null}]}),
-            json!({"responses":[{"blocks":[],"unknown":true}]}),
-        ] {
-            assert!(parse(&spec).is_err(), "{spec}");
-        }
-        for value in [json!(true), json!(-1), json!("20"), json!(0.5), json!(null)] {
-            assert!(history(&json!({"room_history":value})).is_err(), "{value}");
-        }
-    }
-}
-
 impl Callback {
     async fn resolve(
         &self,
@@ -179,4 +152,31 @@ pub(crate) fn build(
         let callback = Arc::clone(&callback);
         async move { callback.resolve(context, event).await }
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Python: tests/conformance/test_acp_context_fixture.py
+    #[test]
+    fn malformed_context_and_history_are_fixture_failures() {
+        for spec in [
+            json!(null),
+            json!({}),
+            json!({"responses":null}),
+            json!({"responses":[null]}),
+            json!({"responses":[{"blocks":"not a list"}]}),
+            json!({"responses":[{"blocks":[12]}]}),
+            json!({"responses":[{"blocks":[],"error":"both"}]}),
+            json!({"responses":[{"error":12}]}),
+            json!({"responses":[{"blocks":[],"gate":null}]}),
+            json!({"responses":[{"blocks":[],"unknown":true}]}),
+        ] {
+            assert!(parse(&spec).is_err(), "{spec}");
+        }
+        for value in [json!(true), json!(-1), json!("20"), json!(0.5), json!(null)] {
+            assert!(history(&json!({"room_history":value})).is_err(), "{value}");
+        }
+    }
 }

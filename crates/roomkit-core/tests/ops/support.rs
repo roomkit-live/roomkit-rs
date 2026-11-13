@@ -2145,6 +2145,7 @@ impl Sim {
             bindings: self.bindings.clone(),
             participants: self.participants.clone(),
             recent_events: self.timeline.iter().skip(skip).cloned().collect(),
+            history_start_index: None,
             author_register: self.author_register.clone(),
         }
     }
