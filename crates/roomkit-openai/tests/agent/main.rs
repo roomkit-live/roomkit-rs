@@ -579,9 +579,7 @@ async fn an_answer_that_is_no_chat_completion_fails_the_turn() {
 
 #[tokio::test]
 async fn an_unreachable_endpoint_fails_the_turn_without_naming_its_url() {
-    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = closed.local_addr().unwrap();
-    drop(closed);
+    let (_refusing, address) = fake::refused_address();
     let kit = RoomKit::new(RoomKitOptions::default());
     let sms = RecordingTransport::new(
         channel("sms"),

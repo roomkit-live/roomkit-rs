@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio::task::JoinHandle;
 
 /// What the fake answers a request with.
@@ -310,6 +310,17 @@ impl Drop for FakeOpenAi {
     fn drop(&mut self) {
         self.server.abort();
     }
+}
+
+/// A local address whose connections are refused, for as long as the
+/// returned socket lives: bound without listening. No other socket can bind
+/// it meanwhile, as a sibling test's fake could take a port bound and then
+/// dropped (RMK-1298).
+pub(crate) fn refused_address() -> (TcpSocket, std::net::SocketAddr) {
+    let socket = TcpSocket::new_v4().unwrap();
+    socket.bind(([127, 0, 0, 1], 0).into()).unwrap();
+    let address = socket.local_addr().unwrap();
+    (socket, address)
 }
 
 /// Answers each connection with the next reply.

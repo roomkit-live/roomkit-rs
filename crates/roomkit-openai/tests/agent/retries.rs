@@ -16,7 +16,7 @@ use roomkit_openai::{OpenAiAiProvider, OpenAiConfig};
 use serde_json::json;
 use tokio::time::Instant;
 
-use super::fake::{FakeOpenAi, Reply};
+use super::fake::{FakeOpenAi, Reply, refused_address};
 
 /// A wait a retried answer asks for, so that a test takes no backoff.
 const SOON: (&str, &str) = ("retry-after-ms", "1");
@@ -88,9 +88,8 @@ fn status_of(error: &ProviderError) -> (bool, Option<u16>) {
 // Python: tests/test_provider_transport_retryable.py::test_a_transport_failure_is_retryable
 #[tokio::test]
 async fn a_transport_failure_is_retryable() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let refused = format!("http://{}/v1", listener.local_addr().unwrap());
-    drop(listener);
+    let (_refusing, address) = refused_address();
+    let refused = format!("http://{address}/v1");
     for streamed in [false, true] {
         let provider = OpenAiAiProvider::new(config(&refused, 0)).unwrap();
         let error = answer(&provider, streamed).await.unwrap_err();
