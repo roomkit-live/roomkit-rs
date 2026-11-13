@@ -12,11 +12,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
-use roomkit::model::{ChannelId, ChannelType, InboundMessage, RoomId, TextContent};
-use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
+use roomkit::model::{
+    ChannelBinding, ChannelId, ChannelOutput, ChannelType, EventContent, EventType, InboundMessage,
+    RoomContext, RoomEvent, RoomId, TextContent,
+};
+use roomkit::testing::{EventTap, RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, ConversationStore, CreateRoomOptions, InMemoryLockManager,
-    ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions, RoomLockManager,
+    AttachChannelOptions, Channel, ChannelError, ConversationStore, CreateRoomOptions,
+    HookExecution, HookOptions, HookTrigger, InMemoryLockManager, ProcessInboundOptions, RoomKit,
+    RoomKitError, RoomKitOptions, RoomLockManager,
 };
 use roomkit_postgres::{
     PostgresAdvisoryLockManager, PostgresAdvisoryLockManagerOptions, PostgresStore,
@@ -24,7 +28,7 @@ use roomkit_postgres::{
 };
 use tokio::sync::oneshot;
 
-use crate::support::{TempSchema, dsn};
+use crate::support::{SMALL_POOL, TempSchema, dsn};
 
 fn room(id: &str) -> RoomId {
     RoomId::new(id).unwrap()
@@ -507,4 +511,507 @@ async fn the_advisory_lock_is_not_warned_of() {
         ..RoomKitOptions::with_store(PostgresStore::new(PostgresStoreOptions::default()))
     });
     assert_eq!(warnings.containing("is paired with").len(), 1);
+}
+
+// A process killed holding a room's lock or its delivery claim (RFC §13.5): the
+// test binary run again as the holder, in a process of its own, killed by SIGKILL.
+// It closes nothing, so only the server, ending the dead process's sessions, lets
+// its locks go (RK-13.5-003, RK-13.5-005).
+
+/// The holder's environment, set by the test that runs it: the connection string of
+/// the test's schema, the room it sends its message to, and the file it writes
+/// where it holds what it holds.
+const HOLDER_DSN: &str = "ROOMKIT_TEST_HOLDER_DSN";
+const HOLDER_ROOM: &str = "ROOMKIT_TEST_HOLDER_ROOM";
+const HOLDER_OUT: &str = "ROOMKIT_TEST_HOLDER_OUT";
+
+/// The application name of the holder's sessions, by which `pg_locks` tells its locks.
+const HOLDER_APP: &str = "roomkit_killed_holder";
+
+/// What the holder holds until it is killed.
+#[derive(Clone, Copy, Debug)]
+enum Hold {
+    /// The room's lock, in a sync `BEFORE_BROADCAST` hook that never returns,
+    /// before its commit: it writes `holding` from the hook.
+    RoomLock,
+    /// The room's delivery claim, in `out`'s delivery of its committed message,
+    /// which never returns: it writes `delivering <index>` from the delivery.
+    DeliveryClaim,
+}
+
+/// `id`'s advisory lock key, as the manager computes it: Python's `_advisory_key`.
+fn advisory_key(id: &str) -> i64 {
+    use blake2::digest::consts::U8;
+    use blake2::{Blake2b, Digest};
+    i64::from_be_bytes(Blake2b::<U8>::digest(id.as_bytes()).into())
+}
+
+/// `line`, written to `out` whole: the test reads it while it is written.
+fn say(out: &std::path::Path, line: &str) {
+    let partial = out.with_extension("partial");
+    std::fs::write(&partial, format!("{line}\n")).unwrap();
+    std::fs::rename(&partial, out).unwrap();
+}
+
+/// A transport whose delivery says which event it holds and never returns.
+#[derive(Debug)]
+struct Holding {
+    out: std::path::PathBuf,
+}
+
+impl Channel for Holding {
+    fn channel_id(&self) -> ChannelId {
+        ChannelId::new("out").unwrap()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::WEBSOCKET
+    }
+
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "the trait's method is a future"
+    )]
+    async fn handle_inbound(
+        &self,
+        _message: InboundMessage,
+        _context: RoomContext,
+    ) -> Result<RoomEvent, ChannelError> {
+        Err(ChannelError::from("the holder's out receives no message"))
+    }
+
+    async fn deliver(
+        &self,
+        event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> Result<ChannelOutput, ChannelError> {
+        say(&self.out, &format!("delivering {}", event.index));
+        std::future::pending().await
+    }
+}
+
+/// In the holder's process, run again by a test: opens a store and a manager of
+/// its own on the test's schema, as another process of the deployment does,
+/// sends one message to the room, whose `src` and `out` the test attached, and
+/// holds `hold` until it is killed. `false` in the test's own process.
+async fn holds_in_this_process(hold: Hold) -> bool {
+    let (Ok(dsn), Ok(room_id), Some(out)) = (
+        std::env::var(HOLDER_DSN),
+        std::env::var(HOLDER_ROOM),
+        std::env::var_os(HOLDER_OUT),
+    ) else {
+        return false;
+    };
+    let out = std::path::PathBuf::from(out);
+    let store = PostgresStore::new(PostgresStoreOptions {
+        dsn: Some(dsn.clone()),
+        ..PostgresStoreOptions::default()
+    });
+    store.init(SMALL_POOL).await.unwrap();
+    let locks = PostgresAdvisoryLockManager::new(PostgresAdvisoryLockManagerOptions {
+        dsn: Some(dsn),
+        max_size: 4,
+        ..PostgresAdvisoryLockManagerOptions::default()
+    });
+    locks.init().await.unwrap();
+    let kit = RoomKit::new(RoomKitOptions {
+        lock_manager: Some(Arc::new(locks)),
+        ..RoomKitOptions::with_store(store)
+    });
+    kit.register_channel(RecordingTransport::new(
+        ChannelId::new("src").unwrap(),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    ))
+    .unwrap();
+    match hold {
+        Hold::RoomLock => {
+            kit.register_channel(RecordingTransport::new(
+                ChannelId::new("out").unwrap(),
+                ChannelType::WEBSOCKET,
+                RecordingTransportOptions::default(),
+            ))
+            .unwrap();
+            let options = HookOptions {
+                execution: HookExecution::Sync,
+                timeout: Duration::from_secs(600),
+                ..HookOptions::default()
+            };
+            let hold_the_room = move |_event: RoomEvent, _context: RoomContext| {
+                let out = out.clone();
+                async move {
+                    say(&out, "holding");
+                    std::future::pending::<()>().await;
+                }
+            };
+            kit.hook(HookTrigger::BeforeBroadcast, hold_the_room, options)
+                .unwrap();
+        }
+        Hold::DeliveryClaim => kit.register_channel(Holding { out }).unwrap(),
+    }
+    let message = InboundMessage::new(
+        ChannelId::new("src").unwrap(),
+        "u1",
+        TextContent::new("from the killed process"),
+    );
+    let options = ProcessInboundOptions {
+        room_id: Some(room(&room_id)),
+        ..ProcessInboundOptions::default()
+    };
+    kit.process_inbound(message, options).await.unwrap();
+    true
+}
+
+/// The test binary run again as `test`'s holder, killed when dropped.
+struct Holder {
+    child: std::process::Child,
+    out: std::path::PathBuf,
+}
+
+impl Holder {
+    /// Runs `test` again in a process of its own, as the holder of `room_id` on
+    /// `schema`.
+    fn start(test: &str, schema: &TempSchema, room_id: &RoomId) -> Self {
+        let out = std::env::temp_dir().join(format!("{}-holder.out", schema.name()));
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test, "--test-threads=1"])
+            .env(
+                HOLDER_DSN,
+                format!("{}&application_name={HOLDER_APP}", schema.dsn()),
+            )
+            .env(HOLDER_ROOM, room_id.as_str())
+            .env(HOLDER_OUT, &out)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        Self { child, out }
+    }
+
+    /// The line the holder wrote, once it starts with `prefix`; fails when the
+    /// holder ends first, or after twenty seconds.
+    async fn said(&mut self, prefix: &str) -> String {
+        let mut said = String::new();
+        for _ in 0..2000 {
+            said = std::fs::read_to_string(&self.out).unwrap_or_default();
+            if said.starts_with(prefix) {
+                break;
+            }
+            let ended = self.child.try_wait().unwrap();
+            assert!(
+                ended.is_none(),
+                "the holder ended ({ended:?}) before writing {prefix:?}: {}",
+                self.stderr()
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            said.starts_with(prefix),
+            "the holder wrote {said:?}, not {prefix:?}"
+        );
+        said.trim_end().to_owned()
+    }
+
+    /// What the holder wrote to its standard error, once it ended.
+    fn stderr(&mut self) -> String {
+        let mut stderr = String::new();
+        if let Some(mut pipe) = self.child.stderr.take() {
+            std::io::Read::read_to_string(&mut pipe, &mut stderr).unwrap();
+        }
+        stderr
+    }
+
+    /// Kills the holder with SIGKILL, and returns the signal that ended it.
+    fn kill(&mut self) -> Option<i32> {
+        use std::os::unix::process::ExitStatusExt;
+        // A process already gone cannot be killed again.
+        let _already_gone = self.child.kill();
+        self.child.wait().unwrap().signal()
+    }
+}
+
+impl Drop for Holder {
+    fn drop(&mut self) {
+        let _already_gone = self.child.kill();
+        let _waited = self.child.wait();
+        let _removed = std::fs::remove_file(&self.out);
+        let _removed = std::fs::remove_file(self.out.with_extension("partial"));
+    }
+}
+
+/// The sessions `pg_locks` lists on the advisory lock `key` of this database, the
+/// granted first: each one's pid, whether it holds the lock or waits on it, and
+/// whether it is the holder's.
+async fn sessions_on(schema: &TempSchema, key: i64) -> Vec<(i32, bool, bool)> {
+    let unsigned = u64::from_be_bytes(key.to_be_bytes());
+    let (classid, objid) = (
+        u32::try_from(unsigned >> 32).unwrap(),
+        u32::try_from(unsigned & 0xFFFF_FFFF).unwrap(),
+    );
+    let rows = schema
+        .client()
+        .await
+        .query(
+            "SELECT l.pid, l.granted, a.application_name = $3 FROM pg_locks l \
+             JOIN pg_stat_activity a ON a.pid = l.pid \
+             WHERE l.locktype = 'advisory' AND l.objsubid = 1 \
+             AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database()) \
+             AND l.classid = $1 AND l.objid = $2 ORDER BY NOT l.granted",
+            &[&classid, &objid, &HOLDER_APP],
+        )
+        .await
+        .unwrap();
+    rows.iter()
+        .map(|row| (row.get(0), row.get(1), row.get(2)))
+        .collect()
+}
+
+/// The pid of the holder's session granted the advisory lock `key`, the only
+/// session listed on it.
+async fn held_by_the_holder(schema: &TempSchema, key: i64) -> i32 {
+    let sessions = sessions_on(schema, key).await;
+    assert_eq!(
+        sessions
+            .iter()
+            .map(|&(_, granted, holder)| (granted, holder))
+            .collect::<Vec<_>>(),
+        [(true, true)]
+    );
+    sessions.first().unwrap().0
+}
+
+/// The sessions on the advisory lock `key`, once one of them waits on it; fails
+/// after ten seconds.
+async fn until_waited_on(schema: &TempSchema, key: i64) -> Vec<(i32, bool, bool)> {
+    let mut sessions = sessions_on(schema, key).await;
+    for _ in 0..1000 {
+        if sessions.iter().any(|&(_, granted, _)| !granted) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        sessions = sessions_on(schema, key).await;
+    }
+    sessions
+}
+
+/// Returns once the server lists no lock of the session `pid`; fails after ten
+/// seconds.
+async fn until_gone(schema: &TempSchema, pid: i32) {
+    let watcher = schema.client().await;
+    let mut held = 0_i64;
+    for _ in 0..1000 {
+        held = watcher
+            .query_one("SELECT count(*) FROM pg_locks WHERE pid = $1", &[&pid])
+            .await
+            .unwrap()
+            .get(0);
+        if held == 0 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(held, 0, "the killed session {pid} still holds locks");
+}
+
+/// A kit on `schema` with a store and a manager of its own, as another process of
+/// the deployment opens them, with `src` and the recording `out` attached to a
+/// room of the schema's own, which it returns.
+async fn own_kit(
+    schema: &TempSchema,
+    delivery_gap_timeout: Duration,
+) -> (RoomKit<PostgresStore>, RecordingTransport, RoomId) {
+    let kit = RoomKit::new(RoomKitOptions {
+        lock_manager: Some(Arc::new(manager(schema).await)),
+        delivery_gap_timeout,
+        ..RoomKitOptions::with_store(schema.initialized_store().await)
+    });
+    let out = RecordingTransport::new(
+        ChannelId::new("out").unwrap(),
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(RecordingTransport::new(
+        ChannelId::new("src").unwrap(),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    ))
+    .unwrap();
+    kit.register_channel(out.clone()).unwrap();
+    // Advisory locks are the database's, whatever the schema: a room of its own.
+    let room_id = room(&format!("room-{}", schema.name()));
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id.clone()),
+        ..CreateRoomOptions::default()
+    })
+    .await
+    .unwrap();
+    for id in ["src", "out"] {
+        kit.attach_channel(
+            &room_id,
+            &ChannelId::new(id).unwrap(),
+            AttachChannelOptions::default(),
+        )
+        .await
+        .unwrap();
+    }
+    (kit, out, room_id)
+}
+
+/// This process's message to `room_id`.
+fn after_the_kill(room_id: &RoomId) -> (InboundMessage, ProcessInboundOptions) {
+    let message = InboundMessage::new(
+        ChannelId::new("src").unwrap(),
+        "u1",
+        TextContent::new("after the kill"),
+    );
+    let options = ProcessInboundOptions {
+        room_id: Some(room_id.clone()),
+        ..ProcessInboundOptions::default()
+    };
+    (message, options)
+}
+
+// Python: tests/test_postgres_multiprocess.py::test_a_room_lock_a_killed_process_held_is_released_and_the_room_goes_on
+/// RK-13.5-003: a process holds a room's lock in a hook before its commit, and
+/// this process's kit waits on it on the server. The holder killed, the server
+/// ends its sessions and drops its lock: the kit takes the lock and commits, and
+/// the killed process's message was never stored.
+#[tokio::test]
+async fn a_room_lock_a_killed_process_held_is_released_and_the_room_goes_on() {
+    if holds_in_this_process(Hold::RoomLock).await || dsn().is_none() {
+        return;
+    }
+    let schema = TempSchema::new().await;
+    let (kit, _out, room_id) = own_kit(&schema, Duration::from_secs(30)).await;
+    let mut holder = Holder::start(
+        "a_room_lock_a_killed_process_held_is_released_and_the_room_goes_on",
+        &schema,
+        &room_id,
+    );
+    holder.said("holding").await;
+    let key = advisory_key(room_id.as_str());
+    let holder_pid = held_by_the_holder(&schema, key).await;
+    let sending = tokio::spawn({
+        let (kit, (message, options)) = (kit.clone(), after_the_kill(&room_id));
+        async move { kit.process_inbound(message, options).await }
+    });
+    let waiting = until_waited_on(&schema, key).await;
+    // The holder's session holds it, one of this kit's waits on it.
+    assert_eq!(
+        waiting
+            .iter()
+            .map(|&(pid, granted, holder)| (pid == holder_pid, granted, holder))
+            .collect::<Vec<_>>(),
+        [(true, true, true), (false, false, false)]
+    );
+    assert!(!sending.is_finished());
+
+    let signal = holder.kill();
+    let result = tokio::time::timeout(Duration::from_secs(10), sending)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    until_gone(&schema, holder_pid).await;
+    let store = schema.initialized_store().await;
+    let events = store
+        .list_events(&room_id, roomkit::store::ListEventsOptions::default())
+        .await
+        .unwrap();
+    kit.close().await.unwrap();
+    store.close().await;
+
+    assert_eq!(signal, Some(9));
+    assert!(!result.blocked && result.event.is_some(), "{result:?}");
+    let messages: Vec<&str> = events
+        .iter()
+        .filter(|event| event.r#type == EventType::Message)
+        .filter_map(|event| {
+            if let EventContent::Text(text) = &event.content {
+                Some(text.body.as_str())
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(messages, ["after the kill"]);
+    let left = sessions_on(&schema, key).await;
+    assert!(left.is_empty(), "{left:?}");
+}
+
+// Python: tests/test_postgres_multiprocess.py::test_a_delivery_claim_a_killed_process_held_leaves_its_index_skipped
+/// RK-13.5-005: a process committed index N and holds the room's delivery claim,
+/// delivering N, when it is killed. The server drops the claim with its sessions;
+/// this process's next message, N+1, waits on the hole at N for
+/// `delivery_gap_timeout`, skips it with `delivery_skipped`, and is delivered once,
+/// the cursor at N+1.
+#[tokio::test]
+async fn a_delivery_claim_a_killed_process_held_leaves_its_index_skipped() {
+    if holds_in_this_process(Hold::DeliveryClaim).await || dsn().is_none() {
+        return;
+    }
+    let gap = Duration::from_millis(300);
+    let schema = TempSchema::new().await;
+    let (kit, out, room_id) = own_kit(&schema, gap).await;
+    let tap = EventTap::on(&kit, &["delivery_skipped"]);
+    let mut holder = Holder::start(
+        "a_delivery_claim_a_killed_process_held_leaves_its_index_skipped",
+        &schema,
+        &room_id,
+    );
+    let said = holder.said("delivering ").await;
+    let lost: u64 = said.trim_start_matches("delivering ").parse().unwrap();
+    let claim = advisory_key(&format!("\0__delivery__:{}", room_id.as_str()));
+    let holder_pid = held_by_the_holder(&schema, claim).await;
+
+    let signal = holder.kill();
+    until_gone(&schema, holder_pid).await;
+    let store = schema.initialized_store().await;
+    let before = store.get_room(&room_id).await.unwrap().unwrap();
+    let started = tokio::time::Instant::now();
+    let (message, options) = after_the_kill(&room_id);
+    let result = tokio::time::timeout(
+        Duration::from_secs(10),
+        kit.process_inbound(message, options),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let waited = started.elapsed();
+    let after = store.get_room(&room_id).await.unwrap().unwrap();
+    kit.close().await.unwrap();
+    store.close().await;
+
+    assert_eq!(signal, Some(9));
+    let lost_signed = i64::try_from(lost).unwrap();
+    assert_eq!(
+        (before.latest_index, before.delivered_index),
+        (Some(lost), lost_signed - 1)
+    );
+    assert_eq!(result.event.map(|event| event.index), Some(lost + 1));
+    assert!(waited >= gap, "{waited:?}");
+    let skipped: Vec<(u64, u64)> = tap
+        .events()
+        .iter()
+        .map(|skip| {
+            (
+                skip.data["from_index"].as_u64().unwrap(),
+                skip.data["to_index"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(skipped, [(lost, lost)]);
+    let delivered: Vec<u64> = out
+        .deliveries()
+        .iter()
+        .map(|delivery| delivery.event.index)
+        .collect();
+    assert_eq!(delivered, [lost + 1]);
+    assert_eq!(
+        (after.latest_index, after.delivered_index),
+        (Some(lost + 1), lost_signed + 1)
+    );
+    let left = sessions_on(&schema, claim).await;
+    assert!(left.is_empty(), "{left:?}");
 }
