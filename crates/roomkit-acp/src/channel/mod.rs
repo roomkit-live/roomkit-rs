@@ -462,8 +462,8 @@ impl<T: AcpTransport> Channel for AcpChannel<T> {
 
     /// Prompts the room's session with `event` (RFC §6.4), the turn's
     /// stream read as the agent answers; nothing for the channel's own
-    /// events, an event that opens no turn (RFC §10.3) or one whose text
-    /// is blank.
+    /// events, an event that opens no turn (RFC §10.3), or an event with
+    /// no text, host content or Discussion notes.
     async fn on_event(
         &self,
         event: RoomEvent,
@@ -477,7 +477,8 @@ impl<T: AcpTransport> Channel for AcpChannel<T> {
         let blocks =
             context::contributed_blocks(self.shared.context_contributor.as_ref(), &context, &event)
                 .await;
-        if is_blank(&text) && blocks.is_empty() {
+        let notes = context::notes(&event);
+        if is_blank(&text) && blocks.is_empty() && notes.is_none() {
             return Ok(ChannelOutput::empty());
         }
         if event.r#type == EventType::Instruction {
@@ -499,6 +500,7 @@ impl<T: AcpTransport> Channel for AcpChannel<T> {
                     trigger: event.clone(),
                     text,
                     blocks,
+                    notes,
                 },
                 record: record.clone(),
                 host: host.clone(),

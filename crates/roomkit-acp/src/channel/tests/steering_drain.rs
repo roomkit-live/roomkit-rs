@@ -65,6 +65,7 @@ impl Channel for Reading {
                 room_id: context.room.id.clone(),
                 event_id: event.id.to_string(),
                 input: crate::channel::context::Input {
+                    notes: None,
                     context,
                     trigger: event,
                     text: "hello".to_owned(),

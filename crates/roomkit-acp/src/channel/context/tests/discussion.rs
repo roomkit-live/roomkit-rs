@@ -29,12 +29,14 @@ fn test_a_discussion_s_notes_close_the_prompt_under_the_runtime_s_header() {
     trigger
         .metadata
         .insert("_discussion_turn".into(), mark.0.clone());
-    let input = input(vec![], trigger);
+    let accepted = input(vec![], trigger.clone());
     let expected = format!("go\n\n{NOTES_HEADER}\n\n{notes}");
-    assert_eq!(prompt(&input, 0, 20), expected);
-    assert_eq!(input.standalone_prompt(None), expected);
+    assert_eq!(prompt(&accepted, 0, 20), expected);
+    assert_eq!(accepted.standalone_prompt(None), expected);
     drop(mark);
-    assert_eq!(prompt(&input, 0, 20), "go");
+    // Python: test_acp_discussion_notes.py::test_an_accepted_turn_keeps_its_notes_after_the_mark_is_retired
+    assert_eq!(prompt(&accepted, 0, 20), expected);
+    assert_eq!(prompt(&input(vec![], trigger), 0, 20), "go");
 }
 
 // Python: tests/test_channels/test_acp_discussion.py::test_a_copy_of_the_notes_header_in_a_participant_s_words_is_replaced

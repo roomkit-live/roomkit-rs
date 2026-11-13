@@ -167,6 +167,7 @@ fn test_input(room: &str) -> super::context::Input {
         TextContent::new("hello"),
     );
     super::context::Input {
+        notes: None,
         context: RoomContext::new(Room::at(room_id, Timestamp::UNIX_EPOCH)),
         trigger,
         text: "hello".to_owned(),

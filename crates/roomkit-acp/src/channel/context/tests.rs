@@ -38,6 +38,7 @@ fn input(events: Vec<RoomEvent>, trigger: RoomEvent) -> Input {
         ..RoomContext::new(room)
     };
     Input {
+        notes: super::notes(&trigger),
         context,
         trigger,
         text: "go".to_owned(),

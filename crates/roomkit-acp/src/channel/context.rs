@@ -33,6 +33,11 @@ pub(super) async fn contributed_blocks(
     }
 }
 
+/// Capture the notes while accepting the turn, before its lazy stream runs.
+pub(super) fn notes(event: &RoomEvent) -> Option<String> {
+    turn_notes(&roomkit::discussion_notes(event))
+}
+
 /// What one session has successfully read. Failed or unconsumed prompts do
 /// not advance either mark, and a replacement session starts with neither.
 #[derive(Clone, Copy, Default)]
@@ -47,6 +52,7 @@ pub(in crate::channel) struct Input {
     pub(in crate::channel) trigger: RoomEvent,
     pub(in crate::channel) text: String,
     pub(in crate::channel) blocks: Vec<String>,
+    pub(in crate::channel) notes: Option<String>,
 }
 
 impl Input {
@@ -113,7 +119,7 @@ impl Input {
                 .filter(|text| !is_blank(text))
                 .map(without_notes_header_copies),
         );
-        sections.extend(turn_notes(&roomkit::discussion_notes(&self.trigger)));
+        sections.extend(self.notes.iter().cloned());
         sections.join("\n\n")
     }
 

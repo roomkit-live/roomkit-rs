@@ -132,6 +132,7 @@ impl Channel for Reading {
                 room_id: context.room.id.clone(),
                 event_id: event.id.to_string(),
                 input: crate::channel::context::Input {
+                    notes: None,
                     context,
                     trigger: event,
                     text: roomkit_core::rules::transcript::mark_instruction("Summarize."),
