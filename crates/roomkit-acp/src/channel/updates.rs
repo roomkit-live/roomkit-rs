@@ -56,6 +56,10 @@ impl Sink {
             let _gone = pending.await;
         }
     }
+
+    pub(super) fn refuse_tool(&self, update: &Value) {
+        self.tools.refuse(update);
+    }
 }
 
 #[derive(Default)]

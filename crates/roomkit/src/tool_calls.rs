@@ -119,6 +119,8 @@ pub struct ToolCallReport {
     pub error_detail: Option<String>,
     /// The structured copy of its result.
     pub structured_content: Option<Value>,
+    /// An external agent ran the call despite a rejected permission (RFC §9.3).
+    pub refused_but_ran: bool,
 }
 
 impl ToolCallReport {
@@ -130,6 +132,7 @@ impl ToolCallReport {
             result: Value::Null,
             error_detail: None,
             structured_content: None,
+            refused_but_ran: false,
         }
     }
 
@@ -173,7 +176,7 @@ impl ToolCallReport {
             structured_content: self.structured_content.clone(),
             error_detail: self.error_detail.clone(),
             refused: outcome == Some(ToolCallOutcome::Refused),
-            refused_but_ran: false,
+            refused_but_ran: self.refused_but_ran,
             intent: self.call.intent.clone(),
         }
     }

@@ -140,6 +140,11 @@ impl AcpClient for ChannelClient {
     {
         Box::pin(async move {
             self.turns.activity(&request.session_id.0);
+            if let Some(sink) = self.turns.updates(&request.session_id.0)
+                && let Ok(update) = serde_json::to_value(&request.tool_call)
+            {
+                sink.refuse_tool(&update);
+            }
             Ok(rejected(&request))
         })
     }

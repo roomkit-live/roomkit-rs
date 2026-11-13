@@ -14,6 +14,7 @@ pub(super) struct Call {
     pub(super) request: ToolCall,
     pub(super) started: bool,
     pub(super) finished: bool,
+    pub(super) rejected: bool,
     since: Instant,
     result: Value,
     display: Option<Value>,
@@ -25,6 +26,7 @@ impl Call {
             request: ToolCall::new(id, "tool", Metadata::new()),
             started: false,
             finished: false,
+            rejected: false,
             since: Instant::now(),
             result: Value::Null,
             display: None,
@@ -67,23 +69,13 @@ impl Call {
     pub(super) fn end(&mut self, failed: bool, interrupted: bool) -> End {
         self.finished = true;
         let outcome = match (failed, interrupted) {
+            _ if self.rejected && (failed || interrupted) => ToolCallOutcome::Refused,
             (_, true) => ToolCallOutcome::Cancelled,
             (true, false) => ToolCallOutcome::Failed,
             (false, false) => ToolCallOutcome::Served,
         };
-        let mut row = self.end_row(outcome);
-        let body = if interrupted {
-            // Cancellation's envelope uses Python's default ASCII escaping.
-            roomkit_ai::dumps(
-                &json!({"error": "Tool call cancelled", "tool": self.request.name,
-                "hint": "The turn ended before its result."}),
-            )
-        } else if failed {
-            row.error.clone().unwrap_or_default()
-        } else {
-            result_text(&row.result)
-        };
-        let report = ToolCallReport::new(self.request.clone()).ended(outcome, Value::String(body));
+        let mut row = self.end_row(outcome, interrupted);
+        let report = self.report(&row, outcome, failed);
         let preview = row
             .error
             .clone()
@@ -100,23 +92,37 @@ impl Call {
         }
     }
 
-    fn end_row(&self, outcome: ToolCallOutcome) -> ToolCallContent {
+    fn report(
+        &self,
+        row: &ToolCallContent,
+        outcome: ToolCallOutcome,
+        failed: bool,
+    ) -> ToolCallReport {
+        let body = if outcome == ToolCallOutcome::Cancelled {
+            // Cancellation's envelope uses Python's default ASCII escaping.
+            roomkit_ai::dumps(
+                &json!({"error": "Tool call cancelled", "tool": self.request.name,
+                "hint": "The turn ended before its result."}),
+            )
+        } else if failed {
+            row.error.clone().unwrap_or_default()
+        } else {
+            result_text(&row.result)
+        };
+        let mut report =
+            ToolCallReport::new(self.request.clone()).ended(outcome, Value::String(body));
+        report.refused_but_ran = row.refused_but_ran;
+        report
+    }
+
+    fn end_row(&self, outcome: ToolCallOutcome, interrupted: bool) -> ToolCallContent {
         let failed = outcome != ToolCallOutcome::Served;
-        let interrupted = outcome == ToolCallOutcome::Cancelled;
         let result = if self.result.is_null() {
             self.display.clone().unwrap_or(Value::Null)
         } else {
             self.result.clone()
         };
-        let error = if interrupted {
-            Some(TURN_ENDED.to_owned())
-        } else {
-            (failed && !result.is_null()).then(|| {
-                let (bounded, _) =
-                    ToolResult::Json(result.clone()).into_external_event_payload(None);
-                result_text(&bounded)
-            })
-        };
+        let error = self.end_error(&result, failed, interrupted);
         let mut row = self.start();
         row.result = result;
         row.error = error;
@@ -126,12 +132,30 @@ impl Call {
             ToolCallStatus::Completed
         };
         row.outcome = Some(outcome);
+        row.refused_but_ran = self.rejected && outcome == ToolCallOutcome::Served;
         row.duration_ms = Some(u64::try_from(self.since.elapsed().as_millis()).unwrap_or(u64::MAX));
         row.structured_content = self
             .display
             .as_ref()
             .map(|display| Metadata::from_iter([("acp_content".to_owned(), display.clone())]));
         row
+    }
+    fn end_error(&self, result: &Value, failed: bool, interrupted: bool) -> Option<String> {
+        if interrupted {
+            Some(if self.rejected {
+                roomkit_ai::dumps(
+                    &json!({"error": format!("Tool '{}' was denied", self.request.name)}),
+                )
+            } else {
+                TURN_ENDED.to_owned()
+            })
+        } else {
+            (failed && !result.is_null()).then(|| {
+                let (bounded, _) =
+                    ToolResult::Json(result.clone()).into_external_event_payload(None);
+                result_text(&bounded)
+            })
+        }
     }
 }
 

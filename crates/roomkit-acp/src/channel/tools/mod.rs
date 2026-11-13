@@ -24,6 +24,29 @@ struct State {
     calls: Vec<Call>,
 }
 
+impl State {
+    fn merge(&mut self, update: &Value) -> Option<&mut Call> {
+        if self.closed {
+            return None;
+        }
+        let id = update
+            .get("toolCallId")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())?;
+        let index = self
+            .calls
+            .iter()
+            .position(|call| call.request.id == id)
+            .unwrap_or_else(|| {
+                self.calls.push(Call::new(id));
+                self.calls.len() - 1
+            });
+        let call = self.calls.get_mut(index)?;
+        call.merge(update);
+        Some(call)
+    }
+}
+
 pub(super) struct Tools {
     state: Mutex<State>,
     host: Option<TurnHost>,
@@ -56,24 +79,8 @@ impl Tools {
         update: &Value,
         sender: &mpsc::UnboundedSender<ResponseItem>,
     ) -> Option<Pending> {
-        let id = update
-            .get("toolCallId")
-            .and_then(Value::as_str)
-            .filter(|id| !id.is_empty())?;
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        if state.closed {
-            return None;
-        }
-        let index = state
-            .calls
-            .iter()
-            .position(|call| call.request.id == id)
-            .unwrap_or_else(|| {
-                state.calls.push(Call::new(id));
-                state.calls.len() - 1
-            });
-        let call = state.calls.get_mut(index)?;
-        call.merge(update);
+        let call = state.merge(update)?;
         if !call.started {
             call.started = true;
             self.start(call, sender);
@@ -94,8 +101,21 @@ impl Tools {
         None
     }
 
+    /// A permission alone names a call without announcing it. Closing the
+    /// turn will report its decision even if the agent never sends an update.
+    pub(super) fn refuse(&self, update: &Value) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(call) = state.merge(update) {
+            call.rejected = true;
+        }
+    }
+
     fn start(&self, call: &Call, sender: &mpsc::UnboundedSender<ResponseItem>) {
         let _gone = sender.send(ResponseItem::ToolCallStart(call.start()));
+        self.publish_start(call);
+    }
+
+    fn publish_start(&self, call: &Call) {
         self.publish(EphemeralEventType::ToolCallStart, json!({
             "tool_calls": [{"id": call.request.id, "name": call.request.name, "arguments": call.request.arguments}], "round": 0
         }));
@@ -121,6 +141,11 @@ impl Tools {
         for call in &mut state.calls {
             if call.finished {
                 continue;
+            }
+            if !call.started {
+                call.started = true;
+                rows.push(ResponseItem::ToolCallStart(call.start()));
+                self.publish_start(call);
             }
             let end = call.end(true, true);
             rows.push(ResponseItem::ToolCallEnd(end.row.clone()));
