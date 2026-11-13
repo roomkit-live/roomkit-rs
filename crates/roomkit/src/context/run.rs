@@ -267,15 +267,12 @@ impl RunShared {
             .map(|cancel| cancel.follows(&turn));
         let given_up = {
             let mut awaited = self.awaited_turns();
-            match awaited.given_up.remove(&effect) {
-                Some(followed) => {
-                    awaited.cut_late.push(turn.clone());
-                    Some((turn, followed))
-                }
-                None => {
-                    awaited.submitted.insert(effect, turn);
-                    None
-                }
+            if let Some(followed) = awaited.given_up.remove(&effect) {
+                awaited.cut_late.push(turn.clone());
+                Some((turn, followed))
+            } else {
+                awaited.submitted.insert(effect, turn);
+                None
             }
         };
         // Sending a control may invoke a transport tap: no lock held.
