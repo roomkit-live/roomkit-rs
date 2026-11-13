@@ -241,7 +241,9 @@ impl Notification {
                     tracing::warn!(target: "roomkit::hooks", hook = %spec.name, error = %error.message, "an external tool observer raised");
                 }
             };
-            let task: BoxFuture<'static, ()> = Box::pin(crate::keep_context(bounded));
+            // Context layers move their input by value. Keep the observer's
+            // tracing state on the heap before passing through those layers.
+            let task: BoxFuture<'static, ()> = Box::pin(crate::keep_context(Box::pin(bounded)));
             let _closed = self.kit.spawn_observer(task);
         }
     }
