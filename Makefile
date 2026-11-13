@@ -145,10 +145,11 @@ sqlite-fixture:
 # with Python's. With POSTGRES_SOCKET_DIR naming the directory of the server's
 # Unix socket, where it asks no password while TCP asks one, the tests of
 # asyncpg's local defaults run too. One test binary runs at a time on one
-# database.
+# database. A binary that fails stops none of those after it (`--no-fail-fast`):
+# cargo runs them all, then fails naming each binary that failed.
 postgres-test:
 	@test -n "$$POSTGRES_DSN" || { echo "postgres-test: POSTGRES_DSN is not set"; exit 1; }
-	$(CARGO) test --locked --package roomkit-postgres -- --test-threads=4
+	$(CARGO) test --locked --no-fail-fast --package roomkit-postgres -- --test-threads=4
 
 # The cross-read fixture of roomkit-postgres (RMK-989): the rows the Python
 # implementation's PostgresStore writes, as JSON, which
