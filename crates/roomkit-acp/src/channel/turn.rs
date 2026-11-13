@@ -2,6 +2,8 @@
 //! agent ends it (Python's `ACPTurnMixin`).
 
 mod execution;
+#[cfg(test)]
+mod standalone_counter;
 use execution::{Hold, run};
 
 use std::future::Future;
@@ -176,9 +178,12 @@ impl<T: AcpTransport> TurnStream<T> {
         // Python reports the completed inner stream before retiring its
         // temporary session. A slow close must not delay that observation.
         if !self.reported
-            && self.hold.as_ref().is_some_and(Hold::standalone)
+            && let Some(hold) = self.hold.as_mut().filter(|hold| hold.standalone())
             && let Some(Ok(Some(answered))) = &self.ending
         {
+            // The observer sees a completed turn, even when it runs before
+            // the cleanup future's first poll on another worker.
+            hold.retire_active();
             self.report(answered);
             self.reported = true;
         }

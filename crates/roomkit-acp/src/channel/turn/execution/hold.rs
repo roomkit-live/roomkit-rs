@@ -77,6 +77,10 @@ impl<T: AcpTransport> Hold<T> {
         self.preparation.retire();
     }
 
+    pub(in crate::channel::turn) fn retire_active(&mut self) {
+        self.active.take();
+    }
+
     pub(in crate::channel::turn) fn needs_cleanup(&self) -> bool {
         self.temporary.is_some() || self.needs_room_cleanup()
     }
@@ -106,7 +110,7 @@ impl<T: AcpTransport> Hold<T> {
         }
         // Python's finished turn leaves its registry before releasing the
         // replacement session. The room guard still spans that release.
-        self.active.take();
+        self.retire_active();
         if let Some(mut session) = self.temporary.take() {
             session.release().await;
         }
