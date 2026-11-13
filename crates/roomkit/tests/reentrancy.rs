@@ -609,6 +609,7 @@ mod a_locked_hook {
     /// delivery waits behind the hook's work: the key still names it, the
     /// agent's turn on it never starts, and the message is delivered all
     /// the same, ahead of the event the hook decides on.
+    // Python: tests/test_delivery_cancel_turns.py::test_a_reentrant_call_s_key_names_its_delivery_until_it_runs
     async fn sends_then_works_on() {
         let (kit, audit) = room().await;
         let turns = Arc::new(Mutex::new(Vec::new()));
@@ -671,6 +672,7 @@ mod a_locked_hook {
     /// message's set, which waited behind the hook, placed first in its idle
     /// lane, runs from its placement, and the message is delivered within
     /// the close's grace.
+    // Python: tests/test_reentrance.py::TestACallALockedHookMakes::test_one_whose_hook_hangs_is_delivered_by_the_kit_s_close
     #[tokio::test(start_paused = true)]
     async fn that_sends_then_hangs_has_its_message_delivered_by_the_kit_s_close() {
         let (kit, audit) = room().await;
