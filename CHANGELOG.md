@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Persist ACP tool updates and close interrupted calls; report each outcome once, preserve text segments and keep observers on the turn's reentry budget.
+
 - Stream ACP thoughts and report them in completed turns; publish private-by-default bounded previews and close thinking indicators on completion, failure or abandonment.
 
 - ACP sessions receive fixed or per-room MCP servers on every opening, including reconnects and authorized rebuilds; closing the channel cancels a pending initial supplier.

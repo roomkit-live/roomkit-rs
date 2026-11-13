@@ -19,6 +19,7 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 
 use super::Shared;
+use super::tools::{Closing, Tools};
 use super::updates::{Sink, ThinkingWindow};
 use crate::error::AcpError;
 use crate::transport::AcpTransport;
@@ -53,6 +54,7 @@ pub(super) struct TurnStream<T: AcpTransport> {
     text: mpsc::UnboundedReceiver<ResponseItem>,
     thinking: Vec<String>,
     thinking_window: Arc<ThinkingWindow>,
+    tool_ends: Closing,
     said: Vec<String>,
     ending: Option<Result<Option<Answered>, ChannelError>>,
     hold: Option<Hold<T>>,
@@ -78,14 +80,21 @@ impl<T: AcpTransport> TurnStream<T> {
             channel_id.clone(),
             shared.publish_thinking_text,
         ));
-        let sender = Sink::new(sender, Arc::clone(&thinking_window));
+        let tools = Arc::new(Tools::new(
+            host.clone(),
+            room_id.clone(),
+            channel_id.clone(),
+            ask.answers_room,
+        ));
+        let sender = Sink::new(sender, Arc::clone(&thinking_window), Arc::clone(&tools));
         let work = run(shared, ask, sender, generation);
         Self {
             work: Some(Box::pin(work)),
             text,
             thinking: Vec::new(),
             thinking_window,
-            said: Vec::new(),
+            tool_ends: Closing::new(tools),
+            said: vec![String::new()],
             ending: None,
             hold: None,
             cleanup: None,
@@ -99,9 +108,15 @@ impl<T: AcpTransport> TurnStream<T> {
 
     fn observe_item(&mut self, item: &ResponseItem) {
         if let ResponseItem::Text(text) = item {
-            self.said.push(text.clone());
+            if let Some(segment) = self.said.last_mut() {
+                segment.push_str(text);
+            }
         } else if let ResponseItem::Thinking(text) = item {
             self.thinking.push(text.clone());
+        } else if matches!(item, ResponseItem::ToolCallStart(_))
+            && self.said.last().is_some_and(|text| !text.is_empty())
+        {
+            self.said.push(String::new());
         }
     }
 
@@ -147,9 +162,8 @@ impl<T: AcpTransport> TurnStream<T> {
         let Some(host) = &self.host else {
             return;
         };
-        let (segments, content) = response_transcript(
-            std::iter::once(self.said.concat()).filter(|text| !text.is_empty()),
-        );
+        let (segments, content) =
+            response_transcript(self.said.iter().filter(|text| !text.is_empty()).cloned());
         let latency_ms = u64::try_from(answered.started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let end = roomkit_core::rules::turn_end::recorded_turn_end(&self.record.to_metadata());
         let event = AiResponseEvent {
@@ -159,11 +173,15 @@ impl<T: AcpTransport> TurnStream<T> {
             latency_ms,
             streaming: true,
             thinking: self.thinking.concat(),
+            tool_calls_count: u32::try_from(self.tool_ends.count()).unwrap_or(u32::MAX),
             segments,
             ..AiResponseEvent::new(self.channel_id.clone(), content)
         };
         let mut data = Metadata::new();
-        data.insert("tool_calls_count".to_owned(), Value::from(0));
+        data.insert(
+            "tool_calls_count".to_owned(),
+            Value::from(self.tool_ends.count()),
+        );
         data.insert("latency_ms".to_owned(), Value::from(latency_ms));
         data.insert("streaming".to_owned(), Value::Bool(true));
         let emitter = host.clone();
@@ -179,6 +197,7 @@ impl<T: AcpTransport> Stream for TurnStream<T> {
         if this.done {
             return Poll::Ready(None);
         }
+        this.tool_ends.start_reports();
         if this.poll_cleanup(cx).is_pending() {
             return Poll::Pending;
         }
@@ -199,6 +218,11 @@ impl<T: AcpTransport> Stream for TurnStream<T> {
             Poll::Pending => return Poll::Pending,
         }
         this.thinking_window.finish();
+        match this.tool_ends.poll_next(cx) {
+            Poll::Pending => return Poll::Pending,
+            Poll::Ready(Some(item)) => return Poll::Ready(Some(Ok(item))),
+            Poll::Ready(None) => {}
+        }
         if let Some(hold) = &this.hold {
             hold.retire_steering();
         }

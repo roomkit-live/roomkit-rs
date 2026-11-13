@@ -75,17 +75,8 @@ impl Turns {
         }
     }
 
-    fn text(&self, session: &str, text: String) {
-        if let Some(turn) = self.lock().get(session) {
-            // A turn whose stream went takes nothing more.
-            turn.updates.text(text);
-        }
-    }
-
-    fn thought(&self, session: &str, text: String) {
-        if let Some(turn) = self.lock().get(session) {
-            turn.updates.thought(text);
-        }
+    fn updates(&self, session: &str) -> Option<Sink> {
+        self.lock().get(session).map(|turn| turn.updates.clone())
     }
 
     fn activity(&self, session: &str) {
@@ -115,17 +106,29 @@ impl AcpClient for ChannelClient {
         Box::pin(async move {
             let session = notification.session_id.0.to_string();
             self.turns.activity(&session);
+            let Some(sink) = self.turns.updates(&session) else {
+                return;
+            };
             if let SessionUpdate::AgentMessageChunk(chunk) = notification.update {
                 if let ContentBlock::Text(text) = chunk.content
                     && !text.text.is_empty()
                 {
-                    self.turns.text(&session, text.text);
+                    sink.text(text.text);
                 }
-            } else if let SessionUpdate::AgentThoughtChunk(chunk) = notification.update
-                && let ContentBlock::Text(text) = chunk.content
-                && !text.text.is_empty()
+            } else if let SessionUpdate::AgentThoughtChunk(chunk) = notification.update {
+                if let ContentBlock::Text(text) = chunk.content
+                    && !text.text.is_empty()
+                {
+                    sink.thought(text.text);
+                }
+            } else if let SessionUpdate::ToolCall(call) = notification.update {
+                if let Ok(update) = serde_json::to_value(call) {
+                    sink.tool(update).await;
+                }
+            } else if let SessionUpdate::ToolCallUpdate(call) = notification.update
+                && let Ok(update) = serde_json::to_value(call)
             {
-                self.turns.thought(&session, text.text);
+                sink.tool(update).await;
             }
         })
     }

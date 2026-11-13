@@ -8,6 +8,8 @@ use roomkit::{ResponseItem, TurnHost};
 use serde_json::Value;
 use tokio::sync::mpsc;
 
+use super::tools::Tools;
+
 /// Only an unscoped answer may publish to the room's subscribers.
 pub(super) fn answers_room(event: &RoomEvent) -> bool {
     event
@@ -21,14 +23,20 @@ pub(super) fn answers_room(event: &RoomEvent) -> bool {
 pub(super) struct Sink {
     sender: mpsc::UnboundedSender<ResponseItem>,
     thinking: Arc<ThinkingWindow>,
+    tools: Arc<Tools>,
 }
 
 impl Sink {
     pub(super) fn new(
         sender: mpsc::UnboundedSender<ResponseItem>,
         thinking: Arc<ThinkingWindow>,
+        tools: Arc<Tools>,
     ) -> Self {
-        Self { sender, thinking }
+        Self {
+            sender,
+            thinking,
+            tools,
+        }
     }
 
     pub(super) fn same_channel(&self, other: &Self) -> bool {
@@ -41,6 +49,12 @@ impl Sink {
 
     pub(super) fn thought(&self, text: String) {
         self.thinking.chunk(text, &self.sender);
+    }
+
+    pub(super) async fn tool(&self, update: Value) {
+        if let Some(pending) = self.tools.update(&update, &self.sender) {
+            let _gone = pending.await;
+        }
     }
 }
 

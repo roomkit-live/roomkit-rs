@@ -9,6 +9,7 @@ mod detachment;
 mod preparation;
 mod sessions;
 mod steering;
+mod tools;
 mod turn;
 mod updates;
 

@@ -80,6 +80,7 @@
 //! still holds, and its calls are new arrivals (RFC §9.5.1).
 
 mod adoption;
+mod external;
 mod floors;
 mod run;
 mod section;
