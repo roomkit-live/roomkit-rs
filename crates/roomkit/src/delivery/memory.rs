@@ -701,7 +701,10 @@ mod tests {
     }
 
     // Python: tests/delivery/test_memory.py::TestLifecycle::test_nack_queue_full_dead_letters
-    #[tokio::test]
+    // On tokio's paused clock, the retry's timer, its delay 0, always fires
+    // before the test's 10 ms wait: on the real clock, a thread off the CPU
+    // 10 ms woke both at once and read the dead letters first (RMK-1298).
+    #[tokio::test(start_paused = true)]
     async fn test_nack_queue_full_dead_letters() {
         let backend = InMemoryDeliveryBackend::new(InMemoryDeliveryBackendOptions {
             max_queue_size: 1,
