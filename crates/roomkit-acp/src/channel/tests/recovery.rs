@@ -8,10 +8,10 @@ use std::sync::atomic::Ordering;
 
 use futures_core::Stream;
 use roomkit::Channel;
-use roomkit::model::RoomId;
+use roomkit::model::{RoomId, ToolCallOutcome, ToolCallStatus};
 use serde_json::json;
 
-use super::{PATIENCE, drained, poll_once, turn};
+use super::{PATIENCE, TurnStream, drained, poll_once, turn};
 use fixture::{Stage, channel};
 
 // Python: tests/test_channels/test_acp_recovery.py::test_activity_makes_even_an_authorized_signal_terminal[permission]
@@ -19,6 +19,7 @@ use fixture::{Stage, channel};
 async fn test_activity_makes_even_an_authorized_signal_terminal_permission() {
     let (channel, state) = channel(Stage::Permission);
     let (mut stream, record) = turn(&channel, "r1");
+    assert_refused_permission(&mut stream).await;
     let item = poll_fn(|cx| Pin::new(&mut stream).poll_next(cx)).await;
     let error = item.unwrap().unwrap_err();
     assert!(error.to_string().contains("activity; recovery refused"));
@@ -35,6 +36,25 @@ async fn test_activity_makes_even_an_authorized_signal_terminal_permission() {
     assert_eq!(record.to_metadata()["acp"]["interrupted"], true);
     assert_eq!(channel.active_turns(), 0);
     channel.close().await;
+}
+
+async fn assert_refused_permission(stream: &mut TurnStream<fixture::Direct>) {
+    // A permission names a tool even without an agent announcement. Its
+    // refused start/end precede the terminal session error (RFC §9.3).
+    let start = poll_fn(|cx| Pin::new(&mut *stream).poll_next(cx))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(start, roomkit::ResponseItem::ToolCallStart(row) if row.tool_id == "tool-1"));
+    let end = poll_fn(|cx| Pin::new(&mut *stream).poll_next(cx))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(end, roomkit::ResponseItem::ToolCallEnd(row)
+        if row.tool_id == "tool-1"
+            && row.status == ToolCallStatus::Failed
+            && row.outcome == Some(ToolCallOutcome::Refused)
+            && !row.refused_but_ran));
 }
 
 // Python: tests/test_channels/test_acp_recovery.py::test_cancel_or_abandon_recovery_cleans_state_and_releases_the_lock
