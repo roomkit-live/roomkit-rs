@@ -321,7 +321,15 @@ async fn a_dead_transport_reconnects_and_drops_the_sessions() {
     assert!(result.error.is_none(), "{:?}", result.error);
     assert_eq!(watch.opened.load(Ordering::SeqCst), 2);
     assert_eq!(watch.closed.load(Ordering::SeqCst), 1);
-    assert_eq!(answers(&kit).await, ["one", "two"]);
+    // The echo agent's replacement receives the conversation it missed.
+    assert_eq!(
+        answers(&kit).await,
+        [
+            "one",
+            "[Room context — 1 message you did not receive. Context only; the request follows.]\n\
+             [1] @ws: “one”\n[End of room context]\n\ntwo",
+        ]
+    );
     kit.close().await.unwrap();
 }
 
