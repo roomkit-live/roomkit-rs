@@ -77,6 +77,7 @@ pub(super) struct TurnStream<T: AcpTransport> {
     room_id: RoomId,
     record: ResponseMetadata,
     host: Option<TurnHost>,
+    reported: bool,
     done: bool,
 }
 
@@ -117,6 +118,7 @@ impl<T: AcpTransport> TurnStream<T> {
             room_id,
             record,
             host,
+            reported: false,
             done: false,
         }
     }
@@ -168,6 +170,18 @@ impl<T: AcpTransport> TurnStream<T> {
             return true;
         }
         false
+    }
+
+    fn report_standalone_response(&mut self) {
+        // Python reports the completed inner stream before retiring its
+        // temporary session. A slow close must not delay that observation.
+        if !self.reported
+            && self.hold.as_ref().is_some_and(Hold::standalone)
+            && let Some(Ok(Some(answered))) = &self.ending
+        {
+            self.report(answered);
+            self.reported = true;
+        }
     }
 
     /// Reports the turn that ran to its end to `ON_AI_RESPONSE`'s hooks,
@@ -242,13 +256,16 @@ impl<T: AcpTransport> Stream for TurnStream<T> {
         if let Some(hold) = &this.hold {
             hold.retire_steering();
         }
+        this.report_standalone_response();
         if this.begin_session_cleanup(cx) {
             return Poll::Pending;
         }
         this.done = true;
         let ending = match this.ending.take() {
             Some(Ok(Some(answered))) => {
-                this.report(&answered);
+                if !this.reported {
+                    this.report(&answered);
+                }
                 if let Some(hold) = &mut this.hold {
                     hold.completed();
                 }
