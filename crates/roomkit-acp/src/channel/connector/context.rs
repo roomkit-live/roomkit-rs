@@ -19,6 +19,7 @@ impl<T: AcpTransport> Connector<T> {
         session: &str,
         index: u64,
         labelled: bool,
+        instructed: bool,
     ) {
         let mut state = self.lock();
         // Each handshake gets a new Arc, even if the transport's connection
@@ -35,5 +36,6 @@ impl<T: AcpTransport> Connector<T> {
         let seen = state.seen.entry(room.clone()).or_default();
         seen.index = Some(seen.index.map_or(index, |before| before.max(index)));
         seen.labelled |= labelled;
+        seen.instructed |= instructed;
     }
 }

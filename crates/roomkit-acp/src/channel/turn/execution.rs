@@ -1,5 +1,6 @@
 //! At most two prompt attempts, serialized by the same room turn guard.
 
+mod acknowledgement;
 mod hold;
 pub(super) use hold::Hold;
 
@@ -46,8 +47,12 @@ async fn execute<T: AcpTransport>(
     };
     for attempt in 0..2 {
         let seen = hold.shared.connector.seen(&hold.room_id);
-        let (prompt, labelled) =
-            input.prompt(&hold.shared.channel_id, seen, hold.shared.room_history);
+        let (prompt, labelled, instructed) = input.prompt(
+            &hold.shared.channel_id,
+            seen,
+            hold.shared.room_history,
+            hold.shared.instructions.as_deref(),
+        );
         let started = Instant::now();
         let activity = Arc::new(AtomicBool::new(false));
         let outcome = one_prompt(
@@ -58,17 +63,15 @@ async fn execute<T: AcpTransport>(
             &prompt,
             text,
             &activity,
+            crate::channel::context::Seen {
+                index: Some(input.seen_index()),
+                labelled,
+                instructed,
+            },
         )
         .await;
         match outcome {
             Ok(Some(answer)) => {
-                hold.shared.connector.acknowledged(
-                    &hold.room_id,
-                    &connection,
-                    &session,
-                    input.seen_index(),
-                    labelled,
-                );
                 return Ok(Some(Answered {
                     usage: usage_of(&answer),
                     started,
@@ -172,6 +175,7 @@ async fn one_prompt<T: AcpTransport>(
     prompt: &str,
     text: &Sink,
     activity: &Arc<AtomicBool>,
+    seen: crate::channel::context::Seen,
 ) -> Result<Option<PromptResponse>, AcpError> {
     let mut meta = Map::new();
     meta.insert("roomkit.live/eventId".to_owned(), json!(event_id));
@@ -183,6 +187,7 @@ async fn one_prompt<T: AcpTransport>(
         request,
         hold.record.clone(),
         Arc::clone(&hold.preparation),
+        acknowledgement::on_return(hold, connection, session, seen),
     ));
     if !hold.shared.connector.register_prompt(
         session,
@@ -227,6 +232,7 @@ async fn prompt_task<C: AcpConnection>(
     request: PromptRequest,
     record: ResponseMetadata,
     preparation: Arc<crate::channel::preparation::Preparation>,
+    acknowledge: impl FnOnce() + Send,
 ) -> Result<Option<PromptResponse>, AcpError> {
     ready.await.map_err(|_| AcpError::ConnectionClosed)?;
     let session = request.session_id.0.to_string();
@@ -238,7 +244,10 @@ async fn prompt_task<C: AcpConnection>(
         return Ok(None);
     };
     match &answer {
-        Ok(answer) => answered(&record, answer),
+        Ok(answer) => {
+            acknowledge();
+            answered(&record, answer);
+        }
         Err(_) => interrupted(&record),
     }
     answer.map(Some)

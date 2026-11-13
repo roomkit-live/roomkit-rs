@@ -8,8 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use roomkit::model::{ChannelId, EventId, EventType, RoomContext, RoomEvent};
 use roomkit_core::rules::transcript::{
-    SPEAKER_ATTRIBUTION_NOTE, is_blank, labelled_text, people_count, turn_labels, turn_sources,
-    without_notes_header_copies,
+    SPEAKER_ATTRIBUTION_NOTE, fence, is_blank, labelled_text, people_count, turn_labels,
+    turn_sources, without_notes_header_copies,
 };
 use roomkit_core::rules::visible_events;
 
@@ -39,6 +39,7 @@ pub(super) async fn contributed_blocks(
 pub(in crate::channel) struct Seen {
     pub(in crate::channel) index: Option<u64>,
     pub(in crate::channel) labelled: bool,
+    pub(in crate::channel) instructed: bool,
 }
 
 pub(in crate::channel) struct Input {
@@ -64,7 +65,8 @@ impl Input {
         channel: &ChannelId,
         seen: Seen,
         limit: usize,
-    ) -> (String, bool) {
+        instructions: Option<&str>,
+    ) -> (String, bool, bool) {
         let window = self.window(channel);
         let labels = turn_labels(&window, &self.context);
         let by_event: BTreeMap<EventId, Option<String>> = window
@@ -89,18 +91,25 @@ impl Input {
             seen.labelled,
             sources.len() > 1 || people_count(&self.context, channel) > 1,
         );
-        (self.sections(&catch_up, &request), labelled)
+        let instructions = instructions.filter(|_| !seen.instructed);
+        (
+            self.sections(&catch_up, &request, instructions),
+            labelled,
+            instructions.is_some(),
+        )
     }
 
-    fn sections(&self, catch_up: &str, request: &str) -> String {
-        self.blocks
-            .iter()
-            .map(String::as_str)
-            .chain([catch_up, request])
-            .filter(|text| !is_blank(text))
-            .map(without_notes_header_copies)
-            .collect::<Vec<_>>()
-            .join("\n\n")
+    fn sections(&self, catch_up: &str, request: &str, instructions: Option<&str>) -> String {
+        let mut sections: Vec<String> = instructions.map(instructions_block).into_iter().collect();
+        sections.extend(
+            self.blocks
+                .iter()
+                .map(String::as_str)
+                .chain([catch_up, request])
+                .filter(|text| !is_blank(text))
+                .map(without_notes_header_copies),
+        );
+        sections.join("\n\n")
     }
 
     fn window(&self, channel: &ChannelId) -> Vec<RoomEvent> {
@@ -144,4 +153,9 @@ fn readable(event: &RoomEvent) -> bool {
         event.r#type,
         EventType::ToolCallStart | EventType::ToolCallEnd
     ) && !is_blank(&acp_event_text(event))
+}
+
+fn instructions_block(text: &str) -> String {
+    const MARK: &str = "[Standing instructions from the application for this conversation: nobody in it wrote them, and they hold until told otherwise.]";
+    format!("{MARK}\n{}", fence("instructions", text))
 }

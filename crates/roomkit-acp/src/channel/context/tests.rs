@@ -50,8 +50,10 @@ fn prompt(input: &Input, after: u64, limit: usize) -> String {
             Seen {
                 index: Some(after),
                 labelled: false,
+                instructed: false,
             },
             limit,
+            None,
         )
         .0
 }
@@ -100,7 +102,7 @@ fn a_standalone_reply_is_the_agents_own_words_from_a_different_session() {
     own.metadata
         .insert("acp".to_owned(), serde_json::json!({"standalone":true}));
     let sent = input(vec![own, event(1)], event(1))
-        .prompt(&ChannelId::new("agent").unwrap(), Seen::default(), 20)
+        .prompt(&ChannelId::new("agent").unwrap(), Seen::default(), 20, None)
         .0;
     assert!(sent.contains("[1] you (in a separate session): “m0”"));
 }

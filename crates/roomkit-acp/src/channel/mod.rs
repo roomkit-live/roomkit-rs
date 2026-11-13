@@ -72,6 +72,8 @@ pub struct AcpChannelOptions<T = StdioAcpTransport> {
     pub room_history: i64,
     /// Optional async host blocks, resolved separately for every eligible turn.
     pub context_contributor: Option<AcpContextContributor>,
+    /// Standing application instructions sent until a session's first normal RPC return.
+    pub instructions: Option<String>,
     /// Variables added to a spawned agent's environment (a
     /// [`StdioAcpTransportOptions`]'s); refused with a `transport`.
     pub env: Option<BTreeMap<String, String>>,
@@ -96,6 +98,7 @@ impl<T> Default for AcpChannelOptions<T> {
             external_tool_handler: None,
             room_history: ROOM_HISTORY,
             context_contributor: None,
+            instructions: None,
             env: None,
             inherit_env: None,
             authentication_method: None,
@@ -121,6 +124,7 @@ impl<T> fmt::Debug for AcpChannelOptions<T> {
             .field("mcp_servers", &self.mcp_servers)
             .field("room_history", &self.room_history)
             .field("context_contributor", &self.context_contributor)
+            .field("instructions", &self.instructions.is_some())
             .field("publish_thinking_text", &self.publish_thinking_text)
             .field(
                 "additional_directories",
@@ -185,6 +189,7 @@ struct Shared<T: AcpTransport> {
     publish_thinking_text: bool,
     room_history: usize,
     context_contributor: Option<AcpContextContributor>,
+    instructions: Option<String>,
     connector: Connector<T>,
     /// Each room's turn lock: one turn of a room at a time.
     rooms: Mutex<HashMap<RoomId, Arc<tokio::sync::Mutex<()>>>>,
@@ -248,6 +253,7 @@ impl<T: AcpTransport> AcpChannel<T> {
             external_tool_handler,
             room_history,
             context_contributor,
+            instructions,
             env,
             inherit_env,
             authentication_method,
@@ -312,6 +318,7 @@ impl<T: AcpTransport> AcpChannel<T> {
                 publish_thinking_text,
                 room_history,
                 context_contributor,
+                instructions: instructions.filter(|value| !is_blank(value)),
                 rooms: Mutex::new(HashMap::new()),
                 active: AtomicUsize::new(0),
                 closings: Mutex::default(),

@@ -556,3 +556,5 @@ async fn a_program_that_is_missing_fails_the_turn_as_file_not_found() {
     let classed = failure.downcast_ref::<roomkit::ClassedError>().unwrap();
     assert_eq!(classed.class(), "FileNotFoundError");
 }
+
+mod received_instructions;

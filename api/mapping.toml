@@ -1122,7 +1122,7 @@ reason = "the Python ACP SDK's message queue, None from SDK 0.12.1 on: the conne
 [[missing]]
 python = "roomkit.ACPChannel.__init__"
 params = [
-    "name", "role", "description", "instructions",
+    "name", "role", "description",
 ]
 scope = "text"
 reason = "not in 0.x yet: parity stream L's later lots (RMK-1429): thinking, permissions, session setup, the catch-up and instructions, the discussion"

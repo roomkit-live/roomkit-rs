@@ -137,6 +137,7 @@ async fn check_late_ack(open_replacement_first: bool) {
         "/srv",
         AcpChannelOptions {
             transport: Some(Transport(Arc::clone(&state))),
+            instructions: Some("Standing direction".to_owned()),
             ..Default::default()
         },
     )
@@ -207,6 +208,10 @@ async fn check_late_ack(open_replacement_first: bool) {
         "replacement lost history: {sent}"
     );
     assert!(sent.ends_with("new request"));
+    assert!(
+        sent.contains("<instructions>\nStanding direction\n</instructions>"),
+        "replacement lost instructions: {sent}"
+    );
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn late_ack_does_not_seed_a_session_not_yet_reopened() {

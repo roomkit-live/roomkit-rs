@@ -76,3 +76,19 @@ fn test_permission_fixture_rejects_malformed_steps() {
         );
     }
 }
+
+// Python: tests/conformance/test_acp_context_fixture.py::test_malformed_instructions_are_a_fixture_failure
+#[tokio::test]
+async fn test_malformed_instructions_are_a_fixture_failure() {
+    for value in [json!(true), json!(4), json!([]), json!({})] {
+        let scenario = json!({"setup":{"channels":[{"id":"agent","type":"ai",
+            "acp":{"cwd":"/srv/project","agent":{},"instructions":value}}]}});
+        let problems = crate::harness::run(&scenario).await;
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.contains("acp.instructions")),
+            "{problems:?}"
+        );
+    }
+}

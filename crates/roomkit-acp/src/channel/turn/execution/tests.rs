@@ -69,7 +69,8 @@ async fn test_close_after_reconstruction_finishes_prevents_replacement_prompt() 
             "event-1",
             "hello",
             &text,
-            &activity
+            &activity,
+            crate::channel::context::Seen::default(),
         )
         .await
         .unwrap()
@@ -140,7 +141,8 @@ async fn test_cancel_after_reconstruction_finishes_prevents_replacement_prompt()
             "event-1",
             "hello",
             &text,
-            &activity
+            &activity,
+            crate::channel::context::Seen::default(),
         )
         .await
         .unwrap()

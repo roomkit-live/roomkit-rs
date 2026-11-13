@@ -49,6 +49,7 @@ pub(crate) const ACP: &[&str] = &[
     "external_tool_handler",
     "room_history",
     "context_contributor",
+    "instructions",
 ];
 /// The members of its `agent`.
 pub(crate) const AGENT: &[&str] = &[
@@ -118,6 +119,7 @@ pub(crate) fn scripted_acp_channel(
         external_tool_handler: handler::build(spec, id.as_str(), run)?,
         room_history: context::history(spec)?,
         context_contributor: context::build(spec, id.as_str(), run)?,
+        instructions: instructions(spec)?,
         session_config: spec
             .get("session_config")
             .and_then(Value::as_object)
@@ -126,6 +128,14 @@ pub(crate) fn scripted_acp_channel(
     };
     let channel = AcpChannel::new(id, cwd, options).map_err(|error| format!("acp: {error}"))?;
     Ok((channel, wire, pipe))
+}
+
+fn instructions(spec: &Value) -> Result<Option<String>, Unreadable> {
+    match spec.get("instructions") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(text)) => Ok(Some(text.clone())),
+        Some(_) => Err("acp.instructions: expected a string or null".to_owned()),
+    }
 }
 
 fn directories(spec: &Value) -> Result<Option<Vec<PathBuf>>, Unreadable> {
