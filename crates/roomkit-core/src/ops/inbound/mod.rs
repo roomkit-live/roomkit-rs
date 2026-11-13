@@ -603,9 +603,13 @@ impl Operation for Inbound {
     /// queued with a place in its room's lane, the kit's close having
     /// sealed it (RFC §12.10.4), but the set of an event of `runs`, which
     /// runs from its placement: each stores what its event's hooks gave
-    /// within the close's grace (RFC §10.1 step 15).
+    /// within the close's grace (RFC §10.1 step 15). A set waiting behind
+    /// the hook body that made its entry waits no more: placed first in its
+    /// idle lane, it runs from its placement; queued behind another, it is
+    /// dropped.
     fn lanes_sealed(&mut self, runs: &[EventId]) {
         self.machine.cascade.seal_lanes(runs.to_vec());
+        self.machine.adopted.release_held();
     }
 }
 

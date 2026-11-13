@@ -21,7 +21,10 @@
 //!   the call's own answer is held back until the entry is settled, so the
 //!   section never goes on, nor lets the lock go, while an entry nested in
 //!   it works. Two entries nested under one call run one after the other,
-//!   never as two sections within one tenure;
+//!   never as two sections within one tenure. The entry's delivery set
+//!   waits in the room's lane behind the hook's body that made it, until
+//!   that hook is answered or given up, or the kit's close seals the lane;
+//!   so do the sets behind it;
 //! - a call made in the room's admission order (`Effect::admitted`: an
 //!   off-lock hook, a message's parse, any call of an entry beside already):
 //!   the entry runs beside the operation's work, taking the room lock as any
@@ -104,6 +107,10 @@ pub(super) struct Adoptions {
     /// section's entry, or the one it is owed to, as Python's nested call
     /// queues them on that section (RFC §9.4, §9.5.1 Reentrance).
     owners: Vec<(EntryId, EntryId)>,
+    /// Each entry made under the room's lock, and the hook whose body made
+    /// it: the entry's delivery set waits in the lane behind that body,
+    /// until the hook is answered or given up (RFC §9.5.1 Reentrance).
+    behind: Vec<(EntryId, EffectId)>,
 }
 
 /// An adopted entry committed, whose answer waits for the commits of the
@@ -318,6 +325,31 @@ impl Adoptions {
             .partition(|(effect, _)| *effect == origin);
         self.deferred = kept;
         released
+    }
+
+    /// Whether the delivery set of `lineage` waits behind the work that
+    /// made its entry: one made under the room's lock is delivered once the
+    /// body of the hook that made it is over, whatever that body awaits
+    /// after the call returned (RFC §9.5.1 Reentrance: "Made under the
+    /// lock, its delivery waits in the lane behind the work that made it").
+    pub(super) fn holds_back(&self, lineage: Lineage, io: &Io) -> bool {
+        let Lineage::Entry(entry) = lineage else {
+            return false;
+        };
+        self.behind
+            .iter()
+            .any(|(held, origin)| *held == entry && io.is_outstanding(*origin))
+    }
+
+    /// Forgets the entries whose hook's body is over: answered, or given up.
+    pub(super) fn forget_bodies_over(&mut self, io: &Io) {
+        self.behind.retain(|(_, origin)| io.is_outstanding(*origin));
+    }
+
+    /// Holds back no set any more: the kit's close sealed the room's lane,
+    /// whose sets run from their placement or are dropped (RFC §12.10.4).
+    pub(super) fn release_held(&mut self) {
+        self.behind.clear();
     }
 
     fn next_id(&mut self) -> EntryId {
@@ -562,6 +594,9 @@ impl Machine {
             && let Some(owner) = owner
         {
             self.adopted.owners.push((id, owner));
+        }
+        if nested.is_some() {
+            self.adopted.behind.push((id, origin));
         }
         let adopted = Adopted {
             id,

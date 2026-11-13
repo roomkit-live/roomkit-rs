@@ -596,6 +596,114 @@ mod a_locked_hook {
             )
         );
     }
+
+    on_both_runtimes!(
+        that_sends_then_works_on_holds_its_message_s_delivery_until_it_returns,
+        that_sends_then_works_on_holds_its_message_s_delivery_until_it_returns_on_threads,
+        sends_then_works_on
+    );
+
+    /// RFC §9.5.1 Reentrance, §10.1 "Explicit delivery cancellation"
+    /// (RMK-1679): the hook sends a message keyed `b`, does work of its own,
+    /// then cancels that delivery. Made under the lock, the message's
+    /// delivery waits behind the hook's work: the key still names it, the
+    /// agent's turn on it never starts, and the message is delivered all
+    /// the same, ahead of the event the hook decides on.
+    async fn sends_then_works_on() {
+        let (kit, audit) = room().await;
+        let turns = Arc::new(Mutex::new(Vec::new()));
+        let agent_turns = Arc::clone(&turns);
+        let agent = Scripted::agent(
+            "ai",
+            Arc::new(move |event: RoomEvent| {
+                agent_turns.lock().unwrap().push(text_of(&event.content));
+                Box::pin(ready(Ok(ChannelOutput::default())))
+            }),
+        );
+        kit.register_channel(agent).unwrap();
+        kit.attach_channel(&room_id(), &channel("ai"), AttachChannelOptions::default())
+            .await
+            .unwrap();
+        let cancelled = Arc::new(Mutex::new(None));
+        let (hook_kit, hook_cancelled) = (kit.clone(), Arc::clone(&cancelled));
+        kit.hook(
+            HookTrigger::BeforeBroadcast,
+            move |event: RoomEvent, _| {
+                let (kit, cancelled) = (hook_kit.clone(), Arc::clone(&hook_cancelled));
+                async move {
+                    if text_of(&event.content) == "lead" {
+                        let mut task = message("task B");
+                        task.delivery_key = Some("b".to_owned());
+                        kit.process_inbound(task, in_room(room_id())).await?;
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        let count = kit
+                            .cancel_delivery("b", roomkit::CancelDeliveryOptions::default())
+                            .await;
+                        *cancelled.lock().unwrap() = Some(count);
+                    }
+                    Ok(HookResult::allow(AllowOptions::default()))
+                }
+            },
+            before_broadcast("post", true),
+        )
+        .unwrap();
+        send(&kit, "lead").await.unwrap();
+        tokio::time::timeout(BOUND, roomkit::testing::idle(&kit))
+            .await
+            .unwrap();
+        assert_eq!(
+            (
+                *cancelled.lock().unwrap(),
+                turns.lock().unwrap().clone(),
+                audit.texts()
+            ),
+            (
+                Some(1),
+                vec!["lead".to_owned()],
+                vec!["task B".to_owned(), "lead".to_owned()]
+            )
+        );
+        kit.close().await.unwrap();
+    }
+
+    /// RFC §9.5.1 Reentrance, §12.10.4 (RMK-1679): the hook sends a message,
+    /// then never returns. The kit's close seals the room's lane: the
+    /// message's set, which waited behind the hook, placed first in its idle
+    /// lane, runs from its placement, and the message is delivered within
+    /// the close's grace.
+    #[tokio::test(start_paused = true)]
+    async fn that_sends_then_hangs_has_its_message_delivered_by_the_kit_s_close() {
+        let (kit, audit) = room().await;
+        let sent = Arc::new(Notify::new());
+        let (hook_kit, hook_sent) = (kit.clone(), Arc::clone(&sent));
+        kit.hook(
+            HookTrigger::BeforeBroadcast,
+            move |event: RoomEvent, _| {
+                let (kit, sent) = (hook_kit.clone(), Arc::clone(&hook_sent));
+                async move {
+                    if text_of(&event.content) == "lead" {
+                        kit.process_inbound(message("task B"), in_room(room_id()))
+                            .await?;
+                        sent.notify_one();
+                        std::future::pending::<()>().await;
+                    }
+                    Ok(HookResult::allow(AllowOptions::default()))
+                }
+            },
+            before_broadcast("post", true),
+        )
+        .unwrap();
+        let calling = kit.clone();
+        let call = tokio::spawn(async move {
+            calling
+                .process_inbound(message("lead"), in_room(room_id()))
+                .await
+        });
+        tokio::time::timeout(BOUND, sent.notified()).await.unwrap();
+        kit.close().await.unwrap();
+        drop(tokio::time::timeout(BOUND, call).await.unwrap());
+        assert_eq!(audit.texts(), ["task B"]);
+    }
 }
 
 /// RFC §9.5.1 Reentrance: an off-lock hook's injection takes no ticket, so
@@ -2112,13 +2220,15 @@ async fn a_parse_that_calls_into_its_room_for_every_message_is_bounded() {
 }
 
 /// RFC §13.6, gap G-076: a call dropped while its hook works under the
-/// lock, once the event the hook sent into the room is committed and its
-/// delivery under way, expires: the hook is given up on, the lock let go,
-/// nothing more of the call's event written, and the hook's event is
-/// delivered all the same. The next call goes through.
+/// lock, once the event the hook sent into the room is committed, expires:
+/// the hook is given up on, the lock let go, nothing more of the call's
+/// event written, and the hook's event, whose delivery waited behind the
+/// hook's body (RFC §9.5.1 Reentrance), is delivered all the same. The
+/// next call goes through.
 #[tokio::test]
 async fn a_call_dropped_after_its_hook_s_event_committed_delivers_that_event() {
     let (kit, _) = room().await;
+    let sent = Arc::new(Notify::new());
     let (delivering, go) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
     let delivered = Arc::new(Mutex::new(Vec::new()));
     let (started, released, kept) = (
@@ -2153,11 +2263,11 @@ async fn a_call_dropped_after_its_hook_s_event_committed_delivers_that_event() {
     )
     .await
     .unwrap();
-    let hook_kit = kit.clone();
+    let (hook_kit, hook_sent) = (kit.clone(), Arc::clone(&sent));
     kit.hook(
         HookTrigger::BeforeBroadcast,
         move |event: RoomEvent, _| {
-            let kit = hook_kit.clone();
+            let (kit, sent) = (hook_kit.clone(), Arc::clone(&hook_sent));
             async move {
                 if text_of(&event.content) == "first" {
                     kit.send_event(
@@ -2167,6 +2277,7 @@ async fn a_call_dropped_after_its_hook_s_event_committed_delivers_that_event() {
                         SendEventOptions::default(),
                     )
                     .await?;
+                    sent.notify_one();
                     std::future::pending::<()>().await;
                 }
                 Ok(HookResult::allow(AllowOptions::default()))
@@ -2179,8 +2290,11 @@ async fn a_call_dropped_after_its_hook_s_event_committed_delivers_that_event() {
     let call = kit.process_inbound(message("first"), in_room(room.clone()));
     tokio::select! {
         result = call => panic!("the call ended before its hook's event: {result:?}"),
-        () = delivering.notified() => {}
+        () = sent.notified() => {}
     }
+    tokio::time::timeout(BOUND, delivering.notified())
+        .await
+        .unwrap();
     go.notify_one();
     tokio::time::timeout(BOUND, roomkit::testing::idle(&kit))
         .await

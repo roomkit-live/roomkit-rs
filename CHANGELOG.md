@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A message, an injection, a post or a greeting a hook sends into its room under the room's lock is delivered once that hook's body is over, whatever the body awaits after the call returned: its delivery waits in the room's lane until the hook returns, times out or is given up, or until the kit's close seals the lane, which delivers it from its place when that place is the first, and drops it otherwise, as any set it seals. Its delivery key names it until then, and a cancellation by key made meanwhile starts none of its turns (RFC §9.5.1 Reentrance).
+
 - A call given up while it still runs on another worker no longer submits a live turn: the turn it submits is cut as it arrives, with its delivery's reason when that delivery was cancelled, never runs, and the run waits for its end (RFC §10.1 "Explicit delivery cancellation").
 
 - The kit's close returns within its bound while a `SqliteStore` write still holds the file: the write under way, and those waiting for their turn, get one second, the bound a PostgreSQL pool's connections get, where a write waiting for another process's lock on the file held the close up to SQLite's 5-second busy timeout; past it the close returns and says so in the log, the write runs on, and the file closes once it ends. A write that held its turn as the close began is no longer refused (RFC §12.10.4).

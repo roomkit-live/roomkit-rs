@@ -15,7 +15,10 @@
 //! before it is over, its record under the room's lock included (RFC §14.3),
 //! whatever the call is doing, the set of an entry its parse or its off-lock
 //! hook made included, so that nothing behind its place waits for the call's
-//! own steps.
+//! own steps. Only the set of an entry a hook made under the room's lock
+//! waits for that hook's body to be over, as the RFC's "its delivery waits
+//! in the lane behind the work that made it" says (§9.5.1 Reentrance), and
+//! the sets behind it with it.
 //!
 //! An event's place is taken at its commit, under the lock (`pass`), so the
 //! places follow the commits; its set joins `sets` once its pass is over,
@@ -654,6 +657,7 @@ impl Machine {
     /// add to them, the cascade ends.
     pub(super) fn run_queues(&mut self, cx: &mut Cx<'_>) {
         self.start_rows(cx);
+        self.adopted.forget_bodies_over(cx.io);
         loop {
             // An entry the call's admission adopted runs its whole cascade
             // ahead of the call's own passes, its answers and their streams
@@ -676,7 +680,15 @@ impl Machine {
             if self.drop_sealed_sets(cx) {
                 continue;
             }
+            // A set of an entry made under the lock waits for the end of the
+            // hook body that made it, and every set behind it in the lane
+            // with it (RFC §9.5.1 Reentrance).
             if self.cascade.delivery.is_none()
+                && self
+                    .cascade
+                    .sets
+                    .front()
+                    .is_some_and(|next| !self.adopted.holds_back(next.set.lineage(), cx.io))
                 && let Some(mut delivery) = self.cascade.sets.pop_front()
             {
                 match delivery.set.start(cx) {

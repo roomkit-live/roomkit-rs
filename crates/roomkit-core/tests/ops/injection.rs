@@ -600,7 +600,9 @@ mod an_entry_adopted_under_the_lock {
     /// every hook run on it, its commit ahead of the outer event's, whose
     /// pass reads the room again once its hooks are over. Its event takes
     /// its place in the lane ahead of the outer event's (RFC §10.2), and
-    /// its set runs in its turn, while the outer section still decides.
+    /// its set waits there behind the hook's body that made it (RFC §9.5.1
+    /// Reentrance), then runs in its turn, while the outer section still
+    /// decides.
     #[test]
     fn commits_ahead_of_the_event_being_processed() {
         let (mut sim, _, _) = notified();
@@ -621,14 +623,14 @@ mod an_entry_adopted_under_the_lock {
                 "enter lane room_1 evt_2",
                 "hook notifier settled",
                 "hook notifier returns",
-                "await lane room_1 evt_2",
                 "load_context room_1",
-                "on_event sms <- evt_2",
+                "await lane room_1 evt_2",
                 "commit #1 sms delivered \"hello\"",
-                "deliver sms <- evt_2",
+                "on_event sms <- evt_2",
                 "enter lane room_1 evt_1",
-                "leave lane room_1 evt_2",
+                "deliver sms <- evt_2",
                 "release room_1",
+                "leave lane room_1 evt_2",
                 "await lane room_1 evt_1",
                 "on_event ws <- evt_1",
                 "deliver ws <- evt_1",
