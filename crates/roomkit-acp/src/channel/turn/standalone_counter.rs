@@ -1,7 +1,7 @@
 //! Stop the response reader after its report is scheduled and before cleanup.
-//! Python: tests/test_channels/test_acp_standalone_response.py::test_standalone_response_observer_sees_no_active_turn
+// Python: tests/test_channels/test_acp_standalone_response.py::test_standalone_response_observer_sees_no_active_turn
 
-use std::future::poll_fn;
+use std::future::{Future, poll_fn, ready};
 use std::pin::Pin;
 use std::sync::{
     Arc,
@@ -39,38 +39,53 @@ impl AcpTransport for Direct {
     fn name(&self) -> &'static str {
         "standalone-counter"
     }
-    async fn open(&self, _: Arc<dyn AcpClient>) -> Result<Connection, AcpError> {
-        Ok(Connection)
+    fn open(&self, _: Arc<dyn AcpClient>) -> impl Future<Output = Result<Connection, AcpError>> {
+        ready(Ok(Connection))
     }
-    async fn close(&self) {}
+    fn close(&self) -> impl Future<Output = ()> {
+        ready(())
+    }
 }
 impl AcpConnection for Connection {
-    async fn initialize(&self, _: InitializeRequest) -> Result<InitializeResponse, AcpError> {
-        Ok(serde_json::from_value(serde_json::json!({"protocolVersion":1,"agentCapabilities":{"sessionCapabilities":{"close":{}}}})).unwrap())
+    fn initialize(
+        &self,
+        _: InitializeRequest,
+    ) -> impl Future<Output = Result<InitializeResponse, AcpError>> {
+        ready(Ok(serde_json::from_value(serde_json::json!({
+            "protocolVersion": 1,
+            "agentCapabilities": {"sessionCapabilities": {"close": {}}}
+        }))
+        .unwrap()))
     }
-    async fn authenticate(&self, _: AuthenticateRequest) -> Result<AuthenticateResponse, AcpError> {
-        Ok(AuthenticateResponse::new())
+    fn authenticate(
+        &self,
+        _: AuthenticateRequest,
+    ) -> impl Future<Output = Result<AuthenticateResponse, AcpError>> {
+        ready(Ok(AuthenticateResponse::new()))
     }
-    async fn new_session(&self, _: NewSessionRequest) -> Result<NewSessionResponse, AcpError> {
-        Ok(NewSessionResponse::new("temporary"))
+    fn new_session(
+        &self,
+        _: NewSessionRequest,
+    ) -> impl Future<Output = Result<NewSessionResponse, AcpError>> {
+        ready(Ok(NewSessionResponse::new("temporary")))
     }
-    async fn prompt(&self, _: PromptRequest) -> Result<PromptResponse, AcpError> {
-        Ok(PromptResponse::new(StopReason::EndTurn))
+    fn prompt(&self, _: PromptRequest) -> impl Future<Output = Result<PromptResponse, AcpError>> {
+        ready(Ok(PromptResponse::new(StopReason::EndTurn)))
     }
-    async fn cancel(&self, _: CancelNotification) -> Result<(), AcpError> {
-        Ok(())
+    fn cancel(&self, _: CancelNotification) -> impl Future<Output = Result<(), AcpError>> {
+        ready(Ok(()))
     }
-    async fn close_session(
+    fn close_session(
         &self,
         _: CloseSessionRequest,
-    ) -> Result<CloseSessionResponse, AcpError> {
-        Ok(CloseSessionResponse::new())
+    ) -> impl Future<Output = Result<CloseSessionResponse, AcpError>> {
+        ready(Ok(CloseSessionResponse::new()))
     }
-    async fn set_config_option(
+    fn set_config_option(
         &self,
         _: SetSessionConfigOptionRequest,
-    ) -> Result<SetSessionConfigOptionResponse, AcpError> {
-        Ok(SetSessionConfigOptionResponse::new(vec![]))
+    ) -> impl Future<Output = Result<SetSessionConfigOptionResponse, AcpError>> {
+        ready(Ok(SetSessionConfigOptionResponse::new(vec![])))
     }
 }
 
