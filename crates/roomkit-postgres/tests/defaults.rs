@@ -248,10 +248,14 @@ impl Drop for Link {
     }
 }
 
-/// A local TCP port nothing listens on.
-fn dead_port() -> u16 {
-    let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    probe.local_addr().unwrap().port()
+/// A local TCP port nothing listens on, for as long as the returned socket
+/// lives: bound without listening, so that no other socket, a sibling
+/// test's fake server among them, can bind it meanwhile (RMK-1298).
+fn dead_port() -> (tokio::net::TcpSocket, u16) {
+    let socket = tokio::net::TcpSocket::new_v4().unwrap();
+    socket.bind(([127, 0, 0, 1], 0).into()).unwrap();
+    let port = socket.local_addr().unwrap().port();
+    (socket, port)
 }
 
 /// What a fake server does with each connection it takes.
@@ -542,7 +546,7 @@ async fn a_host_list_goes_past_a_dead_host() {
         return;
     };
     let home = TempDir::new();
-    let dead = dead_port();
+    let (_refusing, dead) = dead_port();
     let hosts = format!("127.0.0.1,{}", server.host);
     let ports = format!("{dead},{}", server.port);
     let credentials = server.credentials();

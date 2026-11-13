@@ -254,10 +254,11 @@ mod tests {
     /// connection lost once open, or a server's refusal, ends the list.
     #[tokio::test]
     async fn only_a_host_that_cannot_be_reached_is_passed_for_the_next() {
-        let dead = {
-            let probe = TcpListener::bind("127.0.0.1:0").unwrap();
-            probe.local_addr().unwrap().port()
-        };
+        // Bound without listening for the whole test: refused, and kept from
+        // the fakes' binds (RMK-1298).
+        let refusing = tokio::net::TcpSocket::new_v4().unwrap();
+        refusing.bind(([127, 0, 0, 1], 0).into()).unwrap();
+        let dead = refusing.local_addr().unwrap().port();
         let cases = [
             ("refused", dead, Encryption::Disable, true),
             (
