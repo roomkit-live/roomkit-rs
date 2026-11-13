@@ -163,7 +163,7 @@ fn every_message_python_carried_reads_and_rewrites_with_nothing_lost() {
     );
 }
 
-/// Python: tests/test_context_history_boundary.py::test_the_optional_boundary_survives_serialization_and_rejects_negative_indices
+// Python: tests/test_context_history_boundary.py::test_the_optional_boundary_survives_serialization_and_rejects_negative_indices
 /// An explicitly supplied boundary survives the same request codec; this
 /// extends the historical request, not its claim of Python provenance.
 #[test]
