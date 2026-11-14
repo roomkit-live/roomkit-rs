@@ -1312,12 +1312,6 @@ scope = "text"
 reason = "not yet in Rust: the owner reads an open human-input request, Python's RMK-1467, whose lot ports it and takes this entry off (HITL 40019981)"
 
 [[missing]]
-python = "roomkit.RoomKit"
-members = ["release_channel"]
-scope = "text"
-reason = "not yet in Rust: a declared channel built anew, Python's RMK-1477, whose lot ports it and takes this entry off (HITL 40019981)"
-
-[[missing]]
 python = "roomkit.AIChannelTurnConfig.__init__"
 params = ["tool_timeouts"]
 scope = "text"

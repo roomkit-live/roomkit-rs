@@ -27,6 +27,7 @@ mod background;
 pub(crate) mod background_tools;
 mod bindings;
 pub(crate) mod channel_detach;
+mod channel_release;
 pub(crate) mod channel_state;
 pub use channel_state::ChannelCallOptions;
 mod delivery;

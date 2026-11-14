@@ -386,6 +386,10 @@ async fn other_call(
     if name == "channel_call" {
         return crate::channel_verbs::call(run, spec).await;
     }
+    if name == "release_channel" {
+        let outcome = run.kit_of(spec)?.release_channel(&channel_id(spec)?).await;
+        return Ok(finish(run, name, outcome, |()| Value::Null));
+    }
     if name == "close" {
         return close(run, name, spec).await;
     }

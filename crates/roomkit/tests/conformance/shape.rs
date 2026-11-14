@@ -411,6 +411,7 @@ const STEPS: &[(&str, &[&str])] = &[
 fn arguments(call: &str) -> Option<&'static [&'static str]> {
     Some(match call {
         "close" | "kit_executor.close" | "kit_executor.closed" => &[],
+        "release_channel" => &["channel_id"],
         "process_inbound" => &["message", "room_id", "defer_delivery"],
         "delivery.cancel" => &["of", "reason", "timeout_ms"],
         "delivery.wait" => &["of"],

@@ -62,8 +62,8 @@ fn reported_apart(id: &str, failing: &mut Vec<String>) -> bool {
     // This discussion scenario also requires a separately started executor
     // (RFC §19.7.5, RMK-1626), which the runner cannot create yet. Remove
     // this exact case when the public executor and its runner are ported.
-    let apart =
-        id.starts_with(APART) || id == "discussion/an-offline-agent-s-turn-is-skipped-not-failed";
+    let apart = (id.starts_with(APART) && id != "executors/releasing-an-unknown-channel-fails")
+        || id == "discussion/an-offline-agent-s-turn-is-skipped-not-failed";
     if apart {
         println!("known failure {id}:\n  {NO_EXECUTOR_APART}");
         failing.push(id.to_owned());
