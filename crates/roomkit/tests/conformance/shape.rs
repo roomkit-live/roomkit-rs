@@ -29,8 +29,11 @@ const SETUP: &[&str] = &[
     "strategies",
     "session_auditor",
     "processes",
+    "event_handlers",
 ];
 const PROCESS: &[&str] = &["id"];
+const EVENT_HANDLER: &[&str] = &["event", "reactions"];
+const EVENT_HANDLER_REACTION: &[&str] = &["when", "repeat", "gate", "do"];
 const KIT: &[&str] = &[
     "max_chain_depth",
     "process_timeout_ms",
@@ -568,6 +571,7 @@ pub(crate) fn unknown_members(scenario: &Value) -> Vec<String> {
     for (position, hook) in items(&setup["hooks"]) {
         self::hook(hook, &format!("setup.hooks[{position}]"), &mut found);
     }
+    event_handlers(setup, &mut found);
     for (position, step) in items(&scenario["steps"]) {
         self::step(step, &format!("steps[{position}]"), &mut found);
     }
@@ -584,6 +588,33 @@ pub(crate) fn unknown_members(scenario: &Value) -> Vec<String> {
         }
     }
     found
+}
+
+/// The members of the framework-event handlers, and of their reactions
+/// (RFC §8.2).
+fn event_handlers(setup: &Value, found: &mut Vec<String>) {
+    for (position, handler) in items(&setup["event_handlers"]) {
+        let path = format!("setup.event_handlers[{position}]");
+        members(handler, EVENT_HANDLER, &path, found);
+        for (index, reaction) in items(&handler["reactions"]) {
+            let at = format!("{path}.reactions[{index}]");
+            members(reaction, EVENT_HANDLER_REACTION, &at, found);
+            optional(
+                &reaction["when"],
+                &["room_id"],
+                &format!("{at}.when"),
+                found,
+            );
+            for (number, action) in items(&reaction["do"]) {
+                call(
+                    action,
+                    &["as", "expect"],
+                    &format!("{at}.do[{number}]"),
+                    found,
+                );
+            }
+        }
+    }
 }
 
 /// The members of the scripted strategies, and of their install and

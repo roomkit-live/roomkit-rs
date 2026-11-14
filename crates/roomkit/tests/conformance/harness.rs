@@ -277,6 +277,9 @@ async fn set_up(run: &Arc<Run>, setup: &Value) -> Result<(), String> {
         identity::register_identity_hook(run, hook)
             .map_err(|error| format!("register {hook}: {error}"))?;
     }
+    for handler in setup["event_handlers"].as_array().into_iter().flatten() {
+        crate::scripted::register_event_handler(run, handler)?;
+    }
     // Entered, as Python's `async with` starts its delivery backend.
     run.kit()
         .start()

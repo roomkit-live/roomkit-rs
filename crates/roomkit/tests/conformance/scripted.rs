@@ -770,6 +770,37 @@ pub(crate) fn status_hook_handler(
     }
 }
 
+/// Registers the scripted framework-event handler `spec` on the run's kit
+/// (README, `event_handlers`): it reacts to each event of its type, in the
+/// context the kit runs it in.
+pub(crate) fn register_event_handler(run: &Arc<Run>, spec: &Value) -> Result<(), String> {
+    let event_type = spec["event"]
+        .as_str()
+        .ok_or_else(|| format!("{spec}: no event"))?
+        .to_owned();
+    let reactions = Arc::new(Reactions::new(spec.get("reactions")));
+    let weak = Arc::downgrade(run);
+    run.kit()
+        .on(event_type, move |event: roomkit::FrameworkEvent| {
+            let reactions = Arc::clone(&reactions);
+            let run = Weak::clone(&weak);
+            async move {
+                let Some(run) = run.upgrade() else {
+                    return;
+                };
+                let room = event.room_id.map(|id| id.as_str().to_owned());
+                let Some(reaction) = reactions.pick(&json!({ "room_id": room })) else {
+                    return;
+                };
+                let scope = room.as_deref().map(Scope::in_room).unwrap_or_default();
+                // Nothing to raise: the shape refuses `fail` on these
+                // reactions, and `run_action` keeps an action's error.
+                drop(perform(&run, &reaction, &scope).await);
+            }
+        })
+        .map_err(|error| format!("{spec}: {error}"))
+}
+
 pub(crate) fn hook_handler(
     spec: &Value,
     run: &Arc<Run>,
