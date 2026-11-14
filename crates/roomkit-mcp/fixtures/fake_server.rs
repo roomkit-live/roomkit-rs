@@ -369,7 +369,7 @@ fn call(params: &Value) -> Option<Value> {
             text("x".repeat(usize::try_from(chars).unwrap_or(10)))
         }
         "huge" => text("h".repeat(5 * 1024 * 1024)),
-        "structured" => json!({ "content": [], "structuredContent": { "status": "shipped" } }),
+        "structured" => structured(arguments),
         "slow" => return None,
         "crash" => std::process::exit(3),
         "env" => {
@@ -380,5 +380,18 @@ fn call(params: &Value) -> Option<Value> {
             text(names.join(" "))
         }
         _ => json!({ "content": [], "isError": true }),
+    })
+}
+
+/// A scripted structured result; the empty arguments keep the original fixture.
+fn structured(arguments: &Value) -> Value {
+    json!({
+        "content": arguments.get("text").map_or_else(
+            || json!([]),
+            |text| json!([{ "type": "text", "text": text }]),
+        ),
+        "structuredContent": arguments.get("copy").cloned()
+            .unwrap_or_else(|| json!({ "status": "shipped" })),
+        "isError": arguments.get("error").and_then(Value::as_bool).unwrap_or(false),
     })
 }

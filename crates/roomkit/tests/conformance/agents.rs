@@ -1009,6 +1009,7 @@ fn scripted_handler(tools: Vec<Value>, run: &Arc<Run>) -> ToolHandler {
                 return Err(ToolError::unserved(format!("{name} is not this handler's")));
             };
             write_record(&behaviour);
+            write_structured_content(&behaviour)?;
             if let (Some(gate), Some(run)) = (behaviour["gate"].as_str(), run.upgrade()) {
                 run.gates.hold(gate).await;
             }
@@ -1224,6 +1225,7 @@ fn tools(spec: &Value, run: &Arc<Run>) -> Tools {
                 let (behaviour, run) = (behaviour.clone(), Weak::clone(&run));
                 async move {
                     write_record(&behaviour);
+                    write_structured_content(&behaviour)?;
                     if let (Some(gate), Some(run)) = (behaviour["gate"].as_str(), run.upgrade()) {
                         run.gates.hold(gate).await;
                     }
@@ -1242,6 +1244,22 @@ pub(crate) fn write_record(spec: &Value) {
     ) {
         record.update(keys.clone());
     }
+}
+
+/// Publish through the real call context, before the scripted answer or gate.
+fn write_structured_content(spec: &Value) -> Result<(), ToolError> {
+    let Some(copy) = spec.get("writes_structured_content") else {
+        return Ok(());
+    };
+    let call = roomkit_ai::current_tool_call().ok_or_else(|| {
+        ToolError::failed("a scripted tool publishing a copy has no call context")
+    })?;
+    call.structured_content.replace(
+        copy.as_object()
+            .cloned()
+            .map(roomkit::model::ResponseMetadata::from),
+    );
+    Ok(())
 }
 
 /// What a scripted tool answers.
@@ -1603,6 +1621,7 @@ fn tool_call_record(event: &ToolCallEvent) -> Value {
         "refused_but_ran": event.refused_but_ran,
         "cancelled": event.cancelled,
         "error_detail": event.error_detail,
+        "structured_content": event.structured_content,
     })
 }
 

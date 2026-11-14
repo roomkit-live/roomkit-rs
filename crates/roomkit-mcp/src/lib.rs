@@ -68,6 +68,7 @@ mod process;
 mod provider;
 mod results;
 mod server;
+mod structured;
 mod texts;
 
 pub use self::error::McpError;

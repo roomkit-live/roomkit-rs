@@ -178,6 +178,9 @@ pub struct ToolCallContext {
     pub tool_call_id: String,
     /// The channel whose model made the call.
     pub channel_id: Option<ChannelId>,
+    /// The handler's structured copy of its result (RFC §9.3, §21.4).
+    /// Clones share this field; `replace` assigns it, and `get` reads its live map.
+    pub structured_content: super::ToolStructuredContent,
 }
 
 /// The call the current tool handler runs within: Python's
@@ -307,11 +310,12 @@ impl DynToolset for ServedBy {
         call: ToolCall,
         context: ToolContext,
     ) -> BoxFuture<'_, Result<ToolResult, ToolError>> {
-        let within = ToolCallContext {
+        let within = context.call_record.unwrap_or_else(|| ToolCallContext {
             room_id: Some(context.room_id.clone()),
             tool_call_id: call.id.clone(),
             channel_id: Some(context.channel_id.clone()),
-        };
+            ..ToolCallContext::default()
+        });
         // The handler is called within its call, as Python sets the call's
         // context before it calls the handler; its answer may decline the
         // call, as Python's `declined_answer` reads it (RFC §21.4).

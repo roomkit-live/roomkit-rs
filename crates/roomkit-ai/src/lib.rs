@@ -144,8 +144,8 @@ pub use self::tools::{
     FireBeforeHookOptions, FireOnToolHookOptions, OnToolCancelledOptions, OnToolRefusedOptions,
     OnToolResultOptions, PolicyExternalToolHandler, PolicyExternalToolHandlerOptions,
     ProcessToolCallOptions, Tool, ToolCallContext, ToolDecision, ToolEntry, ToolError, ToolFuture,
-    ToolHandler, ToolPolicy, ToolResult, ToolResultPart, compose_tool_handlers,
-    current_response_metadata, current_tool_actor_id, current_tool_call,
+    ToolHandler, ToolPolicy, ToolResult, ToolResultPart, ToolStructuredContent,
+    compose_tool_handlers, current_response_metadata, current_tool_actor_id, current_tool_call,
 };
 #[doc(hidden)]
 pub use self::tools::{ToolContext, Tools, alias_server, arguments, served_tool_name};

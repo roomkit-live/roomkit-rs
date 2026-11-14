@@ -12,4 +12,5 @@ mod calls;
 #[cfg(target_os = "linux")]
 mod lifecycle;
 mod listing;
+mod structured;
 mod support;

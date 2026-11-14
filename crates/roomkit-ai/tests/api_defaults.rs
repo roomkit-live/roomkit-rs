@@ -17,6 +17,17 @@ use roomkit_ai::{FromToolOptions, ToolDeclarationOrigin};
 use std::time::Duration;
 
 #[test]
+fn tool_call_structured_content_defaults_as_python() {
+    // roomkit.tools.ToolCallContext.__init__(structured_content) = None
+    assert!(
+        roomkit_ai::ToolCallContext::default()
+            .structured_content
+            .get()
+            .is_none()
+    );
+}
+
+#[test]
 fn mock_memory_and_knowledge_options_defaults_as_python() {
     let memory = MockMemoryProviderOptions::default();
     // roomkit.memory.MockMemoryProvider.__init__(messages) = None

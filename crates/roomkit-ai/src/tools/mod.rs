@@ -23,6 +23,7 @@ pub(crate) mod repair;
 mod result;
 mod row_bound;
 pub(crate) mod schema;
+mod structured;
 pub(crate) mod toolbox;
 
 use std::any::type_name;
@@ -53,6 +54,7 @@ pub use self::policy::ToolPolicy;
 pub use self::policy::{alias_server, served_tool_name};
 pub(crate) use self::result::read as read_tool_result;
 pub use self::result::{ToolResult, ToolResultPart};
+pub use self::structured::ToolStructuredContent;
 use crate::error::AiError;
 use crate::texts::error_envelope;
 use crate::tool_search::TurnSearch;
@@ -264,6 +266,8 @@ pub struct ToolContext {
     /// The participant whose event woke the turn, Python's tool loop
     /// context's `actor_id`, read with [`current_tool_actor_id`].
     pub(crate) actor_id: Option<String>,
+    /// The fresh record retained by the tool loop for this call's result.
+    pub(crate) call_record: Option<ToolCallContext>,
     /// What a skill activation's hint may name, when the call asks to
     /// activate: the tools the turn reaches, its own and a person's aside (RFC
     /// §24.4).
@@ -284,6 +288,7 @@ impl ToolContext {
             turn: None,
             stands_alone: false,
             actor_id: None,
+            call_record: None,
             hintable: Vec::new(),
             search: None,
         }

@@ -231,6 +231,7 @@ const TOOL: &[&str] = &[
     "declared",
     "returns_json",
     "writes_record",
+    "writes_structured_content",
     "returns_parts",
 ];
 const RAISES: &[&str] = &["kind", "message"];

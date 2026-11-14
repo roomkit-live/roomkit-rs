@@ -503,7 +503,11 @@ impl McpToolProvider {
     ) -> Result<CallToolResult, McpError> {
         let server = self.connected_server()?;
         match tokio::time::timeout(timeout, server.call(name, arguments)).await {
-            Ok(answered) => answered,
+            Ok(Ok(answered)) => {
+                crate::structured::publish(&answered);
+                Ok(answered)
+            }
+            Ok(Err(error)) => Err(error),
             Err(_elapsed) => Err(McpError::CallTimeout {
                 tool: name.to_owned(),
                 after: timeout,

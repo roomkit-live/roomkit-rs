@@ -13,6 +13,7 @@ the mapping and its tests. The check does not generate or update this document.
 
 | Rust name | Python name | Members or parameters |
 | --- | --- | --- |
+| `roomkit_ai::ToolStructuredContent` | — | Whole type |
 | `roomkit_ai::ExternalToolHandler` | — | `state` |
 | `roomkit_ai::ExternalToolHandlerState` | — | Whole type |
 | `roomkit_ai::ExternalToolFuture` | — | Whole type |

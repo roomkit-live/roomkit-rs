@@ -1150,11 +1150,10 @@ members = ["extra_tools", "thinks_while_listening"]
 scope = "text"
 reason = "not in 0.x: tools added at run time and the thinker"
 
-[[missing]]
-python = "roomkit.tools.ToolCallContext.__init__"
-params = ["structured_content"]
-scope = "text"
-reason = "not in 0.x: MCP Apps' structured results"
+[[exception]]
+rust = "roomkit_ai::ToolStructuredContent"
+approved = "2026-11-14"
+reason = "language: Python assigns an optional dictionary to ToolCallContext.structured_content; Rust get/replace share that field across call clones, returning live ResponseMetadata map handles (HITL 0536fcf0)"
 
 [[missing]]
 python = "roomkit.providers.openai.OpenAIAIProvider.__init__"

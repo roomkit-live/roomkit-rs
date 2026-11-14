@@ -16,7 +16,10 @@ use crate::skills::ACTIVATE_SKILL;
 use crate::texts;
 use crate::tool_eviction::kept_whole;
 use crate::tool_search::TOOL_SEARCH_INFRA_TOOL_NAMES;
-use crate::tools::{ToolContext, ToolError, ToolResult, read_tool_result, repair, schema};
+use crate::tools::{
+    ToolCallContext, ToolContext, ToolError, ToolResult, ToolStructuredContent, read_tool_result,
+    repair, schema,
+};
 
 /// The kind a call past its bound reads as (RFC §21.6).
 const TIMED_OUT: &str = "ToolTimeoutError";
@@ -375,8 +378,16 @@ impl Loop {
 
     /// What `call` is told of its turn: an activation also what its hint may
     /// name and reveal (RFC §24.4).
-    fn call_context(&self, call: &ToolCall) -> ToolContext {
+    fn call_context(&self, call: &ToolCall) -> (ToolContext, ToolStructuredContent) {
         let mut context = self.context.clone();
+        let record = ToolCallContext {
+            room_id: Some(context.room_id.clone()),
+            tool_call_id: call.id.clone(),
+            channel_id: Some(context.channel_id.clone()),
+            ..ToolCallContext::default()
+        };
+        let structured = record.structured_content.clone();
+        context.call_record = Some(record);
         if call.name == ACTIVATE_SKILL {
             context.search = Some(Arc::clone(&self.search));
             context.hintable = self
@@ -386,7 +397,7 @@ impl Loop {
                 .filter(|name| self.toolbox.hintable(name))
                 .collect();
         }
-        context
+        (context, structured)
     }
 
     /// Runs `call` on the tool serving it, within the agent's bound per
@@ -396,7 +407,7 @@ impl Loop {
             let text = texts::not_declared(&call.name);
             return ended(call, ToolCallOutcome::Refused, text);
         };
-        let context = self.call_context(&call);
+        let (context, structured) = self.call_context(&call);
         // The tool gets its own call: its intent is the person's, as a
         // handler of the reference implementation never reads it (RFC §6.4).
         let mut handed = call.clone();
@@ -412,7 +423,7 @@ impl Loop {
             None => Ok(answer.await),
         };
         match answered {
-            Ok(Ok(output)) => served(call, output.with_parts_read()),
+            Ok(Ok(output)) => served(call, output.with_parts_read(), &structured),
             Ok(Err(error)) => failure(call, error),
             Err(bound) => timed_out(call, bound),
         }
@@ -436,8 +447,16 @@ fn raised_of(ended: &ToolCallReport) -> Option<String> {
 
 /// `call`, served with `output`, a text, JSON or parts as its hooks read
 /// them.
-fn served(call: ToolCall, output: ToolResult) -> ToolCallReport {
-    ToolCallReport::new(call).ended(ToolCallOutcome::Served, output.into_value())
+fn served(
+    call: ToolCall,
+    output: ToolResult,
+    structured: &ToolStructuredContent,
+) -> ToolCallReport {
+    let mut report = ToolCallReport::new(call);
+    report.structured_content = structured
+        .get()
+        .map(|copy| Value::Object(copy.to_metadata()));
+    report.ended(ToolCallOutcome::Served, output.into_value())
 }
 
 /// A call whose tool answered `error`: a refusal's and a failure's words
