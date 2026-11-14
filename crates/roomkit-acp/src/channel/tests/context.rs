@@ -1,6 +1,8 @@
 //! Host callback admission and cancellation through the public channel API.
 
+mod direct_skip;
 mod empty_input;
+mod public_cancel;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

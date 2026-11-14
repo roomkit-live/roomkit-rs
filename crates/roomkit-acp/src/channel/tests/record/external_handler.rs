@@ -5,6 +5,7 @@ mod concurrent;
 mod cut_report;
 mod failure_body;
 mod standalone;
+mod status_context;
 
 use std::sync::{Arc, Mutex};
 

@@ -74,19 +74,7 @@ async fn concurrent_reports() {
         .await
         .unwrap();
     }
-    let reports = Arc::new(Mutex::new(Vec::new()));
-    let observed = Arc::clone(&reports);
-    kit.turn_executor()
-        .hooks()
-        .register(HookRegistration::new(
-            HookTrigger::OnToolCall,
-            HookExecution::Async,
-            move |event: ToolCallEvent, _: RoomContext| {
-                observed.lock().unwrap().push(event);
-                async {}
-            },
-        ))
-        .unwrap();
+    let reports = observe(&kit);
     let first = tokio::spawn(send_room(Arc::clone(&kit), "r1"));
     let mut agent = Agent::new(opened.recv().await.unwrap());
     let prompt1 = agent.prompted(true).await;
@@ -103,15 +91,23 @@ async fn concurrent_reports() {
     }
     close(&kit, &mut agent).await;
     let reports = reports.lock().unwrap();
-    assert_eq!(reports.len(), 2);
-    let rooms: std::collections::BTreeSet<_> =
-        reports.iter().map(|event| event.room_id.clone()).collect();
-    assert_eq!(rooms.len(), 2);
-    assert!(
-        reports
+    assert_eq!(reports.len(), 4);
+    for mode in [HookExecution::Sync, HookExecution::Async] {
+        let heard: Vec<_> = reports
             .iter()
-            .all(|event| event.tool_call_id == "read" && event.result == Some(json!("original")))
-    );
+            .filter(|(execution, _)| *execution == mode)
+            .map(|(_, event)| event)
+            .collect();
+        assert_eq!(heard.len(), 2);
+        let rooms: std::collections::BTreeSet<_> =
+            heard.iter().map(|event| event.room_id.clone()).collect();
+        assert_eq!(rooms.len(), 2);
+        assert!(
+            heard.iter().all(
+                |event| event.tool_call_id == "read" && event.result == Some(json!("original"))
+            )
+        );
+    }
 }
 
 async fn send_room(kit: Arc<roomkit::RoomKit>, room: &str) {
@@ -141,4 +137,23 @@ async fn completed(agent: &mut Agent, session: &str) {
         .write_all(format!("{update}\n").as_bytes())
         .await
         .unwrap();
+}
+
+fn observe(kit: &roomkit::RoomKit) -> Arc<Mutex<Vec<(HookExecution, ToolCallEvent)>>> {
+    let reports = Arc::new(Mutex::new(Vec::new()));
+    for mode in [HookExecution::Sync, HookExecution::Async] {
+        let observed = Arc::clone(&reports);
+        kit.turn_executor()
+            .hooks()
+            .register(HookRegistration::new(
+                HookTrigger::OnToolCall,
+                mode,
+                move |event: ToolCallEvent, _: RoomContext| {
+                    observed.lock().unwrap().push((mode, event));
+                    async { HookResult::allow(roomkit::model::hook::AllowOptions::default()) }
+                },
+            ))
+            .unwrap();
+    }
+    reports
 }
