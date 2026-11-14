@@ -48,7 +48,7 @@ async fn host_supplies_prompt(body: &str) {
     output.unwrap();
     assert_eq!(*seen.lock().unwrap(), vec![trigger.clone()]);
     assert_eq!(serde_json::to_value(&trigger).unwrap(), before);
-    let (_, ()) = tokio::join!(channel.close(), close_after_single_prompt(&mut agent));
+    let ((), ()) = tokio::join!(channel.close(), close_after_single_prompt(&mut agent));
 }
 
 async fn answer_prompt(opened: &mut mpsc::UnboundedReceiver<DuplexStream>, body: &str) -> Agent {
