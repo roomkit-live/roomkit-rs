@@ -784,22 +784,35 @@ fn turns_ended(kit: &Kit) -> Arc<Mutex<Vec<String>>> {
     ended
 }
 
-// Python: tests/orchestration/test_discussion_processes.py::test_a_turn_whose_lease_ends_unrenewed_is_cut_before_another_process_takes_it[held]
-// and [failing]: A cannot renew its lease while investigator's turn runs,
-// its room lock held or its writes of the queue failing. The turn is cut
-// once the lease ends, then B takes the lease and gives investigator a
-// turn again. One turn at a time, only B's commits, and the end of A's
-// turn, recorded once A can, leaves B's as the one speaking (rules 6, 7
-// and 16).
+/// How A cannot renew its lease in
+/// `a_turn_whose_lease_ends_unrenewed_is_cut_before_another_process_takes_it`.
+#[derive(Clone, Copy, Debug)]
+enum Unrenewed {
+    /// Its room locks held: each edit of the queue waits (`[held]`).
+    Held,
+    /// Its writes of the queue fail (`[failing]`).
+    Failing,
+    /// Its reads of the room held (`[read_held]`).
+    ReadHeld,
+}
+
+// Python: tests/orchestration/test_discussion_processes.py::test_a_turn_whose_lease_ends_unrenewed_is_cut_before_another_process_takes_it[held],
+// [failing] and [read_held]: A cannot renew its lease while investigator's
+// turn runs: its edits of the queue are held or their writes fail, or its
+// reads of the queue are held. The turn is cut by the lease's end, before
+// another process may take the lease over one read later; then B takes it
+// and gives investigator a turn again. One turn at a time, only B's
+// commits, and the end of A's turn, recorded once A can, leaves B's as the
+// one speaking (rules 6, 7 and 16).
 #[tokio::test(start_paused = true)]
 async fn a_turn_whose_lease_ends_unrenewed_is_cut_before_another_process_takes_it() {
-    for failing in [false, true] {
-        a_turn_whose_lease_ends_unrenewed(failing).await;
+    for unrenewed in [Unrenewed::Held, Unrenewed::Failing, Unrenewed::ReadHeld] {
+        a_turn_whose_lease_ends_unrenewed(unrenewed).await;
     }
 }
 
-async fn a_turn_whose_lease_ends_unrenewed(failing: bool) {
-    let case = if failing { "failing" } else { "held" };
+async fn a_turn_whose_lease_ends_unrenewed(unrenewed: Unrenewed) {
+    let case = format!("{unrenewed:?}");
     let mut cluster = Cluster::paused();
     // Past the lease's 15 seconds, and the read a taker waits past them.
     let delay = Duration::from_secs(60);
@@ -811,10 +824,10 @@ async fn a_turn_whose_lease_ends_unrenewed(failing: bool) {
     say(&a, "@investigator what do the logs say?").await;
     cluster.logged("+investigator").await;
     let holds = &a.store().holds;
-    if failing {
-        holds.fail_queue_writes();
-    } else {
-        holds.locks.hold();
+    match unrenewed {
+        Unrenewed::Held => holds.locks.hold(),
+        Unrenewed::Failing => holds.fail_queue_writes(),
+        Unrenewed::ReadHeld => holds.reads.hold(),
     }
 
     let queue = stored_queue(&cluster).await;
@@ -870,9 +883,10 @@ async fn a_turn_whose_lease_ends_unrenewed(failing: bool) {
         "{case}"
     );
     // Cut before another process may take the lease, one read past its end,
-    // not at that same moment (rule 7).
+    // not at that same moment, and by the lease's end, no read before it:
+    // not at the end of a read bounded more tightly than the lease (rule 7).
     assert!(
-        cut_at.is_some_and(|at| at < expires + POLL_SECONDS),
+        cut_at.is_some_and(|at| expires - POLL_SECONDS < at && at < expires + POLL_SECONDS),
         "{case}: cut at {cut_at:?}, the lease ends at {expires}"
     );
     assert_eq!(cluster.started("investigator"), 1, "{case}");
@@ -958,6 +972,34 @@ async fn an_expired_lease_is_taken_over_one_read_past_its_end() {
     until_taken_from(&cluster, &a_holds).await;
     holds.release();
     assert_eq!(within_a_read, Some(a_holds));
+    cluster.close().await;
+}
+
+// Python: tests/orchestration/test_discussion_processes.py::test_a_process_held_less_than_its_lease_keeps_its_turn:
+// the process giving a turn renews its lease at each read, not only once
+// under 10 s of its 15 s are left: held from a read 4 s into the lease
+// until 16.5 s into it, past its end had that read not renewed it, it reads
+// again with the lease its own and keeps its turn (rules 7 and 16). Held
+// as Python's: the lease's clock leaps ahead between two reads, then
+// stands still.
+#[tokio::test(start_paused = true)]
+async fn a_process_held_less_than_its_lease_keeps_its_turn() {
+    let mut cluster = Cluster::paused();
+    let a = cluster.installed(Duration::from_secs(10)).await;
+    say(&a, "@investigator what do the logs say?").await;
+    cluster.logged("+investigator").await;
+    let started = tokio::time::Instant::now();
+    let clock = cluster.clock.clone().unwrap();
+
+    // The turn's reads come each second from its start: half a read past
+    // the fourth, the process is held 12 s.
+    tokio::time::sleep_until(started + Duration::from_millis(4500)).await;
+    clock.stop_at(clock.seconds() + 12.0);
+
+    cluster.turn_over("investigator").await;
+    let log = cluster.log.lock().unwrap().clone();
+    assert_eq!(log, ["+investigator", "-investigator"]);
+    assert_eq!(cluster.answers().await, ["investigator"]);
     cluster.close().await;
 }
 

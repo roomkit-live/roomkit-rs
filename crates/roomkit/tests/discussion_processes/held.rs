@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -75,8 +75,9 @@ impl Gate {
 /// What a test holds in one process.
 #[derive(Debug, Default)]
 pub(crate) struct Holds {
-    /// The process's reads of a room: the stored queue its discussion reads
-    /// without the room's lock (Python's `room.read`).
+    /// The process's reads of a room made while it holds no room's lock:
+    /// the stored queue its discussion reads without that lock (Python's
+    /// `room.read`). A read under the lock, an edit's, passes.
     pub(crate) reads: Gate,
     /// The process's room locks: each change of the stored queue, a lease
     /// renewal among them, waits for one first (Python's `room.editing`).
@@ -84,6 +85,8 @@ pub(crate) struct Holds {
     /// While set, the process's writes of the speak queue fail, as a store
     /// that refuses them.
     failing_queue_writes: AtomicBool,
+    /// How many room locks the process holds now.
+    room_locks: AtomicUsize,
 }
 
 impl Holds {
@@ -136,7 +139,9 @@ impl ConversationStore for HeldStore {
     }
 
     async fn get_room(&self, room_id: &RoomId) -> Result<Option<Room>, StoreError> {
-        self.holds.reads.pass().await;
+        if self.holds.room_locks.load(Ordering::SeqCst) == 0 {
+            self.holds.reads.pass().await;
+        }
         self.store.get_room(room_id).await
     }
 
@@ -294,6 +299,31 @@ impl ConversationStore for HeldStore {
 type LockAnswer<'a> =
     Pin<Box<dyn Future<Output = Result<Box<dyn RoomLock>, RoomKitError>> + Send + 'a>>;
 
+/// A room's lock a process holds, counted while it does.
+struct CountedLock {
+    lock: Option<Box<dyn RoomLock>>,
+    holds: Arc<Holds>,
+}
+
+impl RoomLock for CountedLock {
+    fn release(
+        mut self: Box<Self>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), RoomKitError>> + Send + 'static>> {
+        let lock = self.lock.take().unwrap();
+        Box::pin(async move {
+            let released = lock.release().await;
+            drop(self);
+            released
+        })
+    }
+}
+
+impl Drop for CountedLock {
+    fn drop(&mut self) {
+        self.holds.room_locks.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 /// One process's handle on the cluster's lock manager.
 pub(crate) struct HeldLocks {
     locks: Arc<dyn RoomLockManager>,
@@ -314,10 +344,17 @@ impl RoomLockManager for HeldLocks {
         Box::pin(async move {
             // A room's own lock; the kit leads the keys of its other kinds
             // of locks (delivery claims, verifications) with a NUL.
-            if !room_id.as_str().starts_with('\0') {
-                self.holds.locks.pass().await;
+            if room_id.as_str().starts_with('\0') {
+                return self.locks.locked(room_id).await;
             }
-            self.locks.locked(room_id).await
+            self.holds.locks.pass().await;
+            let lock = self.locks.locked(room_id).await?;
+            self.holds.room_locks.fetch_add(1, Ordering::SeqCst);
+            let counted: Box<dyn RoomLock> = Box::new(CountedLock {
+                lock: Some(lock),
+                holds: Arc::clone(&self.holds),
+            });
+            Ok(counted)
         })
     }
 
