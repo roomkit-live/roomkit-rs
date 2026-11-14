@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 
 struct Reading {
     inner: RecordingTransport,
-    observed: tokio::sync::mpsc::UnboundedSender<StreamItem>,
+    observed: mpsc::UnboundedSender<StreamItem>,
 }
 
 impl Channel for Reading {
@@ -87,7 +87,11 @@ async fn first_items(observed: &mut mpsc::UnboundedReceiver<StreamItem>) {
                 assert_eq!(text, "First chunk");
                 return;
             }
-            _ => {}
+            StreamItem::Row(_)
+            | StreamItem::Thinking(_)
+            | StreamItem::Usage(_)
+            | StreamItem::LoopEnd(_)
+            | _ => {}
         }
     }
 }
@@ -138,10 +142,10 @@ async fn start(agent: &mut Agent) {
 fn assert_end(items: &mut mpsc::UnboundedReceiver<StreamItem>) {
     let mut ended = Vec::new();
     while let Ok(item) = items.try_recv() {
-        if let StreamItem::Row(event) = item {
-            if event.r#type == EventType::ToolCallEnd {
-                ended.push(event);
-            }
+        if let StreamItem::Row(event) = item
+            && event.r#type == EventType::ToolCallEnd
+        {
+            ended.push(event);
         }
     }
     assert_eq!(ended.len(), 1);

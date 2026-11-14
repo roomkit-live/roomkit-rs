@@ -1,6 +1,6 @@
 //! A standalone channel's callbacks retain its own response record.
 
-mod abandoned;
+mod streamed;
 
 use super::*;
 use roomkit::Channel;
