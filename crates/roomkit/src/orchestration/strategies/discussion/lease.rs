@@ -1,6 +1,10 @@
 //! The lease: the one process that gives a room's turns (RFC §19.7.5 rule
 //! 16). The part of Python's `_shared.py` that reads no store and no clock:
-//! each method takes the process's id and the time now.
+//! each method takes the process's id and the time now. Its holder renews
+//! it while it holds it, and another process that installed the discussion
+//! takes it once it has expired, one read of the driver later: a holder
+//! that cannot renew it cuts its turn when it ends, before another process
+//! may give one (rule 7).
 
 use super::queue::SpeakQueueState;
 
@@ -16,19 +20,22 @@ impl SpeakQueueState {
         self.lease_holder.as_deref() == Some(me) && self.lease_expires > now
     }
 
-    /// Whether another process than `me` holds the lease at `now`.
-    pub(crate) fn held_elsewhere(&self, me: &str, now: f64) -> bool {
+    /// Whether another process than `me` holds the lease at `now`: until it
+    /// expires, and `grace` seconds past that for a process about to take
+    /// it over.
+    pub(crate) fn held_elsewhere(&self, me: &str, now: f64, grace: f64) -> bool {
         self.lease_holder
             .as_deref()
             .is_some_and(|holder| holder != me)
-            && self.lease_expires > now
+            && self.lease_expires + grace > now
     }
 
-    /// Take or renew the lease, unless another process holds it; whether `me`
-    /// holds it now. Taking it over from a process whose lease expired ends
-    /// that process's turn (rule 6).
-    pub(crate) fn take_lease(&mut self, me: &str, now: f64) -> bool {
-        if self.held_elsewhere(me, now) {
+    /// Take or renew the lease, unless another process holds it, `grace`
+    /// seconds past its expiry included; whether `me` holds it now. Taking
+    /// it over from a process whose lease expired ends that process's turn
+    /// (rule 6).
+    pub(crate) fn take_lease(&mut self, me: &str, now: f64, grace: f64) -> bool {
+        if self.held_elsewhere(me, now, grace) {
             return false;
         }
         if self.lease_holder.as_deref() != Some(me) {
@@ -99,16 +106,16 @@ mod tests {
         assert!(state.holds("a", 9.0));
         assert!(!state.holds("a", 10.0));
         assert!(!state.holds("b", 9.0));
-        assert!(state.held_elsewhere("b", 9.0));
-        assert!(!state.held_elsewhere("b", 10.0));
-        assert!(!state.held_elsewhere("a", 9.0));
-        assert!(!SpeakQueueState::default().held_elsewhere("a", 0.0));
+        assert!(state.held_elsewhere("b", 9.0, 0.0));
+        assert!(!state.held_elsewhere("b", 10.0, 0.0));
+        assert!(!state.held_elsewhere("a", 9.0, 0.0));
+        assert!(!SpeakQueueState::default().held_elsewhere("a", 0.0, 0.0));
     }
 
     #[test]
     fn another_process_holding_the_lease_keeps_it() {
         let mut state = held_by("a", 10.0);
-        assert!(!state.take_lease("b", 9.0));
+        assert!(!state.take_lease("b", 9.0, 0.0));
         assert_eq!(state.lease_holder.as_deref(), Some("a"));
         assert_eq!(millis(state.lease_expires), millis(10.0));
     }
@@ -117,7 +124,7 @@ mod tests {
     fn taking_over_an_expired_lease_ends_its_holder_s_turn() {
         let mut state = held_by("a", 10.0);
         state.speaking = Some(ChannelId::new("sre").unwrap());
-        assert!(state.take_lease("b", 11.0));
+        assert!(state.take_lease("b", 11.0, 0.0));
         assert_eq!(state.lease_holder.as_deref(), Some("b"));
         assert_eq!(millis(state.lease_expires), millis(26.0));
         assert_eq!(state.speaking, None);
@@ -128,7 +135,7 @@ mod tests {
         let mut state = held_by("a", 10.0);
         let sre = ChannelId::new("sre").unwrap();
         state.speaking = Some(sre.clone());
-        assert!(state.take_lease("a", 9.0));
+        assert!(state.take_lease("a", 9.0, 0.0));
         assert_eq!(millis(state.lease_expires), millis(24.0));
         assert_eq!(state.speaking, Some(sre));
     }
@@ -165,7 +172,7 @@ mod tests {
     fn a_renewal_alone_is_no_change_of_the_queue() {
         let before = held_by("a", 10.0);
         let mut after = before.clone();
-        after.take_lease("a", 9.0);
+        after.take_lease("a", 9.0, 0.0);
         after.version += 1;
         assert!(!after.queue_differs(&before));
         // The turn that runs is the queue's, even though the lease carries it.

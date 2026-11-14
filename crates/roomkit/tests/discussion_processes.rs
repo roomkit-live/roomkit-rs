@@ -5,7 +5,10 @@
 //! What another process stores reaches a turn running here only as its
 //! driver reads the queue again, once a second, and a lease lasts 15
 //! seconds: the tests of that run on tokio's paused clock, which the kits'
-//! clock follows ([`TokioClock`]), as Python's patch the poll and the lease.
+//! clock follows ([`LeaseClock`]), as Python's patch the poll and the lease.
+//! Each process reaches the store and the lock manager through handles of
+//! its own, which a test holds as a stalled database or lock would
+//! ([`Holds`]), as Python's patch one process's reads and edits.
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
@@ -27,14 +30,19 @@ use roomkit::{
     HookTrigger, InMemoryLockManager, InMemoryLockManagerOptions, InMemoryStore,
     InstallStrategyOptions, ListenOnlyOptions, Orchestration, ProcessInboundOptions, RoomKit,
     RoomKitOptions, RoomLockManager, RoomStrategyIsCurrentOptions, RoomStrategyOptions,
-    SpeakQueueOptions, UninstallStrategyOptions,
+    SpeakQueueChange, SpeakQueueEvent, SpeakQueueOptions, UninstallStrategyOptions,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, ProviderError};
 #[path = "support/clock.rs"]
 mod clock;
-use clock::TokioClock;
+#[path = "discussion_processes/held.rs"]
+mod held;
+use held::{HeldLocks, HeldStore, Holds, LeaseClock};
 use roomkit_core::rules::transcoding::text_of;
+
+/// A process of the cluster: a kit on its own handle on the store.
+type Kit = RoomKit<HeldStore>;
 
 const AGENTS: [&str; 3] = ["investigator", "sre", "comms"];
 const KEPT: [&str; 2] = ["investigator", "sre"];
@@ -139,9 +147,9 @@ struct Cluster {
     locks: Arc<dyn RoomLockManager>,
     log: Arc<Mutex<Vec<String>>>,
     starts: Arc<Mutex<Vec<String>>>,
-    kits: Vec<RoomKit>,
+    kits: Vec<Kit>,
     /// The kits' clock, on a paused test's.
-    clock: Option<TokioClock>,
+    clock: Option<LeaseClock>,
 }
 
 impl Cluster {
@@ -161,19 +169,26 @@ impl Cluster {
     /// Processes whose clock is tokio's, for a test on its paused clock.
     fn paused() -> Self {
         Self {
-            clock: Some(TokioClock::new()),
+            clock: Some(LeaseClock::new()),
             ..Self::new()
+        }
+    }
+
+    /// The options of a process's kit: its own handles on the store and the
+    /// lock manager.
+    fn options(&self) -> RoomKitOptions<HeldStore> {
+        let holds = Arc::new(Holds::default());
+        let locks: Arc<dyn RoomLockManager> = Arc::new(HeldLocks::new(&self.locks, &holds));
+        RoomKitOptions {
+            lock_manager: Some(locks),
+            ..RoomKitOptions::with_store(HeldStore::new(&self.store, &holds))
         }
     }
 
     /// A process holding `ops` and the three agents, each answering after
     /// `delay`.
-    fn kit(&mut self, delay: Duration) -> RoomKit {
-        let options = RoomKitOptions {
-            store: Arc::clone(&self.store),
-            lock_manager: Some(Arc::clone(&self.locks)),
-            ..RoomKitOptions::default()
-        };
+    fn kit(&mut self, delay: Duration) -> Kit {
+        let options = self.options();
         let kit = match &self.clock {
             Some(clock) => kit_with_environment(options, clock.clone()),
             None => RoomKit::new(options),
@@ -214,7 +229,7 @@ impl Cluster {
 
     /// A process that installs the discussion of all three agents in `r1`,
     /// which another process created.
-    async fn installing(&mut self, delay: Duration) -> RoomKit {
+    async fn installing(&mut self, delay: Duration) -> Kit {
         let kit = self.kit(delay);
         let options = InstallStrategyOptions::default();
         kit.install_strategy(&room(), Self::discussion(), options)
@@ -226,13 +241,25 @@ impl Cluster {
     /// Until the log holds `line`, each process's drivers roused; fails
     /// past 10 s.
     async fn logged(&self, line: &str) {
-        tokio::time::timeout(Duration::from_secs(10), async {
-            while !self.log.lock().unwrap().iter().any(|logged| logged == line) {
+        self.logged_times(line, 1, Duration::from_secs(10)).await;
+    }
+
+    /// Until the log holds `line` `times` times; fails past `within`.
+    async fn logged_times(&self, line: &str, times: usize, within: Duration) {
+        let logged = tokio::time::timeout(within, async {
+            while self.times(line) < times {
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
         })
-        .await
-        .unwrap();
+        .await;
+        let log = self.log.lock().unwrap();
+        assert!(logged.is_ok(), "{line} x{times}: {log:?}");
+    }
+
+    /// How many times the log holds `line`.
+    fn times(&self, line: &str) -> usize {
+        let log = self.log.lock().unwrap();
+        log.iter().filter(|logged| *logged == line).count()
     }
 
     /// Until the turn of `agent` has run to its end, cut or not, and every
@@ -291,7 +318,7 @@ impl Cluster {
 
     /// A process that creates `r1`, binds `ops` and installs the
     /// discussion.
-    async fn installed(&mut self, delay: Duration) -> RoomKit {
+    async fn installed(&mut self, delay: Duration) -> Kit {
         let kit = self.kit(delay);
         let created = CreateRoomOptions {
             room_id: Some(room()),
@@ -359,7 +386,7 @@ impl Cluster {
     }
 }
 
-async fn say(kit: &RoomKit, text: &str) {
+async fn say(kit: &Kit, text: &str) {
     let message = InboundMessage::new(id("ops"), "ops", TextContent::new(text));
     let options = ProcessInboundOptions {
         room_id: Some(room()),
@@ -418,14 +445,14 @@ async fn a_direct_install_in_a_process_that_follows_takes_the_turns() {
 }
 
 /// The agent whose turn `kit` reads as running, as last read.
-fn speaking(kit: &RoomKit) -> Option<ChannelId> {
+fn speaking(kit: &Kit) -> Option<ChannelId> {
     kit.speak_queue(&room(), SpeakQueueOptions::default())
         .and_then(|queue| queue.speaking)
 }
 
 /// Until `kit` reads no turn running, each process's drivers roused;
 /// fails past `within`.
-async fn until_quiet(cluster: &Cluster, kit: &RoomKit, within: Duration) {
+async fn until_quiet(cluster: &Cluster, kit: &Kit, within: Duration) {
     tokio::time::timeout(within, async {
         while speaking(kit).is_some() {
             for each in &cluster.kits {
@@ -438,24 +465,40 @@ async fn until_quiet(cluster: &Cluster, kit: &RoomKit, within: Duration) {
     .unwrap();
 }
 
-// Python: tests/orchestration/test_discussion_processes.py::test_listen_only_in_one_process_cuts_the_turn_running_in_another
+// Python: tests/orchestration/test_discussion_processes.py::test_listen_only_in_one_process_cuts_the_turn_running_in_another[free]
+// and [stalled]: a renewal of the lease stalled in the process giving the
+// turn holds back no cut; the lease outlasts the turn.
 #[tokio::test(start_paused = true)]
 async fn listen_only_in_one_process_cuts_the_turn_running_in_another() {
+    for stalled in [false, true] {
+        listen_only_cuts_the_turn_in_another(stalled).await;
+    }
+}
+
+async fn listen_only_cuts_the_turn_in_another(stalled: bool) {
+    let case = if stalled { "stalled" } else { "free" };
     let mut cluster = Cluster::paused();
     let a = cluster.installed(Duration::from_secs(2)).await;
     let follower = cluster.kit(Duration::from_secs(2));
     say(&follower, "@investigator take your time").await;
     cluster.logged("+investigator").await;
+    if stalled {
+        a.store().holds.locks.hold();
+    }
 
     follower
         .listen_only(&room(), &[id("investigator")], ListenOnlyOptions::default())
         .await
         .unwrap();
 
+    cluster
+        .logged_times("xinvestigator", 1, Duration::from_secs(3))
+        .await;
+    a.store().holds.release();
     until_quiet(&cluster, &a, Duration::from_secs(3)).await;
     cluster.turn_over("investigator").await;
-    assert_eq!(cluster.answers().await, Vec::<String>::new());
-    cluster.assert_cut("investigator");
+    assert_eq!(cluster.answers().await, Vec::<String>::new(), "{case}");
+    cluster.assert_cut_in("investigator", case);
     cluster.close().await;
 }
 
@@ -485,9 +528,9 @@ async fn removing_the_agent_whose_turn_runs_cuts_it_in_the_process_giving_it() {
 /// host cannot hold the lock manager's lock around a kit call (the names
 /// table, `InMemoryLockManager`'s reentrance). It returns within a second,
 /// whatever the turn running (RFC §19.7): Python's `_uninstall(locked=True)`.
-async fn under_the_lock<F, Fut>(kit: &RoomKit, action: F)
+async fn under_the_lock<F, Fut>(kit: &Kit, action: F)
 where
-    F: FnOnce(RoomKit) -> Fut + Send + 'static,
+    F: FnOnce(Kit) -> Fut + Send + 'static,
     Fut: Future<Output = ()> + Send + 'static,
 {
     let once = Arc::new(Mutex::new(Some(action)));
@@ -530,7 +573,7 @@ where
 
 /// Uninstalls the discussion of `r1` from `kit`, under the room's lock when
 /// `locked`, within a second: Python's `_uninstall`.
-async fn uninstall(kit: &RoomKit, locked: bool) {
+async fn uninstall(kit: &Kit, locked: bool) {
     if !locked {
         let room_id = room();
         let uninstalling = kit.uninstall_strategy(&room_id, UninstallStrategyOptions::default());
@@ -673,6 +716,251 @@ async fn a_turn_longer_than_the_lease_keeps_it() {
     cluster.close().await;
 }
 
+/// How often the driver reads the stored queue, in seconds (rule 16):
+/// Python's `POLL_SECONDS`.
+const POLL_SECONDS: f64 = 1.0;
+
+/// The speak queue as the store holds it now.
+async fn stored_queue(cluster: &Cluster) -> serde_json::Value {
+    let metadata = cluster.metadata().await;
+    metadata.get("_speak_queue").cloned().unwrap_or_default()
+}
+
+/// The process holding the room's lease, as the store holds it.
+async fn lease_holder(cluster: &Cluster) -> Option<String> {
+    let queue = stored_queue(cluster).await;
+    let holder = queue
+        .get("lease_holder")
+        .and_then(serde_json::Value::as_str);
+    holder.map(str::to_owned)
+}
+
+/// Until the store holds the lease another process's than `holder`'s;
+/// fails past 30 s. Only the store is read: a process whose reads a test
+/// holds is not waited for.
+async fn until_taken_from(cluster: &Cluster, holder: &str) {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while lease_holder(cluster)
+            .await
+            .is_none_or(|holding| holding == holder)
+        {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+/// The process holding the room's lease once one took it: the first
+/// process to install the discussion, when the test installs it in the next
+/// one only then. Fails past 10 s.
+async fn first_holder(cluster: &Cluster) -> String {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Some(holder) = lease_holder(cluster).await {
+                return holder;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap()
+}
+
+/// The agents whose turn `kit` tells ended, in the order told: Python's
+/// `_turns_ended`.
+fn turns_ended(kit: &Kit) -> Arc<Mutex<Vec<String>>> {
+    let ended: Arc<Mutex<Vec<String>>> = Arc::default();
+    let told = Arc::clone(&ended);
+    let hook = move |event: SpeakQueueEvent, _context: RoomContext| {
+        if matches!(event.change, SpeakQueueChange::TurnEnded) {
+            let agents = event.channel_ids.iter().map(ToString::to_string);
+            told.lock().unwrap().extend(agents);
+        }
+        async {}
+    };
+    kit.hook(HookTrigger::OnSpeakQueue, hook, HookOptions::default())
+        .unwrap();
+    ended
+}
+
+// Python: tests/orchestration/test_discussion_processes.py::test_a_turn_whose_lease_ends_unrenewed_is_cut_before_another_process_takes_it[held]
+// and [failing]: A cannot renew its lease while investigator's turn runs,
+// its room lock held or its writes of the queue failing. The turn is cut
+// once the lease ends, then B takes the lease and gives investigator a
+// turn again. One turn at a time, only B's commits, and the end of A's
+// turn, recorded once A can, leaves B's as the one speaking (rules 6, 7
+// and 16).
+#[tokio::test(start_paused = true)]
+async fn a_turn_whose_lease_ends_unrenewed_is_cut_before_another_process_takes_it() {
+    for failing in [false, true] {
+        a_turn_whose_lease_ends_unrenewed(failing).await;
+    }
+}
+
+async fn a_turn_whose_lease_ends_unrenewed(failing: bool) {
+    let case = if failing { "failing" } else { "held" };
+    let mut cluster = Cluster::paused();
+    // Past the lease's 15 seconds, and the read a taker waits past them.
+    let delay = Duration::from_secs(60);
+    let a = cluster.installed(delay).await;
+    // A holds the lease before B installs: A gives the turn.
+    let a_holds = first_holder(&cluster).await;
+    let b = cluster.installing(delay).await;
+    let ended = turns_ended(&a);
+    say(&a, "@investigator what do the logs say?").await;
+    cluster.logged("+investigator").await;
+    let holds = &a.store().holds;
+    if failing {
+        holds.fail_queue_writes();
+    } else {
+        holds.locks.hold();
+    }
+
+    let queue = stored_queue(&cluster).await;
+    let expires = queue
+        .get("lease_expires")
+        .and_then(serde_json::Value::as_f64);
+    let expires = expires.unwrap();
+
+    say(&b, "@investigator anything new?").await;
+    let past_the_lease = Duration::from_secs(30);
+    // When A's turn is cut, by the lease's clock; none, B's turn first.
+    let clock = cluster.clock.clone().unwrap();
+    let cut_at = tokio::time::timeout(past_the_lease, async {
+        loop {
+            if cluster.times("xinvestigator") > 0 {
+                return Some(clock.seconds());
+            }
+            if cluster.times("+investigator") > 1 {
+                return None;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .unwrap();
+    cluster
+        .logged_times("+investigator", 2, past_the_lease)
+        .await;
+    let log = cluster.log.lock().unwrap().clone();
+    holds.release();
+    let told = tokio::time::timeout(delay * 2, async {
+        while *ended.lock().unwrap() != ["investigator"] {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await;
+    let told_ended = ended.lock().unwrap().clone();
+    let log_now = cluster.log.lock().unwrap().clone();
+    assert!(
+        told.is_ok(),
+        "{case}: ended {told_ended:?}, log {log_now:?}"
+    );
+    let queue = stored_queue(&cluster).await;
+    // B's turn runs to its end, its answer stored.
+    cluster.logged_times("-investigator", 1, delay * 2).await;
+    for kit in &cluster.kits {
+        idle(kit).await;
+    }
+
+    assert_eq!(
+        log,
+        ["+investigator", "xinvestigator", "+investigator"],
+        "{case}"
+    );
+    // Cut before another process may take the lease, one read past its end,
+    // not at that same moment (rule 7).
+    assert!(
+        cut_at.is_some_and(|at| at < expires + POLL_SECONDS),
+        "{case}: cut at {cut_at:?}, the lease ends at {expires}"
+    );
+    assert_eq!(cluster.started("investigator"), 1, "{case}");
+    let read = |key: &str| queue.get(key).and_then(serde_json::Value::as_str);
+    assert!(
+        read("lease_holder").is_some_and(|holder| holder != a_holds),
+        "{case}"
+    );
+    assert_eq!(read("speaking"), Some("investigator"), "{case}");
+    assert_eq!(cluster.answers().await, ["investigator"], "{case}");
+    cluster.close().await;
+}
+
+// Python: tests/orchestration/test_discussion_processes.py::test_a_turn_whose_lease_another_process_took_is_cut:
+// B uninstalls the discussion and installs it again while A's turn runs,
+// A's reads held meanwhile: A next reads the lease B's, and cuts the turn
+// before B gives one (rules 1 and 16). The turn would end before A's
+// lease: only B's taking it cuts the turn.
+#[tokio::test(start_paused = true)]
+async fn a_turn_whose_lease_another_process_took_is_cut() {
+    let mut cluster = Cluster::paused();
+    let a = cluster.installed(Duration::from_secs(5)).await;
+    let b = cluster.kit(Duration::from_millis(20));
+    say(&a, "@investigator what do the logs say?").await;
+    cluster.logged("+investigator").await;
+    let a_holds = lease_holder(&cluster).await.unwrap();
+    a.store().holds.reads.hold();
+    let uninstalled = b
+        .uninstall_strategy(&room(), UninstallStrategyOptions::default())
+        .await
+        .unwrap();
+    assert!(uninstalled);
+    let options = InstallStrategyOptions::default();
+    b.install_strategy(&room(), Cluster::discussion(), options)
+        .await
+        .unwrap();
+    until_taken_from(&cluster, &a_holds).await;
+
+    a.store().holds.release();
+    cluster.turn_over("investigator").await;
+    say(&b, "@sre and the metrics?").await;
+    cluster
+        .until(|answers| answers.iter().any(|agent| agent == "sre"))
+        .await;
+
+    let log = cluster.log.lock().unwrap().clone();
+    assert_eq!(log, ["+investigator", "xinvestigator", "+sre", "-sre"]);
+    assert_eq!(cluster.answers().await, ["sre"]);
+    cluster.close().await;
+}
+
+// Python: tests/orchestration/test_discussion_processes.py::test_an_expired_lease_is_taken_over_one_read_past_its_end:
+// A's renewal stalls during its turn. B, which looks once A's lease has
+// expired, leaves it to A for one read more, the one in which A cuts its
+// turn when it could not renew; then B takes it (rules 7 and 16). The
+// lease's clock stops at each of B's looks, as Python's.
+#[tokio::test(start_paused = true)]
+async fn an_expired_lease_is_taken_over_one_read_past_its_end() {
+    let mut cluster = Cluster::paused();
+    let a = cluster.installed(Duration::from_secs(60)).await;
+    // A holds the lease before B installs: A gives the turn.
+    let a_holds = first_holder(&cluster).await;
+    let b = cluster.installing(Duration::from_secs(60)).await;
+    say(&a, "@investigator what do the logs say?").await;
+    cluster.logged("+investigator").await;
+    let holds = &a.store().holds;
+    holds.locks.hold();
+    // A's renewal waits: the lease is as stored.
+    tokio::time::timeout(Duration::from_secs(15), holds.locks.entered())
+        .await
+        .unwrap();
+    let queue = stored_queue(&cluster).await;
+    let expires = queue["lease_expires"].as_f64().unwrap();
+    assert_eq!(queue["lease_holder"], a_holds.as_str());
+    let clock = cluster.clock.clone().unwrap();
+
+    clock.stop_at(expires + POLL_SECONDS / 2.0);
+    idle(&b).await;
+    let within_a_read = lease_holder(&cluster).await;
+
+    clock.stop_at(expires + 1.5 * POLL_SECONDS);
+    idle(&b).await;
+    until_taken_from(&cluster, &a_holds).await;
+    holds.release();
+    assert_eq!(within_a_read, Some(a_holds));
+    cluster.close().await;
+}
+
 // Python: tests/orchestration/test_discussion_processes.py::test_an_uninstall_elsewhere_is_taken_at_once_even_under_the_lock_mid_turn
 #[tokio::test(start_paused = true)]
 async fn an_uninstall_elsewhere_is_taken_at_once_even_under_the_lock_mid_turn() {
@@ -770,12 +1058,8 @@ impl Holding {
     }
 
     /// A process holding `ops` and investigator and sre.
-    fn kit(&mut self) -> RoomKit {
-        let options = RoomKitOptions {
-            store: Arc::clone(&self.cluster.store),
-            lock_manager: Some(Arc::clone(&self.cluster.locks)),
-            ..RoomKitOptions::default()
-        };
+    fn kit(&mut self) -> Kit {
+        let options = self.cluster.options();
         let clock = self.cluster.clock.clone().unwrap();
         let kit = kit_with_environment(options, clock);
         kit.register_channel(RecordingTransport::new(
@@ -806,7 +1090,7 @@ impl Holding {
 
     /// A process that creates `r1`, binds `ops` and installs the discussion
     /// of investigator and sre.
-    async fn created(&mut self) -> RoomKit {
+    async fn created(&mut self) -> Kit {
         let kit = self.kit();
         let created = CreateRoomOptions {
             room_id: Some(room()),
@@ -825,7 +1109,7 @@ impl Holding {
 
     /// A gives investigator's long turn; B uninstalls, and A's watch reads
     /// it, which cuts the turn: Python's `_cut_by_an_uninstall_elsewhere`.
-    async fn cut_by_an_uninstall_elsewhere(&self, a: &RoomKit, b: &RoomKit) {
+    async fn cut_by_an_uninstall_elsewhere(&self, a: &Kit, b: &Kit) {
         say(a, "@investigator take your time").await;
         self.cluster.logged("+investigator").await;
         let uninstalled = b
@@ -839,7 +1123,7 @@ impl Holding {
 
     /// Until `kit` no longer holds the discussion, each process's drivers
     /// roused.
-    async fn left(&self, kit: &RoomKit) {
+    async fn left(&self, kit: &Kit) {
         tokio::time::timeout(Duration::from_secs(10), async {
             while kit
                 .room_strategy(&room(), RoomStrategyOptions::default())
@@ -857,7 +1141,7 @@ impl Holding {
 
     /// investigator's turn ends recorded: the `@sre` it says gives sre a
     /// turn. Python's `_sre_answers_investigator`.
-    async fn sre_answers_investigator(&self, kit: &RoomKit) {
+    async fn sre_answers_investigator(&self, kit: &Kit) {
         let mark = self.cluster.log.lock().unwrap().len();
         say(kit, "@investigator go on").await;
         tokio::time::timeout(Duration::from_secs(10), async {

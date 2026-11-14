@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A discussion turn whose lease another process took is cut instead of committing beside the new holder's (RFC §19.7.5, RMK-1698). Across processes, the process giving a turn renewed its lease only when due and never read that it had gone: held past it (a stalled store read or room-lock wait, about 9 s), it ran its turn to its end while the process that took the lease over gave the next one, and both committed. The holder now renews the lease at each read while a turn runs, and cuts the turn as a `Cancel` does once the lease is another process's, or ends before the holder could renew it; what the turn committed before stays and queues whom it names. A process takes an expired lease over one read (a second) past its end, so that cut comes first.
+
 - An ACP configuration call that opens a session retains its returned values when a concurrent close forgets that session.
 
 - ACP responses retain session usage and transport provenance, with model observations and immutable snapshots at prompt completion.

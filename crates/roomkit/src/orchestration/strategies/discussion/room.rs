@@ -62,6 +62,9 @@ pub(super) struct GivenTurn {
     pub(super) listening: bool,
     /// What another process stored cut it already.
     pub(super) cut: bool,
+    /// When the lease the turn runs under ends, as this process last stored
+    /// it, in seconds since the epoch (the lease's clock).
+    pub(super) lease_ends: f64,
 }
 
 /// What this process holds of the room's discussion.

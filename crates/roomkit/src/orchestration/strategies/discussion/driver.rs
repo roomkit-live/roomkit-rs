@@ -6,9 +6,12 @@
 //! the core, which asks the discussion for it
 //! ([`DiscussionRoom::planned_turn`]), and run in the room's lane. While it
 //! runs, the driver reads the stored queue once a second: what another
-//! process stored cuts it, and the lease is renewed (rule 16).
+//! process stored cuts it, the lease is renewed at each read, and the turn
+//! is cut once the lease is another process's or ends unrenewed (rules 7
+//! and 16).
 
 use std::convert::Infallible;
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -43,6 +46,13 @@ const POLL: Duration = Duration::from_secs(1);
 /// Why a turn is cut once another process uninstalled the discussion.
 const UNINSTALLED: &str = "discussion_uninstalled";
 
+/// Why a turn is cut once another process took its lease over (rule 16).
+const LEASE_LOST: &str = "lease_lost";
+
+/// Why a turn is cut once its lease ends before this process renews it
+/// (rule 7).
+const LEASE_EXPIRED: &str = "lease_expired";
+
 /// The longest a failure holds the next look back.
 const RETRY_MAX: Duration = Duration::from_secs(30);
 
@@ -55,6 +65,23 @@ enum Looked {
     Nothing,
     Ran,
     Gone,
+}
+
+/// What stopped a look of the watch short.
+enum Stopped {
+    /// The lease the turn runs under ends before this process could read
+    /// the queue or renew it (Python's `_LeaseEndedError`); what failed,
+    /// when a step failed rather than outlasted it.
+    LeaseEnded(Option<RoomKitError>),
+    /// A step failed with a read left to try it again before the lease
+    /// ends.
+    Failed(RoomKitError),
+}
+
+impl From<RoomKitError> for Stopped {
+    fn from(error: RoomKitError) -> Self {
+        Self::Failed(error)
+    }
 }
 
 /// The lease's clock: seconds since the epoch, as Python's `time.time()`.
@@ -165,7 +192,9 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             return Ok(Looked::Nothing);
         }
         let time = now(&kit);
-        if peek.over || peek.held_elsewhere(&self.me, time) {
+        // A lease past its end stays its holder's one read more: a holder
+        // that could not renew it cut its turn at its end (rule 7).
+        if peek.over || peek.held_elsewhere(&self.me, time, POLL.as_secs_f64()) {
             return Ok(Looked::Nothing);
         }
         if seen == Some(peek.version)
@@ -246,7 +275,10 @@ impl<S: ConversationStore> DiscussionRoom<S> {
 
     /// While a turn this process gave runs: what another process stored
     /// cuts it (the discussion uninstalled, its agent set to listen or
-    /// removed), and the lease is renewed before it expires (rule 16).
+    /// removed), and the lease is renewed at each read. A lease another
+    /// process took, or one this process cannot renew before it ends, cuts
+    /// it too: past its end, another process may take the lease and give
+    /// the next turn (rules 6, 7 and 16).
     async fn watch(&self, kit: &RoomKit<S>) -> Infallible {
         loop {
             tokio::time::sleep(POLL).await;
@@ -261,13 +293,39 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         }
     }
 
-    /// One look of the watch at the stored queue.
+    /// One look of the watch at the stored queue (Python's `_look`): what
+    /// it says is applied, then the lease renewed, both before the lease
+    /// ends.
     async fn watch_once(&self, kit: &RoomKit<S>) -> Result<(), RoomKitError> {
         // Planned under the room's lock first: no turn, nothing to watch.
         if self.state().turn.is_none() {
             return Ok(());
         }
-        let room = kit.store().get_room(&self.room_id).await?;
+        match self.look_before_the_lease_ends(kit).await {
+            Ok(()) => Ok(()),
+            Err(Stopped::Failed(error)) => Err(error),
+            Err(Stopped::LeaseEnded(cause)) => {
+                if let Some(agent) = self.uncut_agent() {
+                    let cause =
+                        cause.map_or_else(|| "timed out".to_owned(), |error| error.to_string());
+                    tracing::warn!(
+                        target: "roomkit::orchestration::discussion",
+                        room_id = %self.room_id,
+                        %agent,
+                        %cause,
+                        "the lease ends before this process renews it; the turn is cut"
+                    );
+                }
+                self.cut_running(kit, LEASE_EXPIRED).await
+            }
+        }
+    }
+
+    /// The read and the renewal of a look, each bounded by the lease's end.
+    async fn look_before_the_lease_ends(&self, kit: &RoomKit<S>) -> Result<(), Stopped> {
+        let deadline = self.deadline(kit)?;
+        let reading = async { Ok(kit.store().get_room(&self.room_id).await?) };
+        let room = self.within(kit, deadline, reading).await?;
         let metadata = room.map(|room| room.metadata).unwrap_or_default();
         let state = read_queue(&metadata);
         let stored = DiscussionConfig::stored(&metadata);
@@ -276,45 +334,150 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             // Routed by the configuration the room stores from then on.
             self.follow(stored);
         }
-        let cut = self.decide_cut(&state, uninstalled);
-        if let Some((agent, reason)) = cut {
-            self.cut(kit, &agent, reason).await?;
+        if let Some(reason) = self.read_cut(&state, uninstalled) {
+            self.cut_running(kit, reason).await?;
         }
-        if state.renew_due(&self.me, now(kit)) {
-            self.editing(kit, |state, _| {
-                state.take_lease(&self.me, now(kit));
-            })
-            .await?;
+        if self.within(kit, deadline, self.renew(kit, &state)).await? {
+            // Its taking the lease over ended this turn (rule 16).
+            if let Some(agent) = self.uncut_agent() {
+                tracing::warn!(
+                    target: "roomkit::orchestration::discussion",
+                    room_id = %self.room_id,
+                    %agent,
+                    "another process took the lease over; the turn is cut"
+                );
+            }
+            self.cut_running(kit, LEASE_LOST).await?;
         }
         Ok(())
     }
 
+    /// Until when, on tokio's clock, a look may read the queue and renew
+    /// the lease (Python's `_deadline`): the lease's end; for a look that
+    /// wakes past it, the process held meanwhile (its turn with it), one
+    /// read later, when another process may take it over. `None`: no
+    /// instant tokio's clock holds, which bounds nothing.
+    fn deadline(&self, kit: &RoomKit<S>) -> Result<Option<tokio::time::Instant>, Stopped> {
+        let mut left = self.lease_left(kit);
+        if left <= 0.0 {
+            left += POLL.as_secs_f64();
+        }
+        if left <= 0.0 {
+            return Err(Stopped::LeaseEnded(None));
+        }
+        Ok(Duration::try_from_secs_f64(left)
+            .ok()
+            .and_then(|left| tokio::time::Instant::now().checked_add(left)))
+    }
+
+    /// How long the lease the running turn runs under has left, in seconds,
+    /// as this process last stored it.
+    fn lease_left(&self, kit: &RoomKit<S>) -> f64 {
+        let ends = self
+            .state()
+            .turn
+            .as_ref()
+            .map_or(0.0, |turn| turn.lease_ends);
+        ends - now(kit)
+    }
+
+    /// `step`, awaited before `deadline` (Python's `_within`). One that
+    /// outlasts it, or fails with no read left to try it again before the
+    /// lease ends, ends the lease; another failure is tried again on the
+    /// next look.
+    async fn within<T>(
+        &self,
+        kit: &RoomKit<S>,
+        deadline: Option<tokio::time::Instant>,
+        step: impl Future<Output = Result<T, RoomKitError>>,
+    ) -> Result<T, Stopped> {
+        let done = match deadline {
+            Some(deadline) => tokio::time::timeout_at(deadline, step)
+                .await
+                .map_err(|_| Stopped::LeaseEnded(None))?,
+            None => step.await,
+        };
+        done.map_err(|error| {
+            if self.lease_left(kit) < POLL.as_secs_f64() {
+                Stopped::LeaseEnded(Some(error))
+            } else {
+                Stopped::Failed(error)
+            }
+        })
+    }
+
+    /// Renews the lease the running turn runs under, read as `state`
+    /// (Python's `_renew`); whether another process took it over. One no
+    /// process holds (the discussion uninstalled elsewhere, maybe installed
+    /// again since) is the driver's next look's.
+    async fn renew(&self, kit: &RoomKit<S>, state: &SpeakQueueState) -> Result<bool, RoomKitError> {
+        let me = Some(self.me.as_str());
+        if state.lease_holder.as_deref() != me {
+            return Ok(state.lease_holder.is_some());
+        }
+        let renewed = self
+            .editing(kit, |editing, _| {
+                if editing.lease_holder.as_deref() != me {
+                    return Err(editing.lease_holder.is_some());
+                }
+                editing.take_lease(&self.me, now(kit), 0.0);
+                Ok(editing.lease_expires)
+            })
+            .await?;
+        match renewed {
+            Err(taken) => Ok(taken),
+            Ok(lease_ends) => {
+                // Renewed once the edit is stored: a write that failed
+                // renewed nothing.
+                if let Some(turn) = self.state().turn.as_mut() {
+                    turn.lease_ends = lease_ends;
+                }
+                Ok(false)
+            }
+        }
+    }
+
     /// What the stored queue, just read as `state`, makes of the running
     /// turn: kept as the queue read, the turn's agent listening as read,
-    /// and the agent to cut and why, once. A turn whose discussion another
-    /// process uninstalled is gone for every process: its end is recorded
-    /// nowhere (rule 1).
-    fn decide_cut(
-        &self,
-        state: &SpeakQueueState,
-        uninstalled: bool,
-    ) -> Option<(ChannelId, &'static str)> {
+    /// and why it cuts the turn, if it does.
+    fn read_cut(&self, state: &SpeakQueueState, uninstalled: bool) -> Option<&'static str> {
         let mut live = self.state();
         live.queue = state.clone();
         let turn = live.turn.as_mut()?;
         let reason = self.cut_reason(turn, state, uninstalled);
         turn.listening = state.listening.contains(&turn.entry.agent);
-        let cut = reason.filter(|_| !turn.cut).map(|reason| {
+        reason
+    }
+
+    /// The agent of the running turn, unless it was cut already.
+    fn uncut_agent(&self) -> Option<ChannelId> {
+        let live = self.state();
+        let turn = live.turn.as_ref().filter(|turn| !turn.cut)?;
+        Some(turn.entry.agent.clone())
+    }
+
+    /// Cuts the running turn once, as a `Cancel` does (rule 12; Python's
+    /// `_cut_running`). A turn whose discussion another process
+    /// uninstalled is gone for every process: its end is recorded nowhere
+    /// (rule 1).
+    async fn cut_running(
+        &self,
+        kit: &RoomKit<S>,
+        reason: &'static str,
+    ) -> Result<(), RoomKitError> {
+        let agent = {
+            let mut live = self.state();
+            let Some(turn) = live.turn.as_mut().filter(|turn| !turn.cut) else {
+                return Ok(());
+            };
             turn.cut = true;
-            (turn.entry.agent.clone(), reason)
-        });
-        if cut
-            .as_ref()
-            .is_some_and(|(_, reason)| *reason == UNINSTALLED)
-        {
-            live.forgotten = true;
-        }
-        cut
+            let agent = turn.entry.agent.clone();
+            if reason == UNINSTALLED {
+                live.forgotten = true;
+            }
+            agent
+        };
+        self.cut(kit, &agent, reason).await
     }
 
     /// Why the stored queue, just read as `state`, cuts `turn`, if it does:
@@ -382,7 +545,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         self.follow(stored);
         let before = read_queue(&metadata);
         let mut state = before.clone();
-        if !state.take_lease(&self.me, now(&kit)) {
+        if !state.take_lease(&self.me, now(&kit), POLL.as_secs_f64()) {
             return Ok(NextTurn::default());
         }
         let mut changes = Vec::new();
@@ -562,6 +725,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
                     mark: mark.clone(),
                     listening,
                     cut: false,
+                    lease_ends: state.lease_expires,
                 });
             } else {
                 drop(live);
@@ -754,7 +918,11 @@ impl<S: ConversationStore> DiscussionRoom<S> {
                 return Ok(Vec::new());
             };
             self.edit(kit, |state, live| {
-                state.ended(&entry.agent);
+                if !state.held_elsewhere(&self.me, now(kit), 0.0) {
+                    // Else the process that took the lease over ended this
+                    // turn, and `speaking` names its own (rule 16).
+                    state.ended(&entry.agent);
+                }
                 if let Some(instruction) = &entry.instruction {
                     forget_instruction(instruction, state, &mut live.instructions);
                 }
