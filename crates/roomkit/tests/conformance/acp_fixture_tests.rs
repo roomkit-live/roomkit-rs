@@ -92,3 +92,21 @@ async fn test_malformed_instructions_are_a_fixture_failure() {
         );
     }
 }
+
+// Python: tests/conformance/test_acp_fixture.py::test_usage_fixture_rejects_malformed_controls
+#[test]
+fn test_usage_fixture_rejects_malformed_controls() {
+    for patch in [
+        json!({"transport":{"provides_usage_metadata":"false"}}),
+        json!({"transport":{"provides_usage_metadata":null}}),
+        json!({"agent":{"prompts":[{"meta":[]} ]}}),
+        json!({"agent":{"prompts":[{"meta":null}]}}),
+    ] {
+        let mut acp = json!({"cwd":"/srv/project","agent":{}});
+        acp.as_object_mut()
+            .unwrap()
+            .extend(patch.as_object().unwrap().clone());
+        let scenario = json!({"setup":{"channels":[{"id":"agent","type":"ai","acp":acp}]}});
+        assert!(!crate::shape::unknown_members(&scenario).is_empty());
+    }
+}

@@ -695,10 +695,18 @@ fn scripted_acp(acp: &Value, path: &str, found: &mut Vec<String>) {
     let transport = &acp["transport"];
     optional(
         transport,
-        &["refuse_prompt"],
+        &["refuse_prompt", "provides_usage_metadata"],
         &format!("{path}.transport"),
         found,
     );
+    if transport
+        .get("provides_usage_metadata")
+        .is_some_and(|v| !v.is_boolean())
+    {
+        found.push(format!(
+            "{path}.transport.provides_usage_metadata: expected a boolean"
+        ));
+    }
     for (index, refusal) in items(&transport["refuse_prompt"]) {
         optional(
             refusal,
@@ -726,6 +734,11 @@ fn scripted_acp(acp: &Value, path: &str, found: &mut Vec<String>) {
         }
     }
     for (index, prompt) in items(&agent["prompts"]) {
+        if prompt.get("meta").is_some_and(|v| !v.is_object()) {
+            found.push(format!(
+                "{path}.agent.prompts[{index}].meta: expected an object"
+            ));
+        }
         crate::acp_agents::permissions::validate(
             prompt,
             &format!("{path}.agent.prompts[{index}]"),

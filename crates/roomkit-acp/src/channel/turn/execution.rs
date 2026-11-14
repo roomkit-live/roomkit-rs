@@ -9,14 +9,14 @@ use opening::{open, rebuild};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use agent_client_protocol_schema::v1::{PromptRequest, PromptResponse};
+use agent_client_protocol_schema::v1::PromptRequest;
 use roomkit::ChannelError;
 use roomkit::model::ResponseMetadata;
 use serde_json::{Map, json};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
-use super::{Answered, activity_error, answered, interrupted, provider_error, raised, usage_of};
+use super::{Answered, activity_error, answered, interrupted, provider_error, raised};
 use crate::channel::Shared;
 use crate::channel::updates::Sink;
 use crate::connection::AcpConnection;
@@ -68,7 +68,7 @@ async fn execute<T: AcpTransport>(
         match outcome {
             Ok(Some(answer)) => {
                 return Ok(Some(Answered {
-                    usage: usage_of(&answer),
+                    usage: answer.usage,
                     started,
                 }));
             }
@@ -133,7 +133,8 @@ async fn one_prompt<T: AcpTransport>(
     input: PromptInput<'_>,
     text: &Sink,
     activity: &Arc<AtomicBool>,
-) -> Result<Option<PromptResponse>, AcpError> {
+) -> Result<Option<PromptAnswer>, AcpError> {
+    let usage = prompt_usage(hold, session, input.event_id);
     let mut meta = Map::new();
     meta.insert("roomkit.live/eventId".to_owned(), json!(input.event_id));
     let request =
@@ -146,12 +147,14 @@ async fn one_prompt<T: AcpTransport>(
         hold.record.clone(),
         Arc::clone(&hold.preparation),
         acknowledgement::on_return(hold, connection, session, input.seen),
+        Arc::clone(&usage),
     ));
     if !hold.shared.connector.register_prompt(
         session,
         text.clone(),
         task.abort_handle(),
         Arc::clone(activity),
+        usage,
     ) {
         task.abort();
         interrupted(&hold.record);
@@ -191,7 +194,8 @@ async fn prompt_task<C: AcpConnection>(
     record: ResponseMetadata,
     preparation: Arc<crate::channel::preparation::Preparation>,
     acknowledge: impl FnOnce() + Send,
-) -> Result<Option<PromptResponse>, AcpError> {
+    usage: Arc<crate::channel::usage::Usage>,
+) -> Result<Option<PromptAnswer>, AcpError> {
     ready.await.map_err(|_| AcpError::ConnectionClosed)?;
     let session = request.session_id.0.to_string();
     let Some(answer) = preparation
@@ -208,7 +212,33 @@ async fn prompt_task<C: AcpConnection>(
         }
         Err(_) => interrupted(&record),
     }
-    answer.map(Some)
+    answer.map(|response| {
+        Some(PromptAnswer {
+            usage: usage.finish(&response),
+        })
+    })
+}
+
+struct PromptAnswer {
+    usage: crate::channel::usage::Snapshot,
+}
+
+fn prompt_usage<T: AcpTransport>(
+    hold: &Hold<T>,
+    session: &str,
+    event: &str,
+) -> Arc<crate::channel::usage::Usage> {
+    let connector = &hold.shared.connector;
+    Arc::new(crate::channel::usage::Usage::new(
+        session,
+        event,
+        connector.transport.name(),
+        connector.transport.provides_usage_metadata(),
+        connector.report().1,
+        crate::channel::config::values(&connector.options(&hold.room_id))
+            .get("model")
+            .cloned(),
+    ))
 }
 
 struct Registered<T: AcpTransport> {
@@ -228,3 +258,6 @@ impl<T: AcpTransport> Drop for Registered<T> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod usage_tests;

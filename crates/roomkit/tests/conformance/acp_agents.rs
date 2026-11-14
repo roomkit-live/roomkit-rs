@@ -78,6 +78,7 @@ pub(crate) const PROMPT: &[&str] = &[
     "permission_steps",
     "stop_reason",
     "usage",
+    "meta",
     "error",
 ];
 
@@ -102,6 +103,9 @@ pub(crate) fn scripted_acp_channel(
     let pipe = Arc::new(AgentPipe::default());
     let transport = ScriptedTransport {
         agent: spec["agent"].clone(),
+        provides_usage_metadata: spec["transport"]["provides_usage_metadata"]
+            .as_bool()
+            .unwrap_or(false),
         wire: Arc::clone(&wire),
         run: Arc::downgrade(run),
         pipe: Arc::clone(&pipe),
@@ -165,6 +169,7 @@ fn directories(spec: &Value) -> Result<Option<Vec<PathBuf>>, Unreadable> {
 
 /// The transport handing the channel a connection to its scripted agent.
 pub(crate) struct ScriptedTransport {
+    provides_usage_metadata: bool,
     refusals: Arc<Mutex<std::vec::IntoIter<Value>>>,
     agent: Value,
     wire: Wire,
@@ -217,6 +222,10 @@ impl AcpTransport for ScriptedTransport {
 
     fn name(&self) -> &'static str {
         "scripted"
+    }
+
+    fn provides_usage_metadata(&self) -> bool {
+        self.provides_usage_metadata
     }
 
     async fn open(&self, client: Arc<dyn AcpClient>) -> Result<Self::Connection, AcpError> {
@@ -443,6 +452,9 @@ impl Agent {
         let mut result = json!({"stopReason": stop});
         if let Some(usage) = prompt.get("usage") {
             result["usage"] = usage.clone();
+        }
+        if let Some(meta) = prompt.get("meta") {
+            result["_meta"] = meta.clone();
         }
         Ok(result)
     }

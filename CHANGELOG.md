@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- ACP responses retain session usage and transport provenance, with model observations and immutable snapshots at prompt completion.
+
 - ACP prompts preserve a whitespace-only request when host content supplies the turn, matching Python without changing the caller's event.
 
 - Discussion reads ACP's local name, role and description when assigning handles, choosing candidates and presenting agents to their peers.

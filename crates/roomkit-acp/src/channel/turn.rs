@@ -54,7 +54,7 @@ pub(super) struct Ask {
 
 /// How the turn's prompt ended, once it returned.
 struct Answered {
-    usage: Metadata,
+    usage: super::usage::Snapshot,
     started: Instant,
 }
 
@@ -203,7 +203,8 @@ impl<T: AcpTransport> TurnStream<T> {
         let end = roomkit_core::rules::turn_end::recorded_turn_end(&self.record.to_metadata());
         let event = AiResponseEvent {
             room_id: Some(self.room_id.clone()),
-            usage: answered.usage.clone(),
+            usage: answered.usage.counters.clone(),
+            usage_metadata: answered.usage.metadata.clone(),
             loop_end_reason: end.and_then(|end| end.as_str().map(str::to_owned)),
             latency_ms,
             streaming: true,
@@ -311,38 +312,6 @@ fn interrupted(record: &ResponseMetadata) {
     record.with_value("acp", |acp| {
         acp["interrupted"] = Value::Bool(true);
     });
-}
-
-/// The counters the agent returned with its answer, unaltered, under
-/// Python's names; none when it returned none.
-fn usage_of(answer: &PromptResponse) -> Metadata {
-    let mut usage = Metadata::new();
-    let Some(counters) = &answer.usage else {
-        return usage;
-    };
-    usage.insert(
-        "total_tokens".to_owned(),
-        Value::from(counters.total_tokens),
-    );
-    usage.insert(
-        "input_tokens".to_owned(),
-        Value::from(counters.input_tokens),
-    );
-    usage.insert(
-        "output_tokens".to_owned(),
-        Value::from(counters.output_tokens),
-    );
-    let optional = [
-        ("thought_tokens", counters.thought_tokens),
-        ("cached_read_tokens", counters.cached_read_tokens),
-        ("cached_write_tokens", counters.cached_write_tokens),
-    ];
-    for (name, value) in optional {
-        if let Some(value) = value {
-            usage.insert(name.to_owned(), Value::from(value));
-        }
-    }
-    usage
 }
 
 /// The turn's failure as Python raises it: a `ProviderError` of the

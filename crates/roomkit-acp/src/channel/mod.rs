@@ -15,6 +15,7 @@ mod steering;
 mod tools;
 mod turn;
 mod updates;
+mod usage;
 
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};

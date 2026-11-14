@@ -5,6 +5,7 @@ mod cancellation;
 mod context;
 mod detachment;
 pub(super) mod release;
+mod session_updates;
 mod sessions;
 pub(super) mod standalone;
 
@@ -42,7 +43,7 @@ pub(super) struct Connector<T: AcpTransport> {
     pub(super) handler: Arc<super::permissions::HandlerService>,
     /// One connection at a time.
     connecting: Arc<tokio::sync::Mutex<()>>,
-    state: Mutex<State<T::Connection>>,
+    state: Arc<Mutex<State<T::Connection>>>,
     /// Each room's lock its session is opened under.
     openings: Mutex<HashMap<RoomId, Arc<tokio::sync::Mutex<()>>>>,
     closed: tokio::sync::Notify,
@@ -82,7 +83,7 @@ impl<T: AcpTransport> Connector<T> {
             turns: Arc::new(Turns::default()),
             handler: Arc::new(super::permissions::HandlerService::new(handler)),
             connecting: Arc::new(tokio::sync::Mutex::new(())),
-            state: Mutex::new(State {
+            state: Arc::new(Mutex::new(State {
                 connection: None,
                 agent_info: None,
                 closes_sessions: true,
@@ -93,7 +94,7 @@ impl<T: AcpTransport> Connector<T> {
                 config: HashMap::new(),
                 detached: HashMap::new(),
                 closed: false,
-            }),
+            })),
             openings: Mutex::new(HashMap::new()),
             closed: tokio::sync::Notify::new(),
         }
@@ -115,12 +116,13 @@ impl<T: AcpTransport> Connector<T> {
         text: super::updates::Sink,
         prompt: tokio::task::AbortHandle,
         activity: Arc<std::sync::atomic::AtomicBool>,
+        usage: Arc<super::usage::Usage>,
     ) -> bool {
         let state = self.lock();
         if state.closed {
             return false;
         }
-        self.turns.register(session, text, prompt, activity);
+        self.turns.register(session, text, prompt, activity, usage);
         true
     }
 
@@ -166,6 +168,9 @@ impl<T: AcpTransport> Connector<T> {
         let client = Arc::new(ChannelClient {
             turns: Arc::clone(&self.turns),
             handler: self.handler.handler.clone(),
+            sessions: Arc::new(session_updates::SessionUpdates::new(Arc::downgrade(
+                &self.state,
+            ))),
         });
         // A turn dropped part-way through the handshake closes what it
         // opened, as Python's closes on any exception, still under the

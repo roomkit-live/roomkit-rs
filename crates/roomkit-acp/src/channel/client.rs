@@ -69,6 +69,7 @@ impl Turns {
         updates: Sink,
         prompt: AbortHandle,
         activity: Arc<AtomicBool>,
+        usage: Arc<super::usage::Usage>,
     ) {
         self.lock().insert(
             session.to_owned(),
@@ -76,6 +77,7 @@ impl Turns {
                 updates,
                 prompt,
                 activity,
+                usage,
             },
         );
     }
@@ -118,6 +120,10 @@ impl Turns {
             turn.activity.store(true, Ordering::Release);
         }
     }
+
+    fn usage(&self, session: &str) -> Option<Arc<super::usage::Usage>> {
+        self.lock().get(session).map(|turn| Arc::clone(&turn.usage))
+    }
 }
 
 /// A turn prompting a session: where its text goes, and its prompt.
@@ -125,12 +131,20 @@ struct Registered {
     updates: Sink,
     prompt: AbortHandle,
     activity: Arc<AtomicBool>,
+    usage: Arc<super::usage::Usage>,
+}
+
+/// Live room configuration, accessed through a weak connection-state view.
+pub(super) trait SessionOptions: Send + Sync {
+    fn model(&self, session: &str) -> Option<serde_json::Value>;
+    fn update(&self, session: &str, options: Vec<serde_json::Value>);
 }
 
 /// The client the channel opens its transport with.
 pub(super) struct ChannelClient {
     pub(super) turns: Arc<Turns>,
     pub(super) handler: Option<Arc<dyn roomkit_ai::ExternalToolHandler>>,
+    pub(super) sessions: Arc<dyn SessionOptions>,
 }
 
 impl AcpClient for ChannelClient {
@@ -141,6 +155,7 @@ impl AcpClient for ChannelClient {
         Box::pin(async move {
             let session = notification.session_id.0.to_string();
             self.turns.activity(&session);
+            self.observe_metadata(&session, &notification.update);
             let Some(sink) = self.turns.updates(&session) else {
                 return;
             };
@@ -183,6 +198,22 @@ impl AcpClient for ChannelClient {
             };
             Ok(answer(&request, decision.approved))
         })
+    }
+}
+
+impl ChannelClient {
+    fn observe_metadata(&self, session: &str, update: &SessionUpdate) {
+        if matches!(update, SessionUpdate::UsageUpdate(_))
+            && let Some(usage) = self.turns.usage(session)
+            && let Ok(update) = serde_json::to_value(update)
+        {
+            usage.observe(&update, self.sessions.model(session));
+        }
+        if let SessionUpdate::ConfigOptionUpdate(update) = update
+            && let Ok(options) = super::config::descriptors(update.config_options.clone())
+        {
+            self.sessions.update(session, options);
+        }
     }
 }
 
