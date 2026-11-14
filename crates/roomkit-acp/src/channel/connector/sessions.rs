@@ -60,13 +60,13 @@ impl<T: AcpTransport> Connector<T> {
         connection: &Arc<T::Connection>,
         cwd: &Path,
         overlay: Metadata,
-    ) -> Result<(String, bool), AcpError> {
+    ) -> Result<(String, Option<Vec<Value>>), AcpError> {
         if let Some(session) = self.session_of(room) {
-            return Ok((session, false));
+            return Ok((session, None));
         }
         let _opening = self.opening(room).await;
         if let Some(session) = self.session_of(room) {
-            return Ok((session, false));
+            return Ok((session, None));
         }
         self.open_session(room, connection, cwd, overlay).await
     }
@@ -77,7 +77,7 @@ impl<T: AcpTransport> Connector<T> {
         connection: &Arc<T::Connection>,
         cwd: &Path,
         overlay: Metadata,
-    ) -> Result<(String, bool), AcpError> {
+    ) -> Result<(String, Option<Vec<Value>>), AcpError> {
         let request = self.session_request(room, cwd, "room").await?;
         let answer = connection.new_session(request).await?;
         let id = answer.session_id.0.to_string();
@@ -103,9 +103,11 @@ impl<T: AcpTransport> Connector<T> {
         }
         state.sessions.insert(room.clone(), id.clone());
         self.turns.remember(&id, room);
-        state.options.insert(room.clone(), options);
+        state.options.insert(room.clone(), options.clone());
         unset.session = None;
-        Ok((id, true))
+        // A closer may remove the room's options as soon as the opening lock
+        // is released. Return this opening's values to its caller regardless.
+        Ok((id, Some(options)))
     }
 
     pub(super) async fn session_request(
@@ -167,11 +169,11 @@ impl<T: AcpTransport> Connector<T> {
         let generation = self.generation(room);
         let connection = self.connection().await?;
         let overlay = Metadata::from_iter([(id.to_owned(), value.clone())]);
-        let (session, opened) = self.session_with(room, &connection, cwd, overlay).await?;
-        let options = if opened {
-            self.options(room)
-        } else {
-            set_option(&*connection, &session, id, &value).await?
+        let (session, opened_options) = self.session_with(room, &connection, cwd, overlay).await?;
+        let opened = opened_options.is_some();
+        let options = match opened_options {
+            Some(options) => options,
+            None => set_option(&*connection, &session, id, &value).await?,
         };
         let values = config::values(&options);
         let retained = self.keep_option(

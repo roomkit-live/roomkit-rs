@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- An ACP configuration call that opens a session retains its returned values when a concurrent close forgets that session.
+
 - ACP responses retain session usage and transport provenance, with model observations and immutable snapshots at prompt completion.
 
 - ACP prompts preserve a whitespace-only request when host content supplies the turn, matching Python without changing the caller's event.

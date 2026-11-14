@@ -1,6 +1,8 @@
 //! Poll the actual ACP work while session/new is unanswered. A background
 //! owner call alone does not prove its executor reached the opening lock.
 
+mod concurrent_close;
+
 use std::pin::pin;
 
 use roomkit::Channel;
