@@ -2,6 +2,7 @@
 
 mod abandoned;
 mod external_handler;
+mod streaming;
 
 use super::{Agent, PATIENCE, channel};
 use roomkit::model::{

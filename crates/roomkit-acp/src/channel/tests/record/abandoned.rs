@@ -10,9 +10,22 @@ use serde_json::json;
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 
-struct Abandon {
+pub(super) struct Abandon {
     inner: RecordingTransport,
     foreign: TurnRecord,
+}
+
+impl Abandon {
+    pub(super) fn new(foreign: TurnRecord) -> Self {
+        Self {
+            inner: RecordingTransport::new(
+                ChannelId::new("ws").unwrap(),
+                ChannelType::WEBSOCKET,
+                RecordingTransportOptions::default(),
+            ),
+            foreign,
+        }
+    }
 }
 
 impl Channel for Abandon {
@@ -73,14 +86,7 @@ async fn check_abandoned() {
     let (channel, mut agents, _) = channel();
     let foreign = TurnRecord::default();
     foreign.current().insert("foreign", json!(true));
-    let reader = Abandon {
-        inner: RecordingTransport::new(
-            ChannelId::new("ws").unwrap(),
-            ChannelType::WEBSOCKET,
-            RecordingTransportOptions::default(),
-        ),
-        foreign: foreign.clone(),
-    };
+    let reader = Abandon::new(foreign.clone());
     let kit = room_with_transport(channel, reader).await;
     let mut observed = observe(&kit);
     let parent = TurnRecord::default();

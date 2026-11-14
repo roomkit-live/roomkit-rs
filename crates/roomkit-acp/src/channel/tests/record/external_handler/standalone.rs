@@ -1,5 +1,7 @@
 //! A standalone channel's callbacks retain its own response record.
 
+mod abandoned;
+
 use super::*;
 use roomkit::Channel;
 use roomkit::model::{
@@ -12,6 +14,7 @@ use roomkit_ai::{OnToolCancelledOptions, current_response_metadata};
 struct Recording {
     state: ExternalToolHandlerState,
     seen: Mutex<Vec<ResponseMetadata>>,
+    recorded: tokio::sync::Notify,
 }
 
 impl Recording {
@@ -19,6 +22,8 @@ impl Recording {
         let record = current_response_metadata().expect("the standalone ACP turn's record");
         assert!(record.get("acp").is_some());
         assert_eq!(record.get("parent"), None);
+        assert_eq!(record.get("foreign"), None);
+        self.seen.lock().unwrap().push(record.clone());
         TurnRecord::default()
             .scope(async {
                 current_response_metadata()
@@ -31,7 +36,11 @@ impl Recording {
             .insert("observed", json!(true));
         assert_eq!(record.get("observed"), Some(json!(true)));
         assert_eq!(record.get("nested"), None);
-        self.seen.lock().unwrap().push(record);
+        self.seen
+            .lock()
+            .unwrap()
+            .push(current_response_metadata().unwrap());
+        self.recorded.notify_one();
     }
 }
 
@@ -130,9 +139,11 @@ async fn check(ending: &str) {
     let records = handler.seen.lock().unwrap().clone();
     assert_eq!(
         records.len(),
-        1,
+        2,
         "{ending}: the callback completed in its record"
     );
+    records[0].insert("identity_check", json!(true));
+    assert_eq!(records[1].get("identity_check"), Some(json!(true)));
     if ending == "error" {
         assert!(result.is_err());
     } else {

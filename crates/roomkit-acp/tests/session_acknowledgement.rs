@@ -129,6 +129,10 @@ async fn say(kit: &RoomKit, room: &RoomId, text: &str) {
     .unwrap()
     .unwrap();
     assert!(result.error.is_none(), "{:?}", result.error);
+    let record = result.response_metadata.get("acp").unwrap();
+    assert_eq!(record.get("prompt_returned"), Some(&json!(true)));
+    assert!(record.get("stop_reason").is_none());
+    assert_ne!(record.get("interrupted"), Some(&json!(true)));
 }
 async fn check_late_ack(open_replacement_first: bool) {
     let state = Arc::new(State::default());
