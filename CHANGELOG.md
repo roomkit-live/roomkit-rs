@@ -8,6 +8,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Tool handlers and MCP results publish their structured copy through `ToolCallContext`, preserving hook replacement and withholding, with a separate shared field for each call.
 
+- Across processes sharing a store, a delivery set with no index (an instruction's, an event the persistence policy keeps out, a regeneration's, a held message's release or a discussion turn's) waits until the room's delivery cursor has reached the latest index committed before it, and moves the cursor no further (RFC §13.5, RMK-1153).
+
 - Add `RoomKit::release_channel` for locally held channels, preserving their registration and room state while rejecting unknown ids and calls after kit close.
 
 - A discussion turn whose lease another process took is cut instead of committing beside the new holder's (RFC §19.7.5, RMK-1698). Across processes, the process giving a turn renewed its lease only when due and never read that it had gone: held past it (a stalled store read or room-lock wait, about 9 s), it ran its turn to its end while the process that took the lease over gave the next one, and both committed. The holder now renews the lease at each read while a turn runs, and cuts the turn as a `Cancel` does once the lease is another process's, or ends before the holder could renew it; what the turn committed before stays and queues whom it names. A process takes an expired lease over one read (a second) past its end, so that cut comes first.

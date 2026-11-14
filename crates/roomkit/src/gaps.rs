@@ -4,9 +4,12 @@
 //! Within the process, a set's turn comes in its room's lane (`queues`).
 //! Across processes sharing a store, the room's delivery cursor orders the
 //! sets: a set runs once the cursor passed every index before its own that
-//! this process did not commit, and the sets of one room run under
-//! its delivery claim, held by the process while one of its sets runs and
-//! until the cursor moved past it, never with the room lock. The claims are
+//! this process did not commit, and a set with no index (an instruction's,
+//! an event the persistence policy keeps out, a rerun's) once the cursor
+//! reached its anchor, the room's latest index when its place was taken.
+//! The sets of one room run under its delivery claim, held by the process
+//! while one of its sets runs and until the cursor moved past it, never
+//! with the room lock. The claims are
 //! taken from the claim manager (`RoomKitOptions::delivery_claim_lock_manager`,
 //! the lock manager by default), an in-memory manager keeping them in a map
 //! of their own, apart from the room locks, so that no room id, a room
@@ -209,6 +212,40 @@ fn rooms(
     rooms.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// What a set's turn from the room's cursor waits for (RFC §13.5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SetTurn {
+    /// The set of an index this process committed: it runs once the cursor
+    /// passed every index before its own, moves the cursor past its own,
+    /// and is dropped once another process's lane skipped its own.
+    Index(u64),
+    /// A set with no index, anchored at the room's latest index when its
+    /// place was taken, `-1` for a room with no event (Python's
+    /// `anchor_index`): it runs once the cursor has reached its anchor,
+    /// and moves the cursor no further (RFC §10.1.1 rule 5).
+    After(i64),
+}
+
+impl SetTurn {
+    /// The first index the set's turn does not wait for: its own, or the
+    /// one after its anchor.
+    fn bound(self) -> u64 {
+        match self {
+            Self::Index(index) => index,
+            Self::After(anchor) => u64::try_from(anchor.saturating_add(1)).unwrap_or(0),
+        }
+    }
+
+    /// Whether the cursor at `cursor` passed the set's own index: another
+    /// process's lane skipped it. A set with no index has none to skip.
+    fn skipped_at(self, cursor: i64) -> bool {
+        match self {
+            Self::Index(index) => cursor >= i64::try_from(index).unwrap_or(i64::MAX),
+            Self::After(_) => false,
+        }
+    }
+}
+
 /// A set's turn from the room's cursor.
 pub(crate) enum CursorTurn {
     /// The set runs, under the room's delivery claim, once the handlers of
@@ -227,15 +264,11 @@ pub(crate) struct Turned {
     pub(crate) skipped: Vec<Handled>,
 }
 
-/// Waits for the turn the room's cursor gives the set of `index`, which
-/// this process committed in `room_id`, and holds the room's delivery claim
-/// for it: once the cursor passed every index before `index` that is not
-/// this process's, skipping those no lane ran within the kit's
+/// Waits for the turn the room's cursor gives a set of `room_id`, `turn`,
+/// and holds the room's delivery claim for it: once the cursor passed
+/// every index before the set's own, or up to its anchor, that is not this
+/// process's, skipping those no lane ran within the kit's
 /// `delivery_gap_timeout`.
-///
-/// An instruction's set, which has no index, takes no turn here: Python
-/// anchors it at the room's latest index when its plan is made, which the
-/// driver does not see (RMK-1153).
 ///
 /// The gap clock runs while the cursor does not move. A store that fails
 /// the cursor's read is logged and read again after the same wait as a
@@ -243,8 +276,9 @@ pub(crate) struct Turned {
 pub(crate) async fn cursor_turn<S: ConversationStore>(
     inner: &Inner<S>,
     room_id: &RoomId,
-    index: u64,
+    turn: SetTurn,
 ) -> CursorTurn {
+    let index = turn.bound();
     let mut skipped = Vec::new();
     let mut waited_since: Option<(i64, Instant)> = None;
     let mut backoff = GAP_BACKOFF_INITIAL;
@@ -255,11 +289,13 @@ pub(crate) async fn cursor_turn<S: ConversationStore>(
             backoff = (backoff * 2).min(GAP_BACKOFF_MAX);
             continue;
         };
-        if cursor >= i64::try_from(index).unwrap_or(i64::MAX) {
+        if turn.skipped_at(cursor) {
             tracing::warn!(target: "roomkit::cursor", room_id = %room_id, index, "delivery dropped (delivery_stale): another lane skipped its index");
             return CursorTurn::Stale;
         }
-        if !inner.cursors.foreign_before(room_id, cursor, index) {
+        if !inner.cursors.foreign_before(room_id, cursor, index)
+            || room_gone(inner, room_id, turn, cursor).await
+        {
             let claim = inner.claims.hold(room_id).await;
             return CursorTurn::Turn(Turned { claim, skipped });
         }
@@ -286,6 +322,23 @@ pub(crate) async fn cursor_turn<S: ConversationStore>(
     }
 }
 
+/// Whether the room of a set with no index is gone from the store, which
+/// reads its cursor at `-1` and moves it no more: the set takes its turn,
+/// and its run finds the room gone (a rerun is refused, RFC §5.1), as
+/// Python's lane runs it from the cursor it counts past its own sets. A
+/// store that fails the read leaves the set waiting.
+async fn room_gone<S: ConversationStore>(
+    inner: &Inner<S>,
+    room_id: &RoomId,
+    turn: SetTurn,
+    cursor: i64,
+) -> bool {
+    if cursor >= 0 || !matches!(turn, SetTurn::After(_)) {
+        return false;
+    }
+    matches!(inner.store.room_exists(room_id).await, Ok(false))
+}
+
 /// Before waiting on another worker, finish any cursor write this worker
 /// owes. Otherwise its completed index holds that worker behind it, until
 /// the other worker mistakes the failed write for a lost delivery.
@@ -298,12 +351,34 @@ async fn retry_owed_cursor<S: ConversationStore>(inner: &Inner<S>, room_id: &Roo
     drop(claim);
 }
 
+/// The anchor of a set with no index whose place is taken in `room_id`'s
+/// lane, read under the room's lock: the room's latest index, `-1` for a
+/// room with no event, as Python's `anchor_index` reads it when the set's
+/// plan is made. `None` when the store fails the read, which is logged: the
+/// set then waits for no other process's index.
+pub(crate) async fn anchor<S: ConversationStore>(
+    inner: &Inner<S>,
+    room_id: &RoomId,
+) -> Option<i64> {
+    match inner.store.get_room(room_id).await {
+        Ok(room) => Some(
+            room.and_then(|room| room.latest_index)
+                .map_or(-1, |latest| i64::try_from(latest).unwrap_or(i64::MAX)),
+        ),
+        Err(error) => {
+            tracing::warn!(target: "roomkit::cursor", room_id = %room_id, %error, "the room's latest index could not be read; the set waits for no other process's delivery");
+            None
+        }
+    }
+}
+
 /// Under the room's delivery claim, which a lane running the hole's set
 /// holds: reads the cursor again, and forces it past the indexes before
-/// `index`, the set's own, that are not this process's, up to the first
-/// that is, then has the indexes this process's sets ended past them move
-/// it on. `None` when the cursor did not move; else the handlers of the
-/// `delivery_skipped` the kit emitted, when it has any.
+/// `index`, the first the set does not wait for, that are not this
+/// process's, up to the first that is, then has the indexes this process's
+/// sets ended past them move it on. `None` when the cursor did not move;
+/// else the handlers of the `delivery_skipped` the kit emitted, when it has
+/// any.
 async fn skip_gap<S: ConversationStore>(
     inner: &Inner<S>,
     room_id: &RoomId,

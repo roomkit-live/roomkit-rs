@@ -8,11 +8,19 @@
 //! that took no place by the
 //! release has no delivery set: a record stored `BLOCKED`, a lifecycle
 //! record, a record committed outside the pipeline.
+//!
+//! A place the run took for an event it did not commit (an instruction's,
+//! an event the persistence policy keeps out, a rerun's) has no index: its
+//! set waits for the room's latest index when the place was taken, its
+//! anchor, which the driver reads under the lock (RFC §13.5, §10.1.1
+//! rule 5).
 
 use std::collections::HashMap;
 
 use roomkit_core::model::{EventId, RoomEvent, RoomId};
 use roomkit_core::ops::{EffectId, Outcome, StoreOutcome};
+
+use crate::gaps::SetTurn;
 
 /// An event of a room, by its id, and its index.
 type Committed = (RoomId, EventId, u64);
@@ -24,8 +32,9 @@ pub(super) struct Indexes {
     committing: HashMap<EffectId, Committed>,
     /// The events committed that took no place in their room's lane yet.
     unplaced: Vec<Committed>,
-    /// The index of each place the run took, by room and event.
-    placed: HashMap<(RoomId, EventId), u64>,
+    /// The turn each place the run took waits for from the room's cursor,
+    /// by room and event: its index, or the anchor of a place with none.
+    placed: HashMap<(RoomId, EventId), SetTurn>,
 }
 
 impl Indexes {
@@ -52,32 +61,45 @@ impl Indexes {
         Some((room_id, stored.index))
     }
 
-    /// The index of the event whose place the run took in `room_id`'s
-    /// lane: `None` for an event the run did not commit (an instruction).
-    pub(super) fn placed_index(&self, room_id: &RoomId, event_id: &EventId) -> Option<u64> {
+    /// The turn the room's cursor gives the set whose place the run took in
+    /// `room_id`'s lane: `None` for a place with no index whose anchor
+    /// could not be read.
+    pub(super) fn turn_of(&self, room_id: &RoomId, event_id: &EventId) -> Option<SetTurn> {
         self.placed
             .get(&(room_id.clone(), event_id.clone()))
             .copied()
     }
 
-    /// The event takes its place in the room's lane.
-    pub(super) fn entered(&mut self, room_id: &RoomId, event_id: &EventId) {
+    /// The event takes its place in the room's lane: whether the run
+    /// committed it, its place then holding its index. A place with no
+    /// index waits for its anchor ([`anchored`](Self::anchored)).
+    pub(super) fn entered(&mut self, room_id: &RoomId, event_id: &EventId) -> bool {
         let Some(at) = self
             .unplaced
             .iter()
             .position(|(room, event, _)| room == room_id && event == event_id)
         else {
-            // An instruction's place: it has no index (RFC §10.1.1).
-            return;
+            return false;
         };
         let (room, event, index) = self.unplaced.remove(at);
-        self.placed.insert((room, event), index);
+        self.placed.insert((room, event), SetTurn::Index(index));
+        true
     }
 
-    /// Remove the event's place, returning its index. The driver decides
-    /// whether it ran: a queued set dropped by close is not delivered.
+    /// The place of `key`, which has no index, is anchored at `anchor`, the
+    /// room's latest index when it was taken.
+    pub(super) fn anchored(&mut self, key: (RoomId, EventId), anchor: i64) {
+        self.placed.insert(key, SetTurn::After(anchor));
+    }
+
+    /// Remove the event's place, returning its index: none for a place with
+    /// no index, whose set moves no cursor. The driver decides whether it
+    /// ran: a queued set dropped by close is not delivered.
     pub(super) fn left(&mut self, room_id: &RoomId, event_id: &EventId) -> Option<u64> {
-        self.placed.remove(&(room_id.clone(), event_id.clone()))
+        match self.placed.remove(&(room_id.clone(), event_id.clone()))? {
+            SetTurn::Index(index) => Some(index),
+            SetTurn::After(_) => None,
+        }
     }
 
     /// The run let the room's lock go: the indexes it committed there that

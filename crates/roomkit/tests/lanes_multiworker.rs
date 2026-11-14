@@ -10,16 +10,18 @@
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
-use std::sync::Arc;
+use std::collections::{BTreeSet, HashMap};
+use std::future::{Future, ready};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use std::collections::HashMap;
-use std::sync::Mutex;
-
 use pretty_assertions::assert_eq;
-use roomkit::model::{ChannelBinding, ChannelCapabilities, ChannelOutput, RoomContext};
 use roomkit::model::{
-    ChannelId, ChannelType, EventSource, EventType, InboundMessage, RoomEvent, RoomId, TextContent,
+    ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelOutput, RoomContext,
+};
+use roomkit::model::{
+    ChannelId, ChannelType, EventSource, EventType, InboundMessage, PersistencePolicy, RoomEvent,
+    RoomId, TextContent,
 };
 use roomkit::store::{AdvanceDeliveredIndexOptions, CommitEventOptions, ListEventsOptions};
 use roomkit::testing::{
@@ -275,10 +277,144 @@ fn send(
     })
 }
 
-/// An instruction's set takes no turn from the cursor: had it waited for
-/// the indexes up to the room's latest when its turn came, a set of
-/// another process committed after it would hold the set behind it in its
-/// lane, until that process skipped the set as lost (review of RMK-1153).
+/// An agent `ai` that answers nothing and reads the room's delivery cursor
+/// at each of its turns.
+struct CursorReader {
+    store: Arc<InMemoryStore>,
+    read: Arc<Mutex<Vec<i64>>>,
+}
+
+impl Channel for CursorReader {
+    fn channel_id(&self) -> ChannelId {
+        channel("ai")
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::AI
+    }
+
+    fn category(&self) -> ChannelCategory {
+        ChannelCategory::Intelligence
+    }
+
+    fn handle_inbound(
+        &self,
+        _message: InboundMessage,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Err("nothing sends an agent a message".into()))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        ready(Ok(ChannelOutput::empty()))
+    }
+
+    async fn on_event(
+        &self,
+        event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> Result<ChannelOutput, ChannelError> {
+        let cursor = self
+            .store
+            .get_delivered_index(&event.room_id)
+            .await
+            .unwrap();
+        self.read.lock().unwrap().push(cursor);
+        Ok(ChannelOutput::empty())
+    }
+}
+
+/// A set with no index, an instruction's or an event's the persistence
+/// policy keeps out, runs once the cursor has reached the latest index
+/// committed before it, another process's here, and moves the cursor no
+/// further (RFC §13.5, §10.1.1 rule 5).
+// Python: tests/test_lanes.py::test_unindexed_entries_run_at_their_anchor_without_moving_cursor,
+// with the anchor's index committed by another process.
+#[tokio::test(start_paused = true)]
+async fn a_set_with_no_index_waits_for_the_index_committed_before_it() {
+    for instruction in [true, false] {
+        let store = Arc::new(InMemoryStore::new());
+        let kit = RoomKit::new(RoomKitOptions {
+            store: Arc::clone(&store),
+            delivery_gap_timeout: Duration::from_secs(10),
+            // An event kept out of the store is delivered with no index.
+            persistence_policy: (!instruction).then(|| PersistencePolicy {
+                exclude_types: BTreeSet::from([EventType::Message]),
+                ..PersistencePolicy::default()
+            }),
+            ..Default::default()
+        });
+        let options = RecordingTransportOptions::default;
+        let source = RecordingTransport::new(channel("src"), ChannelType::SMS, options());
+        let recorder =
+            RecordingTransport::new(channel("recorder"), ChannelType::WEBSOCKET, options());
+        kit.register_channel(source).unwrap();
+        kit.register_channel(recorder.clone()).unwrap();
+        let read = Arc::default();
+        kit.register_channel(CursorReader {
+            store: Arc::clone(&store),
+            read: Arc::clone(&read),
+        })
+        .unwrap();
+        room(&kit).await;
+        kit.attach_channel(&room_id(), &channel("ai"), AttachChannelOptions::default())
+            .await
+            .unwrap();
+        let skipped = EventTap::on(&kit, &["delivery_skipped"]);
+        let before = lost(&store, "in flight elsewhere").await;
+        let sending = send(&kit, "Introduce yourself.", instruction);
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(
+            *read.lock().unwrap(),
+            Vec::<i64>::new(),
+            "the set waits for the index committed before it (instruction: {instruction})"
+        );
+        assert_eq!(recorder.texts(), Vec::<String>::new());
+        // The other process's lane delivers it and moves the cursor.
+        let options = AdvanceDeliveredIndexOptions::default();
+        assert!(
+            store
+                .advance_delivered_index(&room_id(), before, options)
+                .await
+                .unwrap()
+        );
+        let result = sending.await.unwrap();
+        assert_eq!(result.cancellation_reason, None);
+        let at = i64::try_from(before).unwrap();
+        assert_eq!(
+            *read.lock().unwrap(),
+            [at],
+            "the turn ran once the cursor reached it (instruction: {instruction})"
+        );
+        let transported = if instruction {
+            Vec::new()
+        } else {
+            vec!["Introduce yourself.".to_owned()]
+        };
+        assert_eq!(recorder.texts(), transported);
+        let room = store.get_room(&room_id()).await.unwrap().unwrap();
+        assert_eq!(room.latest_index, Some(before), "the set took no index");
+        assert_eq!(
+            store.get_delivered_index(&room_id()).await.unwrap(),
+            at,
+            "the set moved the cursor no further (instruction: {instruction})"
+        );
+        assert_eq!(skipped.types(), Vec::<String>::new(), "nothing was skipped");
+        kit.close().await.unwrap();
+    }
+}
+
+/// An instruction's set waits for no index committed after it: had it
+/// waited for the indexes up to the room's latest when its turn came, a
+/// set of another process committed after it would hold the set behind it
+/// in its lane, until that process skipped the set as lost (review of
+/// RMK-1153).
 #[tokio::test(start_paused = true)]
 async fn an_instruction_holds_no_later_set_behind_another_process() {
     let store = Arc::new(InMemoryStore::new());
@@ -386,7 +522,7 @@ async fn two_kits_interleaved_deliveries_follow_index_order() {
     sorted.sort_unstable();
     assert_eq!(delivered, sorted, "the deliveries follow the index order");
     assert_eq!(delivered.len(), 10);
-    let tags: std::collections::BTreeSet<_> = log.iter().map(|(tag, _)| *tag).collect();
+    let tags: BTreeSet<_> = log.iter().map(|(tag, _)| *tag).collect();
     assert_eq!(tags.len(), 2, "both kits delivered");
     let room = store.get_room(&room_id()).await.unwrap().unwrap();
     let cursor = store.get_delivered_index(&room_id()).await.unwrap();

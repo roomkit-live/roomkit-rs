@@ -43,7 +43,7 @@ use std::future::poll_fn;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::Poll;
 
-use roomkit_core::model::{ErrorRecord, RoomEvent, RoomId, Timestamp};
+use roomkit_core::model::{ErrorRecord, EventId, RoomEvent, RoomId, Timestamp};
 use roomkit_core::ops::failure_log;
 use roomkit_core::ops::{
     AnswerOf, ChannelRequest, Delivered, Effect, EffectId, EntryId, Environment, HoldOutcome,
@@ -71,7 +71,7 @@ use self::indexes::Indexes;
 use crate::context::{Adoption, ExecutionContext, Frame, Reply, RunShared, Work};
 use crate::delivery_keys::{CancelRequest, Named, NamedGuard};
 use crate::error::RoomKitError;
-use crate::gaps::{CursorTurn, Turned};
+use crate::gaps::{CursorTurn, SetTurn, Turned};
 use crate::kit::Inner;
 use crate::locks::HeldBack;
 use crate::store::ConversationStore;
@@ -758,7 +758,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                     return Ok(());
                 }
                 Some(Event::Waited(id, waited)) => {
-                    let outcome = self.held.settle(waited);
+                    let outcome = self.settle(waited);
                     self.spans.answered(&outcome);
                     return Ok(operation.complete(id, outcome)?);
                 }
@@ -1291,6 +1291,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         } else {
             None
         };
+        let anchoring = self.take_place(&request);
         let over = self.turns_over(&request, turned.is_some());
         match self.held.hold(rooms, &self.context, id, request, deadline) {
             Hold::Wait(_) if matches!(wait, Wait::Admission | Wait::Record) && self.cut_now => {
@@ -1304,13 +1305,16 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             }
             Hold::Wait(waiting) => {
                 let waiting = match across {
-                    Some((room_id, index)) => self.cursor_turn(waiting, room_id, index, deadline),
+                    Some((room_id, turn)) => self.cursor_turn(waiting, room_id, turn, deadline),
                     None => waiting,
                 };
                 self.waits.push((id, wait, waiting));
                 None
             }
-            Hold::Now(outcome) => self.after_the_cursor(id, Answer::Now(outcome), over, turned),
+            Hold::Now(outcome) => match anchoring {
+                Some(key) => self.anchor(id, key, outcome),
+                None => self.after_the_cursor(id, Answer::Now(outcome), over, turned),
+            },
             Hold::Releasing(release) => {
                 self.after_the_cursor(id, Answer::Release(release), over, turned)
             }
@@ -1341,10 +1345,6 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     /// nowhere once it lets the room's lock go.
     fn turns_over(&mut self, request: &HoldRequest, claimed: bool) -> Option<(RoomId, Vec<u64>)> {
         let (room_id, over) = match request {
-            HoldRequest::EnterLane { room_id, event_id } => {
-                self.indexes.entered(room_id, event_id);
-                return None;
-            }
             HoldRequest::LeaveLane { room_id, event_id } => {
                 let index = self.indexes.left(room_id, event_id);
                 // A queued set the close dropped never obtained its turn.
@@ -1357,7 +1357,8 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 (room_id, index.into_iter().collect())
             }
             HoldRequest::ReleaseLock { room_id } => (room_id, self.indexes.released(room_id)),
-            HoldRequest::AcquireLock { .. }
+            HoldRequest::EnterLane { .. }
+            | HoldRequest::AcquireLock { .. }
             | HoldRequest::AcquireLockForRecord { .. }
             | HoldRequest::AwaitLane { .. }
             | HoldRequest::TakeTicket { .. }
@@ -1366,6 +1367,48 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             | HoldRequest::Expiry { .. } => return None,
         };
         (!over.is_empty()).then(|| (room_id.clone(), over))
+    }
+
+    /// Records the place `request` takes in its room's lane, which holds
+    /// its event's index when the run committed the event. Returns the
+    /// place's room and event when it has no index of its own (an
+    /// instruction's, an event the persistence policy keeps out, a
+    /// rerun's): its anchor is read before the place is answered.
+    fn take_place(&mut self, request: &HoldRequest) -> Option<(RoomId, EventId)> {
+        let HoldRequest::EnterLane { room_id, event_id } = request else {
+            return None;
+        };
+        let indexed = self.indexes.entered(room_id, event_id);
+        (!indexed).then(|| (room_id.clone(), event_id.clone()))
+    }
+
+    /// Answers the place `key` took with no index of its own, `outcome`,
+    /// once the room's latest index is read for it: its anchor, read under
+    /// the room's lock as Python reads it when the set's plan is made, so
+    /// that the set waits for every index committed before it and none
+    /// after (RFC §13.5, §10.1.1 rule 5).
+    fn anchor(
+        &mut self,
+        id: EffectId,
+        key: (RoomId, EventId),
+        outcome: Outcome,
+    ) -> Option<(EffectId, Outcome)> {
+        let inner: &'kit Arc<Inner<S>> = self.inner;
+        let read = async move {
+            let anchor = crate::gaps::anchor(inner, &key.0).await;
+            (id, Waited::Anchored(key, anchor, outcome))
+        };
+        self.waits.push((id, Wait::Other, Box::pin(read)));
+        None
+    }
+
+    /// Takes what a wait came to: a place's anchor is the run's indexes',
+    /// anything else what the run holds.
+    fn settle(&mut self, waited: Waited<'kit>) -> Outcome {
+        if let Waited::Anchored(key, Some(anchor), _) = &waited {
+            self.indexes.anchored(key.clone(), *anchor);
+        }
+        self.held.settle(waited)
     }
 
     /// Answers a hold carried out at once, `outcome`, once the room's
@@ -1416,16 +1459,16 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         None
     }
 
-    /// The room and the index of the set whose lane turn `request` waits
-    /// for, when the run committed its event: its turn waits for the room's
-    /// cursor too (RFC §13.5 "Delivery lanes across processes"). An
-    /// instruction's set, or a rerun's, has none.
-    fn across_processes(&self, request: &HoldRequest) -> Option<(RoomId, u64)> {
+    /// The room of the set whose lane turn `request` waits for, and what
+    /// its turn waits for from the room's cursor too: its index, when the
+    /// run committed its event, else its anchor (RFC §13.5 "Delivery lanes
+    /// across processes").
+    fn across_processes(&self, request: &HoldRequest) -> Option<(RoomId, SetTurn)> {
         let HoldRequest::AwaitLane { room_id, event_id } = request else {
             return None;
         };
-        let index = self.indexes.placed_index(room_id, event_id)?;
-        Some((room_id.clone(), index))
+        let turn = self.indexes.turn_of(room_id, event_id)?;
+        Some((room_id.clone(), turn))
     }
 
     /// `waiting`, the wait for a place's turn in its room's lane, then for
@@ -1435,7 +1478,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         &self,
         waiting: Waiting<'kit>,
         room_id: RoomId,
-        index: u64,
+        turn: SetTurn,
         deadline: Option<Instant>,
     ) -> Waiting<'kit> {
         let inner: &'kit Arc<Inner<S>> = self.inner;
@@ -1444,7 +1487,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             let Waited::Place(key, place, true) = waited else {
                 return (effect, waited);
             };
-            match within(deadline, crate::gaps::cursor_turn(inner, &room_id, index)).await {
+            match within(deadline, crate::gaps::cursor_turn(inner, &room_id, turn)).await {
                 Some(CursorTurn::Turn(turned)) => (effect, Waited::Claimed(key, place, turned)),
                 Some(CursorTurn::Stale) => (effect, Waited::Stale(key, place)),
                 None => (effect, Waited::Place(key, place, false)),

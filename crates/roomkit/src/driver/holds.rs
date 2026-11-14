@@ -102,6 +102,10 @@ pub(super) enum Waited<'kit> {
     /// A hold carried out at once, answered once the room's delivery cursor
     /// caught up with the turns it ended (gap G-091).
     Answered(Outcome),
+    /// A place with no index of its own taken, answered `Outcome` once the
+    /// room's latest index, its anchor, was read under the lock: `None`
+    /// when the store failed the read (RFC §13.5).
+    Anchored((RoomId, EventId), Option<i64>, Outcome),
 }
 
 /// What a hold comes to.
@@ -450,7 +454,8 @@ impl<'kit> Held<'kit> {
                     Outcome::DeadlinePassed
                 }
             }
-            Waited::Answered(outcome) => outcome,
+            // The anchor is the run's indexes', which the driver keeps.
+            Waited::Answered(outcome) | Waited::Anchored(_, _, outcome) => outcome,
         }
     }
 }
