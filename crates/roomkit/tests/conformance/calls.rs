@@ -387,8 +387,7 @@ async fn other_call(
         return crate::channel_verbs::call(run, spec).await;
     }
     if name == "release_channel" {
-        let outcome = run.kit_of(spec)?.release_channel(&channel_id(spec)?).await;
-        return Ok(finish(run, name, outcome, |()| Value::Null));
+        return release_channel(run, name, spec).await;
     }
     if name == "close" {
         return close(run, name, spec).await;
@@ -406,6 +405,15 @@ async fn other_call(
         return setting_call(run, name, spec).await;
     }
     lifecycle_call(run, name, spec).await
+}
+
+async fn release_channel(
+    run: &std::sync::Arc<Run>,
+    name: &str,
+    spec: &Value,
+) -> Result<Called, Unreadable> {
+    let outcome = run.kit_of(spec)?.release_channel(&channel_id(spec)?).await;
+    Ok(finish(run, name, outcome, |()| Value::Null))
 }
 
 /// A host's setter of a room's settings: its timers, its agent response

@@ -411,7 +411,6 @@ const STEPS: &[(&str, &[&str])] = &[
 fn arguments(call: &str) -> Option<&'static [&'static str]> {
     Some(match call {
         "close" | "kit_executor.close" | "kit_executor.closed" => &[],
-        "release_channel" => &["channel_id"],
         "process_inbound" => &["message", "room_id", "defer_delivery"],
         "delivery.cancel" => &["of", "reason", "timeout_ms"],
         "delivery.wait" => &["of"],
@@ -467,7 +466,7 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
         "set_agent_response_policy" => &["room_id", "policy"],
         "send_greeting" => &["room_id", "channel_id", "agent_id", "greeting"],
         "register_channel" => &["channel"],
-        "unregister_channel" | "acp.close" => &["channel_id"],
+        "unregister_channel" | "acp.close" | "release_channel" => &["channel_id"],
         "register_hook" | "kit_executor.hook" | "kit_executor.room_hook" => &["hook"],
         "kit_executor.remove_room_hook" => &["name"],
         "enable_room_hook" | "disable_room_hook" | "remove_room_hook" => &["room_id", "name"],
