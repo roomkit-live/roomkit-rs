@@ -107,6 +107,6 @@ fn test_usage_fixture_rejects_malformed_controls() {
             .unwrap()
             .extend(patch.as_object().unwrap().clone());
         let scenario = json!({"setup":{"channels":[{"id":"agent","type":"ai","acp":acp}]}});
-        assert!(!crate::shape::unknown_members(&scenario).is_empty());
+        assert_ne!(crate::shape::unknown_members(&scenario), Vec::<String>::new());
     }
 }
