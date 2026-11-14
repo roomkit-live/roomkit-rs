@@ -7,6 +7,7 @@ use roomkit::orchestration::{DiscussionOptions, StrategyAgent};
 use roomkit::{Channel, Discussion};
 use roomkit_acp::{AcpChannel, AcpChannelOptions, StdioAcpTransport};
 
+#[expect(clippy::unwrap_used, reason = "test fixture construction")]
 fn channel(id: &str, name: Option<&str>) -> AcpChannel<StdioAcpTransport> {
     AcpChannel::new(
         ChannelId::new(id).unwrap(),
