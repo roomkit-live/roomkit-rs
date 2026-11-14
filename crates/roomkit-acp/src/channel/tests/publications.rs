@@ -124,6 +124,9 @@ async fn test_cancel_and_close_while_the_configured_publication_is_awaited() {
         assert!(state.cancelled.lock().unwrap().is_empty());
         assert!(channel.session_id(&room).is_none());
         assert_eq!(channel.active_turns(), 0);
+        if !close {
+            assert_reusable_after_cancel(&channel, &state, &room).await;
+        }
         kit.close().await.unwrap();
     }
 }
@@ -175,4 +178,27 @@ async fn test_a_subscriber_can_change_configuration_during_the_opening_announcem
         "opus"
     );
     kit.close().await.unwrap();
+}
+
+async fn assert_reusable_after_cancel(
+    channel: &AcpChannel<fixture::Direct>,
+    state: &fixture::State,
+    room: &RoomId,
+) {
+    let output = tokio::time::timeout(PATIENCE, direct_turn(channel))
+        .await
+        .unwrap();
+    assert_eq!(
+        output.response_metadata.get("acp").unwrap()["prompt_returned"],
+        true
+    );
+    assert_eq!(channel.session_id(room).as_deref(), Some("session-3"));
+    let sessions: Vec<_> = state
+        .prompts
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|prompt| prompt.session_id.0.to_string())
+        .collect();
+    assert_eq!(sessions, ["session-1", "session-3"]);
 }
