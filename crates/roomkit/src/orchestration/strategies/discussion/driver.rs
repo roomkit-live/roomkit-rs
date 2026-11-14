@@ -700,16 +700,12 @@ impl<S: ConversationStore> DiscussionRoom<S> {
     }
 
     fn agent_line(&self, kit: &RoomKit<S>, agent: &ChannelId) -> AgentLine {
-        let identity = kit
-            .inner
-            .channel(agent)
-            .and_then(|channel| channel.declaration().identity)
-            .unwrap_or_default();
+        let channel = kit.inner.channel(agent);
         AgentLine {
             handle: self.config().handle(agent).to_owned(),
-            name: identity.name,
-            role: identity.role,
-            description: identity.description,
+            name: channel.as_ref().and_then(|channel| channel.name()),
+            role: channel.as_ref().and_then(|channel| channel.role()),
+            description: channel.as_ref().and_then(|channel| channel.description()),
         }
     }
 

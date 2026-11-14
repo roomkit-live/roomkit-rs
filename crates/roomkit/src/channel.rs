@@ -203,6 +203,31 @@ pub trait Channel: Send + Sync + 'static {
     /// Python's `channel_id`, set by its constructor.
     fn channel_id(&self) -> ChannelId;
 
+    /// The local display name, as Python's optional `name` attribute
+    /// (RFC §19.7.5). By default, use the declared agent identity.
+    /// A channel may expose a local name without declaring an agent identity.
+    fn name(&self) -> Option<String> {
+        self.declaration()
+            .identity
+            .and_then(|identity| identity.name)
+    }
+
+    /// The local `role` attribute read by Discussion (RFC §19.7.5),
+    /// from the declared agent identity by default.
+    fn role(&self) -> Option<String> {
+        self.declaration()
+            .identity
+            .and_then(|identity| identity.role)
+    }
+
+    /// The local `description` attribute read by Discussion (RFC §19.7.5),
+    /// from the declared agent identity by default.
+    fn description(&self) -> Option<String> {
+        self.declaration()
+            .identity
+            .and_then(|identity| identity.description)
+    }
+
     /// Python's class attribute `channel_type`: the channel's type, an open
     /// name (RFC §6.2).
     fn channel_type(&self) -> ChannelType;
@@ -698,6 +723,12 @@ pub(crate) type BoxFuture<'call, T> = Pin<Box<dyn Future<Output = T> + Send + 'c
 /// A [`Channel`] behind a trait object, so the kit holds channels of any
 /// type: its calls, and the synchronous members a router reads.
 pub(crate) trait DynChannel: Send + Sync {
+    fn name(&self) -> Option<String>;
+
+    fn role(&self) -> Option<String>;
+
+    fn description(&self) -> Option<String>;
+
     fn normalize_address(&self, address: &str) -> String;
 
     fn recipient_address(&self, binding: &ChannelBinding) -> Option<String>;
@@ -784,6 +815,18 @@ pub(crate) trait DynChannel: Send + Sync {
 }
 
 impl<C: Channel> DynChannel for C {
+    fn name(&self) -> Option<String> {
+        Channel::name(self)
+    }
+
+    fn role(&self) -> Option<String> {
+        Channel::role(self)
+    }
+
+    fn description(&self) -> Option<String> {
+        Channel::description(self)
+    }
+
     fn normalize_address(&self, address: &str) -> String {
         Channel::normalize_address(self, address)
     }

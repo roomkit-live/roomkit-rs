@@ -577,6 +577,12 @@ approved = "2026-11-01"
 reason = "Python's class attribute Channel.sender_is_participant, which the snapshot does not record: a trait method, false by default (RFC 11.6; parity stream E, RMK-1134)"
 
 [[exception]]
+rust = "roomkit::Channel"
+members = ["name", "role", "description"]
+approved = "2026-11-14"
+reason = "Python Discussion reads optional local attributes with getattr. Rust needs trait methods returning owned optional strings across channel erasure; defaults use declared Agent identity, while ACP forwards its local values without changing its declaration (HITL 132f374b)."
+
+[[exception]]
 rust = "roomkit::ChannelOf"
 approved = "2026-10-27"
 reason = "channel_of: Callable[[str], Channel | None]; a trait with async methods is not object-safe, so it returns the kit's view, a RegisteredChannel"

@@ -259,16 +259,12 @@ impl<S: ConversationStore> DiscussionRoom<S> {
 
     /// `agent` as a policy reads it: its identity and its handle.
     fn candidate(&self, kit: &RoomKit<S>, agent: &ChannelId) -> DispatchCandidate {
-        let identity = kit
-            .inner
-            .channel(agent)
-            .and_then(|channel| channel.declaration().identity)
-            .unwrap_or_default();
+        let channel = kit.inner.channel(agent);
         DispatchCandidate {
             channel_id: agent.clone(),
-            name: identity.name,
-            role: identity.role,
-            description: identity.description,
+            name: channel.as_ref().and_then(|channel| channel.name()),
+            role: channel.as_ref().and_then(|channel| channel.role()),
+            description: channel.as_ref().and_then(|channel| channel.description()),
             handle: Some(self.config().handle(agent).to_owned()),
         }
     }

@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Discussion reads ACP's local name, role and description when assigning handles, choosing candidates and presenting agents to their peers.
+
 - ACP prompts append captured Discussion notes after the request, including an empty request, and replace copied notes headers outside that boundary.
 
 - Standalone ACP instructions use fresh turn sessions, preserve room history and configuration, and release their sessions on completion, cancellation or abandonment.

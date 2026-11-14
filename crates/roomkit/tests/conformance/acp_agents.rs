@@ -50,6 +50,9 @@ pub(crate) const ACP: &[&str] = &[
     "room_history",
     "context_contributor",
     "instructions",
+    "name",
+    "role",
+    "description",
 ];
 /// The members of its `agent`.
 pub(crate) const AGENT: &[&str] = &[
@@ -120,6 +123,9 @@ pub(crate) fn scripted_acp_channel(
         room_history: context::history(spec)?,
         context_contributor: context::build(spec, id.as_str(), run)?,
         instructions: instructions(spec)?,
+        name: crate::calls::optional(spec, "name")?,
+        role: crate::calls::optional(spec, "role")?,
+        description: crate::calls::optional(spec, "description")?,
         session_config: spec
             .get("session_config")
             .and_then(Value::as_object)

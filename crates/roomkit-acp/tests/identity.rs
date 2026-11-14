@@ -33,6 +33,14 @@ fn an_acp_agent_preserves_its_identity() {
                 [observed.name(), observed.role(), observed.description()],
                 identity
             );
+            assert_eq!(
+                [
+                    Channel::name(observed),
+                    Channel::role(observed),
+                    Channel::description(observed),
+                ],
+                identity.map(|value| value.map(str::to_owned))
+            );
             assert_eq!(observed.channel_id().as_str(), "agent:7c1e");
             assert!(observed.declaration().identity.is_none());
         }

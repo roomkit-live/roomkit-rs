@@ -384,6 +384,18 @@ impl<T: AcpTransport> fmt::Debug for AcpChannel<T> {
 }
 
 impl<T: AcpTransport> Channel for AcpChannel<T> {
+    fn name(&self) -> Option<String> {
+        self.shared.name.clone()
+    }
+
+    fn role(&self) -> Option<String> {
+        self.shared.role.clone()
+    }
+
+    fn description(&self) -> Option<String> {
+        self.shared.description.clone()
+    }
+
     fn external_tool_bridge(&self) -> Option<roomkit::external_tools::ExternalToolBridge> {
         self.shared
             .connector

@@ -318,14 +318,14 @@ impl Discussion {
         self.agents
             .iter()
             .filter_map(|agent| {
-                let identity = match agent.live() {
-                    Some(live) => live.channel.declaration().identity,
+                let name = match agent.live() {
+                    Some(live) => live.channel.name(),
                     None => kit
                         .inner
                         .channel(agent.channel_id())
-                        .and_then(|channel| channel.declaration().identity),
+                        .and_then(|channel| channel.name()),
                 };
-                Some((agent.channel_id().clone(), identity?.name?))
+                Some((agent.channel_id().clone(), name?))
             })
             .collect()
     }
@@ -507,14 +507,11 @@ fn ids_repr(ids: &[&ChannelId]) -> String {
 }
 
 /// Each live agent's name, by channel id; an agent named by its id has none
-/// here, the kit's install reading its declaration.
+/// here, the kit's install reading the registered channel's local name.
 fn names(agents: &[StrategyAgent]) -> HashMap<&ChannelId, String> {
     agents
         .iter()
-        .filter_map(|agent| {
-            let identity = agent.live()?.channel.declaration().identity?;
-            Some((agent.channel_id(), identity.name?))
-        })
+        .filter_map(|agent| Some((agent.channel_id(), agent.live()?.channel.name()?)))
         .collect()
 }
 

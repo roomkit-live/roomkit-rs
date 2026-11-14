@@ -78,6 +78,7 @@ the mapping and its tests. The check does not generate or update this document.
 | `roomkit::identity::IdentityFuture` | — | Whole type |
 | `roomkit::RoomKit::identity_hook` | — | `handler` |
 | `roomkit::Channel` | — | `sender_is_participant` |
+| `roomkit::Channel` | Optional local attributes read by Python Discussion | `name`, `role`, `description`: `Option<String>` across channel erasure; ACP's declaration remains without an Agent identity (HITL 132f374b) |
 | `roomkit::ChannelOf` | — | Whole type |
 | `roomkit::RegisteredChannel` | — | Whole type |
 | `roomkit::testing::Environment` | — | Whole type |
