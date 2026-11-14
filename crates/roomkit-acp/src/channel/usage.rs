@@ -1,5 +1,5 @@
 //! Per-prompt usage and provenance, copied at the transport return boundary.
-//! Python: channels/_acp_usage.py and ACPTurnMixin._run_prompt.
+//! Python: `channels/_acp_usage.py` and `ACPTurnMixin._run_prompt`.
 
 use std::sync::{Mutex, PoisonError};
 
@@ -45,16 +45,19 @@ impl Usage {
         adapter: Option<Value>,
         model: Option<Value>,
     ) -> Self {
-        let mut prompt = json!({"source":"session/prompt", "scope":"unspecified"});
+        let mut prompt = Metadata::from_iter([
+            ("source".to_owned(), json!("session/prompt")),
+            ("scope".to_owned(), json!("unspecified")),
+        ]);
         if let Some(model) = model.filter(Value::is_string) {
-            prompt["model_at_start"] = model;
+            prompt.insert("model_at_start".to_owned(), model);
         }
         let mut metadata = Metadata::from_iter([
             ("protocol".to_owned(), json!("acp")),
             ("transport".to_owned(), json!(transport)),
             ("session_id".to_owned(), json!(session)),
             ("event_id".to_owned(), json!(event)),
-            ("prompt".to_owned(), prompt),
+            ("prompt".to_owned(), Value::Object(prompt)),
         ]);
         if let Some(adapter) = adapter {
             metadata.insert("adapter_info".to_owned(), adapter);
@@ -99,7 +102,13 @@ impl Usage {
     /// Freeze on the producer task, before its join or stream is polled again.
     pub(super) fn finish(&self, response: &PromptResponse) -> Snapshot {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        state.metadata["prompt"]["stop_reason"] = json!(response.stop_reason);
+        if let Some(prompt) = state
+            .metadata
+            .get_mut("prompt")
+            .and_then(Value::as_object_mut)
+        {
+            prompt.insert("stop_reason".to_owned(), json!(response.stop_reason));
+        }
         if let Some(envelope) = response
             .meta
             .as_ref()
@@ -113,7 +122,7 @@ impl Usage {
                 .get_mut("prompt")
                 .and_then(Value::as_object_mut)
             {
-                prompt.remove("model_at_start");
+                prompt.shift_remove("model_at_start");
                 if let Some(model) = envelope.get("model").filter(|value| value.is_string()) {
                     prompt.insert("model".to_owned(), model.clone());
                 }
@@ -148,7 +157,7 @@ fn apply(metadata: &mut Metadata, envelope: &Metadata, terminal: bool) {
         .chain(RESULT_FIELDS.iter().copied().filter(|_| terminal))
         .chain(["usage_report"])
     {
-        metadata.remove(key);
+        metadata.shift_remove(key);
         if let Some(value) = envelope.get(key) {
             metadata.insert(key.to_owned(), value.clone());
         }
@@ -163,25 +172,34 @@ fn observe(update: &Value, model: Option<Value>) -> Value {
         "identity_source": "roomkit", "observed_at_ms": environment.now().as_unix_millis(),
         "source":"session/update", "scope":"session", "update": update,
     });
-    if let Some(model) = model.filter(Value::is_string) {
-        report["model_at_observation"] = model;
+    if let Some(model) = model.filter(Value::is_string)
+        && let Some(report) = report.as_object_mut()
+    {
+        report.insert("model_at_observation".to_owned(), model);
     }
     report
 }
 
 fn context(report: &Value) -> Metadata {
-    let update = &report["update"];
     let mut values = Metadata::new();
+    let Some(update) = report.get("update") else {
+        return values;
+    };
     for (source, target) in [("used", "context_used"), ("size", "context_size")] {
         if let Some(value) = update.get(source).filter(|v| v.is_i64() || v.is_u64()) {
             values.insert(target.to_owned(), value.clone());
         }
     }
-    if let Some(value) = update["cost"]["amount"].as_f64() {
+    let cost = update.get("cost");
+    if let Some(value) = cost
+        .and_then(|cost| cost.get("amount"))
+        .and_then(Value::as_f64)
+    {
         values.insert("cost".to_owned(), json!(value));
     }
-    if let Some(value) = update["cost"]["currency"]
-        .as_str()
+    if let Some(value) = cost
+        .and_then(|cost| cost.get("currency"))
+        .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
     {
         values.insert("currency".to_owned(), json!(value));
