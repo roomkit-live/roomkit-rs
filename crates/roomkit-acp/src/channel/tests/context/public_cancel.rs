@@ -81,17 +81,13 @@ async fn test_a_steering_cancel_before_the_agent_is_reached_cuts_the_turn() {
 }
 
 fn held_contributor(entered: Arc<Notify>, released: Arc<Notify>) -> AcpContextContributor {
-    AcpContextContributor::new({
+    AcpContextContributor::new(move |_, _| {
         let entered = Arc::clone(&entered);
         let released = Arc::clone(&released);
-        move |_, _| {
-            let entered = Arc::clone(&entered);
-            let released = Arc::clone(&released);
-            async move {
-                entered.notify_one();
-                released.notified().await;
-                Ok(vec!["note".to_owned()])
-            }
+        async move {
+            entered.notify_one();
+            released.notified().await;
+            Ok(vec!["note".to_owned()])
         }
     })
 }
