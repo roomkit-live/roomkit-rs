@@ -58,22 +58,7 @@ async fn concurrent_reports() {
     let handler = Arc::new(Reports::default());
     let (channel, mut opened) = channel_with_handler(Arc::<Reports>::clone(&handler));
     let kit = room(channel).await;
-    let r2 = RoomId::new("r2").unwrap();
-    kit.create_room(CreateRoomOptions {
-        room_id: Some(r2.clone()),
-        ..Default::default()
-    })
-    .await
-    .unwrap();
-    for channel in ["ws", "claude"] {
-        kit.attach_channel(
-            &r2,
-            &ChannelId::new(channel).unwrap(),
-            AttachChannelOptions::default(),
-        )
-        .await
-        .unwrap();
-    }
+    attach_second_room(&kit).await;
     let reports = observe(&kit);
     let first = tokio::spawn(send_room(Arc::clone(&kit), "r1"));
     let mut agent = Agent::new(opened.recv().await.unwrap());
@@ -90,24 +75,7 @@ async fn concurrent_reports() {
         task.await.unwrap();
     }
     close(&kit, &mut agent).await;
-    let reports = reports.lock().unwrap();
-    assert_eq!(reports.len(), 4);
-    for mode in [HookExecution::Sync, HookExecution::Async] {
-        let heard: Vec<_> = reports
-            .iter()
-            .filter(|(execution, _)| *execution == mode)
-            .map(|(_, event)| event)
-            .collect();
-        assert_eq!(heard.len(), 2);
-        let rooms: std::collections::BTreeSet<_> =
-            heard.iter().map(|event| event.room_id.clone()).collect();
-        assert_eq!(rooms.len(), 2);
-        assert!(
-            heard.iter().all(
-                |event| event.tool_call_id == "read" && event.result == Some(json!("original"))
-            )
-        );
-    }
+    assert_reports(&reports.lock().unwrap());
 }
 
 async fn send_room(kit: Arc<roomkit::RoomKit>, room: &str) {
@@ -156,4 +124,43 @@ fn observe(kit: &roomkit::RoomKit) -> Arc<Mutex<Vec<(HookExecution, ToolCallEven
             .unwrap();
     }
     reports
+}
+
+async fn attach_second_room(kit: &roomkit::RoomKit) {
+    let r2 = RoomId::new("r2").unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(r2.clone()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    for channel in ["ws", "claude"] {
+        kit.attach_channel(
+            &r2,
+            &ChannelId::new(channel).unwrap(),
+            AttachChannelOptions::default(),
+        )
+        .await
+        .unwrap();
+    }
+}
+
+fn assert_reports(reports: &[(HookExecution, ToolCallEvent)]) {
+    assert_eq!(reports.len(), 4);
+    for mode in [HookExecution::Sync, HookExecution::Async] {
+        let heard: Vec<_> = reports
+            .iter()
+            .filter(|(execution, _)| *execution == mode)
+            .map(|(_, event)| event)
+            .collect();
+        assert_eq!(heard.len(), 2);
+        let rooms: std::collections::BTreeSet<_> =
+            heard.iter().map(|event| event.room_id.clone()).collect();
+        assert_eq!(rooms.len(), 2);
+        assert!(
+            heard.iter().all(
+                |event| event.tool_call_id == "read" && event.result == Some(json!("original"))
+            )
+        );
+    }
 }
