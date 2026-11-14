@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- ACP prompts preserve a whitespace-only request when host content supplies the turn, matching Python without changing the caller's event.
+
 - Discussion reads ACP's local name, role and description when assigning handles, choosing candidates and presenting agents to their peers.
 
 - ACP prompts append captured Discussion notes after the request, including an empty request, and replace copied notes headers outside that boundary.

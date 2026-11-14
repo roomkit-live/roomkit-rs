@@ -116,7 +116,9 @@ impl Input {
                 .iter()
                 .map(String::as_str)
                 .chain([catch_up, request])
-                .filter(|text| !is_blank(text))
+                // Admission already requires text, host content or notes.
+                // Keep an admitted request's whitespace exactly as supplied.
+                .filter(|text| !text.is_empty())
                 .map(without_notes_header_copies),
         );
         sections.extend(self.notes.iter().cloned());

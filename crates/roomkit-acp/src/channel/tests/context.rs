@@ -1,5 +1,7 @@
 //! Host callback admission and cancellation through the public channel API.
 
+mod empty_input;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
