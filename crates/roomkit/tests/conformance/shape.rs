@@ -370,6 +370,7 @@ const EXPECT: &[&str] = &[
     "observations",
     "thinking_events",
     "tool_events",
+    "custom_events",
     "text_events",
     "tasks",
     "actions",

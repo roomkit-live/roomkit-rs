@@ -24,6 +24,7 @@ pub(super) struct Sink {
     sender: mpsc::UnboundedSender<ResponseItem>,
     thinking: Arc<ThinkingWindow>,
     tools: Arc<Tools>,
+    pub(super) scope: super::publication::Scope,
 }
 
 impl Sink {
@@ -31,11 +32,13 @@ impl Sink {
         sender: mpsc::UnboundedSender<ResponseItem>,
         thinking: Arc<ThinkingWindow>,
         tools: Arc<Tools>,
+        scope: super::publication::Scope,
     ) -> Self {
         Self {
             sender,
             thinking,
             tools,
+            scope,
         }
     }
 

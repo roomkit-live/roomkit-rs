@@ -29,6 +29,7 @@ pub(in crate::channel) enum Stage {
 
 pub(in crate::channel) struct State {
     pub(in crate::channel) stage: Stage,
+    pub(in crate::channel) client: std::sync::Mutex<Option<Arc<dyn AcpClient>>>,
     pub(in crate::channel) reached: Notify,
     pub(in crate::channel) resume: Notify,
     armed: AtomicBool,
@@ -64,6 +65,7 @@ pub(in crate::channel) fn with_options(
 ) -> (AcpChannel<Direct>, Arc<State>) {
     let state = Arc::new(State {
         stage: boundary,
+        client: std::sync::Mutex::new(None),
         reached: Notify::new(),
         resume: Notify::new(),
         armed: AtomicBool::new(true),
@@ -92,6 +94,7 @@ impl AcpTransport for Direct {
     }
     async fn open(&self, client: Arc<dyn AcpClient>) -> Result<Connection, AcpError> {
         self.0.hold(Stage::Start).await;
+        *self.0.client.lock().unwrap() = Some(Arc::clone(&client));
         Ok(Connection {
             state: Arc::clone(&self.0),
             client,
@@ -146,7 +149,10 @@ impl AcpConnection for Connection {
         if request.session_id.0.as_ref() == "session-2" {
             self.state.hold(Stage::Configured).await;
         }
-        Ok(SetSessionConfigOptionResponse::new(options("sonnet")))
+        let wire = serde_json::to_value(&request).unwrap();
+        Ok(SetSessionConfigOptionResponse::new(options(
+            wire["value"].as_str().unwrap(),
+        )))
     }
     async fn close_session(
         &self,

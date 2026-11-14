@@ -64,11 +64,16 @@ impl<T: AcpTransport> Connector<T> {
         if let Some(session) = self.session_of(room) {
             return Ok((session, None));
         }
-        let _opening = self.opening(room).await;
+        let opening = self.opening(room).await;
         if let Some(session) = self.session_of(room) {
             return Ok((session, None));
         }
-        self.open_session(room, connection, cwd, overlay).await
+        let (session, options) = self.open_session(room, connection, cwd, overlay).await?;
+        drop(opening);
+        if let Some(options) = &options {
+            self.publish_options(room, &session, options).await;
+        }
+        Ok((session, options))
     }
 
     async fn open_session(
@@ -171,26 +176,42 @@ impl<T: AcpTransport> Connector<T> {
         let overlay = Metadata::from_iter([(id.to_owned(), value.clone())]);
         let (session, opened_options) = self.session_with(room, &connection, cwd, overlay).await?;
         let opened = opened_options.is_some();
-        let options = match opened_options {
+        let mut options = match opened_options {
             Some(options) => options,
             None => set_option(&*connection, &session, id, &value).await?,
         };
-        let values = config::values(&options);
         let retained = self.keep_option(
             room,
             generation,
             &session,
-            id,
-            values.get(id).cloned().unwrap_or(value),
-            options,
+            (id, value),
+            &mut options,
+            opened,
         );
+        let values = config::values(&options);
         if !retained
             && opened
             && let Some(mut discarded) = self.discard_session(room, &session)
         {
             discarded.release().await;
         }
+        if retained {
+            self.publish_options(room, &session, &options).await;
+        }
         Ok(values)
+    }
+
+    async fn publish_options(&self, room: &RoomId, session: &str, options: &[Value]) {
+        if self.is_closed() || self.session_of(room).as_deref() != Some(session) {
+            return;
+        }
+        let event = crate::channel::publication::event(
+            room,
+            &self.channel_id,
+            roomkit::realtime::EphemeralEventType::Custom,
+            crate::channel::publication::configuration(session, options),
+        );
+        self.publication.bridge.publish(event).await;
     }
 
     fn keep_option(
@@ -198,16 +219,23 @@ impl<T: AcpTransport> Connector<T> {
         room: &RoomId,
         generation: u64,
         session: &str,
-        id: &str,
-        value: Value,
-        options: Vec<Value>,
+        (id, value): (&str, Value),
+        options: &mut Vec<Value>,
+        opened: bool,
     ) -> bool {
         let mut state = self.lock();
         if state.detached.get(room).copied().unwrap_or_default() != generation {
             return false;
         }
         if state.sessions.get(room).map(String::as_str) == Some(session) {
-            state.options.insert(room.clone(), options);
+            // The opening announcement may call a setter back in. Use its
+            // latest state atomically; if closed meanwhile, the owned opening
+            // snapshot above remains the caller's answer (RMK-1429).
+            if opened && let Some(current) = state.options.get(room) {
+                options.clone_from(current);
+            }
+            let value = config::values(options).get(id).cloned().unwrap_or(value);
+            state.options.insert(room.clone(), options.clone());
             state
                 .config
                 .entry(room.clone())

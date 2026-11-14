@@ -305,6 +305,7 @@ impl Comparison<'_> {
             ("observations", &self.observed.observations),
             ("thinking_events", &self.observed.thinking_events),
             ("tool_events", &self.observed.tool_events),
+            ("custom_events", &self.observed.custom_events),
             ("text_events", &self.observed.text_events),
             ("tasks", &self.observed.tasks),
             ("participants", &self.observed.participants),

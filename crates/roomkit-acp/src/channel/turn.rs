@@ -104,7 +104,13 @@ impl<T: AcpTransport> TurnStream<T> {
             ask.answers_room,
             shared.connector.handler.handler.clone(),
         ));
-        let sender = Sink::new(sender, Arc::clone(&thinking_window), Arc::clone(&tools));
+        let scope = super::publication::Scope::new(host.clone(), ask.answers_room);
+        let sender = Sink::new(
+            sender,
+            Arc::clone(&thinking_window),
+            Arc::clone(&tools),
+            scope,
+        );
         let work = run(shared, ask, sender, generation);
         Self {
             work: Some(Box::pin(work)),

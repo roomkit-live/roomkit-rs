@@ -414,7 +414,7 @@ async fn wait_for_lock(run: &Arc<Run>, room_id: &str, waiters: usize) -> bool {
 /// Whether the scenario expects what a room's subscribers read of a turn's
 /// reasoning or of its tool calls (README: `thinking_events`, `tool_events`).
 fn records_ephemerals(scenario: &Value) -> bool {
-    ["thinking_events", "tool_events"]
+    ["thinking_events", "tool_events", "custom_events"]
         .iter()
         .any(|kind| scenario["expect"].get(kind).is_some())
 }
@@ -439,9 +439,14 @@ async fn subscribe_thinking(run: &Arc<Run>, room: &str) -> Result<(), String> {
                     | EphemeralEventType::ThinkingDelta
                     | EphemeralEventType::ThinkingEnd
             );
-            let Some(run) = recorder.upgrade().filter(|_| thinking || tool) else {
+            let custom = event.r#type == EphemeralEventType::Custom;
+            let Some(run) = recorder.upgrade().filter(|_| thinking || tool || custom) else {
                 return;
             };
+            if custom {
+                run.record_custom_event(&room, json!({"room_id": event.room_id, "channel_id": event.channel_id, "data": event.data}));
+                return;
+            }
             let mut read = event.data;
             read.insert("type".to_owned(), json!(event.r#type));
             if tool {

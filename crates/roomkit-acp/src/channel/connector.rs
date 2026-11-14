@@ -40,6 +40,7 @@ pub(super) struct Connector<T: AcpTransport> {
     additional_directories: Vec<PathBuf>,
     mcp_servers: Option<McpServers>,
     pub(super) turns: Arc<Turns>,
+    pub(super) publication: super::publication::Publisher,
     pub(super) handler: Arc<super::permissions::HandlerService>,
     /// One connection at a time.
     connecting: Arc<tokio::sync::Mutex<()>>,
@@ -67,7 +68,7 @@ impl<T: AcpTransport> Connector<T> {
     pub(super) fn new(
         transport: T,
         authentication_method: Option<String>,
-        channel_id: ChannelId,
+        publication: super::publication::Publisher,
         setup: Metadata,
         additional_directories: Vec<PathBuf>,
         mcp_servers: Option<McpServers>,
@@ -76,11 +77,12 @@ impl<T: AcpTransport> Connector<T> {
         Self {
             transport: Arc::new(transport),
             authentication_method,
-            channel_id,
+            channel_id: publication.channel_id.clone(),
             setup,
             additional_directories,
             mcp_servers,
             turns: Arc::new(Turns::default()),
+            publication,
             handler: Arc::new(super::permissions::HandlerService::new(handler)),
             connecting: Arc::new(tokio::sync::Mutex::new(())),
             state: Arc::new(Mutex::new(State {
@@ -168,6 +170,8 @@ impl<T: AcpTransport> Connector<T> {
         let client = Arc::new(ChannelClient {
             turns: Arc::clone(&self.turns),
             handler: self.handler.handler.clone(),
+            publication: self.publication.clone(),
+            trusted_usage: self.transport.provides_usage_metadata(),
             sessions: Arc::new(session_updates::SessionUpdates::new(Arc::downgrade(
                 &self.state,
             ))),

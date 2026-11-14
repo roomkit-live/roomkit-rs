@@ -10,6 +10,7 @@ mod detachment;
 mod identity;
 mod permissions;
 mod preparation;
+mod publication;
 mod sessions;
 mod steering;
 mod tools;
@@ -327,7 +328,7 @@ impl<T: AcpTransport> AcpChannel<T> {
                 connector: Arc::new(Connector::new(
                     transport,
                     authentication_method,
-                    channel_id.clone(),
+                    publication::Publisher::new(channel_id.clone(), publish_thinking_text),
                     setup,
                     additional_directories,
                     mcp_servers,
@@ -395,6 +396,10 @@ impl<T: AcpTransport> Channel for AcpChannel<T> {
 
     fn description(&self) -> Option<String> {
         self.shared.description.clone()
+    }
+
+    fn channel_publication(&self) -> Option<roomkit::channel_publication::ChannelPublication> {
+        Some(self.shared.connector.publication.bridge.clone())
     }
 
     fn external_tool_bridge(&self) -> Option<roomkit::external_tools::ExternalToolBridge> {

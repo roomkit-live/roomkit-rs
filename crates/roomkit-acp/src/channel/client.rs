@@ -14,6 +14,8 @@ use agent_client_protocol_schema::v1::{
 };
 use tokio::task::AbortHandle;
 
+mod notifications;
+
 use super::updates::Sink;
 use crate::client::AcpClient;
 use crate::error::AcpError;
@@ -136,6 +138,7 @@ struct Registered {
 
 /// Live room configuration, accessed through a weak connection-state view.
 pub(super) trait SessionOptions: Send + Sync {
+    fn contains(&self, session: &str) -> bool;
     fn model(&self, session: &str) -> Option<serde_json::Value>;
     fn update(&self, session: &str, options: Vec<serde_json::Value>);
 }
@@ -145,6 +148,8 @@ pub(super) struct ChannelClient {
     pub(super) turns: Arc<Turns>,
     pub(super) handler: Option<Arc<dyn roomkit_ai::ExternalToolHandler>>,
     pub(super) sessions: Arc<dyn SessionOptions>,
+    pub(super) publication: super::publication::Publisher,
+    pub(super) trusted_usage: bool,
 }
 
 impl AcpClient for ChannelClient {
@@ -155,7 +160,7 @@ impl AcpClient for ChannelClient {
         Box::pin(async move {
             let session = notification.session_id.0.to_string();
             self.turns.activity(&session);
-            self.observe_metadata(&session, &notification.update);
+            self.observe_metadata(&session, &notification.update).await;
             let Some(sink) = self.turns.updates(&session) else {
                 return;
             };
@@ -176,9 +181,12 @@ impl AcpClient for ChannelClient {
                     sink.tool(update).await;
                 }
             } else if let SessionUpdate::ToolCallUpdate(call) = notification.update
-                && let Ok(update) = serde_json::to_value(call)
+                && let Ok(update) = serde_json::to_value(&call)
             {
                 sink.tool(update).await;
+                if let Ok(wire) = serde_json::to_value(SessionUpdate::ToolCallUpdate(call)) {
+                    self.progress(&session, wire).await;
+                }
             }
         })
     }
@@ -198,22 +206,6 @@ impl AcpClient for ChannelClient {
             };
             Ok(answer(&request, decision.approved))
         })
-    }
-}
-
-impl ChannelClient {
-    fn observe_metadata(&self, session: &str, update: &SessionUpdate) {
-        if matches!(update, SessionUpdate::UsageUpdate(_))
-            && let Some(usage) = self.turns.usage(session)
-            && let Ok(update) = serde_json::to_value(update)
-        {
-            usage.observe(&update, self.sessions.model(session));
-        }
-        if let SessionUpdate::ConfigOptionUpdate(update) = update
-            && let Ok(options) = super::config::descriptors(update.config_options.clone())
-        {
-            self.sessions.update(session, options);
-        }
     }
 }
 

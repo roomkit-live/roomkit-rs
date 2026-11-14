@@ -59,6 +59,7 @@ async fn test_close_after_reconstruction_finishes_prevents_replacement_prompt() 
             true,
             None,
         )),
+        crate::channel::publication::Scope::new(None, true),
     );
     let activity = Arc::new(AtomicBool::new(false));
     assert!(
@@ -133,6 +134,7 @@ async fn test_cancel_after_reconstruction_finishes_prevents_replacement_prompt()
             true,
             None,
         )),
+        crate::channel::publication::Scope::new(None, true),
     );
     let activity = Arc::new(AtomicBool::new(false));
     assert!(

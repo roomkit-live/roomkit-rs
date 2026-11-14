@@ -645,6 +645,12 @@ pub trait Channel: Send + Sync + 'static {
         None
     }
 
+    /// Registration bridge for an adapter's out-of-turn notifications.
+    #[doc(hidden)]
+    fn channel_publication(&self) -> Option<crate::channel_publication::ChannelPublication> {
+        None
+    }
+
     /// Registration bridge for an adapter's external tool handler.
     #[doc(hidden)]
     fn external_tool_bridge(&self) -> Option<crate::external_tools::ExternalToolBridge> {
@@ -810,6 +816,7 @@ pub(crate) trait DynChannel: Send + Sync {
 
     fn close(&self) -> BoxFuture<'_, ()>;
 
+    fn channel_publication(&self) -> Option<crate::channel_publication::ChannelPublication>;
     fn external_tool_bridge(&self) -> Option<crate::external_tools::ExternalToolBridge>;
     fn human_input_registered(&self, registration: u64);
 }
@@ -956,6 +963,10 @@ impl<C: Channel> DynChannel for C {
 
     fn close(&self) -> BoxFuture<'_, ()> {
         Box::pin(Channel::close(self))
+    }
+
+    fn channel_publication(&self) -> Option<crate::channel_publication::ChannelPublication> {
+        Channel::channel_publication(self)
     }
 
     fn external_tool_bridge(&self) -> Option<crate::external_tools::ExternalToolBridge> {

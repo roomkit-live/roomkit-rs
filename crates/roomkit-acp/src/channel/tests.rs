@@ -10,6 +10,7 @@ mod directories;
 mod handler_lifecycle;
 mod mcp;
 mod opening;
+mod publications;
 mod record;
 pub(in crate::channel) mod recovery;
 mod session_lifecycle;

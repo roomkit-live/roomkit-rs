@@ -2,7 +2,9 @@
 
 mod abandoned;
 mod external_handler;
+mod scoped_publications;
 mod streaming;
+mod usage_publication;
 
 use super::{Agent, PATIENCE, channel};
 use roomkit::model::{

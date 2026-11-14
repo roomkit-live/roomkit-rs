@@ -19,6 +19,14 @@ impl<C> SessionUpdates<C> {
 }
 
 impl<C: AcpConnection> SessionOptions for SessionUpdates<C> {
+    fn contains(&self, session: &str) -> bool {
+        let Some(state) = self.state.upgrade() else {
+            return false;
+        };
+        let state = state.lock().unwrap_or_else(PoisonError::into_inner);
+        !state.closed && state.sessions.values().any(|id| id == session)
+    }
+
     fn model(&self, session: &str) -> Option<Value> {
         let state = self.state.upgrade()?;
         let state = state.lock().unwrap_or_else(PoisonError::into_inner);

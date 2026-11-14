@@ -54,6 +54,7 @@ impl<S: ConversationStore> RoomKit<S> {
             declaration.channel_type.clone(),
         );
         let channel_id = declaration.channel_id.clone();
+        let publication = channel.channel_publication();
         let external = channel
             .external_tool_bridge()
             .map(|bridge| (channel_id.clone(), bridge));
@@ -83,6 +84,9 @@ impl<S: ConversationStore> RoomKit<S> {
         }
         if let Some((channel_id, bridge)) = external {
             self.inner.wire_external_tools(&channel_id, &bridge);
+        }
+        if let Some(publication) = publication {
+            publication.wire(self);
         }
         drop(self.inner.emit(registered));
         Ok(())

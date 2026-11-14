@@ -45,6 +45,7 @@ mod external_tools;
 mod inputs;
 mod loop_hooks;
 mod media;
+mod publication_scope;
 mod publish;
 
 pub(crate) use self::inputs::InputNotification;
@@ -93,6 +94,7 @@ pub(crate) fn turn_in_scope() -> Option<TurnHost> {
 /// that sends it.
 #[derive(Clone)]
 pub struct TurnHost {
+    answer_unscoped: bool,
     shared: Arc<Shared>,
     room_hooks: Arc<[String]>,
     /// The room snapshot built when this external tool report fires.
@@ -1720,6 +1722,7 @@ pub(crate) fn host(
     response_depth: u32,
 ) -> TurnHost {
     TurnHost {
+        answer_unscoped: true,
         tool_report_context: None,
         room_hooks: Arc::default(),
         shared: Arc::new(Shared {

@@ -151,7 +151,9 @@ impl Executor {
             Arc::clone(&link),
             response_depth(&request.event),
         );
-        let host = host.with_room_hooks(request.room_hooks.clone());
+        let host = host
+            .with_publication_scope(&request.event)
+            .with_room_hooks(request.room_hooks.clone());
         host.reads_trace_from(Arc::clone(&self.turn.traced));
         let flow = Arc::new(Flow::default());
         let _released = Released(Arc::clone(&link));

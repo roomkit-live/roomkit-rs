@@ -48,6 +48,8 @@
 //! core's.
 
 mod channel;
+#[doc(hidden)]
+pub mod channel_publication;
 mod classed;
 mod context;
 mod cursors;

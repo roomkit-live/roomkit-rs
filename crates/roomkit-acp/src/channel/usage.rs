@@ -142,7 +142,7 @@ impl Usage {
     }
 }
 
-fn envelope(update: &Value, trusted: bool) -> Option<&Metadata> {
+pub(super) fn envelope(update: &Value, trusted: bool) -> Option<&Metadata> {
     trusted
         .then_some(update)?
         .get("_meta")?
@@ -165,7 +165,7 @@ fn apply(metadata: &mut Metadata, envelope: &Metadata, terminal: bool) {
     metadata.insert("identity_source".to_owned(), json!("transport"));
 }
 
-fn observe(update: &Value, model: Option<Value>) -> Value {
+pub(super) fn observe(update: &Value, model: Option<Value>) -> Value {
     let environment = SystemEnvironment;
     let mut report = json!({
         "report_id": environment.new_observation_id().to_string(),
