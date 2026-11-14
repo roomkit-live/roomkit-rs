@@ -8,6 +8,7 @@ mod context;
 mod detachment;
 mod directories;
 mod handler_lifecycle;
+mod lifecycle_witnesses;
 mod mcp;
 mod opening;
 mod publications;

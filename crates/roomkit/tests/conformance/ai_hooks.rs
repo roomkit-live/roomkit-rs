@@ -240,6 +240,7 @@ impl Scripted for AiResponseEvent {
             .collect();
         json!({
             "channel_id": self.channel_id.as_str(),
+            "room_id": self.room_id,
             "response_content": self.response_content,
             "segments": self.segments,
             "tool_calls_count": self.tool_calls_count,
