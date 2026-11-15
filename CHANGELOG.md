@@ -369,7 +369,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   another process committed; a hole no lane runs is skipped after
   `RoomKitOptions::delivery_gap_timeout` (30 s), the kit emitting
   `delivery_skipped`, and a set whose index another lane skipped is
-  dropped, `delivery_stale` (RMK-1153).
+  dropped, `delivery_stale` (RMK-1153). A set waiting on the cursor of a
+  room the store no longer holds, which reads -1 for good, takes its turn
+  in its lane's order, with an index or without (RMK-1702).
 - A name the kit quotes as Python's `repr` (a rename's record, an error's
   text, a skill's or a memory's message) escapes every character Python's
   `str.isprintable` refuses, as Python does: `'Bob\xa0Smith'` and

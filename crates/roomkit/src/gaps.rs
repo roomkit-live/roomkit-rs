@@ -294,7 +294,7 @@ pub(crate) async fn cursor_turn<S: ConversationStore>(
             return CursorTurn::Stale;
         }
         if !inner.cursors.foreign_before(room_id, cursor, index)
-            || room_gone(inner, room_id, turn, cursor).await
+            || room_gone(inner, room_id, cursor).await
         {
             let claim = inner.claims.hold(room_id).await;
             return CursorTurn::Turn(Turned { claim, skipped });
@@ -322,18 +322,14 @@ pub(crate) async fn cursor_turn<S: ConversationStore>(
     }
 }
 
-/// Whether the room of a set with no index is gone from the store, which
-/// reads its cursor at `-1` and moves it no more: the set takes its turn,
-/// and its run finds the room gone (a rerun is refused, RFC §5.1), as
-/// Python's lane runs it from the cursor it counts past its own sets. A
-/// store that fails the read leaves the set waiting.
-async fn room_gone<S: ConversationStore>(
-    inner: &Inner<S>,
-    room_id: &RoomId,
-    turn: SetTurn,
-    cursor: i64,
-) -> bool {
-    if cursor >= 0 || !matches!(turn, SetTurn::After(_)) {
+/// Whether the set's room is gone from the store, which reads its cursor
+/// at `-1` for good: no lane fills or skips its holes any more, so the
+/// set, with an index or without, takes its turn in its lane's order, and
+/// its run finds the room gone (a rerun is refused, RFC §5.1), as Python's
+/// lane reads such a cursor just before its next set (RFC §13.5). A store
+/// that fails the read leaves the set waiting.
+async fn room_gone<S: ConversationStore>(inner: &Inner<S>, room_id: &RoomId, cursor: i64) -> bool {
+    if cursor >= 0 {
         return false;
     }
     matches!(inner.store.room_exists(room_id).await, Ok(false))
