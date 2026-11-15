@@ -17,6 +17,24 @@ use roomkit_ai::{FromToolOptions, ToolDeclarationOrigin};
 use std::time::Duration;
 
 #[test]
+fn skill_registry_options_default_as_python() {
+    let options = roomkit_ai::SkillRegistryOptions::default();
+    // roomkit.SkillRegistry.__init__(requires_match) = <function serves_exactly>
+    assert_eq!(options.requires_match, roomkit_ai::RequiresMatch::default());
+    let names = std::collections::HashSet::from(["lookup".to_owned()]);
+    assert!(matches!(
+        options.requires_match.call("lookup", &names),
+        Ok(true)
+    ));
+    assert!(matches!(
+        options.requires_match.call("look*", &names),
+        Ok(false)
+    ));
+    // roomkit.SkillRegistry.copy(marks) = True
+    assert!(roomkit_ai::CopyOptions::default().marks);
+}
+
+#[test]
 fn tool_turn_context_defaults_as_python() {
     let options = roomkit_ai::ToolTurnContextOptions::default();
     // roomkit.tools.tool_turn_context(room_id) = None

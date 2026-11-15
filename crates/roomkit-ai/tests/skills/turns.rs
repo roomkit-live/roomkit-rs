@@ -54,7 +54,7 @@ fn skills(tree: &TempDir) -> SkillRegistry {
     for n in 2..=6 {
         tree.skill("skills", &format!("extra-{n}"), "Does a thing");
     }
-    let mut skills = SkillRegistry::new();
+    let mut skills = SkillRegistry::default();
     skills
         .discover(&[tree.path().join("skills")], DiscoverOptions::default())
         .unwrap();
@@ -301,9 +301,9 @@ async fn a_host_tool_under_a_skill_tool_s_name_is_refused() {
     assert_eq!(
         [
             built("activate_skill", Some(skills(&tree))),
-            built("activate_skill", Some(SkillRegistry::new())),
+            built("activate_skill", Some(SkillRegistry::default())),
             built("run_skill_script", Some(skills(&tree))),
-            built("run_skill_script", Some(SkillRegistry::new())),
+            built("run_skill_script", Some(SkillRegistry::default())),
             built("activate_skill", None)
         ],
         [
@@ -650,7 +650,7 @@ async fn an_activation_names_only_the_references_a_read_takes() {
 #[tokio::test]
 async fn an_empty_registry_adds_nothing() {
     let model = ScriptedProvider::new([ScriptedRound::answering("Hello.")]);
-    let room = Room::new(model.clone(), SkillRegistry::new(), |options| options).await;
+    let room = Room::new(model.clone(), SkillRegistry::default(), |options| options).await;
     room.says("Hello").await;
     let request = model.requests().remove(0);
     assert_eq!(
@@ -685,7 +685,7 @@ async fn a_channel_built_without_skills_says_it_ignores_a_turn_s_registry() {
     let tree = TempDir::new();
     let (warnings, _capturing) = Warnings::capture();
     let model = ScriptedProvider::new([ScriptedRound::answering("Hello.")]);
-    let room = Room::new(model, SkillRegistry::new(), |options| {
+    let room = Room::new(model, SkillRegistry::default(), |options| {
         let without = AiChannelOptions {
             skills: None,
             ..options
@@ -714,7 +714,7 @@ async fn a_room_is_read_again_under_a_turn_s_empty_registry() {
         ScriptedRound::answering("Under nothing."),
     ]);
     let turns = Arc::new(AtomicUsize::new(0));
-    let (first, empty) = (skills(&tree), SkillRegistry::new());
+    let (first, empty) = (skills(&tree), SkillRegistry::default());
     let provider = move |_, _| {
         let skills = if turns.fetch_add(1, Ordering::SeqCst) == 0 {
             first.clone()
@@ -732,7 +732,7 @@ async fn a_room_is_read_again_under_a_turn_s_empty_registry() {
         channel("assistant"),
         model,
         AiChannelOptions {
-            skills: Some(SkillRegistry::new()),
+            skills: Some(SkillRegistry::default()),
             config_provider: Some(Arc::new(provider)),
             ..AiChannelOptions::default()
         },

@@ -737,7 +737,7 @@ fn a_registry_reserves_its_names_against_every_tool() {
     .unwrap();
     let skilled = refused(AiChannelOptions {
         human_input_handler: Some(person),
-        skills: Some(SkillRegistry::new()),
+        skills: Some(SkillRegistry::default()),
         ..AiChannelOptions::default()
     });
     assert_eq!(
@@ -749,7 +749,7 @@ fn a_registry_reserves_its_names_against_every_tool() {
     let host = |name: &str| AiTool::new(name, "Mine").unwrap().into();
     let first = refused(AiChannelOptions {
         tools: vec![host("read_skill_reference"), host("activate_skill")],
-        skills: Some(SkillRegistry::new()),
+        skills: Some(SkillRegistry::default()),
         ..AiChannelOptions::default()
     });
     assert_eq!(
@@ -770,7 +770,7 @@ fn a_registry_reserves_its_names_against_every_tool() {
     let before = refused(AiChannelOptions {
         tools: vec![host("activate_skill"), host("x")],
         human_input_handler: Some(person),
-        skills: Some(SkillRegistry::new()),
+        skills: Some(SkillRegistry::default()),
         ..AiChannelOptions::default()
     });
     assert_eq!(

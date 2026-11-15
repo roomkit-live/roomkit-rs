@@ -46,7 +46,7 @@ fn each_form_keeps_its_public_metadata_type() {
             "research",
             &skill_md("research", "d", frontmatter),
         );
-        let mut registry = SkillRegistry::new();
+        let mut registry = SkillRegistry::default();
         let metadata = registry.register(&path).unwrap();
         assert_eq!(metadata.allowed_tools, expected, "{frontmatter}");
         assert_eq!(registry.get_metadata("research"), Some(&metadata));
@@ -55,7 +55,7 @@ fn each_form_keeps_its_public_metadata_type() {
 
 // Python: tests/test_channels/test_ai_skill_gating.py::TestGatedToolNames;
 // tests/test_skill_tool_gating.py::test_requires_reads_a_value_as_allowed_tools_does
-// (allowed_tools half only; requires remains unimplemented).
+// (allowed_tools half; requirements.rs verifies both on the same values).
 #[test]
 fn gated_tool_names_reads_text_and_list_without_changing_them() {
     let cases = [
@@ -168,7 +168,7 @@ fn globs_gate_the_names_the_skill_names() {
             "allowed_tools:\n  - search_*\n  - fetch_*\n",
         ),
     );
-    let metadata = SkillRegistry::new().register(path).unwrap();
+    let metadata = SkillRegistry::default().register(path).unwrap();
     assert!(metadata.gates("search_web") && metadata.gates("fetch_url"));
     assert!(!metadata.gates("send_email"));
 }
@@ -191,7 +191,7 @@ fn repeated_keys_cannot_erase_an_earlier_gate() {
             &format!("allowed_tools: '[ab]'\n{extra}"),
         );
         let path = root.skill_with("skills", "research", &text);
-        let metadata = SkillRegistry::new().register(path).unwrap();
+        let metadata = SkillRegistry::default().register(path).unwrap();
         assert!(metadata.gates("ab"), "{extra}");
         assert!(!metadata.gates("a") && !metadata.gates("b"));
     }
@@ -226,7 +226,7 @@ fn a_gate_that_cannot_be_read_whole_refuses_the_skill() {
             "research",
             &skill_md("research", "d", &format!("allowed_tools: {gate}\n")),
         );
-        let mut registry = SkillRegistry::new();
+        let mut registry = SkillRegistry::default();
         assert!(registry.register(path).is_err(), "accepted {gate:?}");
         assert!(!registry.has_entries());
     }

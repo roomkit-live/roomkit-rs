@@ -11,6 +11,7 @@ use super::files::{self, OpenFailure, ReadFailure, SKILL_FILE_MAX};
 use super::frontmatter::{self, Fields};
 use super::model::{DiscoverOptions, Skill, SkillMetadata};
 use super::texts::quoted_name;
+use super::{CopyOptions, RequiresMatch, SkillRegistryOptions};
 
 /// The most characters a skill's name takes (RFC §24.1).
 const NAME_MAX: usize = 64;
@@ -50,7 +51,7 @@ pub(crate) const MANIFEST_MAX: usize = 64 * 1024;
 /// ```
 /// use roomkit_ai::{DiscoverOptions, SkillRegistry};
 ///
-/// let mut skills = SkillRegistry::new();
+/// let mut skills = SkillRegistry::default();
 /// let error = skills
 ///     .discover(&["no/such/directory"], DiscoverOptions::default())
 ///     .unwrap_err();
@@ -59,6 +60,8 @@ pub(crate) const MANIFEST_MAX: usize = 64 * 1024;
 /// ```
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SkillRegistry {
+    /// The host's reading of a prerequisite against offered tool names.
+    pub requires_match: RequiresMatch,
     /// Its skills, shared by its clones: a turn's reads one for its turn alone.
     pub(super) skills: Arc<Vec<Skill>>,
     pub(super) marks: Marks,
@@ -66,8 +69,11 @@ pub struct SkillRegistry {
 
 impl SkillRegistry {
     /// A registry with no skill.
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(options: SkillRegistryOptions) -> Self {
+        Self {
+            requires_match: options.requires_match,
+            ..Self::default()
+        }
     }
 
     /// Registers every skill found in `directories`: each subdirectory
@@ -90,7 +96,7 @@ impl SkillRegistry {
     /// use roomkit_ai::{DiscoverOptions, SkillRegistry};
     ///
     /// let directory = std::path::PathBuf::from("skills");
-    /// let _found = SkillRegistry::new().discover(&directory, DiscoverOptions::default());
+    /// let _found = SkillRegistry::default().discover(&directory, DiscoverOptions::default());
     /// ```
     pub fn discover<P: AsRef<Path>>(
         &mut self,
@@ -172,18 +178,25 @@ impl SkillRegistry {
     /// Copies the registry, optionally narrowed to `names` (RFC §24.3).
     /// Instructions and resolved paths are kept without reading files again.
     /// Unknown names are omitted; the source registry is unchanged.
+    /// With `marks=false`, copied available skills are listed and no unavailable
+    /// reason or closed pattern survives. Removed skills are never restored.
     #[must_use]
-    pub fn copy(&self, names: Option<&[String]>) -> Self {
+    pub fn copy(&self, names: Option<&[String]>, options: CopyOptions) -> Self {
         let skills: Vec<Skill> = self
             .skills
             .iter()
             .filter(|skill| names.is_none_or(|names| names.iter().any(|name| name == skill.name())))
             .cloned()
             .collect();
-        let marks = self.marks.subset(names, &skills);
+        let marks = if options.marks {
+            self.marks.subset(names, &skills)
+        } else {
+            Marks::default()
+        };
         Self {
             skills: Arc::new(skills),
             marks,
+            requires_match: self.requires_match.clone(),
         }
     }
 

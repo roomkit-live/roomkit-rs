@@ -6,7 +6,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-- Local text skill activation checks exact prerequisites against policy-admitted, non-withdrawn tools and closed gates before granting access or acknowledging an active skill (RMK-1709).
+- Skill registries accept a host prerequisite matcher and copy availability marks optionally. Use `SkillRegistry::new(SkillRegistryOptions)` (or `default()`) and `copy(names, CopyOptions)` in place of `new()` and `copy(names)` (HITL 73da84cd, RMK-1709).
+
+- Local text skill activation checks prerequisites against policy-admitted, non-withdrawn tools and closed gates before granting access or acknowledging an active skill (RMK-1709).
 
 - Local skill registries preserve unavailable reasons and closed gates, keep unlisted skills activatable, and carry marks through copies; re-registration clears stale marks (RMK-1709).
 

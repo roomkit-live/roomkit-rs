@@ -90,7 +90,7 @@ impl SkillTools {
         let served = crate::served_tool_name(name);
         let activated = local.iter().cloned().chain(room).collect();
         self.registry
-            .gated_patterns(&activated)
+            .gated_tool_names(&activated)
             .iter()
             .any(|pattern| {
                 crate::tools::glob_matches(pattern, name)
@@ -101,7 +101,7 @@ impl SkillTools {
     /// Whether no available skill can open a closed pattern for this name.
     pub(crate) fn unopenable(&self, name: &str) -> bool {
         let served = crate::served_tool_name(name);
-        self.registry.unopenable_patterns().iter().any(|pattern| {
+        self.registry.unopenable_tool_names().iter().any(|pattern| {
             crate::tools::glob_matches(pattern, name) || crate::tools::glob_matches(pattern, served)
         })
     }

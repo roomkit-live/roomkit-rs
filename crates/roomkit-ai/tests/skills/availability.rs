@@ -1,5 +1,6 @@
 //! Python registry marks and views, through its public API (RFC §24.3).
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -15,7 +16,7 @@ use super::support::{Room, TempDir, skill_md, tool_results};
 fn an_unavailable_skill_leaves_every_available_view_and_registration_restores_it() {
     let root = TempDir::new();
     let path = root.skill_with("skills", "calendar", &skill_md("calendar", "d", ""));
-    let mut registry = SkillRegistry::new();
+    let mut registry = SkillRegistry::default();
     registry.register(&path).unwrap();
     registry.mark_unavailable("calendar", "not granted");
     assert!(registry.get_skill("calendar").is_none());
@@ -51,7 +52,7 @@ fn an_unavailable_skill_leaves_every_available_view_and_registration_restores_it
 // and test_to_prompt_xml_unavailable_only.
 #[test]
 fn an_unavailable_only_manifest_escapes_names_and_reasons_and_keeps_order() {
-    let mut registry = SkillRegistry::new();
+    let mut registry = SkillRegistry::default();
     registry.mark_unavailable("a<\"", "Needs <approval> & access");
     registry.mark_unavailable("b", "later");
     registry.mark_unavailable("a<\"", "Updated <approval> & access");
@@ -73,7 +74,7 @@ fn an_unavailable_only_manifest_escapes_names_and_reasons_and_keeps_order() {
 #[test]
 fn unlisted_skills_keep_their_available_reads_and_regain_listing_on_registration() {
     let root = TempDir::new();
-    let mut registry = SkillRegistry::new();
+    let mut registry = SkillRegistry::default();
     let path = root.skill_with("skills", "quiet", &skill_md("quiet", "d", ""));
     registry.mark_unlisted("ghost");
     assert_eq!(registry.listed_names(), Vec::<&str>::new());
@@ -94,7 +95,7 @@ fn unlisted_skills_keep_their_available_reads_and_regain_listing_on_registration
 #[test]
 fn a_subset_copy_preserves_selected_marks_without_mutating_its_source() {
     let root = TempDir::new();
-    let mut source = SkillRegistry::new();
+    let mut source = SkillRegistry::default();
     for name in ["loud", "quiet", "gone"] {
         let path = root.skill_with("skills", name, &skill_md(name, "d", ""));
         source.register(path).unwrap();
@@ -102,14 +103,17 @@ fn a_subset_copy_preserves_selected_marks_without_mutating_its_source() {
     source.mark_unlisted("quiet");
     source.mark_unavailable("gone", "not here");
     let selected = ["quiet".to_owned(), "gone".to_owned()];
-    let mut copied = source.copy(Some(&selected));
+    let mut copied = source.copy(Some(&selected), roomkit_ai::CopyOptions::default());
     assert_eq!(copied.skill_names(), ["quiet"]);
     assert_eq!(copied.listed_names(), Vec::<&str>::new());
     assert_eq!(copied.get_unavailable_reason("gone"), Some("not here"));
     copied.mark_unavailable("quiet", "only in copy");
     assert!(source.get_skill("quiet").is_some());
     assert!(source.get_unavailable_reason("quiet").is_none());
-    assert_eq!(source.copy(None), source);
+    assert_eq!(
+        source.copy(None, roomkit_ai::CopyOptions::default()),
+        source
+    );
 }
 
 // Python: tests/test_skill_requires_parity.py::test_a_subset_copy_keeps_only_its_skills_closed_gates.
@@ -117,7 +121,7 @@ fn a_subset_copy_preserves_selected_marks_without_mutating_its_source() {
 #[tokio::test]
 async fn repeated_marks_and_subset_copies_keep_the_right_tools_closed() {
     let root = TempDir::new();
-    let mut source = SkillRegistry::new();
+    let mut source = SkillRegistry::default();
     for name in ["a", "b"] {
         let path = root.skill_with(
             "skills",
@@ -129,9 +133,18 @@ async fn repeated_marks_and_subset_copies_keep_the_right_tools_closed() {
         source.mark_unavailable(name, "updated reason");
     }
     for (registry, b_runs) in [
-        (source.copy(None), false),
-        (source.copy(Some(&["a".to_owned()])), true),
+        (source.copy(None, roomkit_ai::CopyOptions::default()), false),
+        (
+            source.copy(Some(&["a".to_owned()]), roomkit_ai::CopyOptions::default()),
+            true,
+        ),
     ] {
+        let expected = if b_runs {
+            HashSet::from(["tool_a".into()])
+        } else {
+            HashSet::from(["tool_a".into(), "tool_b".into()])
+        };
+        assert_eq!(registry.closed_tool_names(&HashSet::new()), expected);
         assert_closed_calls(registry, b_runs).await;
     }
 }
@@ -194,7 +207,7 @@ fn a_failed_registration_preserves_unavailable_and_unlisted_marks() {
             "skills/held/SKILL.md",
             &skill_md("held", "d", "allowed_tools: held_tool\n"),
         );
-        let mut registry = SkillRegistry::new();
+        let mut registry = SkillRegistry::default();
         registry.register(&path).unwrap();
         registry.mark_unlisted("held");
         if unavailable {
@@ -221,7 +234,7 @@ fn a_failed_registration_preserves_unavailable_and_unlisted_marks() {
 fn registration_removes_the_old_reason_before_checking_the_manifest_size() {
     let root = TempDir::new();
     let path = root.skill_with("skills", "held", &skill_md("held", "d", ""));
-    let mut registry = SkillRegistry::new();
+    let mut registry = SkillRegistry::default();
     registry.mark_unavailable("held", &"r".repeat(70_000));
     assert!(registry.to_prompt_xml().chars().count() > 65_536);
     registry.register(path).unwrap();
@@ -239,7 +252,7 @@ async fn registration_makes_an_unavailable_gate_openable_again() {
         "a",
         &skill_md("a", "d", "allowed_tools: tool_a\n"),
     );
-    let mut registry = SkillRegistry::new();
+    let mut registry = SkillRegistry::default();
     registry.register(&path).unwrap();
     registry.mark_unavailable("a", "not here");
     tree.file(
@@ -247,6 +260,12 @@ async fn registration_makes_an_unavailable_gate_openable_again() {
         &skill_md("a", "d", "allowed_tools: tool_b\n"),
     );
     registry.register(path).unwrap();
+    assert!(registry.closed_tool_names(&HashSet::new()).is_empty());
+    assert!(
+        registry
+            .gated_tool_names(&HashSet::from(["a".into()]))
+            .is_empty()
+    );
     let model = ScriptedProvider::new([
         ScriptedRound::calling("", [("c1", "tool_a", "{}")]),
         ScriptedRound::calling("", [("c2", "tool_b", "{}")]),

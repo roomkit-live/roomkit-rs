@@ -110,6 +110,9 @@ the mapping and its tests. The check does not generate or update this document.
 | — | `roomkit.providers.ai.AIToolResultPart.__init__` | `type` |
 | `roomkit_ai::SkillRegistry` | — | `tool_definitions` |
 | `roomkit_ai::SkillRegistry::copy` | — | `names` |
+| `roomkit_ai::RequiresMatch` | `roomkit.skills.RequiresMatch` | Callable wrapper: synchronous `new`/`call`, borrowed names, fallible result; clones share callback identity (HITL 73da84cd) |
+| `roomkit_ai::SkillRegistry.requires_match` | `SkillRegistry.requires_match` | Public instance attribute, not recorded by the signature snapshot (HITL 73da84cd) |
+| `roomkit_ai::SkillRegistry::{gated_tool_names,closed_tool_names}` | Same names | Explicit `activated` set; empty means Python's default `()` (HITL 73da84cd) |
 | `roomkit_ai::SkillToolNames` | `SkillMetadata.allowed_tools: str \| list[str] \| None` | Whole type: `Text(String)` or `List(Vec<String>)`, wrapped in `Option` (HITL ed472959) |
 | `roomkit_ai::ImageResolver` | — | Whole type |
 | `roomkit_openai::OpenAiConfig` | — | `vision` |
@@ -231,3 +234,12 @@ The handler's state belongs to the handler, not to a global registry or a task.
 Registration sets its identity and callbacks together; sharing an instance makes
 the last registration authoritative, with a warning when its channel changes.
 This language form was approved in HITL 915d07a5-8f40-4b74-8f9f-16087e3b9b92.
+
+
+Skill registries use `SkillRegistryOptions` for Python's constructor keyword
+`requires_match`; `new(SkillRegistryOptions::default())` or `default()`
+selects exact matching. `CopyOptions { marks: true }` is the default for
+`copy(names, options)`. Disabling marks never restores unavailable skills.
+This replaces `new()` and `copy(names)` calls (HITL 73da84cd, RMK-1709).
+Registry equality includes matcher identity: default equals default; custom
+callbacks equal only their clones, not independently constructed closures.

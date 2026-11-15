@@ -234,7 +234,7 @@ async fn a_server_s_tool_named_like_a_skill_tool_is_refused() {
         "---\nname: doc-helper\ndescription: Answers API questions\n---\nRead the guide.\n",
     )
     .unwrap();
-    let mut skills = SkillRegistry::new();
+    let mut skills = SkillRegistry::default();
     skills
         .discover(&[&directory], DiscoverOptions::default())
         .unwrap();

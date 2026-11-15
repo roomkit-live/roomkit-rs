@@ -95,7 +95,7 @@ fn available_lines(lines: &mut Vec<String>, skill: &Skill) {
 impl SkillRegistry {
     /// Closed patterns are opened only by the identical pattern of an active
     /// available skill, never merely by an overlapping glob (RFC §24.2).
-    pub(crate) fn closed_patterns(&self, activated: &HashSet<String>) -> HashSet<String> {
+    pub fn closed_tool_names(&self, activated: &HashSet<String>) -> HashSet<String> {
         let opened: HashSet<String> = self
             .all_metadata()
             .into_iter()
@@ -111,8 +111,10 @@ impl SkillRegistry {
             .collect()
     }
 
-    pub(crate) fn gated_patterns(&self, activated: &HashSet<String>) -> HashSet<String> {
-        let mut patterns = self.closed_patterns(activated);
+    /// Patterns retained by inactive or unavailable skills (RFC §24.2).
+    /// Pass an empty set for Python's default activated=().
+    pub fn gated_tool_names(&self, activated: &HashSet<String>) -> HashSet<String> {
+        let mut patterns = self.closed_tool_names(activated);
         patterns.extend(
             self.all_metadata()
                 .into_iter()
@@ -122,8 +124,9 @@ impl SkillRegistry {
         patterns
     }
 
-    pub(crate) fn unopenable_patterns(&self) -> HashSet<String> {
-        self.closed_patterns(&self.skill_names().into_iter().map(str::to_owned).collect())
+    /// Closed patterns no available skill could open (RFC §24.2).
+    pub fn unopenable_tool_names(&self) -> HashSet<String> {
+        self.closed_tool_names(&self.skill_names().into_iter().map(str::to_owned).collect())
     }
 
     /// Remove a skill from available reads while retaining its reason and

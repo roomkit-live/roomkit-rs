@@ -7,6 +7,7 @@
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
 mod availability;
+mod copy_matcher;
 mod discovery;
 mod gating;
 mod requirements;

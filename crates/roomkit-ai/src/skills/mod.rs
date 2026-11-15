@@ -12,8 +12,8 @@
 //! - which skills are active in each room (`activation`), in memory, read
 //!   again from the room's stored rows after a restart.
 //!
-//! Prerequisites (`requires`) use exact names in the admitted catalogue;
-//! custom prerequisite matchers remain unimplemented. No skill script runs,
+//! Prerequisites (`requires`) use the admitted catalogue and the host's matcher,
+//! exact by default. No skill script runs,
 //! and skills an MCP server serves (RFC §24.7) remain unsupported.
 
 mod activation;
@@ -21,6 +21,7 @@ mod availability;
 mod error;
 mod files;
 mod frontmatter;
+mod matcher;
 mod model;
 mod registry;
 mod requirements;
@@ -29,6 +30,7 @@ mod tool_names;
 pub(crate) mod tools;
 
 pub use self::error::SkillError;
+pub use self::matcher::{CopyOptions, RequiresMatch, SkillRegistryOptions};
 pub use self::model::{DiscoverOptions, Skill, SkillMetadata};
 pub use self::registry::SkillRegistry;
 #[doc(hidden)]

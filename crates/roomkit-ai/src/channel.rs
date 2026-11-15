@@ -2135,7 +2135,7 @@ mod tests {
         let id = ChannelId::new("ai1").unwrap();
         let mut agent =
             AiChannel::new(id, ScriptedProvider::new([]), AiChannelOptions::default()).unwrap();
-        let skills = Arc::new(SkillTools::new(SkillRegistry::new(), false));
+        let skills = Arc::new(SkillTools::new(SkillRegistry::default(), false));
         agent.skills = Some(Arc::clone(&skills));
         let (room, other) = (RoomId::new("r1").unwrap(), RoomId::new("r2").unwrap());
         let image = ToolResult::Parts(vec![ToolResultPart::Image(AiImagePart {

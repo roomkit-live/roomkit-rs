@@ -895,25 +895,18 @@ members = [
     "read_reference", "resolve_script",
 ]
 scope = "text"
-reason = "not in 0.x: skill gating, references and scripts, skills served by MCP, unavailable and unlisted skills"
+reason = "not in 0.x: direct skill reference/script helpers, skills served by MCP, in-memory registration and execution tool patterns"
 
 [[missing]]
 python = "roomkit.SkillRegistry"
 members = [
-    "add", "add_mcp_server", "closed_tool_names",
-    "execution_tool_patterns", "gated_tool_names",
+    "add", "add_mcp_server",
+    "execution_tool_patterns",
     "has_served", "is_served", "load_skill",
     "origin", "read_file",
-    "unopenable_tool_names",
 ]
 scope = "text"
-reason = "not in 0.x: skill gating, references and scripts, skills served by MCP, unavailable and unlisted skills"
-
-[[missing]]
-python = "roomkit.SkillRegistry.__init__"
-params = ["requires_match"]
-scope = "text"
-reason = "not in 0.x: requires_match (convention 3: no empty options struct)"
+reason = "not in 0.x: direct skill reference/script helpers, skills served by MCP, in-memory registration and execution tool patterns"
 
 [[missing]]
 python = "roomkit.ToolCallEvent.__init__"
@@ -1031,12 +1024,6 @@ rust = "roomkit_ai::SkillRegistry::copy"
 params = ["names"]
 approved = "2026-10-30"
 reason = "An explicit None selects all skills; Rust has no optional call arguments"
-
-[[missing]]
-python = "roomkit.SkillRegistry.copy"
-params = ["marks"]
-scope = "text"
-reason = "Skill availability marks are not implemented in the Rust registry yet"
 
 [[exception]]
 rust = "roomkit_ai::ImageResolver"
@@ -1360,3 +1347,16 @@ rust = "roomkit_ai::FireOnToolHookOptions"
 approved = "2026-11-13"
 reason = "Named keyword arguments of Python's protected _fire_on_tool_hook helper (HITL 915d07a5-8f40-4b74-8f9f-16087e3b9b92)"
 
+
+
+[[exception]]
+rust = "roomkit_ai::SkillRegistry::gated_tool_names"
+params = ["activated"]
+approved = "2026-11-15"
+reason = "Rust has no default call arguments: an explicit empty set is Python's activated=() (HITL 73da84cd)"
+
+[[exception]]
+rust = "roomkit_ai::SkillRegistry::closed_tool_names"
+params = ["activated"]
+approved = "2026-11-15"
+reason = "Rust has no default call arguments: an explicit empty set is Python's activated=() (HITL 73da84cd)"

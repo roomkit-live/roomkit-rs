@@ -19,16 +19,18 @@ pub(crate) fn check(
     let mut activated = context.skill_activated.clone();
     activated.extend(room_active);
     activated.insert(metadata.name.clone());
-    let closed = registry.closed_patterns(&activated);
-    let offered: HashSet<&String> = admitted
+    let closed = registry.closed_tool_names(&activated);
+    let offered: HashSet<String> = admitted
         .iter()
         .filter(|name| !closed.iter().any(|pattern| glob_matches(pattern, name)))
+        .cloned()
         .collect();
-    let missing: Vec<String> = metadata
-        .required_tool_names()
-        .into_iter()
-        .filter(|name| !offered.contains(name))
-        .collect();
+    let mut missing = Vec::new();
+    for name in metadata.required_tool_names() {
+        if !registry.requires_match.call(&name, &offered)? {
+            missing.push(name);
+        }
+    }
     if missing.is_empty() {
         return Ok(());
     }

@@ -1,9 +1,13 @@
 //! Python prerequisite metadata and bounded frontmatter reads (RFC §24.2).
 
-use roomkit_ai::{SkillError, SkillMetadata, SkillRegistry};
+use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
+use roomkit_ai::{
+    AiChannelOptions, AiTool, SkillError, SkillMetadata, SkillRegistry, SkillToolNames, ToolResult,
+    Tools,
+};
 use serde_json::json;
 
-use super::support::{TempDir, skill_md};
+use super::support::{Room, TempDir, skill_md, tool_results};
 
 // Python: tests/test_skill_tool_gating.py::test_requires_reads_a_value_as_allowed_tools_does.
 #[test]
@@ -28,9 +32,23 @@ fn requires_reads_text_and_list_values_without_changing_metadata() {
         (json!(null), vec![]),
     ] {
         let mut metadata = SkillMetadata::new("research", "d");
+        metadata.allowed_tools = match &value {
+            serde_json::Value::String(text) => Some(SkillToolNames::Text(text.clone())),
+            serde_json::Value::Array(items) => Some(SkillToolNames::List(
+                items
+                    .iter()
+                    .map(|item| item.as_str().unwrap().to_owned())
+                    .collect(),
+            )),
+            serde_json::Value::Null
+            | serde_json::Value::Bool(_)
+            | serde_json::Value::Number(_)
+            | serde_json::Value::Object(_) => None,
+        };
         metadata.extra_metadata.insert("requires".into(), value);
         let before = metadata.clone();
         assert_eq!(metadata.required_tool_names(), expected);
+        assert_eq!(metadata.gated_tool_names(), expected);
         assert_eq!(metadata, before);
     }
 }
@@ -62,7 +80,7 @@ fn frontmatter_keeps_requires_as_text_in_extra_metadata() {
             "a",
             &skill_md("a", "d", &format!("requires: {value}\n")),
         );
-        let parsed = SkillRegistry::new().register(path);
+        let parsed = SkillRegistry::default().register(path);
         assert!(parsed.is_ok(), "{value}: {parsed:?}");
         let metadata = parsed.unwrap();
         assert_eq!(metadata.extra_metadata.get("requires"), Some(&json!(text)));
@@ -82,7 +100,7 @@ fn repeated_requirements_cannot_erase_dependencies_and_unreadable_ones_are_refus
             "a",
             &skill_md("a", "d", &format!("requires: tool_a\n{extra}")),
         );
-        let metadata = SkillRegistry::new().register(path).unwrap();
+        let metadata = SkillRegistry::default().register(path).unwrap();
         assert!(
             metadata
                 .required_tool_names()
@@ -101,7 +119,7 @@ fn repeated_requirements_cannot_erase_dependencies_and_unreadable_ones_are_refus
             "a",
             &skill_md("a", "d", &format!("requires: {value}\n")),
         );
-        assert!(SkillRegistry::new().register(path).is_err(), "{value}");
+        assert!(SkillRegistry::default().register(path).is_err(), "{value}");
     }
 }
 
@@ -117,7 +135,7 @@ fn bracketed_requirements_and_gates_explain_the_supported_pattern_syntax() {
             &skill_md("a", "d", &format!("{key}: 'tool_[ab]'\n")),
         );
         assert_eq!(
-            SkillRegistry::new().register(path),
+            SkillRegistry::default().register(path),
             Err(SkillError::Validation {
                 skill: "a".into(),
                 reasons: vec![format!(
@@ -126,4 +144,34 @@ fn bracketed_requirements_and_gates_explain_the_supported_pattern_syntax() {
             }),
         );
     }
+}
+
+// Python: tests/test_skill_requires_parity.py::test_an_offered_required_tool_lets_the_activation_through.
+#[tokio::test]
+async fn an_offered_required_tool_returns_the_exact_instructions() {
+    let tree = TempDir::new();
+    let path = tree.skill_with(
+        "skills",
+        "cal",
+        "---\nname: cal\ndescription: cal skill\nrequires: calendar\n---\nUse calendar.",
+    );
+    let mut registry = SkillRegistry::default();
+    registry.register(path).unwrap();
+    let tools = Tools::new().tool(
+        AiTool::new("calendar", "Read calendar").unwrap(),
+        |_call, _context| async { Ok(ToolResult::from("ok")) },
+    );
+    let model = ScriptedProvider::new([
+        ScriptedRound::calling("", [("c1", "activate_skill", r#"{"name":"cal"}"#)]),
+        ScriptedRound::answering("Done."),
+    ]);
+    let room = Room::new(model.clone(), registry, |options| AiChannelOptions {
+        tools: tools.into(),
+        ..options
+    })
+    .await;
+    room.says("Go").await;
+    let results = tool_results(&model);
+    let result: serde_json::Value = serde_json::from_str(&results[1][0]).unwrap();
+    assert_eq!(result["instructions"], "Use calendar.");
 }
