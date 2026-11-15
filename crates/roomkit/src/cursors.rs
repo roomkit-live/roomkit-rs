@@ -18,14 +18,25 @@
 //! process's, or no lane's, and skipped after `gap_timeout`. An index this
 //! process committed whose turn never comes (its run ended before its set
 //! did, as the kit's shutdown ends it) holds the cursor below it.
+//!
+//! A room is its id and its `created_at`: a room deleted while its sets
+//! run, then created again under the same id, is another room, which gives
+//! its indexes out anew. The indexes of the deleted one never move the new
+//! one's cursor (RFC §13.5), as Python's lanes keep a lane per room and
+//! `created_at`.
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use roomkit_core::model::RoomId;
+use roomkit_core::model::{RoomId, Timestamp};
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::store::{AdvanceDeliveredIndexOptions, ConversationStore};
+
+/// The `created_at` of the room an index was committed in, read under the
+/// room's lock; `None` when the run read no room: such an index belongs to
+/// the room the process knows under its id.
+pub(crate) type RoomCreatedAt = Option<Timestamp>;
 
 /// Each room's indexes whose turn is over, waiting for its cursor.
 #[derive(Debug, Default)]
@@ -36,6 +47,8 @@ pub(crate) struct RoomCursors {
 /// One room's indexes waiting for its cursor, and its one writer.
 #[derive(Debug, Default)]
 struct Cursor {
+    /// The room the indexes were committed in.
+    created_at: RoomCreatedAt,
     ready: Mutex<BTreeSet<u64>>,
     /// The indexes this process committed that the cursor has not passed:
     /// a set waits for no other process's lane on them.
@@ -45,6 +58,13 @@ struct Cursor {
 }
 
 impl Cursor {
+    fn of(created_at: RoomCreatedAt) -> Self {
+        Self {
+            created_at,
+            ..Self::default()
+        }
+    }
+
     fn ready(&self) -> MutexGuard<'_, BTreeSet<u64>> {
         self.ready.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -66,10 +86,29 @@ impl Cursor {
     }
 }
 
+/// Whether indexes of the room created at `one` and at `other` belong to
+/// different rooms of the same id: never when either is unknown.
+fn other_room(one: RoomCreatedAt, other: RoomCreatedAt) -> bool {
+    one.zip(other).is_some_and(|(one, other)| one != other)
+}
+
 impl RoomCursors {
-    /// Records that this process committed `index` in `room_id`.
-    pub(crate) fn committed(&self, room_id: &RoomId, index: u64) {
-        let cursor = Arc::clone(self.rooms().entry(room_id.clone()).or_default());
+    /// Records that this process committed `index` in `room_id`, created at
+    /// `created_at`. An index committed under the room's lock is the room's
+    /// the store holds: when it is a room created again under the id, its
+    /// indexes start anew and the deleted room's are forgotten, never
+    /// written, whichever `created_at` is the later.
+    pub(crate) fn committed(&self, room_id: &RoomId, index: u64, created_at: RoomCreatedAt) {
+        let cursor = {
+            let mut rooms = self.rooms();
+            let held = rooms
+                .entry(room_id.clone())
+                .or_insert_with(|| Arc::new(Cursor::of(created_at)));
+            if other_room(held.created_at, created_at) {
+                *held = Arc::new(Cursor::of(created_at));
+            }
+            Arc::clone(held)
+        };
         cursor.local().insert(index);
     }
 
@@ -103,9 +142,25 @@ impl RoomCursors {
         i64::try_from(own).unwrap_or(i64::MAX) - 1
     }
 
-    /// Records that the turn of `indexes` in `room_id` is over.
-    pub(crate) fn over(&self, room_id: &RoomId, indexes: impl IntoIterator<Item = u64>) {
-        let cursor = Arc::clone(self.rooms().entry(room_id.clone()).or_default());
+    /// Records that the turn of `indexes` in `room_id`, created at
+    /// `created_at`, is over. Those of a room deleted before one created
+    /// again under its id are forgotten: nothing writes them.
+    pub(crate) fn over(
+        &self,
+        room_id: &RoomId,
+        indexes: impl IntoIterator<Item = u64>,
+        created_at: RoomCreatedAt,
+    ) {
+        let cursor = {
+            let mut rooms = self.rooms();
+            let held = rooms
+                .entry(room_id.clone())
+                .or_insert_with(|| Arc::new(Cursor::of(created_at)));
+            if other_room(held.created_at, created_at) {
+                return;
+            }
+            Arc::clone(held)
+        };
         cursor.ready().extend(indexes);
     }
 
@@ -168,7 +223,13 @@ impl RoomCursors {
         store: &S,
         room_id: &RoomId,
     ) -> Result<(), crate::store::StoreError> {
-        let mut at = store.get_delivered_index(room_id).await?;
+        let Some(mut at) = Self::cursor_of(cursor, store, room_id).await? else {
+            // The room is gone, or created again: its indexes are written
+            // nowhere (RFC §13.5).
+            cursor.ready().clear();
+            cursor.local().clear();
+            return Ok(());
+        };
         while let Some(next) = cursor.next_after(at) {
             let options = AdvanceDeliveredIndexOptions::default();
             if !store
@@ -187,6 +248,24 @@ impl RoomCursors {
             at = i64::try_from(next).unwrap_or(i64::MAX);
         }
         Ok(())
+    }
+
+    /// The cursor of the room the indexes of `cursor` were committed in;
+    /// `None` once the store holds no room under its id, or one created
+    /// again (another `created_at`). Read with the room when its
+    /// `created_at` is known, alone otherwise.
+    async fn cursor_of<S: ConversationStore>(
+        cursor: &Cursor,
+        store: &S,
+        room_id: &RoomId,
+    ) -> Result<Option<i64>, crate::store::StoreError> {
+        let Some(created_at) = cursor.created_at else {
+            return store.get_delivered_index(room_id).await.map(Some);
+        };
+        let room = store.get_room(room_id).await?;
+        Ok(room
+            .filter(|room| room.created_at == created_at)
+            .map(|room| room.delivered_index))
     }
 
     /// Drops the room's entry once nothing waits in it and nobody else
@@ -233,8 +312,8 @@ mod tests {
     #[test]
     fn a_skip_never_passes_an_index_this_process_committed() {
         let cursors = RoomCursors::default();
-        cursors.committed(&room_id(), 3);
-        cursors.committed(&room_id(), 5);
+        cursors.committed(&room_id(), 3, None);
+        cursors.committed(&room_id(), 5, None);
         assert!(
             cursors.foreign_before(&room_id(), 0, 5),
             "1, 2 and 4 are not ours"
@@ -258,11 +337,11 @@ mod tests {
         let store = InMemoryStore::new();
         let cursors = RoomCursors::default();
         for index in 0..5 {
-            cursors.committed(&room_id(), index);
+            cursors.committed(&room_id(), index, None);
         }
         // The sets of 0 to 3 ended once the room was gone: their cursor
         // writes find no room.
-        cursors.over(&room_id(), 0..4);
+        cursors.over(&room_id(), 0..4, None);
         cursors.catch_up(&store, &room_id()).await;
         assert!(
             !cursors.owes_write(&room_id()),
@@ -274,11 +353,48 @@ mod tests {
         );
     }
 
+    /// The indexes of a room deleted while its sets ran never move the
+    /// cursor of a room created again under its id, which gives them out
+    /// anew (RMK-1707).
+    // Python: tests/test_lanes.py::test_the_sets_of_a_deleted_room_never_touch_the_cursor_of_one_created_again
+    #[tokio::test]
+    async fn a_room_created_again_takes_none_of_the_deleted_room_s_indexes() {
+        let store = InMemoryStore::new();
+        let deleted = store.create_room(Room::new(room_id())).await.unwrap();
+        let cursors = RoomCursors::default();
+        for index in 0..2 {
+            cursors.committed(&room_id(), index, Some(deleted.created_at));
+        }
+        store.delete_room(&room_id()).await.unwrap();
+        let mut again = Room::new(room_id());
+        again.created_at = deleted
+            .created_at
+            .checked_add(Duration::from_millis(1))
+            .unwrap();
+        store.create_room(again.clone()).await.unwrap();
+        // The deleted room's first set ends once the room is created again.
+        cursors.over(&room_id(), [0], Some(deleted.created_at));
+        cursors.catch_up(&store, &room_id()).await;
+        assert_eq!(store.get_delivered_index(&room_id()).await.unwrap(), -1);
+        // The new room commits its own 0 and 1; the deleted room's 1 ends.
+        for index in 0..2 {
+            cursors.committed(&room_id(), index, Some(again.created_at));
+        }
+        cursors.over(&room_id(), [1], Some(deleted.created_at));
+        cursors.over(&room_id(), [0], Some(again.created_at));
+        cursors.catch_up(&store, &room_id()).await;
+        assert_eq!(
+            store.get_delivered_index(&room_id()).await.unwrap(),
+            0,
+            "the new room's 1 has not run"
+        );
+    }
+
     #[test]
     fn an_index_this_process_committed_is_no_hole() {
         let cursors = RoomCursors::default();
         for index in 0..4 {
-            cursors.committed(&room_id(), index);
+            cursors.committed(&room_id(), index, None);
         }
         assert!(!cursors.foreign_before(&room_id(), -1, 3));
         assert!(
@@ -418,12 +534,12 @@ mod tests {
         }
         let cursors = Arc::new(RoomCursors::default());
         for index in 0..6 {
-            cursors.committed(&room_id(), index);
+            cursors.committed(&room_id(), index, None);
         }
         // 0 to 3 delivered; 5 is over, its write waits for 4's set.
-        cursors.over(&room_id(), 0..4);
+        cursors.over(&room_id(), 0..4, None);
         cursors.catch_up(&store.store, &room_id()).await;
-        cursors.over(&room_id(), [5]);
+        cursors.over(&room_id(), [5], None);
         store.armed.store(true, Ordering::SeqCst);
         let catching_up = {
             let (cursors, store) = (Arc::clone(&cursors), Arc::clone(&store));
@@ -442,8 +558,8 @@ mod tests {
             .commit_event(&room_id(), event, options)
             .await
             .unwrap();
-        cursors.committed(&room_id(), 6);
-        cursors.over(&room_id(), [6]);
+        cursors.committed(&room_id(), 6, None);
+        cursors.over(&room_id(), [6], None);
         store.go.notify_one();
         tokio::time::timeout(bound, catching_up)
             .await

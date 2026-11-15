@@ -167,7 +167,7 @@ async fn close_after_hole(filled_after_close: bool) {
     }
     // Python's late CursorEntry: a record with no delivery set tells the
     // same kit its index is over, even after admission has closed.
-    kit.inner.cursors.over(&room_id(), [hole.index]);
+    kit.inner.cursors.over(&room_id(), [hole.index], None);
     kit.inner.cursors.catch_up(kit.store(), &room_id()).await;
     // Within the five-second grace, not after its forced cut.
     tokio::time::timeout(Duration::from_secs(1), closing)

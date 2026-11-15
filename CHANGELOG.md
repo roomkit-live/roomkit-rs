@@ -374,7 +374,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in its lane's order, with an index or without (RMK-1702); the indexes
   a deleted room's sets leave above the room's latest index are forgotten,
   so that a room created again under its id never reads them as its own
-  (RMK-1706).
+  (RMK-1706). A room is its id and its `created_at`, as Python's: the sets
+  of a room deleted before a room was created again under its id take
+  their turn without moving or skipping the new room's cursor, where a set
+  queued behind one under way waited on it until the gap timeout, and the
+  deleted room's first set moved it, dropping the new room's first
+  messages as `delivery_stale` (RMK-1707).
 - A name the kit quotes as Python's `repr` (a rename's record, an error's
   text, a skill's or a memory's message) escapes every character Python's
   `str.isprintable` refuses, as Python does: `'Bob\xa0Smith'` and

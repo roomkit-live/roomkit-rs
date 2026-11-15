@@ -25,6 +25,11 @@
 //! kit emits `delivery_skipped` with the indexes skipped (RFC §8.2). A set
 //! whose own index another process's lane skipped is dropped, as
 //! `delivery_stale`.
+//!
+//! A set belongs to the room it was placed in, its id and its `created_at`.
+//! Once the store holds no room under that id, or one created again, the
+//! set takes its turn in its lane's order: the cursor it would read, wait
+//! on, skip or be dropped by is no longer its room's (RFC §13.5).
 
 use std::collections::HashMap;
 use std::fmt;
@@ -36,6 +41,7 @@ use serde_json::Value;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::Instant;
 
+use crate::cursors::RoomCreatedAt;
 use crate::events::{FrameworkEvent, Handled};
 use crate::kit::Inner;
 use crate::locks::{HeldLock, KitLocks};
@@ -264,11 +270,11 @@ pub(crate) struct Turned {
     pub(crate) skipped: Vec<Handled>,
 }
 
-/// Waits for the turn the room's cursor gives a set of `room_id`, `turn`,
-/// and holds the room's delivery claim for it: once the cursor passed
-/// every index before the set's own, or up to its anchor, that is not this
-/// process's, skipping those no lane ran within the kit's
-/// `delivery_gap_timeout`.
+/// Waits for the turn the room's cursor gives a set of `room_id`, created
+/// at `created_at`, `turn`, and holds the room's delivery claim for it:
+/// once the cursor passed every index before the set's own, or up to its
+/// anchor, that is not this process's, skipping those no lane ran within
+/// the kit's `delivery_gap_timeout`; at once when its room is gone.
 ///
 /// The gap clock runs while the cursor does not move. A store that fails
 /// the cursor's read is logged and read again after the same wait as a
@@ -277,6 +283,7 @@ pub(crate) async fn cursor_turn<S: ConversationStore>(
     inner: &Inner<S>,
     room_id: &RoomId,
     turn: SetTurn,
+    created_at: RoomCreatedAt,
 ) -> CursorTurn {
     let index = turn.bound();
     let mut skipped = Vec::new();
@@ -289,15 +296,14 @@ pub(crate) async fn cursor_turn<S: ConversationStore>(
             backoff = (backoff * 2).min(GAP_BACKOFF_MAX);
             continue;
         };
-        if turn.skipped_at(cursor) {
-            tracing::warn!(target: "roomkit::cursor", room_id = %room_id, index, "delivery dropped (delivery_stale): another lane skipped its index");
-            return CursorTurn::Stale;
-        }
-        if !inner.cursors.foreign_before(room_id, cursor, index)
-            || room_gone(inner, room_id, cursor).await
-        {
-            let claim = inner.claims.hold(room_id).await;
-            return CursorTurn::Turn(Turned { claim, skipped });
+        let moved = waited_since.is_none_or(|(at, _)| at != cursor);
+        match at_cursor(inner, room_id, turn, created_at, cursor, moved).await {
+            AtCursor::Stale => return CursorTurn::Stale,
+            AtCursor::Turn => {
+                let claim = inner.claims.hold(room_id).await;
+                return CursorTurn::Turn(Turned { claim, skipped });
+            }
+            AtCursor::Wait => {}
         }
         // The gap clock runs while the cursor does not move.
         let since = match waited_since {
@@ -310,6 +316,10 @@ pub(crate) async fn cursor_turn<S: ConversationStore>(
         .elapsed();
         if since >= inner.delivery_gap_timeout {
             let claim = inner.claims.hold(room_id).await;
+            // Never a skip of the cursor of a room created again.
+            if room_gone(inner, room_id, created_at).await {
+                return CursorTurn::Turn(Turned { claim, skipped });
+            }
             let skip = skip_gap(inner, room_id, index).await;
             drop(claim);
             if let Some(handled) = skip {
@@ -322,17 +332,64 @@ pub(crate) async fn cursor_turn<S: ConversationStore>(
     }
 }
 
-/// Whether the set's room is gone from the store, which reads its cursor
-/// at `-1` for good: no lane fills or skips its holes any more, so the
-/// set, with an index or without, takes its turn in its lane's order, and
-/// its run finds the room gone (a rerun is refused, RFC §5.1), as Python's
-/// lane reads such a cursor just before its next set (RFC §13.5). A store
-/// that fails the read leaves the set waiting.
-async fn room_gone<S: ConversationStore>(inner: &Inner<S>, room_id: &RoomId, cursor: i64) -> bool {
-    if cursor >= 0 {
-        return false;
+/// What a read of the room's cursor gives a set.
+enum AtCursor {
+    /// The set takes its turn.
+    Turn,
+    /// Another process's lane skipped the set's index: it is dropped.
+    Stale,
+    /// The set waits for an index that is not this process's.
+    Wait,
+}
+
+/// What the room's cursor, read at `cursor`, gives the set of `room_id`,
+/// created at `created_at`, `turn`. The room is read before the set is
+/// dropped as stale, and before it waits: at each read of a cursor at
+/// `-1`, which a deleted room's reads for good, and once at each other
+/// value the cursor stands at (`moved`), which a room created again may
+/// have. A set whose room is gone takes its turn.
+async fn at_cursor<S: ConversationStore>(
+    inner: &Inner<S>,
+    room_id: &RoomId,
+    turn: SetTurn,
+    created_at: RoomCreatedAt,
+    cursor: i64,
+    moved: bool,
+) -> AtCursor {
+    let index = turn.bound();
+    if turn.skipped_at(cursor) {
+        if room_gone(inner, room_id, created_at).await {
+            return AtCursor::Turn;
+        }
+        tracing::warn!(target: "roomkit::cursor", room_id = %room_id, index, "delivery dropped (delivery_stale): another lane skipped its index");
+        return AtCursor::Stale;
     }
-    matches!(inner.store.room_exists(room_id).await, Ok(false))
+    if !inner.cursors.foreign_before(room_id, cursor, index)
+        || ((cursor < 0 || moved) && room_gone(inner, room_id, created_at).await)
+    {
+        return AtCursor::Turn;
+    }
+    AtCursor::Wait
+}
+
+/// Whether the set's room, created at `created_at`, is gone from the
+/// store: no room under its id, which reads its cursor at `-1` for good, or
+/// one created again, whose cursor is another room's. No lane fills or
+/// skips the set's holes any more, so the set, with an index or without,
+/// takes its turn in its lane's order, and its run finds the room gone (a
+/// rerun is refused, RFC §5.1), as Python's lane reads such a cursor just
+/// before its next set (RFC §13.5). A store that fails the read leaves the
+/// set waiting.
+async fn room_gone<S: ConversationStore>(
+    inner: &Inner<S>,
+    room_id: &RoomId,
+    created_at: RoomCreatedAt,
+) -> bool {
+    match inner.store.get_room(room_id).await {
+        Ok(None) => true,
+        Ok(Some(room)) => created_at.is_some_and(|created_at| room.created_at != created_at),
+        Err(_) => false,
+    }
 }
 
 /// Before waiting on another worker, finish any cursor write this worker
@@ -436,6 +493,8 @@ async fn read_cursor<S: ConversationStore>(inner: &Inner<S>, room_id: &RoomId) -
 
 #[cfg(test)]
 mod tests {
+    use roomkit_core::model::Room;
+
     use super::*;
     use crate::lock_manager::{InMemoryLockManager, RoomLockManager, SharedLockManager, key_space};
     use crate::{RoomKit, RoomKitOptions};
@@ -524,6 +583,39 @@ mod tests {
             drop((claim, section));
             kit.close().await.unwrap();
         }
+    }
+
+    /// A set of a room deleted and created again under its id, the new
+    /// room's cursor standing past the set's index, takes its turn: that
+    /// cursor is another room's, which skipped nothing of the set
+    /// (RMK-1707, RFC §13.5).
+    // Python: tests/test_lanes.py::test_the_entries_of_a_deleted_room_take_their_turn[behind_holes_created_again_past_them]
+    #[tokio::test]
+    async fn a_set_of_a_room_created_again_past_its_index_is_not_stale() {
+        let kit = RoomKit::new(RoomKitOptions::default());
+        let (store, room) = (kit.store(), room_id());
+        let deleted = store.create_room(Room::new(room.clone())).await.unwrap();
+        store.delete_room(&room).await.unwrap();
+        let mut again = Room::new(room.clone());
+        again.created_at = deleted
+            .created_at
+            .checked_add(Duration::from_millis(1))
+            .unwrap();
+        store.create_room(again).await.unwrap();
+        let options = AdvanceDeliveredIndexOptions { force: true };
+        let moved = store.advance_delivered_index(&room, 3, options);
+        assert!(moved.await.unwrap());
+        let created_at = Some(deleted.created_at);
+        let turn = cursor_turn(&kit.inner, &room, SetTurn::Index(2), created_at);
+        let turn = tokio::time::timeout(Duration::from_secs(5), turn)
+            .await
+            .unwrap();
+        assert!(
+            matches!(turn, CursorTurn::Turn(_)),
+            "the set takes its turn"
+        );
+        drop(turn);
+        kit.close().await.unwrap();
     }
 
     /// A room's claim never takes the room's own lock, whatever its id

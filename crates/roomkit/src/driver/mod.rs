@@ -69,6 +69,7 @@ pub(crate) use self::inbound::{
 };
 use self::indexes::Indexes;
 use crate::context::{Adoption, ExecutionContext, Frame, Reply, RunShared, Work};
+use crate::cursors::RoomCreatedAt;
 use crate::delivery_keys::{CancelRequest, Named, NamedGuard};
 use crate::error::RoomKitError;
 use crate::gaps::{CursorTurn, SetTurn, Turned};
@@ -1305,7 +1306,9 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             }
             Hold::Wait(waiting) => {
                 let waiting = match across {
-                    Some((room_id, turn)) => self.cursor_turn(waiting, room_id, turn, deadline),
+                    Some((room_id, turn, created_at)) => {
+                        self.cursor_turn(waiting, room_id, turn, created_at, deadline)
+                    }
                     None => waiting,
                 };
                 self.waits.push((id, wait, waiting));
@@ -1340,10 +1343,15 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         !decided && !self.own && self.committing.is_none() && !self.inner.tasks.spares(&self.marks)
     }
 
-    /// The room and the indexes whose turn `request` ends (gap G-091): a
-    /// set's once it leaves its place, those the run committed and placed
-    /// nowhere once it lets the room's lock go.
-    fn turns_over(&mut self, request: &HoldRequest, claimed: bool) -> Option<(RoomId, Vec<u64>)> {
+    /// The room and the indexes whose turn `request` ends (gap G-091), each
+    /// with the `created_at` of the room it was committed in: a set's once
+    /// it leaves its place, those the run committed and placed nowhere once
+    /// it lets the room's lock go.
+    fn turns_over(
+        &mut self,
+        request: &HoldRequest,
+        claimed: bool,
+    ) -> Option<(RoomId, Vec<(u64, RoomCreatedAt)>)> {
         let (room_id, over) = match request {
             HoldRequest::LeaveLane { room_id, event_id } => {
                 let index = self.indexes.left(room_id, event_id);
@@ -1427,7 +1435,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         &mut self,
         id: EffectId,
         answer: Answer,
-        over: Option<(RoomId, Vec<u64>)>,
+        over: Option<(RoomId, Vec<(u64, RoomCreatedAt)>)>,
         turned: Option<Turned>,
     ) -> Option<(EffectId, Outcome)> {
         let skipped = turned
@@ -1444,7 +1452,9 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         }
         let inner: &'kit Arc<Inner<S>> = self.inner;
         let room_id = over.map(|(room_id, indexes)| {
-            inner.cursors.over(&room_id, indexes);
+            for (index, created_at) in indexes {
+                inner.cursors.over(&room_id, [index], created_at);
+            }
             room_id
         });
         let caught_up = async move {
@@ -1471,12 +1481,12 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     /// its turn waits for from the room's cursor too: its index, when the
     /// run committed its event, else its anchor (RFC §13.5 "Delivery lanes
     /// across processes").
-    fn across_processes(&self, request: &HoldRequest) -> Option<(RoomId, SetTurn)> {
+    fn across_processes(&self, request: &HoldRequest) -> Option<(RoomId, SetTurn, RoomCreatedAt)> {
         let HoldRequest::AwaitLane { room_id, event_id } = request else {
             return None;
         };
-        let turn = self.indexes.turn_of(room_id, event_id)?;
-        Some((room_id.clone(), turn))
+        let (turn, created_at) = self.indexes.turn_of(room_id, event_id)?;
+        Some((room_id.clone(), turn, created_at))
     }
 
     /// `waiting`, the wait for a place's turn in its room's lane, then for
@@ -1487,6 +1497,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         waiting: Waiting<'kit>,
         room_id: RoomId,
         turn: SetTurn,
+        created_at: RoomCreatedAt,
         deadline: Option<Instant>,
     ) -> Waiting<'kit> {
         let inner: &'kit Arc<Inner<S>> = self.inner;
@@ -1495,7 +1506,12 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             let Waited::Place(key, place, true) = waited else {
                 return (effect, waited);
             };
-            match within(deadline, crate::gaps::cursor_turn(inner, &room_id, turn)).await {
+            match within(
+                deadline,
+                crate::gaps::cursor_turn(inner, &room_id, turn, created_at),
+            )
+            .await
+            {
                 Some(CursorTurn::Turn(turned)) => (effect, Waited::Claimed(key, place, turned)),
                 Some(CursorTurn::Stale) => (effect, Waited::Stale(key, place)),
                 None => (effect, Waited::Place(key, place, false)),
@@ -1656,11 +1672,12 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         let effect = self.effect_of_task.remove(&task)?;
         self.spans.answered(&outcome);
         self.locate(&outcome);
+        self.indexes.read(&outcome);
         self.call_of_effect.remove(&effect);
         self.written.extend(self.writing.remove(&effect));
         self.shared.answered(effect);
-        if let Some((room_id, index)) = self.indexes.answered(effect, &outcome) {
-            self.inner.cursors.committed(&room_id, index);
+        if let Some((room_id, index, created_at)) = self.indexes.answered(effect, &outcome) {
+            self.inner.cursors.committed(&room_id, index, created_at);
         }
         Some((effect, outcome))
     }

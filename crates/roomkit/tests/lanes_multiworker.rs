@@ -223,6 +223,46 @@ async fn a_set_whose_index_another_lane_skipped_is_dropped() {
     kit.close().await.unwrap();
 }
 
+/// A set waiting on another process's index when its room is deleted and
+/// created again under its id, the new room's cursor standing where the set
+/// waited, skips none of the new room's indexes past the gap timeout: it
+/// takes its turn, and the new room's cursor stays its own (RMK-1707, RFC
+/// §13.5).
+// Python: tests/test_lanes.py::test_a_lane_skips_no_index_of_a_room_created_again_at_its_cursor
+#[tokio::test(start_paused = true)]
+async fn a_set_skips_no_index_of_a_room_created_again_at_its_cursor() {
+    let store = Arc::new(InMemoryStore::new());
+    let (kit, recorder) = worker(&store, Duration::from_millis(50));
+    room(&kit).await;
+    let skipped = EventTap::on(&kit, &["delivery_skipped"]);
+    lost(&store, "lost").await;
+    let waited = store.get_delivered_index(&room_id()).await.unwrap();
+    let sending = {
+        let kit = kit.clone();
+        tokio::spawn(async move {
+            kit.process_inbound(message("src", "mine"), ProcessInboundOptions::default())
+                .await
+                .unwrap()
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert!(recorder.texts().is_empty(), "the set waits on the hole");
+    assert!(store.delete_room(&room_id()).await.unwrap());
+    room(&kit).await;
+    let room = room_id();
+    assert_eq!(
+        store.get_delivered_index(&room).await.unwrap(),
+        waited,
+        "the new room's cursor stands where the set waited"
+    );
+    let result = sending.await.unwrap();
+    assert_eq!(recorder.texts(), ["mine"]);
+    assert_eq!(result.cancellation_reason, None);
+    assert_eq!(skipped.types(), Vec::<String>::new(), "nothing was skipped");
+    assert_eq!(store.get_delivered_index(&room).await.unwrap(), waited);
+    kit.close().await.unwrap();
+}
+
 // Python: tests/test_lanes_multiworker.py::test_ai_chain_completes_before_return_and_cursor_catches_up
 #[tokio::test]
 async fn an_ai_cascades_cursor_is_current_when_the_call_returns() {
