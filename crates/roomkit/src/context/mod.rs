@@ -84,6 +84,7 @@ mod external;
 mod floors;
 mod run;
 mod section;
+mod tool_turn;
 
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -96,6 +97,7 @@ use roomkit_core::rules::chain_depth::{self, Draw, ReentryBudget};
 pub(crate) use self::adoption::{Adopting, Adoption, Completion, Reply, adopt, adopt_by_own_run};
 pub(crate) use self::run::{Lease, ReadTurns, RunShared, Written};
 pub(crate) use self::section::Section;
+pub use self::tool_turn::within_tool_turn_depth;
 use crate::locks::HeldLock;
 use crate::tasks::Marks;
 
@@ -144,6 +146,7 @@ pub(crate) struct ExecutionContext {
     frames: Arc<[Frame]>,
     body: Option<HookBody>,
     floor: Option<floors::Floor>,
+    tool_depth: Option<floors::Floor>,
     hand: Option<Hand>,
 }
 
@@ -347,6 +350,7 @@ impl ExecutionContext {
             frames: frames.into(),
             body: self.body.clone(),
             floor: self.floor.clone(),
+            tool_depth: self.tool_depth.clone(),
             hand: None,
         }
     }
@@ -424,6 +428,7 @@ impl ExecutionContext {
             frames: Arc::default(),
             body: Some(body),
             floor: None,
+            tool_depth: None,
             hand: None,
         }
     }
@@ -525,6 +530,7 @@ impl ExecutionContext {
         turns
             .chain(body)
             .chain(self.floor.as_ref().and_then(floors::Floor::depth))
+            .chain(self.tool_depth.as_ref().and_then(floors::Floor::depth))
             .max()
     }
 
@@ -678,6 +684,9 @@ pub fn keep_context<F>(future: F) -> impl Future<Output = F::Output> + Send + 's
 where
     F: Future + Send + 'static,
 {
+    // Each carrier wraps the next. Keep large delivery futures out of
+    // their initial states, especially when a nested scope spawns work.
+    let future = Box::pin(future);
     // The tool call a handler runs within rides along, as Python's
     // `create_task` copies its `ContextVar` (RFC §21.4).
     let future = crate::tool_call_scope::within_current_tool_call(future);

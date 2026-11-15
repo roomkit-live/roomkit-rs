@@ -189,6 +189,8 @@ pub use self::lock_manager::{
 // For the AI channel's loop alone: the payloads of its triggers, which
 // roomkit-ai defines, and what their hooks came to.
 #[doc(hidden)]
+pub use self::context::within_tool_turn_depth;
+#[doc(hidden)]
 pub use self::hooks::TurnPayload;
 pub use self::host::{HostChannel, HostChannelOptions};
 pub use self::inbound::{CancelOptions, DeliveryHandle, InboundResult};

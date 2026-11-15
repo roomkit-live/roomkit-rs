@@ -5,6 +5,22 @@
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum AiError {
+    /// The explicit tool turn names two different rooms.
+    #[error("room {room:?} and room_id {room_id:?} name different rooms")]
+    ToolTurnRoomConflict {
+        /// The supplied room's id.
+        room: roomkit::model::RoomId,
+        /// The separately supplied id.
+        room_id: roomkit::model::RoomId,
+    },
+    /// The supplied call record belongs to a different room.
+    #[error("the call's room_id {call_room:?} is not the turn's room {turn_room:?}")]
+    ToolTurnCallRoomConflict {
+        /// The call's room, absent for a call without a room.
+        call_room: Option<roomkit::model::RoomId>,
+        /// The described turn's room.
+        turn_room: Option<roomkit::model::RoomId>,
+    },
     /// A toolset declares a tool under a name the agent serves already, or
     /// twice: a name is served by one tool (RFC §21.1 "One tool per name").
     #[error("a tool named {name:?} is served already")]

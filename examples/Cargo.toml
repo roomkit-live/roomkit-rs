@@ -56,6 +56,10 @@ name = "acp_external_handler"
 path = "acp_external_handler.rs"
 
 [[example]]
+name = "tool_turn_context"
+path = "tool_turn_context.rs"
+
+[[example]]
 name = "echo_room"
 path = "echo_room.rs"
 

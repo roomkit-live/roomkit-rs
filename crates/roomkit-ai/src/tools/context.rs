@@ -1,0 +1,210 @@
+//! A caller-described tool turn, scoped across asynchronous suspension.
+
+use std::collections::HashSet;
+use std::future::Future;
+use std::sync::Arc;
+
+use roomkit::model::{Metadata, Room, RoomId};
+
+use super::{AiTool, ToolCallContext};
+use crate::AiError;
+
+/// Python's `tool_turn_context` keyword arguments. All optional fields
+/// default to `None`; `chain_depth` defaults to zero (RFC §21.4).
+#[derive(Clone, Debug, Default)]
+pub struct ToolTurnContextOptions {
+    /// The turn's room id; may be omitted when `room` is supplied.
+    pub room_id: Option<RoomId>,
+    /// The immutable room snapshot. Readers retain this same `Arc`.
+    pub room: Option<Arc<Room>>,
+    /// Whose turn it is. This names a participant; it authenticates none.
+    pub actor_id: Option<String>,
+    /// The resolved catalogue. `None` is unresolved, `Some(vec![])` empty.
+    pub tools: Option<Vec<AiTool>>,
+    /// The response's depth (RFC §8.3). Rust accepts `0..=u32::MAX`;
+    /// Python's helper also accepts signed, unbounded integers.
+    pub chain_depth: u32,
+    /// The call record; clones share its structured-content field.
+    pub call: Option<ToolCallContext>,
+    /// The conversation's label for who asked, not a participant id.
+    pub requester: Option<String>,
+}
+
+/// Runs `work` as a tool of the turn described by `options` (RFC §21.4).
+///
+/// A test or host calling a handler directly supplies the context it would
+/// otherwise lack. The response record is fresh. Nested scopes restore
+/// their caller on return, error, panic and cancellation. `work` may borrow
+/// values and need not be `Send`; its output, including a `Result`, is
+/// returned unchanged inside the installer's `Result`.
+///
+/// Spawned tasks use [`roomkit::keep_context`]. They keep the readable
+/// snapshot after this scope ends, but no longer lend its depth to calls
+/// into a kit. A nested explicit scope replaces the outer tool depth;
+/// runtime turn and hook depths still apply independently (RFC §8.3).
+///
+/// # Errors
+///
+/// Conflicting room arguments are rejected before `work` is polled.
+///
+/// ```
+/// # async fn example() -> Result<(), roomkit_ai::AiError> {
+/// use roomkit_ai::{ToolTurnContextOptions, current_tool_actor_id, tool_turn_context};
+/// tool_turn_context(ToolTurnContextOptions {
+///     actor_id: Some("alice".into()),
+///     ..Default::default()
+/// }, async {
+///     assert_eq!(current_tool_actor_id().as_deref(), Some("alice"));
+/// }).await?;
+/// # Ok(())
+/// # }
+/// ```
+pub fn tool_turn_context<F: Future>(
+    options: ToolTurnContextOptions,
+    work: F,
+) -> impl Future<Output = Result<F::Output, AiError>> {
+    // Box before constructing our future: otherwise each enclosing scope's
+    // initial state embeds the full caller future, growing nested stacks.
+    // This allocation requires neither Send nor 'static.
+    let work = Box::pin(work);
+    async move {
+        check_one_room(&options)?;
+        let depth = options.chain_depth;
+        let scope = Scope::new(options);
+        let work = roomkit::within_tool_call_scope(Arc::new(scope), work);
+        let work = roomkit::TurnRecord::default().scope(work);
+        Ok(roomkit::within_tool_turn_depth(depth, work).await)
+    }
+}
+
+fn check_one_room(options: &ToolTurnContextOptions) -> Result<(), AiError> {
+    if let (Some(room), Some(room_id)) = (&options.room, &options.room_id)
+        && room.id != *room_id
+    {
+        return Err(AiError::ToolTurnRoomConflict {
+            room: room.id.clone(),
+            room_id: room_id.clone(),
+        });
+    }
+    let room_id = options
+        .room
+        .as_ref()
+        .map(|room| &room.id)
+        .or(options.room_id.as_ref());
+    if let Some(call) = &options.call
+        && call.room_id.as_ref() != room_id
+    {
+        return Err(AiError::ToolTurnCallRoomConflict {
+            call_room: call.room_id.clone(),
+            turn_room: room_id.cloned(),
+        });
+    }
+    Ok(())
+}
+
+/// The room id of the described tool turn, or `None` outside a scope.
+pub fn current_tool_room_id() -> Option<RoomId> {
+    current()?.turn.room_id.clone()
+}
+
+/// The turn's immutable room snapshot, retaining the supplied `Arc`.
+/// A later store write does not change it. `None` when no room was supplied
+/// or outside a scope. It names the room; it grants no authorization.
+pub fn current_tool_room() -> Option<Arc<Room>> {
+    current()?.turn.room.clone()
+}
+
+/// The conversation label of who asked (RFC §6.4, §19.7), or `None` when
+/// no requester was supplied or outside a scope.
+pub fn current_tool_requester() -> Option<String> {
+    current()?.turn.requester.clone()
+}
+
+/// The captured response depth, even after a kept child outlives the
+/// scope (RFC §21.4). Zero outside a scope. Reading this value does not
+/// keep the scope's live depth in force for calls into a kit.
+pub fn current_tool_chain_depth() -> u32 {
+    current().map_or(0, |scope| scope.turn.chain_depth)
+}
+
+/// The resolved tool names. `None` outside a scope or for an unresolved
+/// catalogue; an empty set for a resolved, empty catalogue.
+pub fn current_tool_allowed_names() -> Option<HashSet<String>> {
+    Some(
+        current()?
+            .turn
+            .tools
+            .as_ref()?
+            .iter()
+            .map(|tool| tool.name.clone())
+            .collect(),
+    )
+}
+
+/// The call this handler runs within (RFC §21.4). Clones share the
+/// structured-content field. `None` outside a call; a task spawned with
+/// [`roomkit::keep_context`] retains it.
+pub fn current_tool_call() -> Option<ToolCallContext> {
+    current()?.turn.call.clone()
+}
+
+/// The participant whose event woke the turn (RFC §5.5, §11), or the
+/// explicit scope's actor. `None` when no participant woke it or outside
+/// a scope. This names the turn; it does not authenticate it: a handler
+/// accessing a person's data must require the participant's identification.
+pub fn current_tool_actor_id() -> Option<String> {
+    current()?.turn.actor_id.clone()
+}
+
+struct Scope {
+    turn: ToolTurnContextOptions,
+    room_metadata: Option<Arc<Metadata>>,
+}
+
+impl Scope {
+    fn new(mut turn: ToolTurnContextOptions) -> Self {
+        let room_metadata = turn
+            .room
+            .as_ref()
+            .map(|room| Arc::new(room.metadata.clone()));
+        if let Some(room) = &turn.room {
+            turn.room_id = Some(room.id.clone());
+        }
+        Self {
+            turn,
+            room_metadata,
+        }
+    }
+}
+
+fn current() -> Option<Arc<Scope>> {
+    roomkit::current_tool_call_scope()?.downcast::<Scope>().ok()
+}
+
+pub(crate) fn current_tool_room_metadata() -> Option<Arc<Metadata>> {
+    current()?.room_metadata.clone()
+}
+
+/// The existing handler boundary; installing a call does not replace
+/// the response record its turn already holds.
+pub(crate) async fn within_call<T>(
+    call: ToolCallContext,
+    actor_id: Option<String>,
+    room_metadata: Option<Arc<Metadata>>,
+    work: impl Future<Output = T>,
+) -> T {
+    let turn = ToolTurnContextOptions {
+        room_id: call.room_id.clone(),
+        call: Some(call),
+        actor_id,
+        ..Default::default()
+    };
+    roomkit::within_tool_call_scope(
+        Arc::new(Scope {
+            turn,
+            room_metadata,
+        }),
+        work,
+    )
+    .await
+}

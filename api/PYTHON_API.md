@@ -13,6 +13,7 @@ the mapping and its tests. The check does not generate or update this document.
 
 | Rust name | Python name | Members or parameters |
 | --- | --- | --- |
+| `roomkit_ai::tool_turn_context` | `roomkit.tools.tool_turn_context` | `work`: scoped future replacing the enclosed `with` block (HITL 47e0cee0) |
 | `roomkit_ai::ToolStructuredContent` | — | Whole type |
 | `roomkit_ai::ExternalToolHandler` | — | `state` |
 | `roomkit_ai::ExternalToolHandlerState` | — | Whole type |
@@ -143,6 +144,19 @@ the mapping and its tests. The check does not generate or update this document.
 | — | `roomkit.ACPSessionInvalidatedError.__init__` | `reason` |
 
 ## Types represented by language rules
+
+`ToolTurnContextOptions` carries the seven Python keywords with the same defaults.
+Its depth is `u32` (`0..=4294967295`); Python's helper also accepts negative and
+arbitrarily large integers. Its room is an immutable `Arc<Room>`: an explicit
+scope retains that same allocation, but this does not promise object identity
+with Rust callbacks' by-value `RoomContext.room` copies. These representation
+limits were approved in HITL 47e0cee0.
+
+The explicit installer, including context retention and live depth expiry in
+`keep_context` children, is covered by `tests/tool_turn_context.rs`. Automatic
+population of the new readers throughout AI preparation and stream consumption,
+requester attribution and policy-filtered catalogue refresh remain separate
+integration work; the installer tests do not claim that coverage.
 
 | Rust type | Python representation |
 | --- | --- |

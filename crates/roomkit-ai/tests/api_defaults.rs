@@ -17,6 +17,25 @@ use roomkit_ai::{FromToolOptions, ToolDeclarationOrigin};
 use std::time::Duration;
 
 #[test]
+fn tool_turn_context_defaults_as_python() {
+    let options = roomkit_ai::ToolTurnContextOptions::default();
+    // roomkit.tools.tool_turn_context(room_id) = None
+    assert!(options.room_id.is_none());
+    // roomkit.tools.tool_turn_context(room) = None
+    assert!(options.room.is_none());
+    // roomkit.tools.tool_turn_context(actor_id) = None
+    assert!(options.actor_id.is_none());
+    // roomkit.tools.tool_turn_context(tools) = None
+    assert!(options.tools.is_none());
+    // roomkit.tools.tool_turn_context(chain_depth) = 0
+    assert_eq!(options.chain_depth, 0);
+    // roomkit.tools.tool_turn_context(call) = None
+    assert!(options.call.is_none());
+    // roomkit.tools.tool_turn_context(requester) = None
+    assert!(options.requester.is_none());
+}
+
+#[test]
 fn tool_call_structured_content_defaults_as_python() {
     // roomkit.tools.ToolCallContext.__init__(structured_content) = None
     assert!(

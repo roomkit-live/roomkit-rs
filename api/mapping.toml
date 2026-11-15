@@ -1155,6 +1155,12 @@ rust = "roomkit_ai::ToolStructuredContent"
 approved = "2026-11-14"
 reason = "language: Python assigns an optional dictionary to ToolCallContext.structured_content; Rust get/replace share that field across call clones, returning live ResponseMetadata map handles (HITL 0536fcf0)"
 
+[[exception]]
+rust = "roomkit_ai::tool_turn_context"
+params = ["work"]
+approved = "2026-11-15"
+reason = "language: a scoped future replaces Python's enclosed with block, preserving task-local context across suspension without Send or static bounds (HITL 47e0cee0)"
+
 [[missing]]
 python = "roomkit.providers.openai.OpenAIAIProvider.__init__"
 params = ["transport"]

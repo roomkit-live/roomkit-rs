@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Add explicit `tool_turn_context` scopes and readers, with fresh response records, nested restoration and depth that expires when the scope ends.
+
 - Tool handlers and MCP results publish their structured copy through `ToolCallContext`, preserving hook replacement and withholding, with a separate shared field for each call.
 
 - Across processes sharing a store, a delivery set with no index (an instruction's, an event the persistence policy keeps out, a regeneration's, a held message's release or a discussion turn's) waits until the room's delivery cursor has reached the latest index committed before it, and moves the cursor no further (RFC §13.5, RMK-1153).
