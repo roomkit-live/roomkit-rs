@@ -76,6 +76,14 @@ impl CommitPass {
     /// injection into a room that binds no channel it names is refused
     /// first, nothing written (gap G-069).
     pub(super) fn on_gate(&mut self, cx: &mut Cx<'_>, context: Box<RoomContext>) -> State {
+        // A room created again under its id since the set the event answers
+        // is another room: the pass's own is gone (RFC §13.5).
+        if self
+            .room_created_at
+            .is_some_and(|created_at| created_at != context.room.created_at)
+        {
+            return self.on_missing_room(cx);
+        }
         let refusal = self
             .direct
             .as_ref()

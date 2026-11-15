@@ -610,8 +610,13 @@ impl DeliverySet {
     /// none.
     fn on_checked(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Progress<SetOutcome> {
         self.place = Place::Turn;
+        // A room created again under its id meanwhile is another room: the
+        // rerun's own is gone (RFC §13.5).
+        let created_at = self.context.room.created_at;
         let status = match outcome.into_context() {
-            Ok(context) => context.map(|context| context.room.status),
+            Ok(context) => context
+                .filter(|read| read.room.created_at == created_at)
+                .map(|context| context.room.status),
             Err(error) => {
                 // Python's lane logs the plan that raised, at ERROR (RFC
                 // §15.2, `lanes._execute`): a rerun's entry has no index.

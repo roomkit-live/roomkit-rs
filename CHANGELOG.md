@@ -383,7 +383,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   their turn without moving or skipping the new room's cursor, where a set
   queued behind one under way waited on it until the gap timeout, and the
   deleted room's first set moved it, dropping the new room's first
-  messages as `delivery_stale` (RMK-1707).
+  messages as `delivery_stale` (RMK-1707). Nothing of those sets is
+  written into the new room either, as Python's: an agent's answer,
+  buffered or streamed, each row of a stream, and the record of an answer
+  past the reentry budget or of an agent the depth limit did not ask were
+  committed into it, and a regeneration waiting in the deleted room's
+  lane ran its agent there; they are now refused as in a room gone,
+  `room_refused_event` naming no status, a stream not yet read closed
+  unread (RMK-1708).
 - A name the kit quotes as Python's `repr` (a rename's record, an error's
   text, a skill's or a memory's message) escapes every character Python's
   `str.isprintable` refuses, as Python does: `'Bob\xa0Smith'` and

@@ -43,7 +43,7 @@ use super::identity::Participation;
 use super::queues::Lineage;
 use crate::model::{
     ChannelId, ErrorRecord, InjectedEvent, Observation, RoomContext, RoomEvent, RoomStatus, Task,
-    Visibility,
+    Timestamp, Visibility,
 };
 use crate::ops::io::Bound;
 use crate::ops::lifecycle::gate::{Applied, Pending, TimerHooks};
@@ -329,6 +329,10 @@ pub(super) struct CommitPass {
     /// own: no hook, no check of its source's right to write, and a refusal
     /// of its room's status only logged (RFC §7.5 rule 2, §19.1).
     greeting: bool,
+    /// The `created_at` of the room whose delivery set the event answers:
+    /// a room created again under its id since is another room, and the
+    /// pass finds its own gone (RFC §13.5). `None` for no such set.
+    room_created_at: Option<Timestamp>,
 }
 
 /// What the hooks decided, which the pass applies once it has read the room
@@ -508,6 +512,7 @@ impl CommitPass {
             observed: None,
             participation: None,
             greeting: false,
+            room_created_at: None,
         }
     }
 
@@ -544,6 +549,15 @@ impl CommitPass {
     pub(super) fn participating(self, participation: Option<Participation>) -> Self {
         Self {
             participation: participation.map(Box::new),
+            ..self
+        }
+    }
+
+    /// The same pass, of an answer to a set of the room created at
+    /// `created_at` (RFC §13.5).
+    pub(super) fn in_room(self, created_at: Timestamp) -> Self {
+        Self {
+            room_created_at: Some(created_at),
             ..self
         }
     }

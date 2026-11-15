@@ -31,7 +31,7 @@ use super::queues::Lineage;
 use super::{InboundResult, stamp};
 use crate::model::{
     ChannelBinding, ChannelId, ChannelOutput, DeliveryError, ErrorRecord, EventDirection,
-    EventSource, EventType, RoomContext, RoomEvent, TextContent, Visibility,
+    EventSource, EventType, RoomContext, RoomEvent, TextContent, Timestamp, Visibility,
 };
 use crate::ops::protocol::{
     ChannelOutcome, ChannelRequest, EffectId, EntryId, KIT_CLOSED, Outcome, ROW_HIDDEN,
@@ -63,11 +63,15 @@ pub(super) struct StreamJob {
     /// The response's own id, which each of its rows and its failure's
     /// `ON_ERROR` payload carry, once its read is asked (RFC §9.2).
     pub(super) correlation_id: Option<String>,
+    /// The `created_at` of the room whose delivery set asked the turn: a
+    /// room created again under its id since is another room, which the
+    /// stream finds gone (RFC §13.5).
+    pub(super) room_created_at: Timestamp,
 }
 
 impl StreamJob {
     /// The stream of the turn `turn` of `responder`, asked by the delivery
-    /// set of `answers`, of `kind`.
+    /// set of `answers`, of `kind`, in the room created at `room_created_at`.
     pub(super) fn new(
         turn: EffectId,
         responder: ChannelBinding,
@@ -75,6 +79,7 @@ impl StreamJob {
         kind: SetKind,
         lineage: Lineage,
         bindings: Vec<ChannelBinding>,
+        room_created_at: Timestamp,
     ) -> Self {
         Self {
             turn,
@@ -85,6 +90,7 @@ impl StreamJob {
             chained: matches!(kind, SetKind::Response | SetKind::Greeting),
             bindings,
             correlation_id: None,
+            room_created_at,
         }
     }
 
@@ -238,11 +244,13 @@ impl StreamRead {
                 self.unread("its cascade's turns are cut")
             }
             ReadStage::Loading(_) => match outcome.into_context() {
-                Ok(Some(context)) => {
+                // A room created again under its id since the turn was asked
+                // is another room: the stream's own is gone (RFC §13.5).
+                Ok(Some(context)) if context.room.created_at == self.job.room_created_at => {
                     self.ask(cx, budget, context);
                     Read::Reading(Box::new(self))
                 }
-                Ok(None) => self.unread("the room is gone"),
+                Ok(Some(_) | None) => self.unread("the room is gone"),
                 Err(error) => self.unread(&error.message),
             },
             ReadStage::Asking(_) => {
@@ -390,7 +398,11 @@ impl StreamRead {
         let origin = PassOrigin::Response {
             answers_within: job.answers_within.clone(),
         };
-        let pass = CommitPass::new(origin, row).within(job.lineage);
+        // A row of a room deleted, or created again under its id, since
+        // the turn was asked finds its room gone (RFC §13.5).
+        let pass = CommitPass::new(origin, row)
+            .within(job.lineage)
+            .in_room(job.room_created_at);
         let skips = streamed.then(|| self.target.clone()).flatten();
         (pass, skips)
     }

@@ -20,7 +20,9 @@
 use super::direct::DirectCall;
 use super::queues::Lineage;
 use super::{cascade, commit, report};
-use crate::model::{ChannelId, ErrorRecord, EventStatus, Room, RoomContext, RoomEvent, RoomId};
+use crate::model::{
+    ChannelId, ErrorRecord, EventStatus, Room, RoomContext, RoomEvent, RoomId, Timestamp,
+};
 use crate::ops::io::Bound;
 use crate::ops::protocol::{EffectId, KeyHeld, Outcome, StoreRequest};
 use crate::ops::rooting::{Rooted, Rooting};
@@ -75,6 +77,10 @@ struct RecordWork {
     /// Whether the record is the call's own event, whose commit decides the
     /// call (`Effect::decides`).
     decides: bool,
+    /// The `created_at` of the room whose delivery set left the record: a
+    /// room created again under its id since is another room, and the
+    /// record finds its own gone (RFC §13.5). `None` for no such set.
+    room_created_at: Option<Timestamp>,
     /// The request outstanding.
     waiting: Waiting,
 }
@@ -127,6 +133,7 @@ impl RecordPass {
             narrowing: Narrowing::SourceBinding,
             direct: None,
             decides: false,
+            room_created_at: None,
             waiting: Waiting::Nothing,
         };
         Self {
@@ -138,6 +145,13 @@ impl RecordPass {
     /// The same record, of the cascade of `lineage`.
     pub(super) fn within(mut self, lineage: Lineage) -> Self {
         self.lineage = lineage;
+        self
+    }
+
+    /// The same record, left by a set of the room created at `created_at`
+    /// (RFC §13.5).
+    pub(super) fn in_room(mut self, created_at: Timestamp) -> Self {
+        self.section.work_mut().room_created_at = Some(created_at);
         self
     }
 
@@ -278,6 +292,14 @@ impl SectionWork for RecordWork {
         cx: &mut Cx<'_>,
         context: Box<RoomContext>,
     ) -> Progress<Result<RecordResult, Abort>> {
+        // A room created again under its id since the set that left the
+        // record is another room: the record's own is gone (RFC §13.5).
+        if self
+            .room_created_at
+            .is_some_and(|created_at| created_at != context.room.created_at)
+        {
+            return Progress::Done(Ok(RecordResult::Missing));
+        }
         let refusal = self
             .direct
             .as_ref()

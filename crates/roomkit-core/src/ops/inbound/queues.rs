@@ -768,7 +768,8 @@ impl Machine {
                     job.answers_within.as_ref(),
                     &job.bindings,
                 );
-                self.queue_refused(record, chain_depth::REENTRY_LOOP_CAP, job.lineage);
+                let room = job.room_created_at;
+                self.queue_refused(record, chain_depth::REENTRY_LOOP_CAP, job.lineage, room);
             }
         }
     }
