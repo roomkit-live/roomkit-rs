@@ -253,6 +253,11 @@ impl Toolbox {
         self.reserved.contains(name)
     }
 
+    /// Only channel-owned infrastructure escapes policy and skill gates.
+    pub(crate) fn is_exempt(&self, name: &str) -> bool {
+        self.exempt.contains(name)
+    }
+
     /// Whether Tool Search never hides `name`.
     fn never_hidden_name(&self, name: &str) -> bool {
         self.exempt.contains(name)

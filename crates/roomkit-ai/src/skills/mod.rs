@@ -12,7 +12,7 @@
 //! - which skills are active in each room (`activation`), in memory, read
 //!   again from the room's stored rows after a restart.
 //!
-//! A skill that gates or requires tools (`allowed_tools`, `requires`), and
+//! A skill that requires tools (`requires`), and
 //! a skill's scripts, are not supported: the first is refused, and no
 //! script runs. Skills an MCP server serves (RFC §24.7) are not either.
 
@@ -23,6 +23,7 @@ mod frontmatter;
 mod model;
 mod registry;
 mod texts;
+mod tool_names;
 pub(crate) mod tools;
 
 pub use self::error::SkillError;
@@ -32,3 +33,4 @@ pub use self::registry::SkillRegistry;
 pub use self::texts::dumps;
 pub(crate) use self::texts::dumps_unescaped;
 pub(crate) use self::texts::{ACTIVATE_SKILL, quoted_name};
+pub use self::tool_names::SkillToolNames;

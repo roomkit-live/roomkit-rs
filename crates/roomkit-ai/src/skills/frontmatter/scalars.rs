@@ -212,13 +212,18 @@ fn escape(characters: &mut std::str::CharIndices<'_>) -> Option<char> {
 /// The items of a flow list whole on its line (`[a, 'b', "c"]`), its
 /// empty items and nulls left out; `None` for anything else.
 pub(super) fn flow_list(value: &str) -> Option<Vec<String>> {
+    flow_list_with(value, list_item)
+}
+
+/// Reads the same bounded flow form with the field's scalar rules.
+pub(super) fn flow_list_with(value: &str, read_item: fn(&str) -> Item) -> Option<Vec<String>> {
     let inner = value.strip_prefix('[')?.strip_suffix(']')?;
     if inner.contains(['[', ']', '{', '}']) {
         return None;
     }
     let mut items = Vec::new();
     for part in inner.split(',') {
-        match list_item(part.trim()) {
+        match read_item(part.trim()) {
             Item::Text(item) => items.push(item),
             Item::Nothing => {}
             Item::Unread => return None,

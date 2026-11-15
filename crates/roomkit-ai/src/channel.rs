@@ -1733,6 +1733,8 @@ impl<P: AiProvider> AiChannel<P> {
             route_request: started.asked,
             toolbox,
             policy: self.policy.clone(),
+            skills,
+            activated_skills: std::sync::Mutex::default(),
             bounds: self.bounds.clone(),
             budget: started.budget,
             resilience: self.resilience.clone(),

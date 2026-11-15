@@ -8,19 +8,6 @@ use serde_json::Value;
 
 use crate::{harness, shape};
 
-/// Retained text work, independent of the store (RMK-1709, RFC §24.3).
-/// These scenarios execute and must fail until skill gating is implemented.
-pub(crate) const SKILL_GATING_FAILURES: &[(&str, &str)] = &[
-    (
-        "tool-allowed-names/skill-hidden-tools-remain-allowed-but-policy-denied-tools-do-not-non-streaming",
-        "RMK-1709: allowed_tools frontmatter is refused before a turn starts",
-    ),
-    (
-        "tool-allowed-names/skill-hidden-tools-remain-allowed-but-policy-denied-tools-do-not-streaming",
-        "RMK-1709: allowed_tools frontmatter is refused before a turn starts",
-    ),
-];
-
 /// The repository's copy of the suite.
 pub(crate) fn suite() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance")

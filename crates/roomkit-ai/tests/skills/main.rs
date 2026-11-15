@@ -7,6 +7,7 @@
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
 mod discovery;
+mod gating;
 mod support;
 mod turns;
 #[path = "../../../roomkit/tests/support/warnings.rs"]

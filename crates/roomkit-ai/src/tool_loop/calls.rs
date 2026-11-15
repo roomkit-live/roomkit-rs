@@ -92,6 +92,7 @@ impl Loop {
             shown
         };
         let references = if outcome == ToolCallOutcome::Served || invalid_arguments {
+            self.settle_skill(&reported.call, outcome);
             self.reference_shown()
         } else {
             Vec::new()
@@ -302,6 +303,12 @@ impl Loop {
         if !self.toolbox.permits(&self.policy, &model_call.name) {
             return refuse(texts::not_permitted(&model_call.name));
         }
+        if self.skill_gated(&model_call.name) {
+            return refuse(texts::error_envelope(&format!(
+                "Tool '{}' is gated by a skill. Activate the skill first using activate_skill.",
+                model_call.name
+            )));
+        }
         // A hidden tool the model named: a search applied at call time, every
         // guard after this one still standing (RFC §6.4).
         self.search.note_recovery(&model_call.name);
@@ -391,7 +398,7 @@ impl Loop {
         if call.name == ACTIVATE_SKILL {
             context.search = Some(Arc::clone(&self.search));
             context.hintable = self
-                .declared()
+                .reachable()
                 .into_iter()
                 .map(|tool| tool.name)
                 .filter(|name| self.toolbox.hintable(name))

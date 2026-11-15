@@ -163,7 +163,7 @@ impl Loop {
             .unwrap_or_else(PoisonError::into_inner);
         let shown: Vec<AiTool> = self
             .search
-            .collapsed(self.declared())
+            .collapsed(self.reachable())
             .into_iter()
             .filter(|tool| !first.contains(&tool.name) && referenced.insert(tool.name.clone()))
             .collect();

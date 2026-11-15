@@ -14,8 +14,8 @@
 //!
 //! - a frontmatter past 65,536 characters, or holding more than 64
 //!   brackets and braces open at once (§24.1);
-//! - `allowed_tools` and `requires`: this implementation gates no tool,
-//!   and a skill read without what it gates would leave its tools open;
+//! - `requires`, whose prerequisites this implementation does not enforce;
+//! - an `allowed_tools` value that cannot be read whole as text or a list;
 //! - a top-level line that is no key, no item under a key, no comment,
 //!   since YAML may read there a key this reading cannot name (an explicit
 //!   key, a tag, an anchor, a merge, a flow mapping);
@@ -24,7 +24,14 @@
 //!   (`\r` alone, U+0085, U+2028, U+2029), and any other control
 //!   character but the tab.
 
+mod gates;
 mod scalars;
+
+#[cfg(test)]
+mod differential;
+
+use crate::skills::SkillToolNames;
+use gates::Gates;
 
 use self::scalars::{
     BlockHeader, Item, NULLS, block_header, block_text, flow_list, list_item, not_a_plain_text,
@@ -38,11 +45,11 @@ pub(crate) const FRONTMATTER_MAX: usize = 64 * 1024;
 /// ones counted too (RFC §24.1).
 const FLOW_DEPTH_MAX: usize = 64;
 
-/// The keys that gate or require tools (RFC §24.2), which no skill of this
-/// implementation may declare. The Agent Skills format's `allowed-tools`,
+/// The prerequisite key (RFC §24.3), not yet enforced by this implementation.
+/// The Agent Skills format's `allowed-tools`,
 /// hyphenated, is none of them: a key like any other, kept as written, as
 /// Python's `GATING_KEYS`.
-const GATING_KEYS: [&str; 2] = ["allowed_tools", "requires"];
+const GATING_KEYS: [&str; 1] = ["requires"];
 
 /// The fields the registry reads, in the order of [`Fields`].
 const FIELDS: [&str; 4] = ["name", "description", "license", "compatibility"];
@@ -56,6 +63,7 @@ pub(crate) struct Fields {
     pub(crate) description: Option<String>,
     pub(crate) license: Option<String>,
     pub(crate) compatibility: Option<String>,
+    pub(crate) allowed_tools: Option<SkillToolNames>,
     pub(crate) extra: Vec<(String, String)>,
 }
 
@@ -178,6 +186,7 @@ fn unread_character(text: &str) -> Option<char> {
 /// What the key the reader is in holds so far.
 #[derive(Debug, Default)]
 enum Open {
+    Gates(Gates),
     /// No key, or a key whose value ended on its line.
     #[default]
     Closed,
@@ -185,7 +194,10 @@ enum Open {
     /// cannot read whole: the lines indented under it are its value's.
     Skipped,
     /// A field whose value ended on its line.
-    Ended { field: usize, text: Option<String> },
+    Ended {
+        field: usize,
+        text: Option<String>,
+    },
     /// A field alone on its line: `- item` lines may follow.
     Items {
         field: usize,
@@ -211,7 +223,7 @@ impl Open {
     /// The field whose value is open, if any.
     fn field(&self) -> Option<usize> {
         match self {
-            Self::Closed | Self::Skipped => None,
+            Self::Closed | Self::Skipped | Self::Gates(_) => None,
             Self::Ended { field, .. }
             | Self::Items { field, .. }
             | Self::Plain { field, .. }
@@ -270,7 +282,8 @@ impl Reader {
         match &mut self.open {
             Open::Plain { blanks, ended, .. } if !*ended => *blanks += 1,
             Open::Block { lines, .. } => lines.push(String::new()),
-            Open::Closed
+            Open::Gates(_)
+            | Open::Closed
             | Open::Skipped
             | Open::Ended { .. }
             | Open::Items { .. }
@@ -283,7 +296,11 @@ impl Reader {
         match &mut self.open {
             Open::Plain { ended, .. } => *ended = true,
             Open::Block { .. } => self.finish(false)?,
-            Open::Closed | Open::Skipped | Open::Ended { .. } | Open::Items { .. } => {}
+            Open::Gates(_)
+            | Open::Closed
+            | Open::Skipped
+            | Open::Ended { .. }
+            | Open::Items { .. } => {}
         }
         Ok(())
     }
@@ -294,6 +311,7 @@ impl Reader {
         let comment = read.starts_with('#');
         match &mut self.open {
             // Not a key: YAML refuses it, and it gives no field.
+            Open::Gates(gates) => gates.line(line),
             Open::Closed | Open::Skipped => Ok(()),
             Open::Block { lines, .. } => {
                 lines.push(line.to_owned());
@@ -316,6 +334,7 @@ impl Reader {
         let indent = line.len() - line.trim_start().len();
         match &mut self.open {
             Open::Skipped => Ok(()),
+            Open::Gates(gates) => gates.line(line),
             Open::Items {
                 field,
                 items,
@@ -354,6 +373,10 @@ impl Reader {
             ));
         }
         let value = value.trim();
+        if key == "allowed_tools" {
+            self.open = Open::Gates(Gates::read(value)?);
+            return Ok(());
+        }
         if matches!(
             key,
             "disable-model-invocation" | "user-invocable" | "context" | "agent"
@@ -382,6 +405,10 @@ impl Reader {
     /// the frontmatter ends there, with no line break after its last line.
     fn finish(&mut self, at_end: bool) -> Result<(), String> {
         let (field, value) = match std::mem::take(&mut self.open) {
+            Open::Gates(gates) => {
+                gates.finish(&mut self.fields.allowed_tools);
+                return Ok(());
+            }
             Open::Closed | Open::Skipped => return Ok(()),
             Open::Ended { field, text } => (field, text),
             Open::Items { field, items, .. } => {

@@ -3,6 +3,7 @@
 //! and so escape the tool policy (RFC §21.1), and what each turn's system
 //! prompt carries of the skills (RFC §6.4, §24.3, §24.4).
 
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use roomkit::model::{ChannelId, RoomEvent, RoomId, ToolCall, ToolCallOutcome};
@@ -76,6 +77,39 @@ impl SkillTools {
     /// The skills active in `room`, least recently used first.
     pub(crate) fn active_names(&self, room: &RoomId) -> Vec<String> {
         self.lock().active(room)
+    }
+
+    /// Every inactive skill retains its gates. Standalone turns borrow none
+    /// of the room's activations (RFC §10.1.1, §24.2).
+    pub(crate) fn gates(&self, name: &str, context: &ToolContext, local: &HashSet<String>) -> bool {
+        let room = if context.stands_alone {
+            Vec::new()
+        } else {
+            self.active_names(&context.room_id)
+        };
+        let served = crate::served_tool_name(name);
+        self.registry.all_metadata().iter().any(|skill| {
+            !local.contains(&skill.name)
+                && !room.contains(&skill.name)
+                && (skill.gates(name) || skill.gates(served))
+        })
+    }
+
+    /// Record the served activation before the result references newly opened
+    /// tools. A hook that blocks it leaves the room and turn unchanged.
+    pub(crate) fn record_activation(
+        &self,
+        call: &ToolCall,
+        outcome: ToolCallOutcome,
+        context: &ToolContext,
+    ) -> Option<String> {
+        if call.name != ACTIVATE_SKILL || outcome != ToolCallOutcome::Served {
+            return None;
+        }
+        let name = argument(call, "name");
+        self.registry.get_skill(name)?;
+        self.lock().activate(&context.room_id, name);
+        Some(name.to_owned())
     }
 
     /// The names a channel given skills keeps for its own tools, as
@@ -174,7 +208,7 @@ impl SkillTools {
     /// time in the room, and always on a turn standing alone, whose prompt
     /// carries none; then an acknowledgement saying they are in force (RFC
     /// §24.4). The activation is recorded once the call is served
-    /// ([`DynToolset::settled`]); a skill the registry does not hold is
+    /// (before the result references newly opened tools); a skill the registry does not hold is
     /// refused.
     async fn activate(
         &self,
@@ -264,18 +298,6 @@ impl DynToolset for SkillTools {
                 self.read(&call).await
             }
         })
-    }
-
-    /// An activation served is recorded for its room: from the room's next
-    /// turn, the skill's instructions ride the system prompt.
-    fn settled(&self, call: &ToolCall, outcome: ToolCallOutcome, context: &ToolContext) {
-        if call.name != ACTIVATE_SKILL || outcome != ToolCallOutcome::Served {
-            return;
-        }
-        let name = argument(call, "name");
-        if self.registry.get_skill(name).is_some() {
-            self.lock().activate(&context.room_id, name);
-        }
     }
 }
 

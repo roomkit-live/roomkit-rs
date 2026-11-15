@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Local text skills gate ordinary tool declarations, discovery and execution until served activation, including deferred providers; `SkillMetadata.allowed_tools` preserves text or list values (`SkillToolNames`). Complete metadata struct literals must add `allowed_tools: None` (RMK-1709).
+
 - Local AI turns expose their resolved allowed-tool catalogue, including Tool Search-hidden tools and round declarations, and refresh it when hooks withdraw tools.
 
 - AI preparation, streamed tool calls and turn observers share their room snapshot, actor and response depth, with separate preparation and consumption lifetimes.

@@ -3,11 +3,12 @@
 
 use std::path::PathBuf;
 
+use super::SkillToolNames;
 use roomkit::model::Metadata;
 
 /// What a skill's `SKILL.md` frontmatter declares (RFC §24.2): Python's
 /// `SkillMetadata(name, description, license=None, compatibility=None,
-/// extra_metadata={})`.
+/// allowed_tools=None, extra_metadata={})`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SkillMetadata {
     /// Its name: lowercase letters and digits in hyphen-separated runs, at
@@ -19,6 +20,8 @@ pub struct SkillMetadata {
     pub license: Option<String>,
     /// What it needs to run, as free text, when its frontmatter says.
     pub compatibility: Option<String>,
+    /// Tool-name patterns kept closed until this skill is activated (RFC §24.2).
+    pub allowed_tools: Option<SkillToolNames>,
     /// The frontmatter's other keys, each with its value as text, a list's
     /// items joined by commas; a key with no value, or one the line-by-line
     /// reading cannot read whole, is left out.
@@ -34,8 +37,25 @@ impl SkillMetadata {
             description: description.into(),
             license: None,
             compatibility: None,
+            allowed_tools: None,
             extra_metadata: Metadata::new(),
         }
+    }
+
+    /// The patterns this skill gates, with empty entries and surrounding
+    /// spaces/quotes removed, as Python's `gated_tool_names` (RFC §24.2).
+    pub fn gated_tool_names(&self) -> Vec<String> {
+        self.allowed_tools
+            .as_ref()
+            .map(SkillToolNames::names)
+            .unwrap_or_default()
+    }
+
+    /// Whether a pattern gates `tool_name`, using the policy's `*`/`?` matcher.
+    pub fn gates(&self, tool_name: &str) -> bool {
+        self.gated_tool_names()
+            .iter()
+            .any(|pattern| crate::tools::glob_matches(pattern, tool_name))
     }
 }
 

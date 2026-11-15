@@ -92,7 +92,7 @@ use roomkit_postgres::{
 use crate::support::TempSchema;
 
 /// Shared text failures, with no store-specific exceptions.
-pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = scenarios::SKILL_GATING_FAILURES;
+pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[];
 
 /// A scenario that has not finished by then fails instead of hanging the
 /// suite.

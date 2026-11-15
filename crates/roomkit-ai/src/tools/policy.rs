@@ -69,7 +69,7 @@ pub(crate) fn call_admitted(policy: &ToolPolicy, name: &str) -> bool {
 
 /// Whether `pattern`, where `*` matches any characters and `?` one, matches
 /// the whole of `name`.
-fn glob_matches(pattern: &str, name: &str) -> bool {
+pub(crate) fn glob_matches(pattern: &str, name: &str) -> bool {
     let pattern: Vec<char> = pattern.chars().collect();
     let name: Vec<char> = name.chars().collect();
     // The positions after the last `*` and the name's character it stands

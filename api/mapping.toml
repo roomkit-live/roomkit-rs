@@ -243,6 +243,11 @@ reason = "Python's **options, which go to RoomKit.delegate's keywords that are d
 # The architecture table's exceptions, approved with the plan on 2026-10-27.
 
 [[exception]]
+rust = "roomkit_ai::SkillToolNames"
+approved = "2026-11-15"
+reason = "Python's str | list[str] in SkillMetadata.allowed_tools: Text(String) or List(Vec<String>), inside Option for None; new(name, description) still defaults to None; explicit struct literals add allowed_tools (HITL ed472959, RMK-1709)"
+
+[[exception]]
 rust = "roomkit::ConversationStore"
 members = ["is_process_local"]
 approved = "2026-11-04"
@@ -906,15 +911,9 @@ reason = "not in 0.x: skill gating, references and scripts, skills served by MCP
 
 [[missing]]
 python = "roomkit.SkillMetadata"
-members = ["gated_tool_names", "gates", "required_tool_names"]
+members = ["required_tool_names"]
 scope = "text"
-reason = "not in 0.x: skill gating; a skill that gates or requires tools is refused"
-
-[[missing]]
-python = "roomkit.SkillMetadata.__init__"
-params = ["allowed_tools"]
-scope = "text"
-reason = "not in 0.x: skill gating; a skill that gates or requires tools is refused"
+reason = "retained prerequisite work: requires remains refused until availability and prerequisite enforcement are ported"
 
 [[missing]]
 python = "roomkit.SkillRegistry.__init__"

@@ -326,6 +326,7 @@ fn load(directory: &Path) -> Result<Skill, SkillError> {
             description: fields.description.unwrap_or_default(),
             license: fields.license.filter(|license| !license.is_empty()),
             compatibility: fields.compatibility.filter(|text| !text.is_empty()),
+            allowed_tools: fields.allowed_tools,
             extra_metadata: fields
                 .extra
                 .into_iter()
@@ -372,6 +373,17 @@ fn skill_file(directory: &Path, label: &str) -> Result<String, SkillError> {
 /// directory `label`, in the reference implementation's words and order.
 fn invalid(fields: &Fields, label: &str) -> Vec<String> {
     let mut reasons = Vec::new();
+    if let Some(gates) = &fields.allowed_tools {
+        for pattern in gates
+            .names()
+            .into_iter()
+            .filter(|name| name.contains(['[', ']']))
+        {
+            reasons.push(format!(
+                "allowed_tools: pattern {pattern:?} holds a bracket"
+            ));
+        }
+    }
     let name = fields.name.as_deref().unwrap_or_default();
     let characters = name.chars().count();
     if name.is_empty() {

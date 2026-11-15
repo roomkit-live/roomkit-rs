@@ -20,6 +20,7 @@ mod external_rows;
 mod handler;
 pub(crate) mod owner;
 mod policy;
+pub(crate) use policy::glob_matches;
 pub(crate) mod repair;
 mod result;
 mod row_bound;

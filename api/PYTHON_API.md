@@ -110,6 +110,7 @@ the mapping and its tests. The check does not generate or update this document.
 | — | `roomkit.providers.ai.AIToolResultPart.__init__` | `type` |
 | `roomkit_ai::SkillRegistry` | — | `tool_definitions` |
 | `roomkit_ai::SkillRegistry::copy` | — | `names` |
+| `roomkit_ai::SkillToolNames` | `SkillMetadata.allowed_tools: str \| list[str] \| None` | Whole type: `Text(String)` or `List(Vec<String>)`, wrapped in `Option` (HITL ed472959) |
 | `roomkit_ai::ImageResolver` | — | Whole type |
 | `roomkit_openai::OpenAiConfig` | — | `vision` |
 | `roomkit_ai::ToolEntry` | — | Whole type |
@@ -164,9 +165,13 @@ round withdrawals refresh it; new round declarations are shared with preparation
 while consumption's withdrawals stay local to its context. The shared
 `tool-allowed-names/` scenarios and native catalogue lifetime tests cover this.
 Requester attribution, role-specific policy overrides and the reasoning-backend
-driven-turn path remain separate integration work. Skill-gated catalogues depend
-on skill gating (RMK-1709): Rust still refuses `allowed_tools` frontmatter, and
-both shared scenarios exercising it remain explicit known failures on every store.
+driven-turn path remain separate integration work. Skill-gated tools stay in the
+allowed catalogue while their declarations, discovery and execution are closed
+until activation succeeds. The shared `skill-gating/` scenarios cover local text
+turns, including deferred providers; prerequisites and availability remain work
+under RMK-1709. `SkillMetadata::new(name, description)` defaults `allowed_tools`
+to `None`. Existing complete struct literals must add `allowed_tools: None`, or
+use `..SkillMetadata::new(name, description)` (approved in HITL ed472959).
 
 | Rust type | Python representation |
 | --- | --- |

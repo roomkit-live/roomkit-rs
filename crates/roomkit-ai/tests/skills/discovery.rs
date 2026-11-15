@@ -162,9 +162,8 @@ fn each_parse_failure_names_the_skill() {
         ),
         (
             "gates",
-            skill_md("gates", "x", "allowed_tools:\n  - \"secret_*\"\n"),
-            "Parsing failed for gates: the frontmatter declares allowed_tools, which this \
-             implementation does not read: a skill that gates or requires tools is refused",
+            skill_md("gates", "x", "allowed_tools: {secret: true}\n"),
+            "Parsing failed for gates: the frontmatter's allowed_tools cannot be read line by line",
         ),
         (
             "requires",

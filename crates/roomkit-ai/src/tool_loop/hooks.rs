@@ -244,7 +244,7 @@ impl Loop {
     /// room stored a result when the turn began (RFC §6.4: the rounds declare
     /// it from the first either way). Python's `_hook_toolset`.
     pub(super) fn hook_tools(&self) -> Vec<AiTool> {
-        let mut tools = self.declared();
+        let mut tools = self.reachable();
         if self.reread_shown {
             tools.extend(self.reread_kept());
         }
@@ -275,14 +275,14 @@ impl Loop {
     /// What the first round declares: the toolset, collapsed when Tool Search
     /// hides its catalogue, then `read_stored_result`.
     pub(super) fn first_declaration(&self) -> Vec<AiTool> {
-        self.with_reread(self.search.collapsed(self.declared()))
+        self.with_reread(self.search.collapsed(self.reachable()))
     }
 
     /// What this round's request shows, each tool's schema with the intent
     /// property when the agent asks for one, the round's declaration joining
     /// what the turn reports (RFC §6.4).
     pub(super) fn round_tools(&self) -> Vec<AiTool> {
-        let round = self.with_reread(self.search.round_declaration(self.declared()));
+        let round = self.with_reread(self.search.round_declaration(self.reachable()));
         // What Tool Search lists is the turn's offer: the toolset, then the
         // re-read of stored results once the round declares it (Python's
         // `offered_tools`).

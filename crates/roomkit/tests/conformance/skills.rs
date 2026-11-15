@@ -51,8 +51,8 @@ fn write_skill(root: &std::path::Path, skill: &Value) -> std::io::Result<()> {
     let directory = root.join(text("name"));
     let references = directory.join("references");
     std::fs::create_dir_all(&references)?;
-    let allowed = skill["allowed_tools"]
-        .as_str()
+    let allowed = skill
+        .get("allowed_tools")
         .map(|names| format!("allowed_tools: {names}\n"))
         .unwrap_or_default();
     std::fs::write(

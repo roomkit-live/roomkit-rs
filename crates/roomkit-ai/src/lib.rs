@@ -136,7 +136,9 @@ pub use self::router::{
 };
 #[doc(hidden)]
 pub use self::skills::dumps;
-pub use self::skills::{DiscoverOptions, Skill, SkillError, SkillMetadata, SkillRegistry};
+pub use self::skills::{
+    DiscoverOptions, Skill, SkillError, SkillMetadata, SkillRegistry, SkillToolNames,
+};
 pub use self::steering::SteerOptions;
 pub use self::tool_search::{TOOL_FIND_TOOLS, TOOL_LIST_TOOLS, TOOL_SEARCH_INFRA_TOOL_NAMES};
 pub use self::tools::{

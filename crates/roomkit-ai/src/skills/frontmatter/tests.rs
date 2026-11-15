@@ -106,16 +106,14 @@ fn another_key_s_value_is_kept_as_text_when_read_whole() {
     );
 }
 
-/// RFC §24.1: a skill that gates or requires tools is refused, whatever
-/// its value, since no tool is gated here.
+/// Prerequisites remain refused until they are enforced (RFC §24.3).
 #[test]
-fn a_gating_key_is_refused_whatever_its_value() {
+fn requires_is_refused_whatever_its_value() {
     for frontmatter in [
-        "allowed_tools: []",
-        "allowed_tools:\n  - \"search_*\"",
+        "requires: []",
         "requires: lookup",
         "\"requires\": lookup",
-        "'allowed_tools' : x",
+        "'requires' : x",
     ] {
         let refused = description(frontmatter).unwrap_err();
         assert!(refused.contains("declares"), "{frontmatter:?}: {refused}");
@@ -132,7 +130,7 @@ fn a_line_that_may_hide_a_key_is_refused() {
         "&a allowed_tools: x",
         "*a : x",
         "<<: {allowed_tools: x}",
-        r#""allowed_tools": x"#,
+        r#""allowed\u005ftools": x"#,
         "{allowed_tools: x}",
         "- allowed_tools",
         "key with spaces: x",
@@ -217,6 +215,7 @@ fn each_field_the_registry_reads_is_read() {
             description: Some("d".to_owned()),
             license: Some("MIT".to_owned()),
             compatibility: Some("Needs nothing".to_owned()),
+            allowed_tools: None,
             extra: vec![("version".to_owned(), "1.2".to_owned())],
         })
     );
