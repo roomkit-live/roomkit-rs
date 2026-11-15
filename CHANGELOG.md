@@ -10,7 +10,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Tool handlers and MCP results publish their structured copy through `ToolCallContext`, preserving hook replacement and withholding, with a separate shared field for each call.
 
-- Across processes sharing a store, a delivery set with no index (an instruction's, an event the persistence policy keeps out, a regeneration's, a held message's release or a discussion turn's) waits until the room's delivery cursor has reached the latest index committed before it, and moves the cursor no further (RFC §13.5, RMK-1153).
+- Across processes sharing a store, a delivery set with no index (an instruction's, an event the persistence policy keeps out, a regeneration's, a held message's release or a discussion turn's) waits until the room's delivery cursor has reached the latest index committed before it, and moves the cursor no further (RFC §13.5, RMK-1153). When the store fails the read of that index, the set runs behind the sets this process placed before it, under the room's delivery claim, waiting for no other process, and the failure is its cascade's `error`, which a deferred call's handle reports once the set ran (RFC §10.1.1 rule 5, RMK-1701).
 
 - Add `RoomKit::release_channel` for locally held channels, preserving their registration and room state while rejecting unknown ids and calls after kit close.
 

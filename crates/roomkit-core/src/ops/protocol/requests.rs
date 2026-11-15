@@ -202,7 +202,12 @@ pub enum HoldRequest {
     /// place of the room taken before in this process (RFC §10.2): issued
     /// under the room lock once the event is committed, or an instruction
     /// decided, before the lock's release, so that places follow the order
-    /// of the commits. It never waits. Answer [`HoldOutcome::Entered`].
+    /// of the commits. It never waits. Answer [`HoldOutcome::Entered`], or
+    /// [`Outcome::Failed`] for a place taken whose anchor, the room's latest
+    /// index the driver reads for a set with no index, could not be read:
+    /// the place is held all the same, its set waits for no other process's
+    /// index, and the failure is its cascade's error (RFC §13.5, §10.1.1
+    /// rule 5).
     EnterLane {
         /// The room.
         room_id: RoomId,

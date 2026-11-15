@@ -2443,31 +2443,6 @@ mod the_delivery_lane {
     }
 
     #[test]
-    fn delivers_an_event_whose_place_could_not_be_taken() {
-        let mut sim = room();
-        sim.failing_effect = Some("enter lane room_1 evt_1");
-        let result = sim.send(Sim::message("sms", "Bonjour")).unwrap();
-        assert_eq!(
-            (
-                result.event.map(|event| event.status),
-                result.error,
-                sim.traced("deliver"),
-                sim.traced("await lane room_1 evt_1")
-            ),
-            (
-                Some(EventStatus::Delivered),
-                None,
-                vec![
-                    "deliver ws <- evt_1",
-                    "deliver sms <- evt_2",
-                    "deliver ws <- evt_2"
-                ],
-                vec![]
-            )
-        );
-    }
-
-    #[test]
     fn delivers_an_event_whose_turn_could_not_be_awaited_and_leaves_its_place() {
         let mut sim = room();
         sim.failing_effect = Some("await lane room_1 evt_1");

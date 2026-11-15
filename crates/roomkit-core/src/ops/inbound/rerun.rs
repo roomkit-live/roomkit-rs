@@ -28,8 +28,8 @@ use super::queues::{Delivery, Lineage};
 use super::record::RecordPass;
 use super::{InboundResult, Machine, Stage, cascade, report};
 use crate::model::{
-    ChannelBinding, ChannelCategory, ChannelDirection, ChannelType, EventId, Room, RoomContext,
-    RoomEvent, RoomId, Visibility,
+    ChannelBinding, ChannelCategory, ChannelDirection, ChannelType, ErrorRecord, EventId, Room,
+    RoomContext, RoomEvent, RoomId, Visibility,
 };
 use crate::ops::protocol::{
     DiscussionRequest, DiscussionTurn, EffectId, HoldOutcome, HoldRequest, Outcome, StoppedTurn,
@@ -76,6 +76,9 @@ pub(super) struct Planned {
     plan: DeliveryPlan,
     context: Box<RoomContext>,
     placement: Placement,
+    /// The failure met taking its place, which is taken all the same: the
+    /// read of its anchor (RFC §13.5).
+    place_error: Option<ErrorRecord>,
     /// A discussion's turn: its own chain-depth limit (RFC §19.7.5).
     limit: Option<u32>,
     /// The turns its depth limit stopped on the way, recorded first.
@@ -286,7 +289,7 @@ impl SectionWork for RerunWork {
             Waiting::Event(_) => self.on_event(cx, outcome),
             Waiting::Turn(_) => self.on_turn(cx, outcome),
             Waiting::Placing { mut planned, .. } => {
-                planned.placement = placement(&planned.trigger, outcome);
+                (planned.placement, planned.place_error) = placement(outcome);
                 Progress::Done(Ok(Reran::Planned(planned)))
             }
             Waiting::Nothing => Progress::Waiting,
@@ -347,6 +350,7 @@ fn plan(cx: &Cx<'_>, trigger: RoomEvent, context: Box<RoomContext>, floor: u32) 
         plan,
         context,
         placement: Placement::Missing,
+        place_error: None,
         limit: None,
         stopped: Vec::new(),
     }
@@ -376,33 +380,20 @@ fn plan_turn(
         plan,
         context,
         placement: Placement::Missing,
+        place_error: None,
         limit: Some(max_depth),
         stopped,
     })
 }
 
-/// What became of the rerun's place in the room's lane: a place that could
-/// not be taken is logged, and the agents run all the same, out of the
-/// lane's order.
-fn placement(trigger: &RoomEvent, outcome: Outcome) -> Placement {
+/// What became of the rerun's place in the room's lane, and the failure
+/// answered for it: one the driver met once the place was taken, reading
+/// its anchor (RFC §13.5), which goes on the call's result.
+fn placement(outcome: Outcome) -> (Placement, Option<ErrorRecord>) {
     if outcome == Outcome::Hold(HoldOutcome::LaneClosed) {
-        return Placement::Closed;
+        return (Placement::Closed, None);
     }
-    match outcome.into_entered() {
-        Ok(()) => Placement::Taken,
-        Err(error) => {
-            tracing::warn!(
-                target: "roomkit::core::inbound",
-                room_id = %trigger.room_id,
-                event_id = %trigger.id,
-                error_type = %error.error_type,
-                message = %error.message,
-                "taking a rerun's place in the room's delivery lane failed; its agents run \
-                 all the same"
-            );
-            Placement::Missing
-        }
-    }
+    (Placement::Taken, outcome.into_entered().err())
 }
 
 impl Machine {
@@ -524,6 +515,7 @@ impl Machine {
             plan,
             context,
             placement,
+            place_error,
             limit,
             stopped,
         } = planned;
@@ -547,6 +539,7 @@ impl Machine {
         if let Some(limit) = limit {
             set.held_to(limit);
         }
+        set.failed_placing(place_error);
         // Its delivery cancelled before it was planned, the set asks no
         // agent (RFC §10.1 "Explicit delivery cancellation").
         if self.cascade.is_cut(Lineage::Call) {
@@ -622,10 +615,7 @@ fn room_closed() -> InboundResult {
 }
 
 /// `result`, carrying `error`, a failed release of the room's lock.
-fn with_error(
-    mut result: InboundResult,
-    error: Option<crate::model::ErrorRecord>,
-) -> InboundResult {
+fn with_error(mut result: InboundResult, error: Option<ErrorRecord>) -> InboundResult {
     result.error = error;
     result
 }

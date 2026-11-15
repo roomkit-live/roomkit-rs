@@ -215,8 +215,8 @@ pub(crate) struct Sim {
     /// The status `room_1` takes just before a place's turn comes, as by a
     /// close the room's work made while the set waited in its lane.
     pub(crate) status_at_lane_turn: Option<RoomStatus>,
-    /// The events whose place in the lane could not be taken, or whose turn
-    /// could not be awaited, delivered out of it.
+    /// The events whose turn in the lane could not be awaited, delivered
+    /// out of it.
     placeless: BTreeSet<EventId>,
     /// How long each effect takes on the simulated clock, named by the start
     /// of its trace line (`hook pii_scan`, `lock room_1`, `await ticket
@@ -1540,10 +1540,11 @@ impl Sim {
                 format!("route {}", query.channel_id),
                 ErrorRecord::new("RouterError", "the CRM is unreachable"),
             ),
-            Request::Hold(HoldRequest::EnterLane { room_id, event_id }) => (
-                format!("enter lane {room_id} {event_id}"),
-                ErrorRecord::new("LaneUnavailable", "the lane manager is down"),
-            ),
+            // A place taken whose anchor, a read of the room, failed (RFC
+            // §13.5).
+            Request::Hold(HoldRequest::EnterLane { room_id, event_id }) => {
+                (format!("enter lane {room_id} {event_id}"), store_down())
+            }
             Request::Hold(HoldRequest::AwaitLane { room_id, event_id }) => (
                 format!("await lane {room_id} {event_id}"),
                 ErrorRecord::new("LaneUnavailable", "the lane manager is down"),
@@ -1586,10 +1587,12 @@ impl Sim {
         if !target.starts_with(failing) && !also {
             return None;
         }
-        if let Request::Hold(
-            HoldRequest::EnterLane { event_id, .. } | HoldRequest::AwaitLane { event_id, .. },
-        ) = request
-        {
+        // The driver answers failed a place it took but could not anchor
+        // (RFC §13.5): the place is held all the same.
+        if let Request::Hold(HoldRequest::EnterLane { room_id, event_id }) = request {
+            self.take_place(room_id.clone(), event_id.clone());
+        }
+        if let Request::Hold(HoldRequest::AwaitLane { event_id, .. }) = request {
             self.placeless.insert(event_id.clone());
         }
         self.trace.push(format!("{target} failed"));

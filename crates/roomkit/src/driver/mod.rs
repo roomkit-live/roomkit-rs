@@ -1403,12 +1403,20 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     }
 
     /// Takes what a wait came to: a place's anchor is the run's indexes',
-    /// anything else what the run holds.
+    /// anything else what the run holds. A place whose anchor could not be
+    /// read is answered with that failure: it is taken all the same,
+    /// anchored at `-1`, so that its set runs under the room's delivery
+    /// claim and waits for no other process's index, and the failure is
+    /// its cascade's error (RFC §13.5, §10.1.1 rule 5).
     fn settle(&mut self, waited: Waited<'kit>) -> Outcome {
-        if let Waited::Anchored(key, Some(anchor), _) = &waited {
-            self.indexes.anchored(key.clone(), *anchor);
+        let mut failed = None;
+        if let Waited::Anchored(key, anchor, _) = &waited {
+            self.indexes
+                .anchored(key.clone(), anchor.as_ref().map_or(-1, |anchor| *anchor));
+            failed = anchor.as_ref().err().cloned();
         }
-        self.held.settle(waited)
+        let outcome = self.held.settle(waited);
+        failed.map_or(outcome, Outcome::Failed)
     }
 
     /// Answers a hold carried out at once, `outcome`, once the room's

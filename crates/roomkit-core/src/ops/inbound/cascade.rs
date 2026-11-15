@@ -281,6 +281,16 @@ impl Machine {
             lineage,
         )
         .with_hook_effects(tasks, observations);
+        // A failure met taking the set's place is its cascade's error (RFC
+        // §13.5, §10.1.1 rule 5): the set's own, reported when it is over;
+        // a response's or an injected event's set reports none, so it is
+        // noted on the call at once, as Python's cascade records it.
+        let place_error = report.place_error.map(|error| *error);
+        if matches!(kind, SetKind::Response | SetKind::Injected) {
+            self.note_release_error(origin.owed(), place_error);
+        } else {
+            set.failed_placing(place_error);
+        }
         if self.cascade.is_cut(lineage) {
             set.cut();
         }

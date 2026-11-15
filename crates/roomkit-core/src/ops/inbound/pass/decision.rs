@@ -551,9 +551,10 @@ impl CommitPass {
         }
     }
 
-    /// The event's place is taken. A place that could not be taken is
-    /// logged, and the event delivered all the same, out of the lane's
-    /// order (RFC §13.6: an event stored is delivered).
+    /// The event's place is taken. A failure answered for it is one the
+    /// driver met once the place was taken, reading the anchor of a set
+    /// with no index (RFC §13.5): the set keeps its place, and the failure
+    /// goes on the result, the event decided (RFC §10.1.1 rule 5).
     pub(super) fn on_placed(
         &mut self,
         cx: &mut Cx<'_>,
@@ -564,18 +565,8 @@ impl CommitPass {
             self.placement = Placement::Closed;
             return self.tell_discussion(cx, result);
         }
-        match outcome.into_entered() {
-            Ok(()) => self.placement = Placement::Taken,
-            Err(error) => tracing::warn!(
-                target: "roomkit::core::inbound",
-                room_id = %self.event.room_id,
-                event_id = %self.event.id,
-                error_type = %error.error_type,
-                message = %error.message,
-                "taking the event's place in the room's delivery lane failed; it is delivered \
-                 all the same"
-            ),
-        }
+        self.placement = Placement::Taken;
+        self.place_error = outcome.into_entered().err();
         self.tell_discussion(cx, result)
     }
 

@@ -113,6 +113,34 @@ fn a_rerun_past_the_depth_limit_whose_room_closed_while_it_waited_stores_nothing
     );
 }
 
+/// A rerun's place the driver answers failed, its anchor unread (RFC
+/// §13.5): the set keeps its place, its agents run, and the failure is the
+/// call's error (RFC §10.1.1 rule 5). Python reads a rerun's anchor from
+/// the context its section read, which no store fails apart.
+#[test]
+fn a_rerun_whose_place_is_answered_failed_runs_its_agents_and_reports_it() {
+    let mut sim = room();
+    sim.failing_effect = Some("enter lane room_1 evt_0");
+    let operation = rerun(&sim);
+
+    let result = sim.run(operation).unwrap();
+
+    assert_eq!(
+        (
+            result.blocked,
+            result.error.as_ref().map(|error| error.error_type.as_str()),
+            sim.traced("await lane room_1 evt_0"),
+            sim.traced("on_event").is_empty(),
+        ),
+        (
+            false,
+            Some("StoreUnavailable"),
+            vec!["await lane room_1 evt_0"],
+            false
+        )
+    );
+}
+
 // Python: core/lanes.py::_execute, core/mixins/lane_execution.py::
 // _refuse_closed_rerun (RMK-1195): the room's read failing when the lane
 // takes the regeneration, the failure is recorded on its cascade, the

@@ -154,8 +154,8 @@ enum Place {
     /// The room's lane took no place, the kit closing: the set delivers
     /// nothing, its cascade cancelled [`KIT_CLOSED`].
     Closed,
-    /// The event holds no place, its `EnterLane` having failed: the set
-    /// runs at once.
+    /// The event holds no place, none having been asked for (the set its
+    /// caller ran itself): the set runs at once.
     Missing,
     /// The set waits for its place's turn.
     Awaiting(EffectId),
@@ -176,8 +176,8 @@ enum Place {
 pub(super) enum Placement {
     /// The place is taken: the set waits for its turn.
     Taken,
-    /// Taking it failed: the set delivers at once, out of the lane's order
-    /// (RFC §13.6: an event stored is delivered).
+    /// None was asked for (the set its caller ran itself): the set
+    /// delivers at once.
     Missing,
     /// The lane takes no more place, the kit closing (RFC §10.1 step 18):
     /// the event is not delivered, its cascade cancelled [`KIT_CLOSED`].
@@ -260,6 +260,15 @@ impl DeliverySet {
             reached,
             unreported: BTreeSet::new(),
             effects: SetEffects::default(),
+        }
+    }
+
+    /// The failure met taking the set's place, which is taken all the same
+    /// (the read of its anchor, RFC §13.5): the set's first error, reported
+    /// with what the set meets when it is over (RFC §10.1.1 rule 5).
+    pub(super) fn failed_placing(&mut self, error: Option<ErrorRecord>) {
+        if self.outcome.error.is_none() {
+            self.outcome.error = error;
         }
     }
 

@@ -31,7 +31,7 @@ use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use roomkit_core::model::{Metadata, RoomId};
+use roomkit_core::model::{ErrorRecord, Metadata, RoomId};
 use serde_json::Value;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::Instant;
@@ -354,20 +354,20 @@ async fn retry_owed_cursor<S: ConversationStore>(inner: &Inner<S>, room_id: &Roo
 /// The anchor of a set with no index whose place is taken in `room_id`'s
 /// lane, read under the room's lock: the room's latest index, `-1` for a
 /// room with no event, as Python's `anchor_index` reads it when the set's
-/// plan is made. `None` when the store fails the read, which is logged: the
-/// set then waits for no other process's index.
+/// plan is made. A read the store fails is logged, and is the failure the
+/// place is answered with: the set waits for no other process's index, and
+/// the failure is its cascade's error (RFC §10.1.1 rule 5).
 pub(crate) async fn anchor<S: ConversationStore>(
     inner: &Inner<S>,
     room_id: &RoomId,
-) -> Option<i64> {
+) -> Result<i64, ErrorRecord> {
     match inner.store.get_room(room_id).await {
-        Ok(room) => Some(
-            room.and_then(|room| room.latest_index)
-                .map_or(-1, |latest| i64::try_from(latest).unwrap_or(i64::MAX)),
-        ),
+        Ok(room) => Ok(room
+            .and_then(|room| room.latest_index)
+            .map_or(-1, |latest| i64::try_from(latest).unwrap_or(i64::MAX))),
         Err(error) => {
             tracing::warn!(target: "roomkit::cursor", room_id = %room_id, %error, "the room's latest index could not be read; the set waits for no other process's delivery");
-            None
+            Err(error.to_record())
         }
     }
 }

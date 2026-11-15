@@ -15,9 +15,9 @@ use std::rc::Rc;
 
 use roomkit_core::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use roomkit_core::model::{
-    ChannelId, ChannelOutput, EventContent, EventId, EventStatus, EventType, HookResult,
-    InboundMessage, InjectedEvent, Observation, ObservationId, RoomEvent, RoomStatus, Task, TaskId,
-    TextContent, Visibility,
+    ChannelId, ChannelOutput, ErrorRecord, EventContent, EventId, EventStatus, EventType,
+    HookResult, InboundMessage, InjectedEvent, Observation, ObservationId, RoomEvent, RoomStatus,
+    Task, TaskId, TextContent, Visibility,
 };
 use roomkit_core::ops::{FrameworkEvent, InboundError, InboundResult, RefusedOperation};
 use roomkit_core::rules::hook_chain::HookOutcome;
@@ -1284,6 +1284,59 @@ mod after_a_locked_hook {
         assert_eq!(
             (result.blocked, result.reason, result.event.is_none()),
             (true, Some("room_closed".to_owned()), true)
+        );
+    }
+}
+
+/// An instruction's place the driver answers failed: it took the place but
+/// could not read its anchor, the room's latest index (RFC §13.5).
+mod a_place_answered_failed {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    /// The set keeps its place and runs at its turn; the failure is its
+    /// cascade's error, which the decision does not carry (RFC §10.1.1 rule
+    /// 5), as Python records it on the cascade.
+    // Python: tests/test_lanes_multiworker.py::test_an_instruction_whose_anchor_read_fails_reports_it_and_keeps_its_place
+    #[test]
+    fn keeps_it_and_is_the_result_s_error_not_the_decision_s() {
+        let mut sim = with_silent_agent();
+        sim.failing_effect = Some("enter lane room_1 evt_2");
+        let result = sim.send(instruction()).unwrap();
+        // The instruction's decision, the last one published.
+        let decided = sim
+            .decisions
+            .last()
+            .map(|(_, decided)| decided.result.as_ref().map(|result| result.error.clone()));
+        assert_eq!(
+            (
+                result.blocked,
+                result.error,
+                decided,
+                sim.traced("await lane room_1 evt_2"),
+                asked_about(&sim, "evt_2"),
+            ),
+            (
+                false,
+                Some(ErrorRecord::new("StoreUnavailable", "the store is down")),
+                Some(Ok(None)),
+                vec!["await lane room_1 evt_2"],
+                vec!["ai".to_owned()],
+            )
+        );
+    }
+
+    /// A failed release of the lock met first stays the error, as Python
+    /// reads the release's failure before its cascade's (RFC §13.5).
+    #[test]
+    fn leaves_a_failed_release_the_error() {
+        let mut sim = with_silent_agent();
+        sim.failing_effect = Some("enter lane room_1 evt_2");
+        sim.release_fails = true;
+        let result = sim.send(instruction()).unwrap();
+        assert_eq!(
+            result.error,
+            Some(ErrorRecord::new("LockLost", "the lock's lease was lost"))
         );
     }
 }

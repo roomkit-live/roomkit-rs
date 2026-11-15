@@ -235,6 +235,10 @@ pub(super) struct PassReport {
     pub(super) release_error: Option<ErrorRecord>,
     /// What became of the delivered event's place in the room's lane.
     pub(super) placement: Placement,
+    /// The failure met taking that place, which is taken all the same: the
+    /// read of the anchor of a set with no index (RFC §13.5). It is the
+    /// set's error, reported with its cascade's (RFC §10.1.1 rule 5).
+    pub(super) place_error: Option<Box<ErrorRecord>>,
     /// Whose cascade the pass belongs to.
     pub(super) lineage: Lineage,
     /// Whether the pass was an agent's greeting (RFC §19.1).
@@ -309,6 +313,8 @@ pub(super) struct CommitPass {
     release_error: Option<ErrorRecord>,
     /// What became of the event's place in the room's delivery lane.
     placement: Placement,
+    /// The failure met taking that place, which is taken all the same.
+    place_error: Option<ErrorRecord>,
     /// The hooks of the timer transitions its gate applied, fired once the
     /// lock is released (RFC §5.1 When).
     timer_hooks: TimerHooks,
@@ -497,6 +503,7 @@ impl CommitPass {
             observations: Vec::new(),
             release_error: None,
             placement: Placement::Missing,
+            place_error: None,
             timer_hooks: TimerHooks::default(),
             observed: None,
             participation: None,
@@ -651,6 +658,7 @@ impl CommitPass {
             observations: mem::take(&mut self.observations),
             release_error: self.release_error.take(),
             placement: self.placement,
+            place_error: self.place_error.take().map(Box::new),
             lineage: self.lineage,
             greeting: self.greeting,
         }))

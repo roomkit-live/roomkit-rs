@@ -103,9 +103,9 @@ pub(super) enum Waited<'kit> {
     /// caught up with the turns it ended (gap G-091).
     Answered(Outcome),
     /// A place with no index of its own taken, answered `Outcome` once the
-    /// room's latest index, its anchor, was read under the lock: `None`
-    /// when the store failed the read (RFC §13.5).
-    Anchored((RoomId, EventId), Option<i64>, Outcome),
+    /// room's latest index, its anchor, was read under the lock, or the
+    /// failure of that read (RFC §13.5).
+    Anchored((RoomId, EventId), Result<i64, ErrorRecord>, Outcome),
 }
 
 /// What a hold comes to.
