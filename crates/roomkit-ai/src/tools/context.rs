@@ -1,6 +1,8 @@
 //! A caller-described tool turn, scoped across asynchronous suspension.
 
-use std::collections::HashSet;
+mod catalogue;
+
+use std::collections::{BTreeSet, HashSet};
 use std::future::Future;
 use std::sync::Arc;
 
@@ -8,6 +10,7 @@ use roomkit::model::{Metadata, Room, RoomId};
 
 use super::{AiTool, ToolCallContext};
 use crate::AiError;
+use catalogue::Catalogue;
 
 /// Python's `tool_turn_context` keyword arguments. All optional fields
 /// default to `None`; `chain_depth` defaults to zero (RFC §21.4).
@@ -129,16 +132,14 @@ pub fn current_tool_chain_depth() -> u32 {
 
 /// The resolved tool names. `None` outside a scope or for an unresolved
 /// catalogue; an empty set for a resolved, empty catalogue.
+/// A local AI turn includes names its policy admits before Tool Search
+/// hides declarations, adds round declarations, and removes withdrawn tools.
 pub fn current_tool_allowed_names() -> Option<HashSet<String>> {
-    Some(
-        current()?
-            .turn
-            .tools
-            .as_ref()?
-            .iter()
-            .map(|tool| tool.name.clone())
-            .collect(),
-    )
+    let scope = current()?;
+    match &scope.turn.tools {
+        Some(tools) => Some(tools.iter().map(|tool| tool.name.clone()).collect()),
+        None => scope.catalogue.names(),
+    }
 }
 
 /// The call this handler runs within (RFC §21.4). Clones share the
@@ -159,6 +160,7 @@ pub fn current_tool_actor_id() -> Option<String> {
 struct Scope {
     turn: ToolTurnContextOptions,
     room_metadata: Option<Arc<Metadata>>,
+    catalogue: Catalogue,
 }
 
 impl Scope {
@@ -173,6 +175,7 @@ impl Scope {
         Self {
             turn,
             room_metadata,
+            catalogue: Catalogue::default(),
         }
     }
 
@@ -193,7 +196,13 @@ pub(crate) fn within_ai_turn<F: Future>(
 /// Capture preparation's readable snapshot now. Consumption starts a fresh
 /// lifetime at its first poll, never reviving preparation's retained children.
 pub(crate) fn continue_ai_turn<F: Future>(work: F) -> impl Future<Output = F::Output> {
-    let scope = current();
+    let scope = current().map(|parent| {
+        Arc::new(Scope {
+            turn: parent.turn.clone(),
+            room_metadata: parent.room_metadata.clone(),
+            catalogue: parent.catalogue.for_loop(),
+        })
+    });
     let work = Box::pin(work);
     async move {
         match scope {
@@ -211,6 +220,18 @@ pub(crate) fn current_tool_room_metadata() -> Option<Arc<Metadata>> {
     current()?.room_metadata.clone()
 }
 
+pub(crate) fn resolve_tool_catalogue(names: HashSet<String>, withdrawn: &BTreeSet<String>) {
+    if let Some(scope) = current() {
+        scope.catalogue.resolve(names, withdrawn);
+    }
+}
+
+pub(crate) fn record_tool_declaration(name: &str) {
+    if let Some(scope) = current() {
+        scope.catalogue.record(name);
+    }
+}
+
 /// The existing handler boundary; installing a call does not replace
 /// the response record its turn already holds.
 pub(crate) async fn within_call<T>(
@@ -226,6 +247,7 @@ pub(crate) async fn within_call<T>(
                 ..parent.turn.clone()
             },
             room_metadata: parent.room_metadata.clone(),
+            catalogue: parent.catalogue.clone(),
         },
         None => Scope {
             turn: ToolTurnContextOptions {
@@ -235,6 +257,7 @@ pub(crate) async fn within_call<T>(
                 ..Default::default()
             },
             room_metadata,
+            catalogue: Catalogue::default(),
         },
     };
     roomkit::within_tool_call_scope(Arc::new(scope), work).await

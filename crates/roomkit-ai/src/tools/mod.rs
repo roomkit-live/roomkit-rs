@@ -44,7 +44,10 @@ pub use self::context::{
     current_tool_chain_depth, current_tool_requester, current_tool_room, current_tool_room_id,
     tool_turn_context,
 };
-pub(crate) use self::context::{continue_ai_turn, current_tool_room_metadata, within_ai_turn};
+pub(crate) use self::context::{
+    continue_ai_turn, current_tool_room_metadata, record_tool_declaration, resolve_tool_catalogue,
+    within_ai_turn,
+};
 pub use self::external::{
     BeforeToolDecision, ExternalToolFuture, ExternalToolHandler, ExternalToolHandlerState,
     FireBeforeHookOptions, FireOnToolHookOptions, OnToolCancelledOptions, OnToolRefusedOptions,

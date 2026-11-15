@@ -91,9 +91,8 @@ use roomkit_postgres::{
 
 use crate::support::TempSchema;
 
-/// Store-specific failures. The shared scenarios now budget their preparation
-/// and hold the worker that must time out; the former 50 ms exemptions are gone.
-pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[];
+/// Shared text failures, with no store-specific exceptions.
+pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = scenarios::SKILL_GATING_FAILURES;
 
 /// A scenario that has not finished by then fails instead of hanging the
 /// suite.

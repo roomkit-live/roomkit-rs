@@ -1271,6 +1271,14 @@ pub(crate) async fn answer(tool: &Value) -> Result<ToolResult, ToolError> {
     if let Some(value) = tool.get("returns_json") {
         return Ok(ToolResult::Json(value.clone()));
     }
+    if tool["returns_allowed_names"].as_bool() == Some(true) {
+        let names = roomkit_ai::current_tool_allowed_names().map(|names| {
+            let mut names: Vec<_> = names.into_iter().collect();
+            names.sort();
+            names
+        });
+        return Ok(ToolResult::Json(json!(names)));
+    }
     if let Some(parts) = tool.get("returns_parts").and_then(Value::as_array) {
         return Ok(ToolResult::Parts(parts.iter().map(returned_part).collect()));
     }

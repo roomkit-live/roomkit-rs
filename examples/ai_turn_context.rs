@@ -1,4 +1,4 @@
-//! Read a real AI turn's room and author in configuration and tools (RFC §21.4).
+//! Read a real AI turn's room, author and tool catalogue (RFC §21.4).
 //! Run `cargo run --example ai_turn_context`; no network or key is needed.
 
 use std::error::Error;
@@ -12,7 +12,7 @@ use roomkit::model::{
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
     AiChannel, AiChannelOptions, ToolHandler, ToolResult, current_tool_actor_id,
-    current_tool_chain_depth, current_tool_room,
+    current_tool_allowed_names, current_tool_chain_depth, current_tool_room,
 };
 use serde_json::json;
 
@@ -34,14 +34,14 @@ async fn run() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
                 configured
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
-                    .push(current_tool_room());
+                    .push((current_tool_room(), current_tool_allowed_names()));
                 Box::pin(async { Ok(None) })
             })),
             tool_handler: Some(ToolHandler::new(move |_, _| {
                 handled
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
-                    .push(current_tool_room());
+                    .push((current_tool_room(), current_tool_allowed_names()));
                 async {
                     Ok(ToolResult::Text(format!(
                         "{}:{}",
@@ -75,11 +75,25 @@ async fn run() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
     let readings = readings.lock().unwrap_or_else(PoisonError::into_inner);
     checks.expect(
         "both callbacks see the room",
-        readings.len() == 2 && readings.iter().all(|seen| seen.as_deref() == Some(&room)),
+        readings.len() == 2
+            && readings
+                .iter()
+                .all(|(seen, _)| seen.as_deref() == Some(&room)),
     );
     checks.expect(
         "one shared room snapshot",
-        matches!(readings.as_slice(), [Some(first), Some(second)] if Arc::ptr_eq(first, second)),
+        matches!(readings.as_slice(), [(Some(first), _), (Some(second), _)] if Arc::ptr_eq(first, second)),
+    );
+    checks.expect(
+        "configuration precedes catalogue resolution",
+        matches!(readings.first(), Some((_, None))),
+    );
+    let allowed = ["lookup".to_owned(), "read_stored_result".to_owned()]
+        .into_iter()
+        .collect();
+    checks.expect(
+        "the handler reads the resolved catalogue and round declaration",
+        matches!(readings.get(1), Some((_, Some(names))) if names == &allowed),
     );
     let result = output.response_events.iter().find_map(|event| {
         let roomkit::model::EventContent::ToolCall(call) = &event.content else {

@@ -35,6 +35,9 @@ impl Loop {
             if !tool.defer_loading && !declared.iter().any(|known| known.name == tool.name) {
                 let origin = self.search.origin(&tool.name);
                 declared.push(DeclaredTool::from_tool(tool, FromToolOptions { origin }));
+                if self.toolbox.permits(&self.policy, &tool.name) {
+                    crate::tools::record_tool_declaration(&tool.name);
+                }
             }
         }
     }

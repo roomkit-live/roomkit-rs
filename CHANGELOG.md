@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Local AI turns expose their resolved allowed-tool catalogue, including Tool Search-hidden tools and round declarations, and refresh it when hooks withdraw tools.
+
 - AI preparation, streamed tool calls and turn observers share their room snapshot, actor and response depth, with separate preparation and consumption lifetimes.
 
 - Add explicit `tool_turn_context` scopes and readers, with fresh response records, nested restoration and depth that expires when the scope ends.

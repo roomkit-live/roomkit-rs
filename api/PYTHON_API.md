@@ -158,8 +158,15 @@ memory retrieval, after ingestion. Their streams inherit the snapshot and record
 with a separate live depth; preparation's children are never revived. Tool calls
 and generation, response, tool-call and human-input observers retain those readers. Native
 tests in `tests/ai_turn_context.rs` cover suspension, interleaving and cancellation.
-Requester attribution and policy-filtered catalogue refresh remain separate
-integration work; these tests do not claim that coverage.
+Local AI turns also expose their policy-filtered catalogue before memory retrieval,
+including Tool Search-hidden tools. Generation-hook adoption and
+round withdrawals refresh it; new round declarations are shared with preparation,
+while consumption's withdrawals stay local to its context. The shared
+`tool-allowed-names/` scenarios and native catalogue lifetime tests cover this.
+Requester attribution, role-specific policy overrides and the reasoning-backend
+driven-turn path remain separate integration work. Skill-gated catalogues depend
+on skill gating (RMK-1709): Rust still refuses `allowed_tools` frontmatter, and
+both shared scenarios exercising it remain explicit known failures on every store.
 
 | Rust type | Python representation |
 | --- | --- |

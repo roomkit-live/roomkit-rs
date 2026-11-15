@@ -1767,6 +1767,7 @@ impl<P: AiProvider> AiChannel<P> {
             instruction: kept_instruction(&event),
             eviction: Arc::clone(&self.eviction),
         };
+        looped.resolve_tool_catalogue();
         // Measured as the first round sends it, before the memory reads the
         // room (RFC §20).
         let notes = roomkit::discussion_notes(&event);

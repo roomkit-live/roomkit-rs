@@ -58,6 +58,15 @@ pub(super) struct Ran {
 }
 
 impl Loop {
+    /// Refresh the actual turn's reader from the same toolbox and policy
+    /// used by dispatch, before presentation filters hide any tools.
+    pub(crate) fn resolve_tool_catalogue(&self) {
+        crate::tools::resolve_tool_catalogue(
+            self.declared().into_iter().map(|tool| tool.name).collect(),
+            &self.adopted.withdrawn,
+        );
+    }
+
     /// Fires `BEFORE_AI_GENERATION` on the turn answering `trigger`, whose
     /// conversation starts with `messages`, and emits
     /// `before_ai_generation` (RFC §8.2); whether the turn generates. What
@@ -146,6 +155,7 @@ impl Loop {
                 .filter(|tool| !kept.contains(tool.name.as_str()))
                 .map(|tool| tool.name.clone()),
         );
+        self.resolve_tool_catalogue();
     }
 
     /// Fires `AFTER_TOOL_ROUND` on the round `round_index`, whose calls
@@ -176,6 +186,7 @@ impl Loop {
         };
         let left = turn.run_turn_hooks(event).await.payload;
         self.adopted.withdrawn.extend(left.withdrawn);
+        self.resolve_tool_catalogue();
         left.messages
             .iter()
             .map(|text| Message::new(Role::User, without_mark_copies(text)))

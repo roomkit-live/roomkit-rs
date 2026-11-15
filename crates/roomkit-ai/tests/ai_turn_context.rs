@@ -3,6 +3,8 @@
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
+#[path = "ai_turn_context/catalogue.rs"]
+mod catalogue;
 #[path = "ai_turn_context/concurrency.rs"]
 mod concurrency;
 #[path = "ai_turn_context/human.rs"]

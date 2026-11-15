@@ -183,7 +183,13 @@ const TURN_CONFIG: &[&str] = &[
     "skills",
 ];
 const TURN_TOOL: &[&str] = &["name", "description", "parameters"];
-const SKILL: &[&str] = &["name", "description", "instructions", "references"];
+const SKILL: &[&str] = &[
+    "name",
+    "description",
+    "instructions",
+    "references",
+    "allowed_tools",
+];
 const HUMAN_TOOL: &[&str] = &["name", "description", "parameters"];
 const MODEL: &[&str] = &[
     "rounds",
@@ -230,6 +236,7 @@ const TOOL: &[&str] = &[
     "gate",
     "declared",
     "returns_json",
+    "returns_allowed_names",
     "writes_record",
     "writes_structured_content",
     "returns_parts",
