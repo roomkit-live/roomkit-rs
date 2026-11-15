@@ -209,7 +209,11 @@ async fn a_set_whose_room_read_fails_still_writes_its_side_effects() {
     let room = store.get_room(&room_id()).await.unwrap().unwrap();
     kit.close().await.unwrap();
 
-    let unread = warnings.containing("Could not read room r1 before writing its side effects");
+    let unread: Vec<String> = warnings
+        .containing("ERROR")
+        .into_iter()
+        .filter(|line| line.contains("Could not read room r1 before writing its side effects"))
+        .collect();
     assert_eq!(
         (
             result.error.is_none(),
