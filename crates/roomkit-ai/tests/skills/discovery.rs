@@ -477,21 +477,26 @@ fn a_copy_limits_availability_without_rereading_or_mutating_the_source() {
     source
         .discover(&[root.path().join("skills")], DiscoverOptions::default())
         .unwrap();
-    let copy = source.copy(
-        Some(&["beta".into(), "missing".into()]),
-        roomkit_ai::CopyOptions::default(),
-    );
+    let copy = source
+        .copy(
+            Some(&["beta".into(), "missing".into()]),
+            roomkit_ai::CopyOptions::default(),
+        )
+        .unwrap();
     assert_eq!(copy.skill_count(), 1);
     assert_eq!(copy.get_skill("beta"), source.get_skill("beta"));
     assert_eq!(source.skill_count(), 2);
     assert_eq!(
-        source.copy(None, roomkit_ai::CopyOptions::default()),
+        source
+            .copy(None, roomkit_ai::CopyOptions::default())
+            .unwrap(),
         source
     );
     assert_eq!(copy.tool_definitions().len(), 2);
     assert_eq!(
         source
             .copy(Some(&[]), roomkit_ai::CopyOptions::default())
+            .unwrap()
             .tool_definitions(),
         Vec::<roomkit_ai::AiTool>::new()
     );

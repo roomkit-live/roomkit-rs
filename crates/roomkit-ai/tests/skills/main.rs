@@ -10,6 +10,7 @@ mod availability;
 mod copy_matcher;
 mod discovery;
 mod gating;
+mod manifest_bound;
 mod requirements;
 mod support;
 mod turns;

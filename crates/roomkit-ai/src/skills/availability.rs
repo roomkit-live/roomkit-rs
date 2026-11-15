@@ -3,8 +3,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use super::error::SkillError;
 use super::model::{Skill, SkillMetadata};
-use super::registry::SkillRegistry;
+use super::registry::{MANIFEST_MAX, SkillRegistry};
 use super::texts::escaped;
 
 /// Marks preserve insertion order in the model-facing manifest.
@@ -48,6 +49,17 @@ impl Marks {
 
     pub(super) fn has_entries(&self) -> bool {
         !self.unavailable.is_empty()
+    }
+
+    pub(super) fn check_manifest(&self, skills: &[Skill]) -> Result<(), SkillError> {
+        let characters = self.manifest(skills).chars().count();
+        if characters > MANIFEST_MAX {
+            return Err(SkillError::ManifestTooLarge {
+                characters,
+                limit: MANIFEST_MAX,
+            });
+        }
+        Ok(())
     }
 
     pub(super) fn manifest(&self, skills: &[Skill]) -> String {
@@ -131,15 +143,20 @@ impl SkillRegistry {
 
     /// Remove a skill from available reads while retaining its reason and
     /// gated patterns (RFC §24.3). Repeating the mark keeps those patterns.
-    pub fn mark_unavailable(&mut self, name: &str, reason: &str) {
-        if let Some(metadata) = self.get_metadata(name) {
+    ///
+    /// # Errors
+    /// Returns [`SkillError::ManifestTooLarge`] if the final escaped manifest
+    /// would exceed 65,536 characters. The registry stays unchanged.
+    pub fn mark_unavailable(&mut self, name: &str, reason: &str) -> Result<(), SkillError> {
+        let mut next = self.clone();
+        if let Some(metadata) = next.get_metadata(name) {
             let gates = metadata.gated_tool_names();
             if !gates.is_empty() {
-                self.marks.closed.insert(name.to_owned(), gates);
+                next.marks.closed.insert(name.to_owned(), gates);
             }
         }
-        Arc::make_mut(&mut self.skills).retain(|skill| skill.name() != name);
-        if let Some((_, held)) = self
+        Arc::make_mut(&mut next.skills).retain(|skill| skill.name() != name);
+        if let Some((_, held)) = next
             .marks
             .unavailable
             .iter_mut()
@@ -147,10 +164,13 @@ impl SkillRegistry {
         {
             reason.clone_into(held);
         } else {
-            self.marks
+            next.marks
                 .unavailable
                 .push((name.to_owned(), reason.to_owned()));
         }
+        next.marks.check_manifest(&next.skills)?;
+        *self = next;
+        Ok(())
     }
 
     /// Hide a registered skill from the manifest, preserving activation

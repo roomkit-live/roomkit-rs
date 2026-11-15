@@ -243,3 +243,11 @@ selects exact matching. `CopyOptions { marks: true }` is the default for
 This replaces `new()` and `copy(names)` calls (HITL 73da84cd, RMK-1709).
 Registry equality includes matcher identity: default equals default; custom
 callbacks equal only their clones, not independently constructed closures.
+
+Registry `mark_unavailable` and `copy` return `Result<_, SkillError>` for
+Python's `SkillManifestTooLargeError`: the final escaped manifest is bounded
+at 65,536 Unicode characters, and rejection leaves the source unchanged
+(HITL 7196c294, RMK-1709). Handle the result before using the copied registry.
+Rust exposes no mutable reference to stored metadata, so every reachable
+registry state already fits and `to_prompt_xml` remains an infallible `String`.
+Python's shared mutable metadata instead requires a final rendering guard.

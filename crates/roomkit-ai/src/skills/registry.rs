@@ -180,8 +180,11 @@ impl SkillRegistry {
     /// Unknown names are omitted; the source registry is unchanged.
     /// With `marks=false`, copied available skills are listed and no unavailable
     /// reason or closed pattern survives. Removed skills are never restored.
-    #[must_use]
-    pub fn copy(&self, names: Option<&[String]>, options: CopyOptions) -> Self {
+    ///
+    /// # Errors
+    /// Returns [`SkillError::ManifestTooLarge`] if the copied manifest would
+    /// exceed 65,536 characters, including skills made listed by dropping marks.
+    pub fn copy(&self, names: Option<&[String]>, options: CopyOptions) -> Result<Self, SkillError> {
         let skills: Vec<Skill> = self
             .skills
             .iter()
@@ -193,11 +196,12 @@ impl SkillRegistry {
         } else {
             Marks::default()
         };
-        Self {
+        marks.check_manifest(&skills)?;
+        Ok(Self {
             skills: Arc::new(skills),
             marks,
             requires_match: self.requires_match.clone(),
-        }
+        })
     }
 
     /// The tools an AI channel given this registry declares
@@ -238,13 +242,7 @@ impl SkillRegistry {
         for name in &names {
             marks.clear(name);
         }
-        let characters = marks.manifest(&next).chars().count();
-        if characters > MANIFEST_MAX {
-            return Err(SkillError::ManifestTooLarge {
-                characters,
-                limit: MANIFEST_MAX,
-            });
-        }
+        marks.check_manifest(&next)?;
         self.skills = Arc::new(next);
         self.marks = marks;
         Ok(names.len())

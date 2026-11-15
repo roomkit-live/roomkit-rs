@@ -22,8 +22,8 @@ fn a_copy_without_marks_never_restores_an_unavailable_skill() {
         source.register(path).unwrap();
     }
     source.mark_unlisted("invoices");
-    source.mark_unavailable("legacy", "not here");
-    let marked = source.copy(None, CopyOptions::default());
+    source.mark_unavailable("legacy", "not here").unwrap();
+    let marked = source.copy(None, CopyOptions::default()).unwrap();
     assert_eq!(marked.listed_names(), ["reports"]);
     assert_eq!(marked.get_unavailable_reason("legacy"), Some("not here"));
     assert_eq!(
@@ -31,7 +31,7 @@ fn a_copy_without_marks_never_restores_an_unavailable_skill() {
         HashSet::from(["use_tool".into()])
     );
     for names in [None, Some(["invoices".into(), "legacy".into()].as_slice())] {
-        let plain = source.copy(names, CopyOptions { marks: false });
+        let plain = source.copy(names, CopyOptions { marks: false }).unwrap();
         assert!(plain.get_skill("legacy").is_none());
         assert!(plain.get_unavailable_reason("legacy").is_none());
         assert_eq!(plain.unavailable_skills().len(), 0);
@@ -60,8 +60,8 @@ fn copies_and_clones_keep_the_same_host_callback_and_state() {
     let names = HashSet::from(["boards_get_card".to_owned()]);
     for copy in [
         source.clone(),
-        source.copy(None, CopyOptions::default()),
-        source.copy(None, CopyOptions { marks: false }),
+        source.copy(None, CopyOptions::default()).unwrap(),
+        source.copy(None, CopyOptions { marks: false }).unwrap(),
     ] {
         assert_eq!(copy.requires_match, matcher);
         assert!(copy.requires_match.call("boards", &names).unwrap());
@@ -105,7 +105,7 @@ fn public_gate_views_distinguish_identical_patterns_from_overlapping_ones() {
         );
         registry.register(path).unwrap();
     }
-    registry.mark_unavailable("closed", "not here");
+    registry.mark_unavailable("closed", "not here").unwrap();
     let empty = HashSet::new();
     assert_eq!(
         registry.closed_tool_names(&empty),
@@ -126,7 +126,7 @@ fn public_gate_views_distinguish_identical_patterns_from_overlapping_ones() {
         registry.gated_tool_names(&active),
         HashSet::from(["calendar_read".into()])
     );
-    registry.mark_unavailable("same", "also gone");
+    registry.mark_unavailable("same", "also gone").unwrap();
     assert_eq!(
         registry.unopenable_tool_names(),
         HashSet::from(["calendar_*".into()])
@@ -144,19 +144,23 @@ fn all_unavailable_gates_survive_a_copy_unless_marks_are_dropped() {
         &skill_md("cal", "d", "allowed_tools: gated_cal\n"),
     );
     registry.register(path).unwrap();
-    registry.mark_unavailable("cal", "not granted here");
+    registry
+        .mark_unavailable("cal", "not granted here")
+        .unwrap();
     let empty = HashSet::new();
     let expected = HashSet::from(["gated_cal".into()]);
     assert_eq!(registry.gated_tool_names(&empty), expected);
     assert_eq!(
         registry
             .copy(None, CopyOptions::default())
+            .unwrap()
             .gated_tool_names(&empty),
         expected
     );
     assert!(
         registry
             .copy(None, CopyOptions { marks: false })
+            .unwrap()
             .gated_tool_names(&empty)
             .is_empty()
     );

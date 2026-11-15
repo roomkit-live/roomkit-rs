@@ -18,7 +18,9 @@ fn an_unavailable_skill_leaves_every_available_view_and_registration_restores_it
     let path = root.skill_with("skills", "calendar", &skill_md("calendar", "d", ""));
     let mut registry = SkillRegistry::default();
     registry.register(&path).unwrap();
-    registry.mark_unavailable("calendar", "not granted");
+    registry
+        .mark_unavailable("calendar", "not granted")
+        .unwrap();
     assert!(registry.get_skill("calendar").is_none());
     assert!(registry.get_metadata("calendar").is_none());
     assert_eq!(registry.skill_names(), Vec::<&str>::new());
@@ -53,9 +55,13 @@ fn an_unavailable_skill_leaves_every_available_view_and_registration_restores_it
 #[test]
 fn an_unavailable_only_manifest_escapes_names_and_reasons_and_keeps_order() {
     let mut registry = SkillRegistry::default();
-    registry.mark_unavailable("a<\"", "Needs <approval> & access");
-    registry.mark_unavailable("b", "later");
-    registry.mark_unavailable("a<\"", "Updated <approval> & access");
+    registry
+        .mark_unavailable("a<\"", "Needs <approval> & access")
+        .unwrap();
+    registry.mark_unavailable("b", "later").unwrap();
+    registry
+        .mark_unavailable("a<\"", "Updated <approval> & access")
+        .unwrap();
     assert_eq!(
         registry.to_prompt_xml(),
         "<unavailable_skills>\n  <skill name=\"a&lt;&quot;\">\n    <reason>Updated &lt;approval&gt; &amp; access</reason>\n  </skill>\n  <skill name=\"b\">\n    <reason>later</reason>\n  </skill>\n</unavailable_skills>"
@@ -101,17 +107,21 @@ fn a_subset_copy_preserves_selected_marks_without_mutating_its_source() {
         source.register(path).unwrap();
     }
     source.mark_unlisted("quiet");
-    source.mark_unavailable("gone", "not here");
+    source.mark_unavailable("gone", "not here").unwrap();
     let selected = ["quiet".to_owned(), "gone".to_owned()];
-    let mut copied = source.copy(Some(&selected), roomkit_ai::CopyOptions::default());
+    let mut copied = source
+        .copy(Some(&selected), roomkit_ai::CopyOptions::default())
+        .unwrap();
     assert_eq!(copied.skill_names(), ["quiet"]);
     assert_eq!(copied.listed_names(), Vec::<&str>::new());
     assert_eq!(copied.get_unavailable_reason("gone"), Some("not here"));
-    copied.mark_unavailable("quiet", "only in copy");
+    copied.mark_unavailable("quiet", "only in copy").unwrap();
     assert!(source.get_skill("quiet").is_some());
     assert!(source.get_unavailable_reason("quiet").is_none());
     assert_eq!(
-        source.copy(None, roomkit_ai::CopyOptions::default()),
+        source
+            .copy(None, roomkit_ai::CopyOptions::default())
+            .unwrap(),
         source
     );
 }
@@ -129,13 +139,20 @@ async fn repeated_marks_and_subset_copies_keep_the_right_tools_closed() {
             &skill_md(name, "d", &format!("allowed_tools: tool_{name}\n")),
         );
         source.register(path).unwrap();
-        source.mark_unavailable(name, "first reason");
-        source.mark_unavailable(name, "updated reason");
+        source.mark_unavailable(name, "first reason").unwrap();
+        source.mark_unavailable(name, "updated reason").unwrap();
     }
     for (registry, b_runs) in [
-        (source.copy(None, roomkit_ai::CopyOptions::default()), false),
         (
-            source.copy(Some(&["a".to_owned()]), roomkit_ai::CopyOptions::default()),
+            source
+                .copy(None, roomkit_ai::CopyOptions::default())
+                .unwrap(),
+            false,
+        ),
+        (
+            source
+                .copy(Some(&["a".to_owned()]), roomkit_ai::CopyOptions::default())
+                .unwrap(),
             true,
         ),
     ] {
@@ -211,9 +228,11 @@ fn a_failed_registration_preserves_unavailable_and_unlisted_marks() {
         registry.register(&path).unwrap();
         registry.mark_unlisted("held");
         if unavailable {
-            registry.mark_unavailable("held", "not here");
+            registry.mark_unavailable("held", "not here").unwrap();
         }
-        registry.mark_unavailable("other", &"r".repeat(65_000));
+        registry
+            .mark_unavailable("other", &"r".repeat(65_000))
+            .unwrap();
         assert!(registry.to_prompt_xml().chars().count() < 65_536);
         let before = registry.clone();
         root.file(
@@ -235,8 +254,12 @@ fn registration_removes_the_old_reason_before_checking_the_manifest_size() {
     let root = TempDir::new();
     let path = root.skill_with("skills", "held", &skill_md("held", "d", ""));
     let mut registry = SkillRegistry::default();
-    registry.mark_unavailable("held", &"r".repeat(70_000));
-    assert!(registry.to_prompt_xml().chars().count() > 65_536);
+    registry.mark_unavailable("held", "").unwrap();
+    let remaining = 65_536 - registry.to_prompt_xml().chars().count();
+    registry
+        .mark_unavailable("held", &"r".repeat(remaining))
+        .unwrap();
+    assert_eq!(registry.to_prompt_xml().chars().count(), 65_536);
     registry.register(path).unwrap();
     assert_eq!(registry.skill_names(), ["held"]);
     assert!(registry.get_unavailable_reason("held").is_none());
@@ -254,7 +277,7 @@ async fn registration_makes_an_unavailable_gate_openable_again() {
     );
     let mut registry = SkillRegistry::default();
     registry.register(&path).unwrap();
-    registry.mark_unavailable("a", "not here");
+    registry.mark_unavailable("a", "not here").unwrap();
     tree.file(
         "skills/a/SKILL.md",
         &skill_md("a", "d", "allowed_tools: tool_b\n"),

@@ -42,7 +42,9 @@ impl SkillDirectories {
         for skill in skills.as_array().into_iter().flatten() {
             let name = skill["name"].as_str().unwrap_or_default();
             if let Some(reason) = skill["unavailable"].as_str() {
-                registry.mark_unavailable(name, reason);
+                registry
+                    .mark_unavailable(name, reason)
+                    .map_err(|e| e.to_string())?;
             }
             if skill["unlisted"].as_bool().unwrap_or(false) {
                 registry.mark_unlisted(name);

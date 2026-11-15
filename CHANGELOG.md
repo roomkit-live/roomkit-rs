@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Skill unavailable marks and copies reject manifests past 65,536 escaped characters atomically. Handle the new `Result` from `mark_unavailable` and `copy` (HITL 7196c294, RMK-1709).
+
 - Skill registries accept a host prerequisite matcher and copy availability marks optionally. Use `SkillRegistry::new(SkillRegistryOptions)` (or `default()`) and `copy(names, CopyOptions)` in place of `new()` and `copy(names)` (HITL 73da84cd, RMK-1709).
 
 - Local text skill activation checks prerequisites against policy-admitted, non-withdrawn tools and closed gates before granting access or acknowledging an active skill (RMK-1709).
