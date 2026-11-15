@@ -6,6 +6,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Local text skill activation checks exact prerequisites against policy-admitted, non-withdrawn tools and closed gates before granting access or acknowledging an active skill (RMK-1709).
+
+- Local skill registries preserve unavailable reasons and closed gates, keep unlisted skills activatable, and carry marks through copies; re-registration clears stale marks (RMK-1709).
+
 - Local text skills gate ordinary tool declarations, discovery and execution until served activation, including deferred providers; `SkillMetadata.allowed_tools` preserves text or list values (`SkillToolNames`). Complete metadata struct literals must add `allowed_tools: None` (RMK-1709).
 
 - Local AI turns expose their resolved allowed-tool catalogue, including Tool Search-hidden tools and round declarations, and refresh it when hooks withdraw tools.

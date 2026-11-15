@@ -14,8 +14,7 @@
 //!
 //! - a frontmatter past 65,536 characters, or holding more than 64
 //!   brackets and braces open at once (§24.1);
-//! - `requires`, whose prerequisites this implementation does not enforce;
-//! - an `allowed_tools` value that cannot be read whole as text or a list;
+//! - an `allowed_tools` or `requires` value unreadable as text or a list;
 //! - a top-level line that is no key, no item under a key, no comment,
 //!   since YAML may read there a key this reading cannot name (an explicit
 //!   key, a tag, an anchor, a merge, a flow mapping);
@@ -45,12 +44,6 @@ pub(crate) const FRONTMATTER_MAX: usize = 64 * 1024;
 /// ones counted too (RFC §24.1).
 const FLOW_DEPTH_MAX: usize = 64;
 
-/// The prerequisite key (RFC §24.3), not yet enforced by this implementation.
-/// The Agent Skills format's `allowed-tools`,
-/// hyphenated, is none of them: a key like any other, kept as written, as
-/// Python's `GATING_KEYS`.
-const GATING_KEYS: [&str; 1] = ["requires"];
-
 /// The fields the registry reads, in the order of [`Fields`].
 const FIELDS: [&str; 4] = ["name", "description", "license", "compatibility"];
 
@@ -64,6 +57,7 @@ pub(crate) struct Fields {
     pub(crate) license: Option<String>,
     pub(crate) compatibility: Option<String>,
     pub(crate) allowed_tools: Option<SkillToolNames>,
+    pub(crate) requires: Option<SkillToolNames>,
     pub(crate) extra: Vec<(String, String)>,
 }
 
@@ -143,6 +137,13 @@ pub(crate) fn read(text: &str) -> Result<Fields, String> {
         reader.line(number + 1, line)?;
     }
     reader.continued(|reader| reader.finish(true))?;
+    if let Some(value) = &reader.fields.requires {
+        let text = match value {
+            SkillToolNames::Text(text) => text.clone(),
+            SkillToolNames::List(items) => items.join(", "),
+        };
+        reader.fields.record_extra("requires", Some(text));
+    }
     Ok(reader.fields)
 }
 
@@ -366,15 +367,14 @@ impl Reader {
                 "the frontmatter's line {number} is no key a line-by-line reading can name"
             ));
         };
-        if GATING_KEYS.contains(&key) {
-            return Err(format!(
-                "the frontmatter declares {key}, which this implementation does not read: \
-                 a skill that gates or requires tools is refused"
-            ));
-        }
         let value = value.trim();
-        if key == "allowed_tools" {
-            self.open = Open::Gates(Gates::read(value)?);
+        let gate = match key {
+            "allowed_tools" => Some("allowed_tools"),
+            "requires" => Some("requires"),
+            _ => None,
+        };
+        if let Some(key) = gate {
+            self.open = Open::Gates(Gates::read(key, value)?);
             return Ok(());
         }
         if matches!(
@@ -406,7 +406,12 @@ impl Reader {
     fn finish(&mut self, at_end: bool) -> Result<(), String> {
         let (field, value) = match std::mem::take(&mut self.open) {
             Open::Gates(gates) => {
-                gates.finish(&mut self.fields.allowed_tools);
+                let held = if gates.key == "requires" {
+                    &mut self.fields.requires
+                } else {
+                    &mut self.fields.allowed_tools
+                };
+                gates.finish(held);
                 return Ok(());
             }
             Open::Closed | Open::Skipped => return Ok(()),

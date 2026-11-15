@@ -5,11 +5,12 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use super::availability::Marks;
 use super::error::SkillError;
 use super::files::{self, OpenFailure, ReadFailure, SKILL_FILE_MAX};
 use super::frontmatter::{self, Fields};
 use super::model::{DiscoverOptions, Skill, SkillMetadata};
-use super::texts::{escaped, quoted_name};
+use super::texts::quoted_name;
 
 /// The most characters a skill's name takes (RFC §24.1).
 const NAME_MAX: usize = 64;
@@ -33,9 +34,9 @@ pub(crate) const MANIFEST_MAX: usize = 64 * 1024;
 ///   of its directory, or has no frontmatter;
 /// - its frontmatter is past 65,536 characters or 64 brackets open at
 ///   once, holds a line that may hide a key or a field the registry reads
-///   that cannot be read whole line by line, or declares `allowed_tools`
-///   or `requires`, since this implementation gates no tool (another key
-///   it cannot read whole is left out of `extra_metadata`);
+///   that cannot be read whole line by line, or an unreadable
+///   `allowed_tools` or `requires` (another key it cannot read whole
+///   is left out of `extra_metadata`);
 /// - its name is missing, not kebab-case, longer than 64 characters or not
 ///   its directory's; its description is missing or longer than 1,024
 ///   characters;
@@ -59,7 +60,8 @@ pub(crate) const MANIFEST_MAX: usize = 64 * 1024;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SkillRegistry {
     /// Its skills, shared by its clones: a turn's reads one for its turn alone.
-    skills: Arc<Vec<Skill>>,
+    pub(super) skills: Arc<Vec<Skill>>,
+    pub(super) marks: Marks,
 }
 
 impl SkillRegistry {
@@ -162,9 +164,9 @@ impl SkillRegistry {
         self.skills.len()
     }
 
-    /// Whether the model has anything to be told: a skill it can activate.
+    /// Whether the model has an available skill or an unavailable reason to read.
     pub fn has_entries(&self) -> bool {
-        !self.skills.is_empty()
+        !self.skills.is_empty() || self.marks.has_entries()
     }
 
     /// Copies the registry, optionally narrowed to `names` (RFC §24.3).
@@ -172,14 +174,16 @@ impl SkillRegistry {
     /// Unknown names are omitted; the source registry is unchanged.
     #[must_use]
     pub fn copy(&self, names: Option<&[String]>) -> Self {
-        let skills = self
+        let skills: Vec<Skill> = self
             .skills
             .iter()
             .filter(|skill| names.is_none_or(|names| names.iter().any(|name| name == skill.name())))
             .cloned()
             .collect();
+        let marks = self.marks.subset(names, &skills);
         Self {
             skills: Arc::new(skills),
+            marks,
         }
     }
 
@@ -200,7 +204,7 @@ impl SkillRegistry {
     /// with its description, license and compatibility, their text escaped
     /// so that none reads as markup; empty with no skill.
     pub fn to_prompt_xml(&self) -> String {
-        manifest(&self.skills)
+        self.marks.manifest(&self.skills)
     }
 
     /// Takes `skills`, each replacing the one of its name, when the
@@ -217,7 +221,11 @@ impl SkillRegistry {
                 None => next.push(skill),
             }
         }
-        let characters = manifest(&next).chars().count();
+        let mut marks = self.marks.clone();
+        for name in &names {
+            marks.clear(name);
+        }
+        let characters = marks.manifest(&next).chars().count();
         if characters > MANIFEST_MAX {
             return Err(SkillError::ManifestTooLarge {
                 characters,
@@ -225,6 +233,7 @@ impl SkillRegistry {
             });
         }
         self.skills = Arc::new(next);
+        self.marks = marks;
         Ok(names.len())
     }
 }
@@ -372,18 +381,7 @@ fn skill_file(directory: &Path, label: &str) -> Result<String, SkillError> {
 /// What is wrong with `fields`, the frontmatter of the skill in the
 /// directory `label`, in the reference implementation's words and order.
 fn invalid(fields: &Fields, label: &str) -> Vec<String> {
-    let mut reasons = Vec::new();
-    if let Some(gates) = &fields.allowed_tools {
-        for pattern in gates
-            .names()
-            .into_iter()
-            .filter(|name| name.contains(['[', ']']))
-        {
-            reasons.push(format!(
-                "allowed_tools: pattern {pattern:?} holds a bracket"
-            ));
-        }
-    }
+    let mut reasons = pattern_errors(fields);
     let name = fields.name.as_deref().unwrap_or_default();
     let characters = name.chars().count();
     if name.is_empty() {
@@ -417,6 +415,29 @@ fn invalid(fields: &Fields, label: &str) -> Vec<String> {
     reasons
 }
 
+/// Bracketed patterns would not match as character classes.
+fn pattern_errors(fields: &Fields) -> Vec<String> {
+    let mut reasons = Vec::new();
+    for (key, value) in [
+        ("allowed_tools", &fields.allowed_tools),
+        ("requires", &fields.requires),
+    ] {
+        if let Some(gates) = value {
+            for pattern in gates
+                .names()
+                .into_iter()
+                .filter(|name| name.contains(['[', ']']))
+            {
+                reasons.push(format!(
+                    "{key}: tool pattern {} holds a bracket: a pattern reads * and ? alone",
+                    quoted_name(&pattern),
+                ));
+            }
+        }
+    }
+    reasons
+}
+
 /// Whether `name` is lowercase ASCII letters and digits in runs a hyphen
 /// separates.
 fn is_kebab_case(name: &str) -> bool {
@@ -426,30 +447,4 @@ fn is_kebab_case(name: &str) -> bool {
                 .chars()
                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
     })
-}
-
-/// The `<available_skills>` block of `skills`, as the reference
-/// implementation writes it; empty with none.
-fn manifest(skills: &[Skill]) -> String {
-    if skills.is_empty() {
-        return String::new();
-    }
-    let mut lines = vec!["<available_skills>".to_owned()];
-    for skill in skills {
-        let metadata = &skill.metadata;
-        lines.push(format!("  <skill name=\"{}\">", escaped(&metadata.name)));
-        let fields = [
-            ("description", Some(metadata.description.as_str())),
-            ("license", metadata.license.as_deref()),
-            ("compatibility", metadata.compatibility.as_deref()),
-        ];
-        for (tag, value) in fields {
-            if let Some(value) = value.filter(|value| !value.is_empty()) {
-                lines.push(format!("    <{tag}>{}</{tag}>", escaped(value)));
-            }
-        }
-        lines.push("  </skill>".to_owned());
-    }
-    lines.push("</available_skills>".to_owned());
-    lines.join("\n")
 }

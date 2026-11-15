@@ -106,17 +106,17 @@ fn another_key_s_value_is_kept_as_text_when_read_whole() {
     );
 }
 
-/// Prerequisites remain refused until they are enforced (RFC §24.3).
+// Python: tests/test_skill_frontmatter_lines.py::test_each_form_reads_as_yaml_reads_it.
 #[test]
-fn requires_is_refused_whatever_its_value() {
-    for frontmatter in [
-        "requires: []",
-        "requires: lookup",
-        "\"requires\": lookup",
-        "'requires' : x",
+fn requires_is_read_under_plain_or_quoted_keys() {
+    for (frontmatter, expected) in [
+        ("requires: []", vec![]),
+        ("requires: lookup", vec!["lookup"]),
+        ("\"requires\": lookup", vec!["lookup"]),
+        ("'requires' : x", vec!["x"]),
     ] {
-        let refused = description(frontmatter).unwrap_err();
-        assert!(refused.contains("declares"), "{frontmatter:?}: {refused}");
+        let fields = read(frontmatter).unwrap();
+        assert_eq!(fields.requires.unwrap().names(), expected);
     }
 }
 
@@ -216,6 +216,7 @@ fn each_field_the_registry_reads_is_read() {
             license: Some("MIT".to_owned()),
             compatibility: Some("Needs nothing".to_owned()),
             allowed_tools: None,
+            requires: None,
             extra: vec![("version".to_owned(), "1.2".to_owned())],
         })
     );

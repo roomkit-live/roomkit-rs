@@ -7,35 +7,37 @@ use crate::skills::SkillToolNames;
 
 #[derive(Debug)]
 pub(super) struct Gates {
+    pub(super) key: &'static str,
     value: Option<SkillToolNames>,
     open: bool,
     indent: Option<usize>,
 }
 
 impl Gates {
-    pub(super) fn read(value: &str) -> Result<Self, String> {
+    pub(super) fn read(key: &'static str, value: &str) -> Result<Self, String> {
         let plain = without_comment(value).trim();
         let open = plain.is_empty();
         let value = if open || NULLS.contains(&plain) {
             None
         } else if value.starts_with(['"', '\'']) {
             Some(SkillToolNames::Text(
-                quoted_whole(value).ok_or_else(unread)?,
+                quoted_whole(value).ok_or_else(|| unread(key))?,
             ))
         } else if value.starts_with('[') {
             Some(SkillToolNames::List(
-                flow_list_with(plain, gate_item).ok_or_else(unread)?,
+                flow_list_with(plain, gate_item).ok_or_else(|| unread(key))?,
             ))
         } else if not_a_plain_text(value) || value.starts_with(['|', '>', '&', '!']) {
-            return Err(unread());
+            return Err(unread(key));
         } else {
             match gate_item(value) {
                 Item::Text(text) => Some(SkillToolNames::Text(text)),
                 Item::Nothing => None,
-                Item::Unread => return Err(unread()),
+                Item::Unread => return Err(unread(key)),
             }
         };
         Ok(Self {
+            key,
             value,
             open,
             indent: None,
@@ -49,7 +51,7 @@ impl Gates {
         }
         let indent = line.len() - text.len();
         if !self.open || !super::is_item(text) || self.indent.is_some_and(|held| held != indent) {
-            return Err(unread());
+            return Err(unread(self.key));
         }
         self.indent = Some(indent);
         let item = gate_item(text.get(1..).unwrap_or_default().trim());
@@ -57,12 +59,12 @@ impl Gates {
             .value
             .get_or_insert_with(|| SkillToolNames::List(Vec::new()));
         let SkillToolNames::List(items) = value else {
-            return Err(unread());
+            return Err(unread(self.key));
         };
         match item {
             Item::Text(item) => items.push(item),
             Item::Nothing => {}
-            Item::Unread => return Err(unread()),
+            Item::Unread => return Err(unread(self.key)),
         }
         Ok(())
     }
@@ -120,6 +122,6 @@ fn numeric_scalar(text: &str) -> bool {
             .all(|c| c.is_ascii_digit() || ":-.+ tTzZ".contains(c))
 }
 
-fn unread() -> String {
-    "the frontmatter's allowed_tools cannot be read line by line".to_owned()
+fn unread(key: &str) -> String {
+    format!("the frontmatter's {key} cannot be read line by line")
 }

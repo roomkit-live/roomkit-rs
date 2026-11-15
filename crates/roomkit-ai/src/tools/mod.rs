@@ -29,6 +29,7 @@ mod structured;
 pub(crate) mod toolbox;
 
 use std::any::type_name;
+use std::collections::HashSet;
 use std::error::Error;
 use std::future::Future;
 use std::sync::Arc;
@@ -283,6 +284,10 @@ pub struct ToolContext {
     /// activate: the tools the turn reaches, its own and a person's aside (RFC
     /// §24.4).
     pub(crate) hintable: Vec<String>,
+    /// The resolved, policy-admitted catalogue for a skill prerequisite check.
+    pub(crate) skill_admitted: Option<HashSet<String>>,
+    /// Activations served in this turn, including a standalone turn.
+    pub(crate) skill_activated: HashSet<String>,
     /// The turn's Tool Search, which reveals what such a hint names once its
     /// call is served.
     pub(crate) search: Option<Arc<TurnSearch>>,
@@ -301,6 +306,8 @@ impl ToolContext {
             actor_id: None,
             call_record: None,
             hintable: Vec::new(),
+            skill_admitted: None,
+            skill_activated: HashSet::new(),
             search: None,
         }
     }

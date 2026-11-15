@@ -49,6 +49,14 @@ impl SkillGates {
 }
 
 impl Loop {
+    pub(super) fn skill_activated(&self) -> HashSet<String> {
+        self.skill_gates
+            .activated
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     /// Ordinary schemas, search and hints all read the same reachable set.
     /// Deferred providers still hold the full admitted definitions unseen.
     pub(super) fn reachable(&self) -> Vec<AiTool> {
@@ -63,6 +71,13 @@ impl Loop {
             return false;
         }
         self.skill_gates.gates(name, &self.context)
+    }
+
+    pub(super) fn skill_unopenable(&self, name: &str) -> bool {
+        self.skill_gates
+            .skills
+            .as_ref()
+            .is_some_and(|skills| skills.unopenable(name))
     }
 
     /// Settle before references are collected and before sibling calls can

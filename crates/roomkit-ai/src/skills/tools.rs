@@ -88,10 +88,21 @@ impl SkillTools {
             self.active_names(&context.room_id)
         };
         let served = crate::served_tool_name(name);
-        self.registry.all_metadata().iter().any(|skill| {
-            !local.contains(&skill.name)
-                && !room.contains(&skill.name)
-                && (skill.gates(name) || skill.gates(served))
+        let activated = local.iter().cloned().chain(room).collect();
+        self.registry
+            .gated_patterns(&activated)
+            .iter()
+            .any(|pattern| {
+                crate::tools::glob_matches(pattern, name)
+                    || crate::tools::glob_matches(pattern, served)
+            })
+    }
+
+    /// Whether no available skill can open a closed pattern for this name.
+    pub(crate) fn unopenable(&self, name: &str) -> bool {
+        let served = crate::served_tool_name(name);
+        self.registry.unopenable_patterns().iter().any(|pattern| {
+            crate::tools::glob_matches(pattern, name) || crate::tools::glob_matches(pattern, served)
         })
     }
 
@@ -217,8 +228,15 @@ impl SkillTools {
     ) -> Result<ToolResult, ToolError> {
         let name = argument(call, "name");
         let Some(skill) = self.registry.get_skill(name) else {
+            if let Some(reason) = self.registry.get_unavailable_reason(name) {
+                return Err(ToolError::Refused(texts::object(&[
+                    ("error", json!(unavailable(name, reason))),
+                    ("available_skills", json!(self.registry.skill_names())),
+                ])));
+            }
             return not_a_skill(call, name, &self.registry.skill_names(), context);
         };
+        self.check_requires(&skill.metadata, context)?;
         let active = !context.stands_alone && self.lock().is_active(&context.room_id, name);
         let path = skill.path.clone();
         let references = blocking(move || files::list_references(&path)).await;
@@ -242,12 +260,31 @@ impl SkillTools {
         Ok(ToolResult::Text(texts::object(&answer)))
     }
 
+    fn check_requires(
+        &self,
+        metadata: &super::SkillMetadata,
+        context: &ToolContext,
+    ) -> Result<(), ToolError> {
+        let active = if context.stands_alone {
+            Vec::new()
+        } else {
+            self.active_names(&context.room_id)
+        };
+        super::requirements::check(&self.registry, metadata, context, active)
+    }
+
     /// `read_skill_reference`: a reference of a skill the registry holds, or
     /// what the model reads of why it cannot be read (RFC §24.6).
     async fn read(&self, call: &ToolCall) -> Result<ToolResult, ToolError> {
         let (skill_name, filename) = (argument(call, "skill_name"), argument(call, "filename"));
         let Some(skill) = self.registry.get_skill(skill_name) else {
-            let error = format!("Skill {} not found", quoted_name(skill_name));
+            let error = self
+                .registry
+                .get_unavailable_reason(skill_name)
+                .map_or_else(
+                    || format!("Skill {} not found", quoted_name(skill_name)),
+                    |reason| unavailable(skill_name, reason),
+                );
             return Err(ToolError::Refused(texts::object(&[(
                 "error",
                 json!(error),
@@ -365,4 +402,11 @@ fn argument<'a>(call: &'a ToolCall, key: &str) -> &'a str {
 /// task; `None` when it panicked.
 async fn blocking<T: Send + 'static>(read: impl FnOnce() -> T + Send + 'static) -> Option<T> {
     tokio::task::spawn_blocking(read).await.ok()
+}
+
+fn unavailable(name: &str, reason: &str) -> String {
+    format!(
+        "Skill {} is unavailable in this context: {reason}",
+        quoted_name(name)
+    )
 }

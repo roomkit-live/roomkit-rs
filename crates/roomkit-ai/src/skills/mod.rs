@@ -12,16 +12,18 @@
 //! - which skills are active in each room (`activation`), in memory, read
 //!   again from the room's stored rows after a restart.
 //!
-//! A skill that requires tools (`requires`), and
-//! a skill's scripts, are not supported: the first is refused, and no
-//! script runs. Skills an MCP server serves (RFC §24.7) are not either.
+//! Prerequisites (`requires`) use exact names in the admitted catalogue;
+//! custom prerequisite matchers remain unimplemented. No skill script runs,
+//! and skills an MCP server serves (RFC §24.7) remain unsupported.
 
 mod activation;
+mod availability;
 mod error;
 mod files;
 mod frontmatter;
 mod model;
 mod registry;
+mod requirements;
 mod texts;
 mod tool_names;
 pub(crate) mod tools;

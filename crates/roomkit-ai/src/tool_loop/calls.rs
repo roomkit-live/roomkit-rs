@@ -304,8 +304,13 @@ impl Loop {
             return refuse(texts::not_permitted(&model_call.name));
         }
         if self.skill_gated(&model_call.name) {
+            let reason = if self.skill_unopenable(&model_call.name) {
+                "gated by a skill that is not available here."
+            } else {
+                "gated by a skill. Activate the skill first using activate_skill."
+            };
             return refuse(texts::error_envelope(&format!(
-                "Tool '{}' is gated by a skill. Activate the skill first using activate_skill.",
+                "Tool '{}' is {reason}",
                 model_call.name
             )));
         }
@@ -396,6 +401,9 @@ impl Loop {
         let structured = record.structured_content.clone();
         context.call_record = Some(record);
         if call.name == ACTIVATE_SKILL {
+            context.skill_admitted =
+                Some(self.declared().into_iter().map(|tool| tool.name).collect());
+            context.skill_activated = self.skill_activated();
             context.search = Some(Arc::clone(&self.search));
             context.hintable = self
                 .reachable()

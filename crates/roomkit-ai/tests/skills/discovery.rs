@@ -167,9 +167,8 @@ fn each_parse_failure_names_the_skill() {
         ),
         (
             "requires",
-            skill_md("requires", "x", "requires: lookup\n"),
-            "Parsing failed for requires: the frontmatter declares requires, which this \
-             implementation does not read: a skill that gates or requires tools is refused",
+            skill_md("requires", "x", "requires: {lookup: true}\n"),
+            "Parsing failed for requires: the frontmatter's requires cannot be read line by line",
         ),
     ];
     for (directory, text, words) in cases {
