@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use roomkit_ai::{DiscoverOptions, SkillRegistry};
+use roomkit_ai::{DiscoverOptions, RequiresMatch, SkillRegistry, SkillRegistryOptions, ToolError};
 use serde_json::Value;
 
 use crate::run::lock;
@@ -17,7 +17,11 @@ pub(crate) struct SkillDirectories(Mutex<Vec<PathBuf>>);
 
 impl SkillDirectories {
     /// The registry holding `skills`, written to a new directory.
-    pub(crate) fn registry(&self, skills: &Value) -> Result<SkillRegistry, String> {
+    pub(crate) fn registry(
+        &self,
+        skills: &Value,
+        matcher: &Value,
+    ) -> Result<SkillRegistry, String> {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let directory = std::env::temp_dir().join(format!(
             "roomkit-conformance-skills-{}-{}",
@@ -29,7 +33,9 @@ impl SkillDirectories {
         for skill in skills.as_array().ok_or("skills: not a list")? {
             write_skill(&directory, skill).map_err(|e| e.to_string())?;
         }
-        let mut registry = SkillRegistry::new();
+        let mut registry = SkillRegistry::new(SkillRegistryOptions {
+            requires_match: requires_match(matcher)?,
+        });
         registry
             .discover(&[directory], DiscoverOptions::default())
             .map_err(|e| e.to_string())?;
@@ -43,6 +49,29 @@ impl SkillDirectories {
             }
         }
         Ok(registry)
+    }
+}
+
+fn requires_match(value: &Value) -> Result<RequiresMatch, String> {
+    let mode = if value.is_null() {
+        "exact"
+    } else {
+        value.as_str().ok_or("skills_requires_match: not text")?
+    };
+    match mode {
+        "exact" => Ok(RequiresMatch::default()),
+        "hub" => Ok(RequiresMatch::new(|required, offered| {
+            Ok(offered
+                .iter()
+                .any(|name| name == required || name.starts_with(&format!("{required}_"))))
+        })),
+        "fail" => Ok(RequiresMatch::new(|_, _| {
+            Err(ToolError::Raised {
+                kind: "RuntimeError".into(),
+                message: "Scripted skill matcher failed".into(),
+            })
+        })),
+        _ => Err(format!("Unknown skill matcher: {mode}")),
     }
 }
 

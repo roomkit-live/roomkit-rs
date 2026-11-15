@@ -333,7 +333,10 @@ pub(crate) fn scripted_agent_of(
         options.config_provider = Some(config_provider(by_room, run)?);
     }
     if let Some(skills) = spec.get("skills") {
-        options.skills = Some(run.skills.registry(skills)?);
+        options.skills = Some(
+            run.skills
+                .registry(skills, &spec["skills_requires_match"])?,
+        );
     }
     if let Some(listed) = spec.get("skills_in_prompt") {
         options.skills_in_prompt = listed.as_bool().ok_or("skills_in_prompt: not a flag")?;
@@ -1186,7 +1189,7 @@ fn turn_config(spec: &Value, run: &Arc<Run>) -> Result<AiChannelTurnConfig, Stri
             .map(|tools| scripted_handler(tools.clone(), run)),
         skills: spec
             .get("skills")
-            .map(|skills| run.skills.registry(skills))
+            .map(|skills| run.skills.registry(skills, &spec["skills_requires_match"]))
             .transpose()?,
     })
 }

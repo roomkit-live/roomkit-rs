@@ -120,6 +120,7 @@ const CHANNEL: &[&str] = &[
     "max_tokens",
     "config_provider",
     "skills",
+    "skills_requires_match",
     "skills_in_prompt",
     "thinking_budget",
     "enable_thinking",
@@ -181,6 +182,7 @@ const TURN_CONFIG: &[&str] = &[
     "turn_budget_usd",
     "tool_handler",
     "skills",
+    "skills_requires_match",
 ];
 const TURN_TOOL: &[&str] = &["name", "description", "parameters"];
 const SKILL: &[&str] = &[
