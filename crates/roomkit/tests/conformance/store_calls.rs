@@ -434,7 +434,7 @@ async fn writes_and_tasks(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Ca
         "store.get_room" => stored(run, name, store.get_room(&room()?).await),
         "store.patch_room_metadata" => patch_room_metadata(run, spec).await?,
         "store.update_room_if" => {
-            let template = kept_created_at(&store, &spec["room"]).await?;
+            let template = kept_created_at(store, &spec["room"]).await?;
             let room: Room = stamped(&template, &["created_at", "updated_at"], "room")?;
             let status: RoomStatus = field(spec, "status")?;
             let (paused_at, last_activity_at): (Option<Timestamp>, Option<Timestamp>) =
