@@ -530,13 +530,18 @@ impl CommitPass {
     /// An event delivered, committed or, for an instruction, decided, takes
     /// its place in the room's delivery lane before the lock is released
     /// (RFC §10.1 step 12), with no deadline: it is the room's already. A
-    /// record stored blocked has no delivery set, and no place.
+    /// record stored blocked has no delivery set, and no place: its hooks'
+    /// side effects are written instead, before the lock is released (RFC
+    /// §10.1 steps 10 and 11).
     fn place(&mut self, cx: &mut Cx<'_>, result: PassResult) -> State {
         let result = if self.greeting {
             greeting::stored_when_unbound(result)
         } else {
             result
         };
+        if matches!(result, PassResult::Blocked { .. }) {
+            return self.store_blocked(cx, result);
+        }
         let PassResult::Delivered { event, .. } = &result else {
             return self.release(cx, Ok(result));
         };

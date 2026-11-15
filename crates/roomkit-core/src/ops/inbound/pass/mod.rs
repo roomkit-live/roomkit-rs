@@ -30,6 +30,7 @@
 //! carries the outcome of the trigger's off-lock check, which step 9
 //! applies first, running only the hooks that need the lock (RFC §9.5.1).
 
+mod blocked;
 mod decision;
 mod gates;
 
@@ -431,6 +432,14 @@ enum State {
         effect: EffectId,
         result: PassResult,
     },
+    /// A record stored blocked, or a blocked instruction, has its hooks'
+    /// tasks and observations written, under the lock (RFC §10.1 steps 10
+    /// and 11).
+    StoringBlocked {
+        effect: EffectId,
+        result: PassResult,
+        tasks: Vec<Task>,
+    },
     Releasing {
         effect: EffectId,
         result: Result<PassResult, Abort>,
@@ -459,6 +468,7 @@ impl State {
             | Self::WritingUnstored { effect, .. }
             | Self::Placing { effect, .. }
             | Self::TellingDiscussion { effect, .. }
+            | Self::StoringBlocked { effect, .. }
             | Self::Releasing { effect, .. } => Some(*effect),
             Self::Start | Self::Finished(_) | Self::Reported => None,
         }
@@ -644,6 +654,9 @@ impl CommitPass {
             State::WritingUnstored { result, .. } => self.on_unstored_written(cx, result, outcome),
             State::Placing { result, .. } => self.on_placed(cx, result, outcome),
             State::TellingDiscussion { result, .. } => self.on_told(cx, result, outcome),
+            State::StoringBlocked { result, tasks, .. } => {
+                self.on_blocked_stored(cx, result, tasks, outcome)
+            }
             State::Releasing { result, .. } => {
                 let released = outcome.into_released();
                 let failure = released.as_ref().err().cloned();
@@ -728,6 +741,7 @@ impl CommitPass {
             | State::WritingUnstored { .. }
             | State::Placing { .. }
             | State::TellingDiscussion { .. }
+            | State::StoringBlocked { .. }
             | State::Releasing { .. }
             | State::Finished(_)
             | State::Reported) => {

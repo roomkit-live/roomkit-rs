@@ -555,7 +555,8 @@ impl Machine {
     }
 
     /// The record of each turn a discussion's depth limit stopped, once, with
-    /// that limit (RFC §8.3, §19.7.5 rule 11).
+    /// that limit, its observation written with it, under its lock, before
+    /// the turn given after it runs (RFC §8.3, §19.7.5 rule 11).
     fn queue_stopped(&mut self, cx: &mut Cx<'_>, stopped: Vec<StoppedTurn>, context: &RoomContext) {
         for StoppedTurn {
             agent,
@@ -576,12 +577,20 @@ impl Machine {
             });
             let id = cx.env.new_event_id();
             let record = chain_depth::not_asked_record(id, &answered, &binding, cx.env.now());
+            let observation = chain_depth::not_asked_observation(
+                cx.env.new_observation_id(),
+                &answered,
+                &binding,
+                max_depth,
+                cx.env.now(),
+            );
+            let pass = RecordPass::new(record)
+                .within(Lineage::Call)
+                .observing(observation);
             self.cascade.queue(Job::Record(
-                Box::new(RecordPass::new(record).within(Lineage::Call)),
+                Box::new(pass),
                 RecordNote::NotAsked {
                     agent: Box::new(binding),
-                    trigger: answered,
-                    observed: false,
                     limit: max_depth,
                 },
             ));

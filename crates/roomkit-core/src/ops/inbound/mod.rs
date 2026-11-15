@@ -697,9 +697,9 @@ struct Machine {
     /// (RFC §13.6, §9.5.1 Reentrance), and a call whose own cascade is over
     /// while theirs still deliver (`answer_once_its_own_cascade_is_over`).
     answers_before_its_entries: bool,
-    /// Whether a pass or a record left tasks or observations that the call
-    /// stores at its end (RFC §10.1 step 15): its caller is then answered
-    /// only once they are stored.
+    /// Whether a pass left tasks or observations that the call stores at
+    /// its end, an instruction a discussion took (RFC §10.1 step 15): its
+    /// caller is then answered only once they are stored.
     stores_at_its_end: bool,
 }
 

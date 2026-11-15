@@ -3,7 +3,7 @@
 use super::pass::{CommitPass, PassOrigin, PassReport};
 use super::queues::Lineage;
 use super::record::{RecordPass, RecordReport};
-use crate::model::{ChannelBinding, ChannelId, RoomEvent};
+use crate::model::{ChannelBinding, ChannelId};
 use crate::ops::protocol::{EffectId, EntryId, Notice, Outcome, SpanNote};
 use crate::ops::{Abort, Cx, Progress};
 
@@ -35,14 +35,11 @@ pub(super) struct RowNote {
 /// What a stored record stands for.
 #[derive(Debug)]
 pub(super) enum RecordNote {
-    /// A channel not asked at the chain-depth limit: it gets an observation
-    /// and a `chain_depth_exceeded` event (RFC §8.3).
+    /// A channel not asked at the chain-depth limit: it gets a
+    /// `chain_depth_exceeded` event, its observation stored with its set's
+    /// side effects or with its record (RFC §8.3, §10.1 step 15).
     NotAsked {
         agent: Box<ChannelBinding>,
-        trigger: Box<RoomEvent>,
-        /// Whether its observation is stored already: a delivery set's,
-        /// with the set's own side effects (RFC §10.1 step 15).
-        observed: bool,
         /// The chain-depth limit it reached: the kit's, or a discussion's
         /// own for its turn (RFC §19.7.5).
         limit: u32,

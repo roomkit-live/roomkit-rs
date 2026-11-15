@@ -11,8 +11,10 @@
 //! its drop (Python's `_store_dropped_side_effects`). A set reads its room
 //! first, and writes none of it once the room it read is gone, deleted or
 //! created again under its id (RFC §13.5), the log saying why (Python's
-//! `_side_effects_room_gone`). What no set stores, a
-//! record's side effects, the call's own observations, is stored once the
+//! `_side_effects_room_gone`). A record stored blocked writes its hooks'
+//! side effects at its commit (`pass::blocked`), and a discussion's stopped
+//! turn its observation with its record. What no set stores, the hooks'
+//! side effects of an instruction a discussion took, is stored once the
 //! cascade's passes and sets are over; then the operation ends.
 //!
 //! A write the store fails is logged, at ERROR (RFC §15.2), and the call
@@ -215,11 +217,6 @@ impl SideEffects {
         }
         self.tasks.extend(tasks);
         self.observations.extend(observations);
-    }
-
-    /// Keeps an observation the call makes itself.
-    pub(super) fn observe(&mut self, observation: Observation) {
-        self.observations.push(observation);
     }
 
     /// The tasks and observations to store, none once taken.

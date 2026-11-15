@@ -15,13 +15,19 @@
 //! 8). A direct injection adopted
 //! past the budget is refused first, as its pass would have refused it, when
 //! the room is another organization's or binds no channel it names: nothing
-//! is stored (gap G-069).
+//! is stored (gap G-069). The record of a discussion's turn the depth
+//! limit stopped has its observation written once it is committed, before
+//! its section releases the room's lock, as Python's `_record_depth_stop`
+//! writes it right after the record (RFC §8.3, §19.7.5 rule 11). Python
+//! commits both under the lock the turn was planned under; here the record
+//! takes the lock again in a section of its own, once the turn is planned.
 
 use super::direct::DirectCall;
 use super::queues::Lineage;
-use super::{cascade, commit, report};
+use super::{cascade, commit, persist, report};
 use crate::model::{
-    ChannelId, ErrorRecord, EventStatus, Room, RoomContext, RoomEvent, RoomId, Timestamp,
+    ChannelId, ErrorRecord, EventStatus, Observation, Room, RoomContext, RoomEvent, RoomId,
+    Timestamp,
 };
 use crate::ops::io::Bound;
 use crate::ops::protocol::{EffectId, KeyHeld, Outcome, StoreRequest};
@@ -81,6 +87,9 @@ struct RecordWork {
     /// room created again under its id since is another room, and the
     /// record finds its own gone (RFC §13.5). `None` for no such set.
     room_created_at: Option<Timestamp>,
+    /// The observation written once the record is committed, under the
+    /// lock: a discussion's stopped turn's (RFC §8.3).
+    observation: Option<Observation>,
     /// The request outstanding.
     waiting: Waiting,
 }
@@ -99,6 +108,11 @@ enum Waiting {
         rooting: Box<Rooting>,
     },
     Commit(EffectId),
+    /// The write of the record's observation, once it is committed.
+    Observing {
+        effect: EffectId,
+        stored: Box<RoomEvent>,
+    },
 }
 
 /// What a record's visibility is narrowed to at its commit, on the room as
@@ -134,6 +148,7 @@ impl RecordPass {
             direct: None,
             decides: false,
             room_created_at: None,
+            observation: None,
             waiting: Waiting::Nothing,
         };
         Self {
@@ -152,6 +167,13 @@ impl RecordPass {
     /// (RFC §13.5).
     pub(super) fn in_room(mut self, created_at: Timestamp) -> Self {
         self.section.work_mut().room_created_at = Some(created_at);
+        self
+    }
+
+    /// The same record, `observation` written once it is committed, under
+    /// the lock (RFC §8.3).
+    pub(super) fn observing(mut self, observation: Observation) -> Self {
+        self.section.work_mut().observation = Some(observation);
         self
     }
 
@@ -256,6 +278,26 @@ impl RecordWork {
                 .decides(effect, cascade::stored_record(self.record.clone()));
         }
         self.waiting = Waiting::Commit(effect);
+    }
+
+    /// The record is committed: its observation, when it carries one, is
+    /// written before the lock is released.
+    fn observe(
+        &mut self,
+        cx: &mut Cx<'_>,
+        stored: Box<RoomEvent>,
+    ) -> Progress<Result<RecordResult, Abort>> {
+        let Some(observation) = self.observation.take() else {
+            return Progress::Done(Ok(RecordResult::Committed(stored)));
+        };
+        let request = StoreRequest::PersistSideEffects {
+            room_id: self.record.room_id.clone(),
+            tasks: Vec::new(),
+            observations: vec![observation],
+        };
+        let effect = cx.io.issue_locked(request, self.record.room_id.clone());
+        self.waiting = Waiting::Observing { effect, stored };
+        Progress::Waiting
     }
 }
 
@@ -371,9 +413,15 @@ impl SectionWork for RecordWork {
                 Err(error) => Progress::Done(Err(Abort::Store(error))),
             },
             Waiting::Commit(_) | Waiting::Nothing => match outcome.into_committed() {
-                Ok(stored) => Progress::Done(Ok(RecordResult::Committed(stored))),
+                Ok(stored) => self.observe(cx, stored),
                 Err(error) => Progress::Done(Err(Abort::Store(error))),
             },
+            // A write the store failed is logged, the record committed all
+            // the same (RFC §10.1 step 15).
+            Waiting::Observing { stored, .. } => {
+                persist::stored_tasks(&self.record.room_id, Vec::new(), outcome.into_persisted());
+                Progress::Done(Ok(RecordResult::Committed(stored)))
+            }
         }
     }
 
@@ -381,7 +429,8 @@ impl SectionWork for RecordWork {
         match &self.waiting {
             Waiting::Key(waited)
             | Waiting::Root { effect: waited, .. }
-            | Waiting::Commit(waited) => *waited == effect,
+            | Waiting::Commit(waited)
+            | Waiting::Observing { effect: waited, .. } => *waited == effect,
             Waiting::Nothing => false,
         }
     }

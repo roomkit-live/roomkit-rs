@@ -566,14 +566,35 @@ mod a_blocked_instruction {
         let mut sim = with_agent();
         blocking(&mut sim);
         sim.send(instruction()).unwrap();
+        let notice = stored_from(&sim, "system").id.to_string();
         assert_eq!(
             (
                 sim.tasks.len(),
                 sim.observations.len(),
-                asked_about(&sim, "evt_3")
+                asked_about(&sim, &notice)
             ),
             (1, 1, vec!["sms".to_owned()])
         );
+    }
+
+    /// RFC §10.1.1 rule 4 with step 10, Python's `_store_blocked`: never
+    /// stored, it has its hooks' task and observation written in its locked
+    /// section, before the lock is released; not once the call's cascade
+    /// is over.
+    #[test]
+    fn writes_its_hooks_side_effects_before_releasing_the_lock() {
+        let mut sim = with_agent();
+        blocking(&mut sim);
+        sim.send(instruction()).unwrap();
+        let section: Vec<&str> = sim
+            .journal
+            .iter()
+            .map(String::as_str)
+            .skip_while(|line| !line.starts_with("lock"))
+            .take_while(|line| *line != "release room_1")
+            .filter(|line| line.starts_with("commit") || line.starts_with("persist"))
+            .collect();
+        assert_eq!(section, ["persist 1 tasks, 1 observations"]);
     }
 
     #[test]

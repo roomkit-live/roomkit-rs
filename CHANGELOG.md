@@ -405,7 +405,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and observations their targets and their events' hooks gave, went into
   the room created again, each task firing `ON_TASK_CREATED`; a set reads
   its room before it writes them, and writes none once its room is gone,
-  an INFO log line saying why (RMK-1710).
+  an INFO log line saying why (RMK-1710). The tasks and observations a
+  hook gives an event it blocks are written at the commit of its record,
+  under the room's lock, and the observation of a discussion's turn the
+  depth limit stops with its record, as Python's: they waited for the end
+  of the call's cascade, `ON_TASK_CREATED` with them, and went into a room
+  created again meanwhile; an event the room refuses once its hooks ran
+  keeps none of theirs, where they were written too (RMK-1713).
 - A name the kit quotes as Python's `repr` (a rename's record, an error's
   text, a skill's or a memory's message) escapes every character Python's
   `str.isprintable` refuses, as Python does: `'Bob\xa0Smith'` and

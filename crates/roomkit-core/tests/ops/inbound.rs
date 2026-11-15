@@ -443,6 +443,31 @@ mod a_blocked_message {
         assert_eq!(categories, ["SIN sent by SMS"]);
     }
 
+    /// RFC §10.1 step 10, Python's `_store_blocked`: the hook's observation
+    /// is written with the record, in the locked section that commits it,
+    /// before the lock is released for the events the hook injected; not
+    /// once the call's cascade is over.
+    #[test]
+    fn stores_the_hook_s_observation_before_releasing_the_lock() {
+        let mut sim = scanning_room();
+        sim.send(Sim::message("sms", "Mon NAS est 123-456-789"))
+            .unwrap();
+        let section: Vec<&str> = sim
+            .journal
+            .iter()
+            .map(String::as_str)
+            .take_while(|line| *line != "release room_1")
+            .filter(|line| line.starts_with("commit") || line.starts_with("persist"))
+            .collect();
+        assert_eq!(
+            section,
+            [
+                "commit #0 sms blocked:sensitivity_scanner \"Mon NAS est 123-456-789\"",
+                "persist 0 tasks, 1 observations",
+            ]
+        );
+    }
+
     #[test]
     fn emits_event_blocked_naming_the_hook() {
         let mut sim = scanning_room();

@@ -209,15 +209,26 @@ impl Machine {
             | PassResult::EditRefused { .. } => (None, None),
         };
         // A delivered event's hooks' side effects are stored with its set's,
-        // before its AFTER_BROADCAST hooks run (RFC §10.1 steps 15 and 16).
-        let delivered = matches!(report.result, PassResult::Delivered { .. });
+        // before its AFTER_BROADCAST hooks run (RFC §10.1 steps 15 and 16);
+        // a record stored blocked stored its own at its commit (steps 10
+        // and 11), and a pass the room refused once its hooks ran stores
+        // none of theirs (step 9a), as Python's `_gate_commit` keeps none.
+        // An instruction a discussion took, which has no set, leaves its
+        // own for the cascade's end.
         let mut hook_effects = (Vec::new(), Vec::new());
-        if delivered {
-            hook_effects = (report.tasks, report.observations);
-        } else {
-            self.stores_at_its_end |= !report.tasks.is_empty() || !report.observations.is_empty();
-            self.side_effects
-                .collect(report.tasks, report.observations, context, made_for);
+        match &report.result {
+            PassResult::Delivered { .. } => hook_effects = (report.tasks, report.observations),
+            PassResult::Stored { .. } => {
+                self.stores_at_its_end |=
+                    !report.tasks.is_empty() || !report.observations.is_empty();
+                self.side_effects
+                    .collect(report.tasks, report.observations, context, made_for);
+            }
+            PassResult::Blocked { .. }
+            | PassResult::Refused { .. }
+            | PassResult::DiscussionOver
+            | PassResult::Duplicate { .. }
+            | PassResult::EditRefused { .. } => {}
         }
         // The failed release of a pass an adopted entry's answer waits for
         // is that entry's, as Python's adopted call collects its own.
@@ -346,16 +357,12 @@ impl Machine {
 
     /// A record is over: the call's own, past the reentry budget it draws
     /// on, decides the call; a channel's not asked at the chain-depth limit
-    /// gets its framework event, and its observation unless its set stored
-    /// it already (RFC §8.3, §10.1 step 15).
+    /// gets its framework event, its observation stored already: with its
+    /// set's side effects, before its event's `AFTER_BROADCAST` hooks
+    /// (`DeliverySet::observe_not_asked`), or, for a discussion's stopped
+    /// turn, with its record (RFC §8.3, §10.1 step 15).
     pub(super) fn on_record(&mut self, cx: &mut Cx<'_>, report: RecordReport, note: RecordNote) {
-        let RecordNote::NotAsked {
-            agent,
-            trigger,
-            observed,
-            limit,
-        } = note
-        else {
+        let RecordNote::NotAsked { agent, limit } = note else {
             match note {
                 RecordNote::Trigger => return self.settle_capped_trigger(cx, report),
                 RecordNote::Injected { owed } => {
@@ -370,19 +377,6 @@ impl Machine {
         let RecordResult::Committed(record) = report.result else {
             return;
         };
-        // A set's record has its observation stored with the set's side
-        // effects, before its event's AFTER_BROADCAST hooks
-        // (`DeliverySet::observe_not_asked`); a discussion's stopped turn's
-        // is stored at the cascade's end.
-        if !observed {
-            self.stores_at_its_end = true;
-            let id = cx.env.new_observation_id();
-            let now = cx.env.now();
-            self.side_effects
-                .observe(chain_depth::not_asked_observation(
-                    id, &trigger, &agent, limit, now,
-                ));
-        }
         report::chain_depth_exceeded(cx, &record, &agent, limit);
     }
 
@@ -467,8 +461,6 @@ impl Machine {
                 Box::new(pass),
                 RecordNote::NotAsked {
                     agent: Box::new(agent),
-                    trigger: Box::new(event.clone()),
-                    observed: true,
                     limit: set.depth_limit().unwrap_or(cx.config.max_chain_depth),
                 },
             ));
