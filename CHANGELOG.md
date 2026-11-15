@@ -371,7 +371,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `delivery_skipped`, and a set whose index another lane skipped is
   dropped, `delivery_stale` (RMK-1153). A set waiting on the cursor of a
   room the store no longer holds, which reads -1 for good, takes its turn
-  in its lane's order, with an index or without (RMK-1702).
+  in its lane's order, with an index or without (RMK-1702); the indexes
+  a deleted room's sets leave above the room's latest index are forgotten,
+  so that a room created again under its id never reads them as its own
+  (RMK-1706).
 - A name the kit quotes as Python's `repr` (a rename's record, an error's
   text, a skill's or a memory's message) escapes every character Python's
   `str.isprintable` refuses, as Python does: `'Bob\xa0Smith'` and

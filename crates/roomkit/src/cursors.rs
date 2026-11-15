@@ -134,8 +134,33 @@ impl RoomCursors {
                 "the room's delivery cursor could not be moved; its delivery goes on"
             );
         }
+        Self::forget_stale(&cursor, store, room_id).await;
         drop(writing);
         self.forget_if_idle(room_id, &cursor);
+    }
+
+    /// Forgets the indexes above the room's latest one, which are none of
+    /// its own: those of a room the store no longer holds, whose cursor
+    /// nothing moves any more, or of the room deleted before a room created
+    /// again under its id, which gives them out anew (RFC §13.5). Read only
+    /// while indexes still wait for the cursor; a store that fails the read
+    /// leaves them, and so is an index given out while the room is read,
+    /// which the room's latest index read before may not count yet.
+    async fn forget_stale<S: ConversationStore>(cursor: &Cursor, store: &S, room_id: &RoomId) {
+        if cursor.ready().is_empty() {
+            return;
+        }
+        let mut known = cursor.ready().clone();
+        known.extend(cursor.local().iter().copied());
+        let latest = match store.get_room(room_id).await {
+            Ok(Some(room)) => room.latest_index,
+            Ok(None) => None,
+            Err(_) => return,
+        };
+        let stale =
+            |index: &u64| known.contains(index) && latest.is_none_or(|latest| *index > latest);
+        cursor.ready().retain(|index| !stale(index));
+        cursor.local().retain(|index| !stale(index));
     }
 
     async fn advance<S: ConversationStore>(
@@ -186,7 +211,19 @@ impl RoomCursors {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    use roomkit_core::model::{
+        ChannelBinding, ChannelId, ChannelType, EventId, EventSource, Identity, IdentityId,
+        Observation, Participant, ParticipantId, Room, RoomEvent, Task, TaskId, TextContent,
+        ThreadSummary,
+    };
+    use tokio::sync::Notify;
+
     use super::*;
+    use crate::InMemoryStore;
+    use crate::store::{self, StoreError};
 
     fn room_id() -> RoomId {
         RoomId::new("room_1").unwrap()
@@ -214,6 +251,29 @@ mod tests {
         );
     }
 
+    /// The indexes of a room deleted while its sets ran are none of a room
+    /// created again under its id, which gives them out anew (RMK-1706).
+    #[tokio::test]
+    async fn a_deleted_room_s_indexes_are_forgotten() {
+        let store = InMemoryStore::new();
+        let cursors = RoomCursors::default();
+        for index in 0..5 {
+            cursors.committed(&room_id(), index);
+        }
+        // The sets of 0 to 3 ended once the room was gone: their cursor
+        // writes find no room.
+        cursors.over(&room_id(), 0..4);
+        cursors.catch_up(&store, &room_id()).await;
+        assert!(
+            !cursors.owes_write(&room_id()),
+            "no write is owed to a gone room"
+        );
+        assert!(
+            cursors.foreign_before(&room_id(), -1, 4),
+            "0 to 3 are no longer this process's"
+        );
+    }
+
     #[test]
     fn an_index_this_process_committed_is_no_hole() {
         let cursors = RoomCursors::default();
@@ -228,6 +288,170 @@ mod tests {
         assert!(
             !cursors.foreign_before(&RoomId::new("room_2").unwrap(), 1, 2),
             "nothing lies between the cursor and the index after it"
+        );
+    }
+
+    /// An in-memory store whose next read of a room, once armed, reads it,
+    /// then tells `entered` and waits for `go` before it answers.
+    #[derive(Debug, Default)]
+    struct HeldRead {
+        store: InMemoryStore,
+        armed: AtomicBool,
+        entered: Notify,
+        go: Notify,
+    }
+
+    /// Forwards each of the store's methods named to the in-memory store.
+    macro_rules! forward {
+        ($($name:ident($($argument:ident: $kind:ty),*) -> $answer:ty;)*) => {
+            $(
+                async fn $name(&self, $($argument: $kind),*) -> Result<$answer, StoreError> {
+                    self.store.$name($($argument),*).await
+                }
+            )*
+        };
+    }
+
+    impl ConversationStore for HeldRead {
+        async fn get_room(&self, room_id: &RoomId) -> Result<Option<Room>, StoreError> {
+            let room = self.store.get_room(room_id).await;
+            if self.armed.swap(false, Ordering::SeqCst) {
+                self.entered.notify_one();
+                self.go.notified().await;
+            }
+            room
+        }
+
+        forward! {
+            get_delivered_index(room_id: &RoomId) -> i64;
+            create_room(room: Room) -> Room;
+            update_room(room: Room) -> Room;
+            delete_room(room_id: &RoomId) -> bool;
+            list_rooms(options: store::ListRoomsOptions) -> Vec<Room>;
+            find_rooms(options: store::FindRoomsOptions) -> Vec<Room>;
+            advance_delivered_index(
+                room_id: &RoomId,
+                index: u64,
+                options: AdvanceDeliveredIndexOptions
+            ) -> bool;
+            add_binding(binding: ChannelBinding) -> ChannelBinding;
+            get_binding(room_id: &RoomId, channel_id: &ChannelId) -> Option<ChannelBinding>;
+            update_binding(binding: ChannelBinding) -> ChannelBinding;
+            remove_binding(room_id: &RoomId, channel_id: &ChannelId) -> bool;
+            list_bindings(room_id: &RoomId) -> Vec<ChannelBinding>;
+            list_participants(room_id: &RoomId) -> Vec<Participant>;
+            add_participant(participant: Participant) -> Participant;
+            get_participant(room_id: &RoomId, participant_id: &ParticipantId) -> Option<Participant>;
+            update_participant(participant: Participant) -> Participant;
+            delete_participant(room_id: &RoomId, participant_id: &ParticipantId) -> ();
+            create_identity(identity: Identity) -> Identity;
+            get_identity(identity_id: &IdentityId) -> Option<Identity>;
+            resolve_identity(
+                channel_type: &ChannelType,
+                address: &str,
+                options: store::ResolveIdentityOptions
+            ) -> Option<Identity>;
+            link_address(
+                identity_id: &IdentityId,
+                channel_type: &ChannelType,
+                address: &str,
+                options: store::LinkAddressOptions
+            ) -> ();
+            check_idempotency(room_id: &RoomId, key: &str, channel_id: Option<&ChannelId>) -> bool;
+            commit_event(
+                room_id: &RoomId,
+                event: RoomEvent,
+                options: store::CommitEventOptions
+            ) -> RoomEvent;
+            get_event(event_id: &EventId) -> Option<RoomEvent>;
+            update_event(event: RoomEvent) -> RoomEvent;
+            delete_event(
+                room_id: &RoomId,
+                event_id: &EventId,
+                options: store::DeleteEventOptions
+            ) -> Vec<RoomEvent>;
+            get_event_count(room_id: &RoomId, options: store::GetEventCountOptions) -> u64;
+            list_events(room_id: &RoomId, options: store::ListEventsOptions) -> Vec<RoomEvent>;
+            add_task(task: Task) -> Task;
+            add_observation(observation: Observation) -> Observation;
+            list_tasks(room_id: &RoomId, options: store::ListTasksOptions) -> Vec<Task>;
+            list_observations(room_id: &RoomId) -> Vec<Observation>;
+            get_task(task_id: &TaskId) -> Option<Task>;
+            update_task(task: Task) -> Task;
+            add_event(event: RoomEvent) -> RoomEvent;
+            mark_read(room_id: &RoomId, channel_id: &ChannelId, event_id: &EventId) -> ();
+            mark_all_read(room_id: &RoomId, channel_id: &ChannelId) -> ();
+            get_unread_count(room_id: &RoomId, channel_id: &ChannelId) -> u64;
+            list_read_markers(room_id: &RoomId) -> std::collections::BTreeMap<ChannelId, u64>;
+            find_latest_room(
+                participant_id: &ParticipantId,
+                options: store::FindLatestRoomOptions
+            ) -> Option<Room>;
+            find_room_id_by_channel(
+                channel_id: &ChannelId,
+                options: store::FindRoomIdByChannelOptions
+            ) -> Option<RoomId>;
+            get_thread_summaries(
+                room_id: &RoomId,
+                root_event_ids: &[EventId]
+            ) -> std::collections::BTreeMap<EventId, ThreadSummary>;
+        }
+    }
+
+    /// An index this process gives out while the room's latest index is
+    /// read, behind indexes still waiting for the cursor, is kept: that read
+    /// may not count it yet (light review of RMK-1706).
+    #[tokio::test]
+    async fn an_index_given_out_while_the_room_is_read_is_kept() {
+        let bound = Duration::from_secs(5);
+        let store = Arc::new(HeldRead::default());
+        store.store.create_room(Room::new(room_id())).await.unwrap();
+        for _ in 0..6 {
+            let source = EventSource::new(ChannelId::new("sms").unwrap(), ChannelType::SMS);
+            let event = RoomEvent::new(room_id(), source, TextContent::new("e"));
+            let options = store::CommitEventOptions::default();
+            store
+                .store
+                .commit_event(&room_id(), event, options)
+                .await
+                .unwrap();
+        }
+        let cursors = Arc::new(RoomCursors::default());
+        for index in 0..6 {
+            cursors.committed(&room_id(), index);
+        }
+        // 0 to 3 delivered; 5 is over, its write waits for 4's set.
+        cursors.over(&room_id(), 0..4);
+        cursors.catch_up(&store.store, &room_id()).await;
+        cursors.over(&room_id(), [5]);
+        store.armed.store(true, Ordering::SeqCst);
+        let catching_up = {
+            let (cursors, store) = (Arc::clone(&cursors), Arc::clone(&store));
+            tokio::spawn(async move { cursors.catch_up(&*store, &room_id()).await })
+        };
+        tokio::time::timeout(bound, store.entered.notified())
+            .await
+            .unwrap();
+        // Another section commits index 6 meanwhile, a record with no set,
+        // after the read took the room's latest index.
+        let source = EventSource::new(ChannelId::new("sms").unwrap(), ChannelType::SMS);
+        let event = RoomEvent::new(room_id(), source, TextContent::new("e"));
+        let options = store::CommitEventOptions::default();
+        store
+            .store
+            .commit_event(&room_id(), event, options)
+            .await
+            .unwrap();
+        cursors.committed(&room_id(), 6);
+        cursors.over(&room_id(), [6]);
+        store.go.notify_one();
+        tokio::time::timeout(bound, catching_up)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            !cursors.foreign_before(&room_id(), 3, 7),
+            "4, 5 and 6 are still this process's"
         );
     }
 }
