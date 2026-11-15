@@ -306,6 +306,9 @@ pub(crate) struct Sim {
     /// A second effect that fails beside `failing_effect`, which must be
     /// set too: a refused attach whose undo fails as well.
     pub(crate) also_failing: Option<&'static str>,
+    /// How many reads of a room made holding no lock on it succeed before
+    /// `failing_effect`, naming `unlocked load_context`, fails the next.
+    pub(crate) unlocked_reads_spared: usize,
     /// An event another call commits to `room_1` just before the next read
     /// of it made holding no lock on it, as a direct call's once its lock
     /// is released.
@@ -399,6 +402,7 @@ impl Sim {
             decisions: Vec::new(),
             failing_effect: None,
             also_failing: None,
+            unlocked_reads_spared: 0,
             committed_before_unlocked_read: None,
             committed_after_unlocked_key_read: None,
         }
@@ -1585,6 +1589,10 @@ impl Sim {
             .also_failing
             .is_some_and(|also| target.starts_with(also));
         if !target.starts_with(failing) && !also {
+            return None;
+        }
+        if target.starts_with("unlocked load_context") && self.unlocked_reads_spared > 0 {
+            self.unlocked_reads_spared -= 1;
             return None;
         }
         // The driver answers failed a place it took but could not anchor

@@ -952,19 +952,21 @@ mod metadata_updates {
 
     /// Python: `core/mixins/helpers.py::_write_metadata_updates` (RMK-1511):
     /// once its set is over, under the room's lock, taken again off the
-    /// set's place in the lane.
+    /// set's place in the lane, once a read found the set's room there
+    /// (RFC §13.5, Python's `_side_effects_room_gone`).
     #[test]
     fn are_written_on_the_room_once_their_set_is_over() {
         let mut sim = tagging_room();
         sim.send(Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(
             (
-                sim.trace[sim.trace.len() - 4..].to_vec(),
+                sim.trace[sim.trace.len() - 5..].to_vec(),
                 sim.room.metadata.get("tier")
             ),
             (
                 vec![
                     "leave lane room_1 evt_1".to_owned(),
+                    "load_context room_1".to_owned(),
                     "lock room_1".to_owned(),
                     "update room room_1 Active".to_owned(),
                     "release room_1".to_owned()
@@ -996,14 +998,9 @@ mod metadata_updates {
         assert_eq!((sim.room.event_count, sim.room.latest_index), (1, Some(0)));
     }
 
-    /// RFC §10.1 step 15: a delivery set that collected a task and a
-    /// metadata update writes both once it is over, the task first, then
-    /// the update under the room's lock, as Python's
-    /// `_persist_side_effects` writes tasks, observations, then
-    /// `_write_metadata_updates` (RMK-1511); the call ends once both are,
-    /// the task stored and the room tagged.
-    #[test]
-    fn are_written_after_the_tasks_under_the_room_s_lock() {
+    /// A room whose agent files a task and tags the room on every event it
+    /// reads.
+    fn tasking_room() -> Sim {
         let mut sim = Sim::new();
         sim.transport("sms");
         sim.agent(
@@ -1025,10 +1022,52 @@ mod metadata_updates {
                 Ok(output)
             }),
         );
+        sim
+    }
+
+    /// Python: `tests/test_hook_side_effects.py::TestGoneRoomSideEffects::
+    /// test_a_set_whose_room_read_fails_still_writes_its_side_effects`
+    /// (RMK-1710, RFC §10.1 step 15): a set whose room cannot be read
+    /// before its side effects writes them all the same, the failure
+    /// logged, and the call goes on.
+    #[test]
+    fn are_written_when_the_read_of_their_room_fails() {
+        let mut sim = tasking_room();
+        // The call's first read of the room, before its pass, holds no lock
+        // either.
+        sim.unlocked_reads_spared = 1;
+        sim.failing_effect = Some("unlocked load_context room_1");
         let result = sim.send(Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(
             (
-                sim.trace[sim.trace.len() - 5..].to_vec(),
+                sim.traced("unlocked load_context room_1"),
+                sim.tasks.len(),
+                sim.room.metadata.get("tier"),
+                result.error
+            ),
+            (
+                vec!["unlocked load_context room_1 failed"],
+                1,
+                Some(&json!("gold")),
+                None
+            )
+        );
+    }
+
+    /// RFC §10.1 step 15: a delivery set that collected a task and a
+    /// metadata update writes both once it is over, the task first, then
+    /// the update under the room's lock, as Python's
+    /// `_persist_side_effects` writes tasks, observations, then
+    /// `_write_metadata_updates` (RMK-1511), once a read found the set's
+    /// room there (RFC §13.5); the call ends once both are, the task
+    /// stored and the room tagged.
+    #[test]
+    fn are_written_after_the_tasks_under_the_room_s_lock() {
+        let mut sim = tasking_room();
+        let result = sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(
+            (
+                sim.trace[sim.trace.len() - 6..].to_vec(),
                 sim.tasks.len(),
                 sim.room.metadata.get("tier"),
                 result.error
@@ -1036,6 +1075,7 @@ mod metadata_updates {
             (
                 vec![
                     "leave lane room_1 evt_1".to_owned(),
+                    "load_context room_1".to_owned(),
                     "persist 1 tasks, 0 observations".to_owned(),
                     "lock room_1".to_owned(),
                     "update room room_1 Active".to_owned(),

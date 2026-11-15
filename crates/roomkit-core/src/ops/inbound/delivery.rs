@@ -691,7 +691,11 @@ impl DeliverySet {
             std::mem::take(&mut self.outcome.observations),
         );
         let metadata = std::mem::take(&mut self.outcome.metadata_updates);
-        match self.effects.write(cx, &self.event.room_id, own, metadata) {
+        let created_at = self.context.room.created_at;
+        match self
+            .effects
+            .write(cx, &self.event.room_id, created_at, own, metadata)
+        {
             Progress::Waiting => Progress::Waiting,
             Progress::Done(written) => self.written(written),
         }
@@ -711,9 +715,10 @@ impl DeliverySet {
             std::mem::take(&mut self.outcome.tasks),
             std::mem::take(&mut self.outcome.observations),
         );
+        let created_at = self.context.room.created_at;
         match self
             .effects
-            .write(cx, &self.event.room_id, own, Metadata::new())
+            .write(cx, &self.event.room_id, created_at, own, Metadata::new())
         {
             Progress::Waiting => Progress::Waiting,
             Progress::Done(written) => self.written(written),

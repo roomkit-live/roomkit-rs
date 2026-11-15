@@ -392,7 +392,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   committed into it, and a regeneration waiting in the deleted room's
   lane ran its agent there; they are now refused as in a room gone,
   `room_refused_event` naming no status, a stream not yet read closed
-  unread (RMK-1708).
+  unread (RMK-1708). Nor are those sets' side effects written, as
+  Python's: the metadata updates their targets returned, and the tasks
+  and observations their targets and their events' hooks gave, went into
+  the room created again, each task firing `ON_TASK_CREATED`; a set reads
+  its room before it writes them, and writes none once its room is gone,
+  an INFO log line saying why (RMK-1710).
 - A name the kit quotes as Python's `repr` (a rename's record, an error's
   text, a skill's or a memory's message) escapes every character Python's
   `str.isprintable` refuses, as Python does: `'Bob\xa0Smith'` and

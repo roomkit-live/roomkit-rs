@@ -39,6 +39,8 @@ mod claim_release;
 mod cursor_recovery;
 #[path = "side_effects/execution_failure.rs"]
 mod execution_failure;
+#[path = "side_effects/gone_room.rs"]
+mod gone_room;
 #[path = "side_effects/stale_drain.rs"]
 mod stale_drain;
 
@@ -72,6 +74,8 @@ enum Failing {
     /// None: the write of the task `tA` waits until the test opens it,
     /// telling it once it started.
     HeldTask,
+    /// The reads of a room's context once `armed`.
+    RoomRead,
 }
 
 /// An in-memory store that fails the write `failing` names.
@@ -79,7 +83,8 @@ enum Failing {
 struct FailingWrites {
     store: InMemoryStore,
     failing: Failing,
-    /// For [`Failing::Cursor`]: the next cursor write fails, then none.
+    /// For [`Failing::Cursor`]: the next cursor write fails, then none;
+    /// for [`Failing::RoomRead`]: each read of a room's context fails.
     armed: AtomicBool,
     /// For [`Failing::SecondCursor`] and [`Failing::CursorTwice`]: writes since `armed`,
     /// and the index of the one that failed.
@@ -141,10 +146,21 @@ impl ConversationStore for FailingWrites {
                 | Failing::Cursor
                 | Failing::CursorTwice
                 | Failing::SecondCursor
-                | Failing::HeldTask => {}
+                | Failing::HeldTask
+                | Failing::RoomRead => {}
             }
         }
         self.store.add_observation(observation).await
+    }
+
+    async fn load_room_context(
+        &self,
+        room_id: &RoomId,
+    ) -> Result<(Option<Room>, Vec<ChannelBinding>, Vec<Participant>), StoreError> {
+        if self.failing == Failing::RoomRead && self.armed.load(Ordering::SeqCst) {
+            return Err(down());
+        }
+        self.store.load_room_context(room_id).await
     }
 
     async fn patch_room_metadata(
@@ -505,8 +521,12 @@ async fn a_failed_side_effect_write_is_logged_and_the_call_goes_on() {
                 "Failed to persist observation o1"
             }
             Failing::Metadata => METADATA_LINE,
-            Failing::Cursor | Failing::CursorTwice | Failing::SecondCursor | Failing::HeldTask => {
-                unreachable!("no case fails the cursor or holds a write")
+            Failing::Cursor
+            | Failing::CursorTwice
+            | Failing::SecondCursor
+            | Failing::HeldTask
+            | Failing::RoomRead => {
+                unreachable!("no case fails the cursor or a read, or holds a write")
             }
         };
         let lines = warnings.containing("ERROR");
