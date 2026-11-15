@@ -152,11 +152,14 @@ scope retains that same allocation, but this does not promise object identity
 with Rust callbacks' by-value `RoomContext.room` copies. These representation
 limits were approved in HITL 47e0cee0.
 
-The explicit installer, including context retention and live depth expiry in
-`keep_context` children, is covered by `tests/tool_turn_context.rs`. Automatic
-population of the new readers throughout AI preparation and stream consumption,
-requester attribution and policy-filtered catalogue refresh remain separate
-integration work; the installer tests do not claim that coverage.
+The explicit installer is covered by `tests/tool_turn_context.rs`. Local AI turns
+install their room snapshot, actor and response depth before configuration and
+memory retrieval, after ingestion. Their streams inherit the snapshot and record
+with a separate live depth; preparation's children are never revived. Tool calls
+and generation, response, tool-call and human-input observers retain those readers. Native
+tests in `tests/ai_turn_context.rs` cover suspension, interleaving and cancellation.
+Requester attribution and policy-filtered catalogue refresh remain separate
+integration work; these tests do not claim that coverage.
 
 | Rust type | Python representation |
 | --- | --- |

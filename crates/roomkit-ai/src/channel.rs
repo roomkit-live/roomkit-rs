@@ -62,6 +62,9 @@ use crate::turn_budget::{TurnBudget, check_budgets, refuse_unpositive, turn_budg
 use crate::turn_config::{AiChannelTurnConfig, TurnConfigFuture, TurnConfigs, base_tools};
 use crate::turn_settings::{ReasoningLevels, TurnSettings, VALUE_ERROR};
 
+mod context;
+use self::context::PreparedAnswer;
+
 /// The metadata word of an instruction that stands alone (RFC §10.1.1
 /// rule 7), as the pipeline writes it.
 const STANDALONE: &str = "standalone";
@@ -1699,7 +1702,7 @@ impl<P: AiProvider> AiChannel<P> {
         binding: ChannelBinding,
         context: RoomContext,
         record: TurnRecord,
-    ) -> Result<ChannelOutput, ChannelError> {
+    ) -> Result<Option<PreparedAnswer>, ChannelError> {
         let turn = current_turn_host();
         // The tools the room's owner serves this turn join the agent's own
         // (RFC §10.6.5), before the turn's own, none of which is declared
@@ -1798,17 +1801,16 @@ impl<P: AiProvider> AiChannel<P> {
         // What the turn's generation hooks leave is its context; a block
         // runs no generation (RFC §6.4).
         if !looped.before_generation(&event, &messages).await {
-            return Ok(ChannelOutput::empty());
+            return Ok(None);
         }
         let items = record.clone().scope_stream(looped.run(messages));
-        match turn {
-            // Within the kit, the turn is one stream, read as it is written.
-            Some(turn) => Ok(ChannelOutput {
-                response_metadata: record.current(),
-                ..turn.respond_with_stream(rows::response(items))
-            }),
-            None => Ok(rows::collect(self.source(), &event, items, record).await?),
-        }
+        Ok(Some(PreparedAnswer {
+            items,
+            record,
+            turn,
+            source: self.source(),
+            event,
+        }))
     }
 }
 
@@ -1955,13 +1957,7 @@ impl<P: AiProvider> Channel for AiChannel<P> {
         if !self.answers(&event) {
             return Ok(ChannelOutput::default());
         }
-        // The turn's one record, alive from its first moment to its last
-        // event: its memory, its hooks and its tools write it (RFC §6.7).
-        let record = TurnRecord::default();
-        record
-            .clone()
-            .scope(Box::pin(self.answer(event, binding, context, record)))
-            .await
+        self.answer_in_context(event, binding, context).await
     }
 
     /// Whether its turns in a room run one after the other

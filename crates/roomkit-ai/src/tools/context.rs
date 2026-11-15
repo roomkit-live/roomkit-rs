@@ -175,6 +175,32 @@ impl Scope {
             room_metadata,
         }
     }
+
+    async fn run<F: Future>(self: Arc<Self>, work: F) -> F::Output {
+        let depth = self.turn.chain_depth;
+        roomkit::within_tool_turn_depth(depth, roomkit::within_tool_call_scope(self, work)).await
+    }
+}
+
+/// Preparation owns its own live depth, without replacing the turn record.
+pub(crate) fn within_ai_turn<F: Future>(
+    options: ToolTurnContextOptions,
+    work: F,
+) -> impl Future<Output = F::Output> {
+    Arc::new(Scope::new(options)).run(Box::pin(work))
+}
+
+/// Capture preparation's readable snapshot now. Consumption starts a fresh
+/// lifetime at its first poll, never reviving preparation's retained children.
+pub(crate) fn continue_ai_turn<F: Future>(work: F) -> impl Future<Output = F::Output> {
+    let scope = current();
+    let work = Box::pin(work);
+    async move {
+        match scope {
+            Some(scope) => scope.run(work).await,
+            None => work.await,
+        }
+    }
 }
 
 fn current() -> Option<Arc<Scope>> {
@@ -193,18 +219,23 @@ pub(crate) async fn within_call<T>(
     room_metadata: Option<Arc<Metadata>>,
     work: impl Future<Output = T>,
 ) -> T {
-    let turn = ToolTurnContextOptions {
-        room_id: call.room_id.clone(),
-        call: Some(call),
-        actor_id,
-        ..Default::default()
-    };
-    roomkit::within_tool_call_scope(
-        Arc::new(Scope {
-            turn,
+    let scope = match current() {
+        Some(parent) => Scope {
+            turn: ToolTurnContextOptions {
+                call: Some(call),
+                ..parent.turn.clone()
+            },
+            room_metadata: parent.room_metadata.clone(),
+        },
+        None => Scope {
+            turn: ToolTurnContextOptions {
+                room_id: call.room_id.clone(),
+                call: Some(call),
+                actor_id,
+                ..Default::default()
+            },
             room_metadata,
-        }),
-        work,
-    )
-    .await
+        },
+    };
+    roomkit::within_tool_call_scope(Arc::new(scope), work).await
 }

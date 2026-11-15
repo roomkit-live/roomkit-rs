@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- AI preparation, streamed tool calls and turn observers share their room snapshot, actor and response depth, with separate preparation and consumption lifetimes.
+
 - Add explicit `tool_turn_context` scopes and readers, with fresh response records, nested restoration and depth that expires when the scope ends.
 
 - Tool handlers and MCP results publish their structured copy through `ToolCallContext`, preserving hook replacement and withholding, with a separate shared field for each call.

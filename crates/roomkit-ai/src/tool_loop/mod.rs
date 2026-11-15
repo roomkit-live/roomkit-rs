@@ -310,11 +310,13 @@ impl Loop {
     /// opens at the first pull: a stream nobody read, muted or cut, opened
     /// none, as Python's generator never started.
     pub(crate) fn run(mut self, conversation: Vec<Message>) -> TurnItems<'static> {
-        items(move |out| async move {
-            let (room_id, channel_id) = (&self.context.room_id, &self.context.channel_id);
-            let name = self.provider.dyn_type_name();
-            self.turn_span = self.telemetry.start_turn(room_id, channel_id, name);
-            self.rounds(conversation, out).await;
+        items(move |out| {
+            crate::tools::continue_ai_turn(async move {
+                let (room_id, channel_id) = (&self.context.room_id, &self.context.channel_id);
+                let name = self.provider.dyn_type_name();
+                self.turn_span = self.telemetry.start_turn(room_id, channel_id, name);
+                self.rounds(conversation, out).await;
+            })
         })
     }
 

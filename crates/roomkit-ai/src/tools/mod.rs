@@ -39,12 +39,12 @@ use serde_json::Value;
 
 #[doc(hidden)]
 pub use self::builder::Tools;
-pub(crate) use self::context::current_tool_room_metadata;
 pub use self::context::{
     ToolTurnContextOptions, current_tool_actor_id, current_tool_allowed_names, current_tool_call,
     current_tool_chain_depth, current_tool_requester, current_tool_room, current_tool_room_id,
     tool_turn_context,
 };
+pub(crate) use self::context::{continue_ai_turn, current_tool_room_metadata, within_ai_turn};
 pub use self::external::{
     BeforeToolDecision, ExternalToolFuture, ExternalToolHandler, ExternalToolHandlerState,
     FireBeforeHookOptions, FireOnToolHookOptions, OnToolCancelledOptions, OnToolRefusedOptions,

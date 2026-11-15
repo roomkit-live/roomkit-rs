@@ -60,6 +60,10 @@ name = "tool_turn_context"
 path = "tool_turn_context.rs"
 
 [[example]]
+name = "ai_turn_context"
+path = "ai_turn_context.rs"
+
+[[example]]
 name = "echo_room"
 path = "echo_room.rs"
 

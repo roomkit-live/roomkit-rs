@@ -847,6 +847,7 @@ impl TurnHost {
             };
             // Under the turn's record, as Python's task copies its context.
             let bounded = crate::turn_record::within_current_turn_record(bounded);
+            let bounded = crate::tool_call_scope::within_current_tool_call(bounded);
             let task = execution
                 .clone()
                 .at_least(floor)
