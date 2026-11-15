@@ -34,7 +34,7 @@ impl SkillToolNames {
     }
 
     /// Repeated keys cannot erase an earlier gate (RFC §24.1).
-    pub(crate) fn merge(&mut self, next: Self) {
+    pub(crate) fn merge(&mut self, next: &Self) {
         let mut names = self.names();
         for name in next.names() {
             if !names.contains(&name) {

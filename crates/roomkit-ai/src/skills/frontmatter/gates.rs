@@ -70,7 +70,7 @@ impl Gates {
     pub(super) fn finish(self, held: &mut Option<SkillToolNames>) {
         if let Some(value) = self.value {
             match held {
-                Some(earlier) => earlier.merge(value),
+                Some(earlier) => earlier.merge(&value),
                 None => *held = Some(value),
             }
         }

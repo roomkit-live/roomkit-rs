@@ -60,7 +60,7 @@ fn each_form_keeps_its_public_metadata_type() {
 fn gated_tool_names_reads_text_and_list_without_changing_them() {
     let cases = [
         (None, vec![]),
-        (Some(SkillToolNames::Text("".into())), vec![]),
+        (Some(SkillToolNames::Text(String::new())), vec![]),
         (
             Some(SkillToolNames::Text("my_tool".into())),
             vec!["my_tool"],
@@ -88,7 +88,7 @@ fn gated_tool_names_reads_text_and_list_without_changing_them() {
             Some(SkillToolNames::List(vec![
                 " search_* ".into(),
                 "a,b".into(),
-                "".into(),
+                String::new(),
             ])),
             vec!["search_*", "a,b"],
         ),

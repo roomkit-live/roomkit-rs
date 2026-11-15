@@ -40,6 +40,7 @@ mod repeat_guard;
 mod resilience;
 mod rules;
 mod skill_gating;
+pub(crate) use skill_gating::SkillGates;
 mod spans;
 mod text_window;
 mod thinking;
@@ -182,8 +183,7 @@ pub(crate) struct Loop {
     /// again; `None` for a channel serving one provider.
     pub(crate) route_request: Option<crate::router::RouteRequest>,
     pub(crate) toolbox: Arc<Toolbox>,
-    pub(crate) skills: Option<Arc<crate::skills::tools::SkillTools>>,
-    pub(crate) activated_skills: std::sync::Mutex<HashSet<String>>,
+    pub(crate) skill_gates: SkillGates,
     pub(crate) policy: ToolPolicy,
     pub(crate) bounds: Bounds,
     /// What the turn may spend (RFC §6.4); `None` sets no budget.
