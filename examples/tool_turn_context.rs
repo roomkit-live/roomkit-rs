@@ -4,6 +4,7 @@
 use std::error::Error;
 use std::process::ExitCode;
 
+use roomkit::model::Metadata;
 use roomkit_ai::{
     ToolCallContext, ToolHandler, ToolResult, ToolTurnContextOptions, current_response_metadata,
     current_tool_actor_id, current_tool_call, tool_turn_context,
@@ -38,7 +39,7 @@ async fn run() -> Result<ExitCode, Box<dyn Error>> {
         ..Default::default()
     };
     let (answer, actor, record) = tool_turn_context(options, async {
-        let answer = handler.call("lookup".into(), Default::default()).await;
+        let answer = handler.call("lookup".into(), Metadata::new()).await;
         (answer, current_tool_actor_id(), current_response_metadata())
     })
     .await?;

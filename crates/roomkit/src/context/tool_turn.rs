@@ -47,6 +47,10 @@ mod tests {
     // Python: tests/test_tool_turn_context_observers.py::test_an_ended_observer_stops_lending_a_live_tool_scope_to_its_child;
     // the observer borrows inherited depth for its own body only.
     #[tokio::test]
+    #[expect(
+        clippy::async_yields_async,
+        reason = "the child is joined only after its spawning scope ends"
+    )]
     async fn observer_children_stop_borrowing_depth_even_when_the_tool_scope_lives() {
         within_tool_turn_depth(3, async {
             let (resume, ready) = tokio::sync::oneshot::channel();
@@ -68,6 +72,10 @@ mod tests {
 
     // Python: tests/test_tool_turn_context_observers.py::test_a_live_observer_stops_borrowing_an_ended_tool_scope
     #[tokio::test]
+    #[expect(
+        clippy::async_yields_async,
+        reason = "the child is joined only after its spawning scope ends"
+    )]
     async fn a_live_observer_stops_borrowing_an_ended_tool_scope() {
         for floor in [0, 2] {
             let (entered, started) = tokio::sync::oneshot::channel();

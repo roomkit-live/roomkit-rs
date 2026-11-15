@@ -1,4 +1,4 @@
-//! Python: tests/test_tool_turn_context.py; the public installer only.
+//! Python: `tests/test_tool_turn_context.py`; the public installer only.
 //! HITL 47e0cee0: a scoped future, u32 depth and an immutable Arc room.
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
@@ -8,7 +8,7 @@ mod lifetime;
 
 use std::sync::Arc;
 
-use roomkit::model::{Room, RoomId};
+use roomkit::model::{Metadata, ResponseMetadata, Room, RoomId};
 use roomkit_ai::{
     AiTool, ToolCallContext, ToolTurnContextOptions, current_response_metadata,
     current_tool_actor_id, current_tool_allowed_names, current_tool_call, current_tool_chain_depth,
@@ -190,7 +190,7 @@ async fn a_call_record_of_the_turns_room_is_installed() {
 #[tokio::test]
 async fn no_toolset_is_not_an_empty_one() {
     for tools in [None, Some(Vec::new())] {
-        let expected = tools.as_ref().map(|_| Default::default());
+        let expected = tools.as_ref().map(|_| std::collections::HashSet::new());
         tool_turn_context(
             ToolTurnContextOptions {
                 tools,
@@ -253,7 +253,7 @@ async fn a_requester_is_explicit_and_an_inner_default_clears_it() {
         },
         async {
             assert_eq!(current_tool_requester().as_deref(), Some("Bob"));
-            tool_turn_context(Default::default(), async {
+            tool_turn_context(ToolTurnContextOptions::default(), async {
                 assert!(current_tool_requester().is_none());
             })
             .await
@@ -275,10 +275,10 @@ async fn the_response_record_is_the_turns_one() {
             .insert("sources", json!(["doc-1"]));
         Ok(roomkit_ai::ToolResult::Text("ok".into()))
     });
-    tool_turn_context(Default::default(), async {
+    tool_turn_context(ToolTurnContextOptions::default(), async {
         let record = current_response_metadata().unwrap();
         handler
-            .call("lookup".into(), Default::default())
+            .call("lookup".into(), Metadata::new())
             .await
             .unwrap();
         assert_eq!(record.get("sources"), Some(json!(["doc-1"])));
@@ -301,7 +301,7 @@ async fn the_structured_copy_lands_on_the_call_record_passed() {
             current_tool_call()
                 .unwrap()
                 .structured_content
-                .replace(Some(Default::default()));
+                .replace(Some(ResponseMetadata::new()));
             current_tool_call()
                 .unwrap()
                 .structured_content
@@ -350,10 +350,10 @@ async fn tasks_started_inside_inherit_the_turn() {
 // Python: TestRestoring::test_each_scope_has_a_fresh_response_record
 #[tokio::test]
 async fn each_scope_has_a_fresh_response_record() {
-    tool_turn_context(Default::default(), async {
+    tool_turn_context(ToolTurnContextOptions::default(), async {
         let outer = current_response_metadata().unwrap();
         outer.insert("source", json!("outer"));
-        tool_turn_context(Default::default(), async {
+        tool_turn_context(ToolTurnContextOptions::default(), async {
             let inner = current_response_metadata().unwrap();
             assert!(inner.is_empty());
             inner.insert("source", json!("inner"));

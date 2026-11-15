@@ -6,7 +6,10 @@ use std::task::Poll;
 
 use roomkit::model::ChannelType;
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
-use roomkit::{AttachChannelOptions, CreateRoomOptions, RoomKit, RoomKitOptions};
+use roomkit::{
+    AttachChannelOptions, CreateRoomOptions, DeliverOptions, GetTimelineOptions, RoomKit,
+    RoomKitOptions,
+};
 use tokio::sync::oneshot;
 
 use super::*;
@@ -37,12 +40,12 @@ async fn kit() -> RoomKit {
 
 async fn post(kit: &RoomKit, body: &str) -> u32 {
     let outcome = kit
-        .deliver(&room_id("r1"), body, Default::default())
+        .deliver(&room_id("r1"), body, DeliverOptions::default())
         .await
         .unwrap();
     let id = outcome.event_id.unwrap();
     let events = kit
-        .get_timeline(&room_id("r1"), Default::default())
+        .get_timeline(&room_id("r1"), GetTimelineOptions::default())
         .await
         .unwrap();
     events
@@ -102,6 +105,10 @@ async fn an_inner_scope_lends_its_own_depth_then_restores_the_outer() {
 
 // Python: tests/test_tool_turn_context.py::TestLiveDepth::test_a_child_keeps_readers_but_stops_lending_depth_after_exit
 #[tokio::test]
+#[expect(
+    clippy::async_yields_async,
+    reason = "the child is joined only after its spawning scope ends"
+)]
 async fn a_child_keeps_readers_but_stops_lending_depth_after_exit() {
     let kit = kit().await;
     let (resume, ready) = oneshot::channel();
@@ -124,6 +131,10 @@ async fn a_child_keeps_readers_but_stops_lending_depth_after_exit() {
 
 // Python: tests/test_tool_turn_context.py::TestLiveDepth::test_an_expired_inner_scope_still_masks_the_live_outer_in_its_child
 #[tokio::test]
+#[expect(
+    clippy::async_yields_async,
+    reason = "the child is joined only after its spawning scope ends"
+)]
 async fn an_expired_inner_scope_still_masks_the_live_outer_in_its_child() {
     let kit = kit().await;
     tool_turn_context(options(3), async {
