@@ -119,6 +119,27 @@ fn stamped<T: serde::de::DeserializeOwned>(
     serde_json::from_value(record).map_err(|error| format!("{what}: {error}"))
 }
 
+/// The template of a room an update writes, given the stored room's
+/// `created_at` when it names none: a write of a partial room updates that
+/// room, it creates none, and a room is its id and its `created_at` (RFC
+/// §13.5).
+async fn kept_created_at(store: &crate::Store, template: &Value) -> Result<Value, Unreadable> {
+    let mut template = template.clone();
+    if template.get("created_at").is_some() {
+        return Ok(template);
+    }
+    let stored = store
+        .get_room(&field::<RoomId>(&template, "id")?)
+        .await
+        .map_err(|error| format!("room: {error}"))?;
+    if let (Some(room), Value::Object(members)) = (stored, &mut template) {
+        let created_at =
+            serde_json::to_value(room.created_at).map_err(|error| format!("room: {error}"))?;
+        members.insert("created_at".to_owned(), created_at);
+    }
+    Ok(template)
+}
+
 /// An event from the template `spec[key]`, in the call's room, or the
 /// template's when the call names none.
 fn event(spec: &Value, key: &str) -> Result<RoomEvent, Unreadable> {
@@ -413,7 +434,8 @@ async fn writes_and_tasks(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Ca
         "store.get_room" => stored(run, name, store.get_room(&room()?).await),
         "store.patch_room_metadata" => patch_room_metadata(run, spec).await?,
         "store.update_room_if" => {
-            let room: Room = stamped(&spec["room"], &["created_at", "updated_at"], "room")?;
+            let template = kept_created_at(&store, &spec["room"]).await?;
+            let room: Room = stamped(&template, &["created_at", "updated_at"], "room")?;
             let status: RoomStatus = field(spec, "status")?;
             let (paused_at, last_activity_at): (Option<Timestamp>, Option<Timestamp>) =
                 (field(spec, "paused_at")?, field(spec, "last_activity_at")?);
