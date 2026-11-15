@@ -33,6 +33,15 @@ impl SkillDirectories {
         registry
             .discover(&[directory], DiscoverOptions::default())
             .map_err(|e| e.to_string())?;
+        for skill in skills.as_array().into_iter().flatten() {
+            let name = skill["name"].as_str().unwrap_or_default();
+            if let Some(reason) = skill["unavailable"].as_str() {
+                registry.mark_unavailable(name, reason);
+            }
+            if skill["unlisted"].as_bool().unwrap_or(false) {
+                registry.mark_unlisted(name);
+            }
+        }
         Ok(registry)
     }
 }
@@ -51,14 +60,14 @@ fn write_skill(root: &std::path::Path, skill: &Value) -> std::io::Result<()> {
     let directory = root.join(text("name"));
     let references = directory.join("references");
     std::fs::create_dir_all(&references)?;
-    let allowed = skill
-        .get("allowed_tools")
-        .map(|names| format!("allowed_tools: {names}\n"))
-        .unwrap_or_default();
+    let requirements: String = ["allowed_tools", "requires"]
+        .iter()
+        .filter_map(|key| skill.get(key).map(|names| format!("{key}: {names}\n")))
+        .collect();
     std::fs::write(
         directory.join("SKILL.md"),
         format!(
-            "---\nname: {}\ndescription: {}\n{allowed}---\n{}",
+            "---\nname: {}\ndescription: {}\n{requirements}---\n{}",
             text("name"),
             text("description"),
             text("instructions")

@@ -189,6 +189,9 @@ const SKILL: &[&str] = &[
     "instructions",
     "references",
     "allowed_tools",
+    "requires",
+    "unavailable",
+    "unlisted",
 ];
 const HUMAN_TOOL: &[&str] = &["name", "description", "parameters"];
 const MODEL: &[&str] = &[
