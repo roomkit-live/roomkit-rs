@@ -73,7 +73,7 @@ pub use lifecycle::{
     ResumeRoom, SetAgentResponsePolicy, SetRoomTimers, TimersChecked, UpdateBinding,
     UpdateRoomMetadata,
 };
-pub use members::{ChangeMember, MemberChange, MemberError, Membered};
+pub use members::{ChangeMember, MemberChange, MemberError, Membered, RecipientAnswer};
 pub use protocol::{
     AfterDelivery, AnswerOf, CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, Decided,
     Delivered, DiscussionOutcome, DiscussionRequest, DiscussionTurn, Effect, EffectId, Entry,

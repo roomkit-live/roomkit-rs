@@ -11,7 +11,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use thiserror::Error;
 
-pub use self::change::{MemberChange, Membered};
+pub use self::change::{MemberChange, Membered, RecipientAnswer};
 use super::io::Io;
 use super::lifecycle::locked::{LockedSection, SectionError};
 use super::protocol::{EffectId, Operation, Outcome, ProtocolError, Step};

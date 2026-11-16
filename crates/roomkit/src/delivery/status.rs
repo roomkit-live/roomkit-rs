@@ -19,9 +19,12 @@ use crate::store::{
 /// finds a sender's, in the channel's form; else the one ACTIVE room bound
 /// to the channel, unless its binding names another correspondent: its
 /// participant, else its recipient, a value that is not a recipient
-/// included (RFC §5.7). Never one room of several: on a number shared by
-/// many correspondents, the oldest room is another customer's. A status is
-/// no activity, and resumes no room (RFC §5.1).
+/// included (RFC §5.7); on a channel not registered, a status naming a
+/// recipient has no room through a binding naming no participant and not
+/// declared `group`. Never one room of
+/// several: on a number shared by many correspondents, the oldest room is
+/// another customer's. A status is no activity, and resumes no room (RFC
+/// §5.1).
 pub(crate) async fn room_of_status<S: ConversationStore>(
     store: &S,
     status: &DeliveryStatus,
@@ -99,6 +102,9 @@ enum DeliversTo {
     /// A value under the channel's recipient key that is not a recipient,
     /// which reads as someone else's address.
     NotARecipient,
+    /// No one a status names: on a channel not registered nothing reads the
+    /// binding's recipient, whatever its metadata holds.
+    Unread,
 }
 
 /// Who `binding` delivers to, on `channel` whose recipient key is
@@ -109,7 +115,7 @@ fn delivers_to(
     binding: &ChannelBinding,
 ) -> DeliversTo {
     let Some(channel) = channel else {
-        return DeliversTo::NoOne;
+        return DeliversTo::Unread;
     };
     if binding.group {
         return DeliversTo::NoOne;
@@ -143,6 +149,6 @@ fn takes_the_status(binding: &ChannelBinding, recipient: &str, delivers_to: &Del
         || match delivers_to {
             DeliversTo::NoOne => true,
             DeliversTo::Recipient(address) => address == recipient,
-            DeliversTo::NotARecipient => false,
+            DeliversTo::NotARecipient | DeliversTo::Unread => false,
         }
 }

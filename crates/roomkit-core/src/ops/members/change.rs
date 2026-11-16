@@ -10,15 +10,17 @@ use serde_json::{Value, json};
 
 use super::MemberError;
 use crate::model::{
-    ChannelId, EventType, IdentificationStatus, Identity, IdentityId, Participant, ParticipantId,
-    ParticipantRole, ParticipantStatus, RoomContext,
+    ChannelBinding, ChannelId, ErrorRecord, EventType, IdentificationStatus, Identity, IdentityId,
+    Participant, ParticipantId, ParticipantRole, ParticipantStatus, RoomContext,
 };
 use crate::ops::Cx;
 use crate::ops::lifecycle::change::{Decision, SectionChange, write_records};
 use crate::ops::lifecycle::report::Reported;
-use crate::ops::protocol::StoreRequest;
+use crate::ops::protocol::{ChannelRequest, Outcome, Request, StoreRequest};
+use crate::rules::addresses::{AddressForm, Held};
 use crate::rules::hook_registry::HookTrigger;
 use crate::rules::records::Record;
+use crate::rules::routing::own_record_id;
 
 /// A change of a room's members.
 #[derive(Clone, Debug)]
@@ -35,7 +37,8 @@ pub enum MemberChange {
         display_name: Option<String>,
     },
     /// Python's `resolve_participant`: the participant identified as the
-    /// identity the store holds, named on the binding of its channel.
+    /// identity the store holds, named on the binding of its channel unless
+    /// that binding is someone else's conversation.
     Resolve {
         /// The participant.
         participant_id: ParticipantId,
@@ -49,6 +52,9 @@ pub enum MemberChange {
         /// The organization the call acts for, whose identities only it
         /// reaches (RFC §17.2).
         organization_id: Option<String>,
+        /// Who the binding of its channel delivers to, as the channel
+        /// answers under the lock; [`RecipientAnswer::Unasked`] when built.
+        recipient: RecipientAnswer,
     },
     /// Python's `add_member`: a deliberate join.
     Add {
@@ -82,6 +88,20 @@ pub enum MemberChange {
 /// What a member change reports once the room's lock is released: its
 /// trigger, and its payload's type, code, body and data, as Python's
 /// `_fire_lifecycle_hook` is called with them.
+/// What the channel answered, under the room's lock, of who the binding a
+/// resolution would name the identity on delivers to (Python's
+/// `routed_recipient`, RFC §5.7): a binding naming no participant and not
+/// declared `group` is its recipient's conversation.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum RecipientAnswer {
+    /// Not asked yet.
+    #[default]
+    Unasked,
+    /// The channel's answer, in its form; `None` when it reads none, or
+    /// the driver no longer holds it.
+    Answered(Option<String>),
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct Report {
     pub(super) trigger: HookTrigger,
@@ -139,6 +159,7 @@ impl SectionChange for MemberChange {
                 identity,
                 resolved_by,
                 organization_id,
+                recipient,
             } => {
                 // The participant first, then the identity, as Python's.
                 members.found(participant_id)?;
@@ -146,7 +167,7 @@ impl SectionChange for MemberChange {
                     .as_deref()
                     .filter(|identity| reaches(organization_id.as_deref(), identity))
                     .ok_or_else(|| MemberError::IdentityNotFound(identity_id.clone()))?;
-                members.resolve(cx, participant_id, identity, resolved_by)?
+                members.resolve(cx, participant_id, identity, resolved_by, recipient)?
             }
             Self::Add {
                 channel_id,
@@ -192,6 +213,95 @@ impl SectionChange for MemberChange {
     fn applies_timers(&self) -> bool {
         false
     }
+
+    /// A resolution asks the channel, once, who the binding it would name
+    /// the identity on delivers to, when that binding names no participant
+    /// and is not declared `group`: its recipient, as routing reads it
+    /// (RFC §5.5, §5.7). Not for a participant or an identity the change
+    /// refuses.
+    fn next_read(&self, context: &RoomContext) -> Option<Request> {
+        let binding = self.binding_to_read(context)?;
+        Some(
+            ChannelRequest::RoutedRecipient {
+                binding: binding.clone(),
+            }
+            .into(),
+        )
+    }
+
+    fn take_read(&mut self, context: &RoomContext, outcome: Outcome) -> Result<(), ErrorRecord> {
+        if self.binding_to_read(context).is_none() {
+            return Ok(());
+        }
+        if let Self::Resolve { recipient, .. } = self {
+            *recipient = RecipientAnswer::Answered(outcome.into_recipient()?);
+        }
+        Ok(())
+    }
+}
+
+impl MemberChange {
+    /// The binding whose recipient a resolution still reads under the lock
+    /// ([`SectionChange::next_read`]).
+    fn binding_to_read<'c>(&self, context: &'c RoomContext) -> Option<&'c ChannelBinding> {
+        let Self::Resolve {
+            participant_id,
+            identity,
+            organization_id,
+            recipient: RecipientAnswer::Unasked,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        identity
+            .as_deref()
+            .filter(|identity| reaches(organization_id.as_deref(), identity))?;
+        let participant = context
+            .participants
+            .iter()
+            .find(|participant| participant.id == *participant_id)?;
+        context
+            .get_binding(&participant.channel_id)
+            .filter(|binding| !binding.group && binding.participant_id.is_none())
+    }
+}
+
+/// Whether `binding` is the conversation of someone other than
+/// `participant`, resolved as `identity_id` (RFC §5.5, §5.7), the Python
+/// implementation's `delivers_to_another_than`: it names another
+/// correspondent, the framework's own name included, or names none and
+/// routing reads its recipient, in `form`, as another address, or as a value
+/// that is not a recipient. On a channel not registered (`form` is `None`)
+/// nothing reads that recipient: a binding naming no one is read as
+/// another's then. The participant
+/// is known by their id, the identity they had and the one they get, and the
+/// address whose own record they are. A `group` binding names no
+/// correspondent, and one delivering to no one is no one's: neither is
+/// another's.
+fn delivers_to_another(
+    binding: &ChannelBinding,
+    form: Option<&AddressForm>,
+    participant: &Participant,
+    identity_id: &IdentityId,
+) -> bool {
+    if binding.group {
+        return false;
+    }
+    let named = match (&binding.participant_id, form.map(|form| form.held(binding))) {
+        (Some(named), _) => named.as_str().to_owned(),
+        (None, None) => return true,
+        (None, Some(Held::Nothing)) => return false,
+        (None, Some(Held::NotARecipient(_))) => return true,
+        (None, Some(Held::Recipient(recipient))) => recipient,
+    };
+    let theirs = named == participant.id.as_str()
+        || named == identity_id.as_str()
+        || participant
+            .identity_id
+            .as_ref()
+            .is_some_and(|had| named == had.as_str());
+    !theirs && own_record_id(binding.channel_id.as_str(), &named) != participant.id.as_str()
 }
 
 /// Whether a caller acting for `organization_id` reaches `identity`: every
@@ -316,8 +426,10 @@ impl Members<'_> {
         participant_id: &ParticipantId,
         identity: &Identity,
         resolved_by: &str,
+        recipient: &RecipientAnswer,
     ) -> Result<Changed, MemberError> {
         let mut participant = self.found(participant_id)?;
+        let pending = participant.clone();
         participant.identification = IdentificationStatus::Identified;
         participant.identity_id = Some(identity.id.clone());
         participant.resolved_at = Some(cx.env.now());
@@ -327,7 +439,7 @@ impl Members<'_> {
             participant.display_name = Some(name.clone());
         }
         self.update(&participant);
-        self.name_on_binding(&participant, &identity.id);
+        self.name_on_binding(cx, &pending, &identity.id, recipient);
         self.record(
             cx,
             &Record::ParticipantIdentified {
@@ -348,8 +460,18 @@ impl Members<'_> {
     }
 
     /// The binding of `participant`'s primary channel names `identity_id`
-    /// from now on, when the room has one.
-    fn name_on_binding(&mut self, participant: &Participant, identity_id: &IdentityId) {
+    /// from now on, when the room has one, unless it is someone else's
+    /// conversation (RFC §5.5): the advisor identifies a person, and does
+    /// not choose whom the room answers. `participant` is the record as it
+    /// was before the resolution, `recipient` the channel's answer of who
+    /// the binding delivers to.
+    fn name_on_binding(
+        &mut self,
+        cx: &Cx<'_>,
+        participant: &Participant,
+        identity_id: &IdentityId,
+        recipient: &RecipientAnswer,
+    ) {
         let Ok(named) = ParticipantId::new(identity_id.as_str()) else {
             return;
         };
@@ -361,6 +483,16 @@ impl Members<'_> {
         else {
             return;
         };
+        let form = cx.config.channel(&binding.channel_id).map(|channel| {
+            let mut form = channel.form();
+            if let RecipientAnswer::Answered(answered) = recipient {
+                form.answered_recipient.clone_from(answered);
+            }
+            form
+        });
+        if delivers_to_another(binding, form.as_ref(), participant, identity_id) {
+            return;
+        }
         binding.participant_id = Some(named);
         self.writes.push_back(StoreRequest::StoreBinding {
             binding: binding.clone(),

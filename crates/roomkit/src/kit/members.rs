@@ -8,7 +8,7 @@
 use roomkit_core::model::{
     ChannelId, IdentityId, Participant, ParticipantId, ParticipantRole, ParticipantStatus, RoomId,
 };
-use roomkit_core::ops::{ChangeMember, MemberChange};
+use roomkit_core::ops::{ChangeMember, MemberChange, RecipientAnswer};
 
 use super::RoomKit;
 use crate::driver;
@@ -139,7 +139,8 @@ impl<S: ConversationStore> RoomKit<S> {
     /// Resolves the pending participant `participant_id` as the identity
     /// `identity_id` the store holds (RFC §5.5, Appendix B.3): IDENTIFIED,
     /// its candidates dropped, the identity's display name taken when it has
-    /// one, the binding of its primary channel naming the identity, the
+    /// one, the binding of its primary channel naming the identity unless it
+    /// is someone else's conversation, which keeps its correspondent, the
     /// record of the change committed and `ON_PARTICIPANT_IDENTIFIED` fired.
     ///
     /// # Errors
@@ -176,6 +177,7 @@ impl<S: ConversationStore> RoomKit<S> {
             identity: identity.map(Box::new),
             resolved_by: options.resolved_by,
             organization_id: options.organization_id.clone(),
+            recipient: RecipientAnswer::Unasked,
         };
         let resolved = self
             .change_member(
