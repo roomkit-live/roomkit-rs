@@ -818,6 +818,19 @@ fn acp_directories(acp: &Value, path: &str, found: &mut Vec<String>) {
     }
 }
 
+/// A scripted agent's `mcp_servers` and their tools (README, "Scripted
+/// agents").
+fn mcp_servers(servers: &Value, path: &str, found: &mut Vec<String>) {
+    for (index, server) in items(servers) {
+        let server_path = format!("{path}.mcp_servers[{index}]");
+        members(server, MCP_SERVER, &server_path, found);
+        for (position, tool) in items(&server["tools"]) {
+            let tool_path = format!("{server_path}.tools[{position}]");
+            members(tool, MCP_TOOL, &tool_path, found);
+        }
+    }
+}
+
 fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
     if let Some(verbs) = channel["verbs"].as_object() {
         for (name, verb) in verbs {
@@ -888,18 +901,7 @@ fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
         &format!("{path}.tool_policy"),
         found,
     );
-    for (index, server) in items(&channel["mcp_servers"]) {
-        let server_path = format!("{path}.mcp_servers[{index}]");
-        members(server, MCP_SERVER, &server_path, found);
-        for (position, tool) in items(&server["tools"]) {
-            members(
-                tool,
-                MCP_TOOL,
-                &format!("{server_path}.tools[{position}]"),
-                found,
-            );
-        }
-    }
+    mcp_servers(&channel["mcp_servers"], path, found);
     optional(
         &channel["addresses"],
         ADDRESSES,
