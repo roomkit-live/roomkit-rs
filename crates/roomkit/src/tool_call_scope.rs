@@ -88,6 +88,9 @@ pub(crate) fn within_current_tool_call<F>(
 where
     F: Future + Send + 'static,
 {
+    // Observers also enter here directly, without keep_context's boxed
+    // input. Keep their large futures out of each carrier's initial state.
+    let future = Box::pin(future);
     let call = current_tool_call_scope();
     let callers = CLOSING_CALLERS.try_with(Arc::clone).ok();
     async move {
