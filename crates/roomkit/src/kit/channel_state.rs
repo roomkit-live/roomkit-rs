@@ -145,6 +145,9 @@ impl<S: ConversationStore> RoomKit<S> {
                 });
             }
         }
+        // The room it is made in: one created again under its id since its
+        // previous turn, by this process or another, follows none (RFC §17.2).
+        let room_created_at = room.created_at;
         let call = ChannelCall {
             call_id: format!("call-{}", uuid::Uuid::new_v4().simple()),
             room_state: stored_state(&room.metadata, &channel_id),
@@ -155,7 +158,11 @@ impl<S: ConversationStore> RoomKit<S> {
             arguments: options.arguments,
             previous_turn: None,
         };
-        let answer = self.inner.turns.channel_call(call, channel).await?;
+        let answer = self
+            .inner
+            .turns
+            .channel_call(call, channel, room_created_at)
+            .await?;
         if let Some(state) = answer.room_state {
             self.keep_channel_state(&room_id, &channel_id, state)
                 .await?;

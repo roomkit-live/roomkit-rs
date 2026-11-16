@@ -13,7 +13,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
-use roomkit_core::model::{ChannelId, RoomId};
+use roomkit_core::model::{ChannelId, RoomId, Timestamp};
 
 use super::{TurnHost, TurnKit};
 use crate::realtime::{EphemeralEvent, EphemeralEventType};
@@ -124,6 +124,7 @@ impl TurnHost {
             Arc::clone(publisher),
             Arc::clone(&self.shared.kit),
             (self.shared.room_id.clone(), self.shared.channel_id.clone()),
+            self.shared.context.room.created_at,
         );
         if !self.shared.kit.spawn_publisher(Box::pin(drain)) {
             tracing::debug!(target: "roomkit::turns", "the kit is shut down: a turn publishes nothing");
@@ -137,12 +138,16 @@ async fn drain(
     publisher: Arc<Publisher>,
     kit: Arc<dyn TurnKit>,
     (room, channel): (RoomId, ChannelId),
+    mark: Timestamp,
 ) {
     let mut draining = Draining {
         publisher: Arc::clone(&publisher),
         finished: false,
     };
-    while let Some(event) = draining.next() {
+    while let Some(mut event) = draining.next() {
+        // Of the turn's own room, whichever room holds its id now (RFC
+        // §8.4, §17.2).
+        event.room_created_at = Some(mark);
         if !kit.reaches_room(&room, &channel).await {
             tracing::debug!(target: "roomkit::turns", room_id = %room, "its answer does not reach the room: an ephemeral is not published");
             continue;

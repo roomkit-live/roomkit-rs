@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use roomkit_core::model::Metadata;
+use roomkit_core::model::{Metadata, Timestamp};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -42,6 +42,7 @@ impl Turns {
         &self,
         mut call: ChannelCall,
         channel: Arc<dyn DynChannel>,
+        room_created_at: Timestamp,
     ) -> Result<ChannelResult, RoomKitError> {
         if self.is_closed() {
             return Err(TurnError::link_reason("backend_closed").into_kit_error());
@@ -54,6 +55,9 @@ impl Turns {
         }
         let (call, raw, key, stale) = {
             let mut records = self.records();
+            // The records of another room of the id, deleted since and
+            // created again, name no previous turn (RFC §17.2).
+            records.mark_room(&call.room_id, room_created_at);
             call.previous_turn = records.get(&call.channel_id, &call.room_id).cloned();
             // Serialize before changing the owner's record: an unsent call
             // must leave the previous turn untouched.
@@ -74,6 +78,7 @@ impl Turns {
                     executor_id: None,
                 },
             );
+            records.mark_room(&call.room_id, room_created_at);
             let key = (call.channel_id.clone(), call.room_id.clone());
             let stale = self.rooms.enter(
                 &channel,

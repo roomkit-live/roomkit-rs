@@ -658,3 +658,161 @@ async fn the_rooms_own_organization_or_none_reaches_the_room() {
         assert_eq!(reached, vec!["room:globex-room".to_owned(); outcomes.len()]);
     }
 }
+
+/// Two kits, as two processes, over one store and one realtime backend.
+fn processes(count: usize) -> Vec<RoomKit> {
+    let store = Arc::new(roomkit::InMemoryStore::new());
+    let realtime: Arc<dyn RealtimeBackend> = Arc::new(InMemoryRealtime::default());
+    (0..count)
+        .map(|_| {
+            RoomKit::new(RoomKitOptions {
+                store: Arc::clone(&store),
+                realtime: Some(Arc::clone(&realtime)),
+                ..RoomKitOptions::default()
+            })
+        })
+        .collect()
+}
+
+fn scoped(organization: &str) -> CreateRoomOptions {
+    CreateRoomOptions {
+        room_id: Some(room("shared-id")),
+        organization_id: Some(organization.to_owned()),
+        ..CreateRoomOptions::default()
+    }
+}
+
+fn typing_for(organization: &str) -> PublishTypingOptions {
+    PublishTypingOptions {
+        organization_id: Some(organization.to_owned()),
+        ..PublishTypingOptions::default()
+    }
+}
+
+/// Python: `tests/test_room_org_scoping.py::TestScopedEphemerals::test_a_deleted_rooms_subscription_reads_nothing_of_the_room_created_again`:
+/// a subscription ends with its room on a realtime backend processes share,
+/// whichever process creates the room again (RFC §8.4, §17.2).
+#[tokio::test]
+async fn a_deleted_rooms_subscription_reads_nothing_of_the_room_created_again() {
+    use roomkit::ConversationStore as _;
+    for count in [1, 2] {
+        let kits = processes(count);
+        let (acme, globex) = (&kits[0], &kits[count - 1]);
+        let (watch, mut read) = recording();
+        acme.create_room(scoped("acme")).await.unwrap();
+        let options = SubscribeRoomOptions {
+            organization_id: Some("acme".to_owned()),
+        };
+        let watching = move |event| watch(event);
+        acme.subscribe_room(&room("shared-id"), watching, options)
+            .await
+            .unwrap();
+        acme.publish_typing(&room("shared-id"), "acme-user", typing_for("acme"))
+            .await
+            .unwrap();
+        assert_eq!(next(&mut read).await.user_id, "acme-user");
+        acme.store().delete_room(&room("shared-id")).await.unwrap();
+        globex.create_room(scoped("globex")).await.unwrap();
+        let (own, mut heard) = recording();
+        let options = SubscribeRoomOptions {
+            organization_id: Some("globex".to_owned()),
+        };
+        globex
+            .subscribe_room(&room("shared-id"), move |event| own(event), options)
+            .await
+            .unwrap();
+        globex
+            .publish_typing(&room("shared-id"), "globex-user", typing_for("globex"))
+            .await
+            .unwrap();
+        assert_eq!(next(&mut heard).await.user_id, "globex-user");
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        assert!(read.try_recv().is_err(), "{count} process(es)");
+        for kit in &kits {
+            kit.close().await.unwrap();
+        }
+    }
+}
+
+/// Python: `tests/test_room_org_scoping.py::TestScopedEphemerals::test_create_room_ends_the_subscriptions_of_an_earlier_room_of_its_id`:
+/// a publication on the backend itself names no room's creation mark, and
+/// a deleted room's subscription is ended, not only filtered.
+#[tokio::test]
+async fn create_room_ends_the_subscriptions_of_an_earlier_room_of_its_id() {
+    use roomkit::ConversationStore as _;
+    let kits = processes(1);
+    let kit = &kits[0];
+    let (watch, mut read) = recording();
+    kit.create_room(scoped("acme")).await.unwrap();
+    let options = SubscribeRoomOptions {
+        organization_id: Some("acme".to_owned()),
+    };
+    kit.subscribe_room(&room("shared-id"), move |event| watch(event), options)
+        .await
+        .unwrap();
+    kit.store().delete_room(&room("shared-id")).await.unwrap();
+    kit.create_room(scoped("globex")).await.unwrap();
+    let (own, mut heard) = recording();
+    let options = SubscribeRoomOptions {
+        organization_id: Some("globex".to_owned()),
+    };
+    kit.subscribe_room(&room("shared-id"), move |event| own(event), options)
+        .await
+        .unwrap();
+    let typing = EphemeralEvent::new(
+        room("shared-id"),
+        EphemeralEventType::TypingStart,
+        "globex-user",
+    );
+    kit.realtime()
+        .publish_to_room(&room("shared-id"), typing)
+        .await;
+    assert_eq!(next(&mut heard).await.user_id, "globex-user");
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    assert!(read.try_recv().is_err());
+    kit.close().await.unwrap();
+}
+
+/// Python: `tests/test_room_org_scoping.py::TestScopedEphemerals::test_a_subscription_made_before_its_room_reads_nothing_of_a_room_gone`:
+/// a subscription made while no room held the id is the room's that holds
+/// the id when it reads: a late publication of a deleted room of the id is
+/// not read, and binds it to nothing (RFC §8.4, §17.2).
+#[tokio::test]
+async fn a_subscription_made_before_its_room_reads_nothing_of_a_room_gone() {
+    use roomkit::ConversationStore as _;
+    let kits = processes(1);
+    let kit = &kits[0];
+    let (watch, mut read) = recording();
+    let gone = kit.create_room(scoped("acme")).await.unwrap();
+    kit.store().delete_room(&room("shared-id")).await.unwrap();
+    kit.subscribe_room(
+        &room("shared-id"),
+        move |event| watch(event),
+        SubscribeRoomOptions::default(),
+    )
+    .await
+    .unwrap();
+    let mut late = EphemeralEvent::new(
+        room("shared-id"),
+        EphemeralEventType::TypingStart,
+        "acme-user",
+    );
+    late.room_created_at = Some(gone.created_at);
+    kit.realtime()
+        .publish_to_room(&room("shared-id"), late)
+        .await;
+    kit.create_room(scoped("globex")).await.unwrap();
+    kit.publish_typing(&room("shared-id"), "globex-user", typing_for("globex"))
+        .await
+        .unwrap();
+    assert_eq!(next(&mut read).await.user_id, "globex-user");
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    assert!(read.try_recv().is_err());
+    kit.close().await.unwrap();
+}

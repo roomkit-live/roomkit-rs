@@ -7,10 +7,11 @@ use std::mem;
 use std::sync::Arc;
 use std::time::Duration;
 
+use roomkit_core::model::hook::AllowOptions;
 use roomkit_core::model::{
     ChannelBinding, ChannelCategory, ChannelId, ChannelOutput, ErrorRecord, EventId, EventUpdates,
-    IdentificationStatus, IdentityResult, InboundMessage, Metadata, ModelError, Observation, Room,
-    RoomContext, RoomEvent, RoomId, RoomUpdates, Task, Timestamp,
+    HookResult, IdentificationStatus, IdentityResult, InboundMessage, Metadata, ModelError,
+    Observation, Room, RoomContext, RoomEvent, RoomId, RoomUpdates, Task, Timestamp,
 };
 use roomkit_core::ops::{
     AfterDelivery, CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, DiscussionOutcome,
@@ -285,6 +286,12 @@ pub(super) async fn store_followed<S: ConversationStore>(
 ) -> Outcome {
     let outcome = store(&*inner.store, request).await;
     if let Outcome::Store(StoreOutcome::Context(context)) = &outcome {
+        let kit = RoomKit {
+            inner: Arc::clone(inner),
+        };
+        // The room's hooks of an earlier room of its id, created again in
+        // another process, are forgotten (RFC §9.1, §17.2).
+        kit.settle_room(&context.room);
         follow_discussion(inner, &context.room);
         if inner.discussions.get(&context.room.id).is_some() {
             held.lock()
@@ -878,6 +885,10 @@ pub(super) async fn hook<S: ConversationStore>(
             context,
             timeout,
         } => {
+            if !runs_in_its_room(inner, hook, &context) {
+                let skipped = HookOutcome::Returned(HookResult::allow(AllowOptions::default()));
+                return HookAnswer::Ran(Box::new(skipped)).into();
+            }
             let registered = inner.hook_with_spec(hook);
             let span = registered.as_ref().and_then(|(_, spec)| {
                 let room_id = &event.room_id;
@@ -908,6 +919,22 @@ pub(super) async fn hook<S: ConversationStore>(
             HookAnswer::Observed.into()
         }
     }
+}
+
+/// Whether `hook` runs on `context`: the room in hand settles its id's
+/// hooks first, and a hook forgotten as an earlier room's of the id, which
+/// the operation read before, runs not (RFC §9.1, §17.2). Python's hook
+/// engine, read at each firing, holds it no more.
+fn runs_in_its_room<S: ConversationStore>(
+    inner: &Arc<Inner<S>>,
+    hook: HookId,
+    context: &RoomContext,
+) -> bool {
+    let kit = RoomKit {
+        inner: Arc::clone(inner),
+    };
+    kit.settle_room(&context.room);
+    !inner.forgotten(hook)
 }
 
 /// Asks the kit's router which room a message that names none belongs to
@@ -1349,7 +1376,8 @@ async fn run_observers<S: ConversationStore>(
 }
 
 /// One observer's run on `event`, within its timeout, reporting what it
-/// raised; `None` for a hook with no handler.
+/// raised; `None` for a hook with no handler, or one that runs not in the
+/// room `context` holds ([`runs_in_its_room`]).
 fn observe<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
     trigger: HookTrigger,
@@ -1357,6 +1385,9 @@ fn observe<S: ConversationStore>(
     event: &RoomEvent,
     context: &RoomContext,
 ) -> Option<impl Future<Output = ()> + Send + 'static> {
+    if !runs_in_its_room(inner, hook, context) {
+        return None;
+    }
     let (kept, spec) = inner.hook_with_spec(hook)?;
     let inner = Arc::clone(inner);
     let (event, context) = (event.clone(), context.clone());

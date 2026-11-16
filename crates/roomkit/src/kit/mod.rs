@@ -58,6 +58,7 @@ mod registry;
 mod room_hook_lifetime;
 mod room_hooks;
 mod room_settings;
+mod room_subscriptions;
 mod rooms;
 mod shutdown;
 mod start_task;
@@ -214,6 +215,9 @@ pub(crate) struct Inner<S> {
     /// The hooks removed whose handler an operation that read the registry
     /// before the removal may still ask for (`engine`).
     retired_hooks: RwLock<Vec<Removed>>,
+    /// The retired hooks forgotten as an earlier room's, which no operation
+    /// runs (RFC §9.1, §17.2).
+    forgotten_hooks: RwLock<std::collections::BTreeSet<HookId>>,
     /// The routing strategy (RFC §10.4), fixed at the kit's construction.
     router: Arc<dyn InboundRoomRouter>,
     pub(crate) store: Arc<S>,
@@ -312,6 +316,9 @@ pub(crate) struct Inner<S> {
     /// The room hooks waiting for the room created under their id: a
     /// room's hooks end with the room (RFC §9.1, §17.2).
     pub(crate) room_hook_lifetime: room_hook_lifetime::RoomHookLifetime,
+    /// The kit's subscriptions to rooms' ephemerals, which end with their
+    /// room (RFC §8.4, §17.2).
+    pub(crate) room_subscriptions: room_subscriptions::RoomSubscriptions,
     /// The strategies' runners of their agents' turns, kept by the owner
     /// (RFC §10.6.1).
     pub(crate) turn_runners: crate::turn_runners::TurnRunners<S>,
@@ -419,6 +426,7 @@ impl<S: ConversationStore> RoomKit<S> {
             channel_order: RwLock::new(Vec::new()),
             hooks: RwLock::new(HashMap::new()),
             retired_hooks: RwLock::new(Vec::new()),
+            forgotten_hooks: RwLock::default(),
             router: inbound_router.unwrap_or_else(|| default_router(&store, kit)),
             store,
             locks: KitLocks::rooms(Arc::clone(&lock_manager)),
@@ -469,6 +477,7 @@ impl<S: ConversationStore> RoomKit<S> {
             default_orchestration: orchestration,
             room_strategies: strategies::RoomStrategies::default(),
             room_hook_lifetime: room_hook_lifetime::RoomHookLifetime::default(),
+            room_subscriptions: room_subscriptions::RoomSubscriptions::default(),
             turn_runners: crate::turn_runners::TurnRunners::default(),
             discussions: discussions::DiscussionSeams::default(),
         });

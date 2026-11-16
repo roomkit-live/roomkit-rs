@@ -4,7 +4,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use roomkit::model::{InboundMessage, Metadata, RoomId, TextContent};
+use roomkit::model::{InboundMessage, Metadata, RoomId, TextContent, Timestamp};
 use roomkit::{
     AttachChannelOptions, CreateRoomOptions, GetRoomOptions, GetTimelineOptions,
     ProcessInboundOptions, RoomKitError, SendEventOptions, TurnHost, UpdateRoomMetadataOptions,
@@ -295,6 +295,61 @@ async fn work_a_turn_began_writes_its_room_in_its_organization_after_the_turn() 
             false,
         )
     );
+}
+
+/// RFC §17.2: another process deleted the room and created it again under
+/// its id: work the deleted room's turn began is served there no more,
+/// refused as for a room the store does not hold.
+// Python: tests/test_turns_between.py::test_a_room_call_after_the_turn_is_refused_in_the_room_created_again
+#[tokio::test(start_paused = true)]
+async fn work_a_turn_began_is_refused_in_the_room_created_again() {
+    use roomkit::ConversationStore as _;
+    let (go, went) = tokio::sync::oneshot::channel::<()>();
+    let went = Arc::new(Mutex::new(Some(went)));
+    let (done, verdicts) = tokio::sync::oneshot::channel::<String>();
+    let done = Arc::new(Mutex::new(Some(done)));
+    let kit = kit(move |_call, _context| {
+        let went = went.lock().unwrap().take();
+        let done = done.lock().unwrap().take();
+        async move {
+            if let (Some(went), Some(done)) = (went, done) {
+                let turn = current_turn_host().unwrap();
+                tokio::spawn(roomkit::keep_context(async move {
+                    let _ = went.await;
+                    let sent = turn
+                        .send_event(
+                            &room(),
+                            &channel("ai"),
+                            TextContent::new("Later."),
+                            SendEventOptions::default(),
+                        )
+                        .await;
+                    drop(done.send(verdict(sent)));
+                }));
+            }
+            Ok(ToolResult::Text("42".to_owned()))
+        }
+    })
+    .await;
+    asks(&kit, "Go.").await;
+    roomkit::testing::idle(&kit).await;
+    let deleted = kit.store().get_room(&room()).await.unwrap().unwrap();
+    kit.store().delete_room(&room()).await.unwrap();
+    // Another process's room under the id, created after it.
+    let mut again = roomkit::model::Room::new(room());
+    again.organization_id = Some("globex".to_owned());
+    again.created_at =
+        Timestamp::from_unix_millis(deleted.created_at.as_unix_millis() + 1000).unwrap();
+    kit.store().create_room(again).await.unwrap();
+    go.send(()).unwrap();
+    let refused = verdicts.await.unwrap();
+    roomkit::testing::idle(&kit).await;
+
+    let written = kit
+        .get_timeline(&room(), GetTimelineOptions::default())
+        .await
+        .unwrap();
+    assert_eq!((refused, written.len()), ("ValueError".to_owned(), 0));
 }
 
 /// RFC §10.6.5: after its turn ended, a host sends the verbs that write

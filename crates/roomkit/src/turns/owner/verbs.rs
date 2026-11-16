@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use roomkit_core::model::{DirectEvent, Metadata, RoomId};
+use roomkit_core::model::{DirectEvent, Metadata, RoomId, Timestamp};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -304,7 +304,7 @@ async fn send(
 /// `room_call`), as the room's records name its last turn of the channel.
 pub(crate) async fn answer_room_call(
     kit: &Arc<dyn TurnKit>,
-    records: impl FnOnce() -> Option<(String, Option<String>)>,
+    records: impl FnOnce() -> Option<LastTurn>,
     message: OwnerMessage,
 ) -> RoomCallResult {
     let OwnerMessage::RoomCall {
@@ -318,7 +318,9 @@ pub(crate) async fn answer_room_call(
         ..
     } = message;
     let answered = async {
-        match records() {
+        let last = records();
+        let room_created_at = last.as_ref().and_then(|last| last.room_created_at);
+        match last.map(|last| (last.turn_id, last.executor_id)) {
             Some((last, Some(took))) if took == executor_id && last == turn_id => {}
             Some((last, Some(took))) if took == executor_id => {
                 return Err(refusal(
@@ -346,7 +348,7 @@ pub(crate) async fn answer_room_call(
                 ),
             ));
         }
-        let organization_id = room_organization(kit, &room_id).await?;
+        let organization_id = room_organization(kit, &room_id, room_created_at).await?;
         // Work its turn began, which starts fresh once the turn is over
         // (RFC §8.3): no depth of the turn floors what it does.
         let scope = Scope {
@@ -372,14 +374,19 @@ pub(crate) async fn answer_room_call(
 }
 
 /// The organization of `room_id`, which a verb after its turn acts in:
-/// a room the store does not hold refuses it, as Python's owner refuses it.
+/// a room the store does not hold refuses it, as Python's owner refuses it,
+/// and so does a room created again under its id since the turn's, of
+/// creation mark `room_created_at` (RFC §17.2).
 async fn room_organization(
     kit: &Arc<dyn TurnKit>,
     room_id: &RoomId,
+    room_created_at: Option<Timestamp>,
 ) -> Result<Option<String>, Box<WireError>> {
     match kit.room(room_id.clone()).await {
-        Ok(Some(room)) => Ok(room.organization_id),
-        Ok(None) => Err(refusal(
+        Ok(Some(room)) if room_created_at.is_none_or(|mark| mark == room.created_at) => {
+            Ok(room.organization_id)
+        }
+        Ok(_) => Err(refusal(
             VALUE_ERROR,
             format!("No room {}", repr(room_id.as_str())),
         )),
@@ -392,10 +399,21 @@ pub(crate) fn last_turn(
     records: &RoomRecords,
     channel_id: &roomkit_core::model::ChannelId,
     room_id: &RoomId,
-) -> Option<(String, Option<String>)> {
-    records
-        .get(channel_id, room_id)
-        .map(|record| (record.turn_id.clone(), record.executor_id.clone()))
+) -> Option<LastTurn> {
+    records.get(channel_id, room_id).map(|record| LastTurn {
+        turn_id: record.turn_id.clone(),
+        executor_id: record.executor_id.clone(),
+        room_created_at: records.room_mark(room_id),
+    })
+}
+
+/// The owner's record of the room's last turn of a channel, as a verb made
+/// after it reads it.
+pub(crate) struct LastTurn {
+    turn_id: String,
+    executor_id: Option<String>,
+    /// The creation mark of the room the turn ran in (RFC §17.2).
+    room_created_at: Option<Timestamp>,
 }
 
 fn refusal(kind: &str, message: String) -> Box<WireError> {

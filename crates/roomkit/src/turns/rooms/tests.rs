@@ -4,7 +4,7 @@ use std::future::{Future, ready};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use roomkit_core::model::{
-    ChannelBinding, ChannelOutput, ChannelType, InboundMessage, RoomContext, RoomEvent,
+    ChannelBinding, ChannelOutput, ChannelType, InboundMessage, RoomContext, RoomEvent, Timestamp,
 };
 use tokio::sync::Notify;
 
@@ -105,6 +105,41 @@ async fn a_failed_drop_is_tried_again_on_the_next_turn() {
     assert_eq!(*lock(&drops.rooms), [key("r1").1]);
 }
 
+// Python: tests/test_turns_own_executor.py::test_a_channel_call_in_a_room_created_again_names_no_previous_turn.
+// The room was deleted and created again under its id: a channel call there
+// follows none of the deleted room's turns, so the executor drops what it
+// held for the id (RFC §10.6.2, §17.2).
+#[tokio::test]
+async fn a_channel_call_in_a_room_created_again_drops_the_earlier_room_s_state() {
+    let turns = super::super::Turns::default();
+    let drops = Arc::new(Drops::default());
+    let agent: Arc<dyn DynChannel> = Arc::new(Agent(Arc::clone(&drops)));
+    let (earlier, again) = (
+        Timestamp::UNIX_EPOCH,
+        Timestamp::from_unix_millis(1000).unwrap(),
+    );
+    // The deleted room's turn: its executor holds the room's state, the
+    // owner its record.
+    assert!(!turns.rooms.enter(&agent, key("r1"), "before", None));
+    {
+        let mut records = turns.records();
+        records.put(&channel(), &key("r1").1, previous("before"));
+        records.mark_room(&key("r1").1, earlier);
+    }
+    let call = super::super::ChannelCall {
+        call_id: "call".to_owned(),
+        channel_id: channel(),
+        room_id: key("r1").1,
+        verb: "nope".to_owned(),
+        arguments: Metadata::new(),
+        organization_id: None,
+        room_state: Metadata::new(),
+        previous_turn: None,
+    };
+    drop(turns.channel_call(call, agent, again).await);
+    assert_eq!(*lock(&drops.rooms), [key("r1").1]);
+}
+
 // Python: test_a_channel_call_no_executor_took_leaves_the_previous_turn.
 #[tokio::test]
 async fn a_channel_call_no_executor_took_leaves_the_previous_turn() {
@@ -125,7 +160,7 @@ async fn a_channel_call_no_executor_took_leaves_the_previous_turn() {
         previous_turn: None,
     };
     assert!(
-        matches!(turns.channel_call(call, agent).await, Err(RoomKitError::TurnLink { reason, .. }) if reason == "no_executor")
+        matches!(turns.channel_call(call, agent, Timestamp::UNIX_EPOCH).await, Err(RoomKitError::TurnLink { reason, .. }) if reason == "no_executor")
     );
     assert_eq!(
         turns

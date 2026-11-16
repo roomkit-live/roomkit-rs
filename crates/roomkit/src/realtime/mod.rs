@@ -74,6 +74,11 @@ pub struct EphemeralEvent {
     pub data: Metadata,
     /// When it was made.
     pub timestamp: Timestamp,
+    /// The creation mark of the room it was published in, `None` when the
+    /// publisher named none: a subscription the kit made reads the events
+    /// of its own room alone (RFC §8.4, §17.2). Python's `room_created_at`.
+    #[serde(default)]
+    pub room_created_at: Option<Timestamp>,
 }
 
 impl EphemeralEvent {
@@ -89,6 +94,7 @@ impl EphemeralEvent {
             channel_id: None,
             data: Metadata::new(),
             timestamp: SystemEnvironment.now(),
+            room_created_at: None,
         }
     }
 

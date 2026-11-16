@@ -39,11 +39,11 @@ impl<S: ConversationStore> RoomKit<S> {
     ) -> Result<(), RoomKitError> {
         self.inner.open()?;
         let registering = self.inner.room_hook_lifetime.registering(room_id);
-        let held = self
-            .room_held(room_id, options.organization_id.as_deref())
+        let mark = self
+            .room_mark(room_id, options.organization_id.as_deref())
             .await?;
         registering.note(
-            held,
+            mark,
             || {
                 self.inner
                     .try_change_config(|config| config.hooks.enable_room_hook(room_id, name))
@@ -71,7 +71,11 @@ impl<S: ConversationStore> RoomKit<S> {
             Ok::<_, std::convert::Infallible>(config.hooks.disable_room_hook(room_id, name))
         });
         if removed {
-            self.inner.room_hook_lifetime.released(room_id, name);
+            let holds = self
+                .config()
+                .hooks
+                .holds_room_hooks_beyond(room_id, &BTreeSet::new());
+            self.inner.room_hook_lifetime.released(room_id, name, holds);
         }
         Ok(removed)
     }

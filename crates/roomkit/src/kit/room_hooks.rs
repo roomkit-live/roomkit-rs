@@ -128,8 +128,8 @@ impl<S: ConversationStore> RoomKit<S> {
     {
         self.inner.open()?;
         let registering = self.inner.room_hook_lifetime.registering(room_id);
-        let held = self
-            .room_held(room_id, options.organization_id.as_deref())
+        let mark = self
+            .room_mark(room_id, options.organization_id.as_deref())
             .await?;
         let hook = HookRegistration {
             priority: options.priority,
@@ -139,7 +139,7 @@ impl<S: ConversationStore> RoomKit<S> {
             ..HookRegistration::new(trigger, execution, r#fn)
         };
         registering.note(
-            held,
+            mark,
             || self.hook_engine().add_room_hook(room_id, hook),
             |registered| registered.name.clone(),
         )
@@ -167,7 +167,11 @@ impl<S: ConversationStore> RoomKit<S> {
             .await?;
         let removed = self.hook_engine().remove_room_hook(room_id, name);
         if removed {
-            self.inner.room_hook_lifetime.released(room_id, name);
+            let holds = self
+                .config()
+                .hooks
+                .holds_room_hooks_beyond(room_id, &std::collections::BTreeSet::new());
+            self.inner.room_hook_lifetime.released(room_id, name, holds);
         }
         Ok(removed)
     }

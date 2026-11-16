@@ -61,13 +61,17 @@ impl<S: ConversationStore> RoomKit<S> {
             .clone()
             .unwrap_or_else(|| self.inner.default_orchestration.clone());
         let forgets = options.room_id.as_ref().is_some_and(|room_id| {
-            self.holds_strategy_record(room_id) || self.has_room_hooks_to_settle(room_id)
+            self.holds_strategy_record(room_id)
+                || self.has_room_hooks_to_settle(room_id)
+                || self.inner.room_subscriptions.holds(room_id)
         });
         if orchestration.is_none() && !forgets {
             let room = self.create_room_record(options, true).await?;
             // A registration that began once the id was checked counts the
             // room as holding it.
-            self.inner.room_hook_lifetime.room_created(&room.id, |_| {});
+            self.inner
+                .room_hook_lifetime
+                .room_created(&room.id, room.created_at, |_| {});
             return Ok(room);
         }
         // Boxed: a room created with no strategy keeps a small future.
@@ -87,7 +91,11 @@ impl<S: ConversationStore> RoomKit<S> {
         let room = self.create_room_record(options, false).await?;
         // The room hooks registered while an earlier room held the id
         // belonged to that room, and so did the strategy recorded for it.
-        self.forget_room_hooks(&room.id);
+        self.forget_room_hooks(&room.id, room.created_at);
+        // So were its subscriptions to the room's ephemerals (RFC §8.4).
+        for subscription_id in self.inner.room_subscriptions.earlier_room(&room.id) {
+            self.inner.realtime.unsubscribe(&subscription_id).await;
+        }
         self.forget_strategy(&room.id).await?;
         if let Some(strategy) = orchestration {
             // The path install_strategy() takes: claimed, recorded (RFC §19.7).

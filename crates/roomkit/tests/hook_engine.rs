@@ -441,3 +441,92 @@ async fn a_room_hook_past_its_timeout_reports_its_own_timeout() {
         .collect();
     assert_eq!(reported, [Some(serde_json::json!(0.05))]);
 }
+
+// Python: tests/test_room_org_scoping.py::TestScopedRoomHooks::test_a_hook_given_to_the_engine_ends_with_the_first_room_it_ran_in
+// A room hook given to the kit's engine itself, below the kit, is the
+// first room's it runs in: another process creating the room again ends
+// it there (RFC §9.1, §17.2).
+#[tokio::test]
+async fn a_hook_given_to_the_engine_ends_with_the_first_room_it_ran_in() {
+    use roomkit::ConversationStore as _;
+    use std::sync::{Arc, Mutex};
+    let store = Arc::new(roomkit::InMemoryStore::new());
+    let kits: Vec<RoomKit> = (0..2)
+        .map(|_| {
+            RoomKit::new(RoomKitOptions {
+                store: Arc::clone(&store),
+                ..RoomKitOptions::default()
+            })
+        })
+        .collect();
+    let (acme, globex) = (&kits[0], &kits[1]);
+    for kit in &kits {
+        kit.register_channel(transport("sms")).unwrap();
+    }
+    let scoped = |organization: &str| CreateRoomOptions {
+        room_id: Some(room("shared-id")),
+        organization_id: Some(organization.to_owned()),
+        ..Default::default()
+    };
+    let read: Arc<Mutex<Vec<String>>> = Arc::default();
+    let reads = Arc::clone(&read);
+    let below = HookRegistration {
+        name: "below".to_owned(),
+        ..HookRegistration::new(
+            HookTrigger::BeforeBroadcast,
+            HookExecution::Sync,
+            move |event: RoomEvent, context: RoomContext| {
+                let reads = Arc::clone(&reads);
+                async move {
+                    let roomkit::model::EventContent::Text(text) = event.content else {
+                        unreachable!()
+                    };
+                    let organization = context.room.organization_id.unwrap_or_default();
+                    reads
+                        .lock()
+                        .unwrap()
+                        .push(format!("{organization}:{}", text.body));
+                    HookResult::allow(AllowOptions::default())
+                }
+            },
+        )
+    };
+    let says = |text: &str| {
+        let message = InboundMessage::new(channel("sms"), "+15550000001", TextContent::new(text));
+        let options = ProcessInboundOptions {
+            room_id: Some(room("shared-id")),
+            ..Default::default()
+        };
+        (message, options)
+    };
+    acme.create_room(scoped("acme")).await.unwrap();
+    acme.attach_channel(
+        &room("shared-id"),
+        &channel("sms"),
+        AttachChannelOptions::default(),
+    )
+    .await
+    .unwrap();
+    acme.hook_engine()
+        .add_room_hook(&room("shared-id"), below)
+        .unwrap();
+    let (message, options) = says("acme note");
+    acme.process_inbound(message, options).await.unwrap();
+    store.delete_room(&room("shared-id")).await.unwrap();
+    globex.create_room(scoped("globex")).await.unwrap();
+    globex
+        .attach_channel(
+            &room("shared-id"),
+            &channel("sms"),
+            AttachChannelOptions::default(),
+        )
+        .await
+        .unwrap();
+    let (message, options) = says("globex secret");
+    acme.process_inbound(message, options).await.unwrap();
+    for kit in &kits {
+        kit.close().await.unwrap();
+    }
+
+    assert_eq!(*read.lock().unwrap(), vec!["acme:acme note".to_owned()]);
+}

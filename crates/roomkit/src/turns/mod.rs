@@ -318,6 +318,14 @@ impl Turns {
                 TurnError::new("no_executor", "the kit's local executor has closed").to_record()
             })?;
         let mut records = self.records();
+        // The records of another room of the id, deleted since and created
+        // again in another process, name no previous turn (RFC §17.2).
+        if records
+            .room_mark(&event.room_id)
+            .is_some_and(|mark| mark != context.room.created_at)
+        {
+            records.pop_room(&event.room_id);
+        }
         let previous = records.get(&binding.channel_id, &event.room_id).cloned();
         let history = std::mem::take(&mut context.recent_events);
         let observers = self.observers();
@@ -343,6 +351,7 @@ impl Turns {
                 executor_id: None,
             },
         );
+        records.mark_room(&event.room_id, context.room.created_at);
         let stale = kit.channel(&binding.channel_id).is_some_and(|channel| {
             self.rooms.enter(
                 &channel,

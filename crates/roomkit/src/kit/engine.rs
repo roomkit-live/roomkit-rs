@@ -331,13 +331,30 @@ impl<S> Inner<S> {
         let mut retired = write(&self.retired_hooks);
         retired.extend(removed);
         let mut handlers = write(&self.hooks);
+        let mut forgotten = write(&self.forgotten_hooks);
         retired.retain(|hook| {
             let held = hook.held.strong_count() > 0;
             if !held {
                 handlers.remove(&hook.id);
+                forgotten.remove(&hook.id);
             }
             held
         });
+    }
+
+    /// Retires `removed`, the hooks of an earlier room of a room id,
+    /// deleted since and created again: an operation that read the
+    /// registry before runs none of them (RFC §9.1, §17.2), whatever room
+    /// it reads.
+    pub(super) fn retire_forgotten(&self, removed: Vec<Removed>) {
+        write(&self.forgotten_hooks).extend(removed.iter().map(|hook| hook.id));
+        self.retire(removed);
+    }
+
+    /// Whether `hook` was forgotten as an earlier room's
+    /// ([`retire_forgotten`](Self::retire_forgotten)).
+    pub(crate) fn forgotten(&self, hook: HookId) -> bool {
+        read(&self.forgotten_hooks).contains(&hook)
     }
 
     /// The registration of the retired hook `hook`.

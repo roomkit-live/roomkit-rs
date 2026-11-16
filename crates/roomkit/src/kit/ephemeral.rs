@@ -7,7 +7,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use roomkit_core::model::{ChannelId, Metadata, RoomId};
+use roomkit_core::model::{ChannelId, Metadata, RoomId, Timestamp};
 
 use super::RoomKit;
 use crate::error::RoomKitError;
@@ -139,15 +139,16 @@ impl<S: ConversationStore> RoomKit<S> {
     }
 
     /// Publishes `event` to the room's subscribers, once the call is
-    /// admitted and the organization `organization_id` reaches the room.
+    /// admitted and the organization `organization_id` reaches the room,
+    /// the event carrying the room's creation mark (RFC §8.4, §17.2).
     async fn publish(
         &self,
         room_id: &RoomId,
         organization_id: Option<&str>,
-        event: EphemeralEvent,
+        mut event: EphemeralEvent,
     ) -> Result<(), RoomKitError> {
         self.inner.open()?;
-        self.reached(room_id, organization_id).await?;
+        event.room_created_at = self.room_mark(room_id, organization_id).await?;
         self.inner.realtime.publish_to_room(room_id, event).await;
         Ok(())
     }
@@ -308,15 +309,36 @@ impl<S: ConversationStore> RoomKit<S> {
         Fut: Future<Output = ()> + Send + 'static,
     {
         self.inner.open()?;
-        self.reached(room_id, options.organization_id.as_deref())
+        let registering = self.inner.room_hook_lifetime.registering(room_id);
+        let mark = self
+            .room_mark(room_id, options.organization_id.as_deref())
             .await?;
-        let callback: crate::realtime::EphemeralCallback =
-            Arc::new(move |event| Box::pin(callback(event)));
-        Ok(self
+        let bound = Arc::new(std::sync::Mutex::new(mark));
+        let (kit, room) = (self.downgrade(), room_id.clone());
+        let callback = Arc::new(callback);
+        let callback: crate::realtime::EphemeralCallback = Arc::new(move |event| {
+            let (bound, kit, room, callback) = (
+                Arc::clone(&bound),
+                kit.clone(),
+                room.clone(),
+                Arc::clone(&callback),
+            );
+            Box::pin(async move {
+                if of_room(&bound, event.room_created_at, &kit, &room).await {
+                    callback(event).await;
+                }
+            })
+        });
+        let subscription_id = self
             .inner
             .realtime
             .subscribe_to_room(room_id, callback)
-            .await)
+            .await;
+        let held = mark.is_some() || registering.created();
+        self.inner
+            .room_subscriptions
+            .made(room_id, &subscription_id, held);
+        Ok(subscription_id)
     }
 
     /// Ends the subscription `subscription_id`; whether it existed:
@@ -327,6 +349,42 @@ impl<S: ConversationStore> RoomKit<S> {
         if self.inner.open().is_err() {
             return false;
         }
+        self.inner.room_subscriptions.ended(subscription_id);
         self.inner.realtime.unsubscribe(subscription_id).await
     }
+}
+
+/// Whether a subscription of the room of creation mark `bound` reads an
+/// event `published` in the room of that mark (RFC §8.4, §17.2): another
+/// room of the id, created after that room was deleted, is not read. Made
+/// while no room held the id (`None`), the subscription is the room's that
+/// holds the id when it reads its first event, read once from the store:
+/// an event of a room gone before it is not read. An event that names no
+/// room's mark, published on the backend directly, is read. Python's
+/// `_of_room`.
+async fn of_room<S: ConversationStore>(
+    bound: &std::sync::Mutex<Option<Timestamp>>,
+    published: Option<Timestamp>,
+    kit: &super::WeakRoomKit<S>,
+    room: &RoomId,
+) -> bool {
+    let Some(published) = published else {
+        return true;
+    };
+    let held = *bound
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(mark) = held {
+        return mark == published;
+    }
+    let Some(kit) = kit.upgrade() else {
+        return false;
+    };
+    let Ok(Some(room)) = kit.store().get_room(room).await else {
+        return false;
+    };
+    *bound
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(room.created_at);
+    room.created_at == published
 }
