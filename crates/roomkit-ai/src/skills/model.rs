@@ -3,9 +3,7 @@
 
 use std::path::PathBuf;
 
-use serde_json::Value;
-
-use super::SkillToolNames;
+use super::{SkillToolNames, parse_tool_names};
 use roomkit::model::Metadata;
 
 /// What a skill's `SKILL.md` frontmatter declares (RFC §24.2): Python's
@@ -56,20 +54,10 @@ impl SkillMetadata {
     /// Exact prerequisite names from optional `requires` metadata (RFC §24.2).
     /// These describe dependencies, not permission grants.
     pub fn required_tool_names(&self) -> Vec<String> {
-        let value = match self.extra_metadata.get("requires") {
-            Some(Value::String(text)) => SkillToolNames::Text(text.clone()),
-            Some(Value::Array(items)) => SkillToolNames::List(
-                items
-                    .iter()
-                    .map(|item| {
-                        item.as_str()
-                            .map_or_else(|| crate::memory::repr::repr(item), str::to_owned)
-                    })
-                    .collect(),
-            ),
-            _ => return Vec::new(),
-        };
-        value.names()
+        self.extra_metadata
+            .get("requires")
+            .map(parse_tool_names)
+            .unwrap_or_default()
     }
 
     /// Whether a pattern gates `tool_name`, using the policy's `*`/`?` matcher.

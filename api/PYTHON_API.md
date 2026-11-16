@@ -13,6 +13,10 @@ the mapping and its tests. The check does not generate or update this document.
 
 | Rust name | Python name | Members or parameters |
 | --- | --- | --- |
+| `roomkit_ai::parse_tool_names` | `roomkit.skills.parse_tool_names` | `value: &serde_json::Value`: text/arrays read as Python; other values give no names. Tuples use arrays; non-JSON Python objects are supplied as their Python text (HITL 63fe8e98). |
+| `roomkit_ai::serves_exactly` | `roomkit.skills.serves_exactly` | `offered`: an iterable of borrowed or owned names; exact membership (HITL 63fe8e98). |
+| `roomkit_ai::missing_required_tools` | `roomkit.skills.missing_required_tools` | `closed: &[String]`, empty by default; explicit `r#match: Option<&RequiresMatch>`, `None` for exact matching; fallible result preserves callback errors (HITL 63fe8e98). |
+| `roomkit_ai::safe_join_filename` | `roomkit.skills.safe_join_filename` | `kind: Option<&str>`, `None` for `"file"`; `Result<PathBuf, SkillPathError>` preserves the path error (HITL 63fe8e98). |
 | `roomkit_ai::tool_turn_context` | `roomkit.tools.tool_turn_context` | `work`: scoped future replacing the enclosed `with` block (HITL 47e0cee0) |
 | `roomkit_ai::ToolStructuredContent` | — | Whole type |
 | `roomkit_ai::ExternalToolHandler` | — | `state` |

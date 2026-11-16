@@ -11,10 +11,12 @@ mod copy_matcher;
 mod discovery;
 mod file_boundaries;
 mod gating;
+mod helper_boundaries;
 mod local_files;
 mod local_registration;
 mod manifest_bound;
 mod requirements;
+mod standalone_helpers;
 mod support;
 mod turns;
 #[path = "../../../roomkit/tests/support/warnings.rs"]

@@ -4,8 +4,41 @@ use std::collections::HashSet;
 
 use serde_json::json;
 
-use super::{SkillMetadata, SkillRegistry, texts};
+use super::{RequiresMatch, SkillMetadata, SkillRegistry, texts};
 use crate::tools::{ToolContext, ToolError, glob_matches};
+
+/// Return unsatisfied skill prerequisites in declaration order (RFC §24.3).
+///
+/// Only admitted names matching no closed pattern are offered to the matcher.
+/// Duplicate prerequisites remain repeated. Pass `&[]` and `None` for Python's
+/// defaults; `Some(matcher)` uses the host's existing `RequiresMatch`.
+///
+/// # Errors
+///
+/// Propagates the first matcher error unchanged without checking further names.
+pub fn missing_required_tools(
+    metadata: &SkillMetadata,
+    admitted: impl IntoIterator<Item = impl AsRef<str>>,
+    closed: &[String],
+    r#match: Option<&RequiresMatch>,
+) -> Result<Vec<String>, ToolError> {
+    let offered: HashSet<String> = admitted
+        .into_iter()
+        .map(|name| name.as_ref().to_owned())
+        .filter(|name| !closed.iter().any(|pattern| glob_matches(pattern, name)))
+        .collect();
+    let mut missing = Vec::new();
+    for name in metadata.required_tool_names() {
+        let served = match r#match {
+            Some(matcher) => matcher.call(&name, &offered)?,
+            None => offered.contains(&name),
+        };
+        if !served {
+            missing.push(name);
+        }
+    }
+    Ok(missing)
+}
 
 pub(crate) fn check(
     registry: &SkillRegistry,
@@ -19,18 +52,9 @@ pub(crate) fn check(
     let mut activated = context.skill_activated.clone();
     activated.extend(room_active);
     activated.insert(metadata.name.clone());
-    let closed = registry.closed_tool_names(&activated);
-    let offered: HashSet<String> = admitted
-        .iter()
-        .filter(|name| !closed.iter().any(|pattern| glob_matches(pattern, name)))
-        .cloned()
-        .collect();
-    let mut missing = Vec::new();
-    for name in metadata.required_tool_names() {
-        if !registry.requires_match.call(&name, &offered)? {
-            missing.push(name);
-        }
-    }
+    let closed: Vec<String> = registry.closed_tool_names(&activated).into_iter().collect();
+    let missing =
+        missing_required_tools(metadata, admitted, &closed, Some(&registry.requires_match))?;
     if missing.is_empty() {
         return Ok(());
     }

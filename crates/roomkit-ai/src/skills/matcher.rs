@@ -8,6 +8,12 @@ use crate::ToolError;
 
 type MatchFn = dyn Fn(&str, &HashSet<String>) -> Result<bool, ToolError> + Send + Sync;
 
+/// Whether an offered tool has this exact, case-sensitive name (RFC §24.3).
+/// Wildcards in `required` are literal characters.
+pub fn serves_exactly(required: &str, offered: impl IntoIterator<Item = impl AsRef<str>>) -> bool {
+    offered.into_iter().any(|name| name.as_ref() == required)
+}
+
 /// Python's `RequiresMatch` callable. Defaults to exact name membership.
 /// Clones retain the same callback and its state; equality compares callback
 /// identity, with all default matchers equal (HITL 73da84cd).

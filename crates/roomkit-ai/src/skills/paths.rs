@@ -23,11 +23,22 @@ pub(super) fn contained_directory(directory: &Path, kind: &str) -> Result<PathBu
     Ok(resolved)
 }
 
-pub(super) fn safe_join_filename(
+/// Resolve a normalized single filename inside its bundled directory (RFC §24.6).
+///
+/// Both the directory and its target must remain contained after symlinks are
+/// resolved. Missing components are allowed. `None` uses Python's default
+/// error label, `"file"`; a custom `kind` changes only that label.
+///
+/// # Errors
+///
+/// Returns `SkillPathError` for an invalid name, escaped directory/target or
+/// path that cannot be resolved. This does not read or execute the target.
+pub fn safe_join_filename(
     directory: &Path,
     filename: &str,
-    kind: &str,
+    kind: Option<&str>,
 ) -> Result<PathBuf, SkillPathError> {
+    let kind = kind.unwrap_or("file");
     let invalid = |reason: &str| {
         SkillPathError(format!(
             "Invalid {kind} filename: {}{reason}",

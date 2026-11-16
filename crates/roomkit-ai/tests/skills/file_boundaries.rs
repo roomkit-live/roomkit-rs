@@ -1,7 +1,7 @@
 //! Python's public filesystem boundary witnesses, mirrored without model tools.
 
 use super::support::TempDir;
-use roomkit_ai::{Skill, SkillFileError, SkillMetadata};
+use roomkit_ai::{Skill, SkillFileError, SkillMetadata, safe_join_filename};
 use std::io::ErrorKind;
 
 fn skill(files: &TempDir) -> Skill {
@@ -25,6 +25,10 @@ fn test_direct_file_helpers_resolve_safe_names_after_nfkc() {
     ] {
         for directory in ["scripts", "references"] {
             files.file(&format!("local/{directory}/{stored}"), "Contents");
+            assert_eq!(
+                safe_join_filename(&skill.path.join(directory), requested, None).unwrap(),
+                skill.path.join(directory).join(stored)
+            );
         }
         assert_eq!(skill.read_reference(requested).unwrap(), "Contents");
         assert_eq!(

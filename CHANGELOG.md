@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Export `parse_tool_names`, `serves_exactly`, `missing_required_tools` and `safe_join_filename`; tool names now trim Python's full whitespace set (RFC §24.2–24.6, RMK-1709).
+
 - Add direct `Skill` file helpers with contained, normalized paths, unbounded UTF-8 reference reads and distinct path/filesystem/encoding errors (RFC §24.6, RMK-1709).
 
 - Register in-memory skills through `SkillRegistry::add`, preserving their paths and instructions, clearing stale marks and rejecting invalid or oversized replacements atomically (RFC §24.3, RMK-1709).

@@ -68,7 +68,7 @@ impl Skill {
         kind: &str,
         label: &str,
     ) -> Result<PathBuf, SkillFileError> {
-        let path = safe_join_filename(&self.path.join(directory), name, kind)?;
+        let path = safe_join_filename(&self.path.join(directory), name, Some(kind))?;
         if !file_metadata(&path)?.is_some_and(|metadata| metadata.is_file()) {
             return Err(
                 io::Error::new(ErrorKind::NotFound, format!("{label} not found: {name}")).into(),

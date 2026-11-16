@@ -1,5 +1,49 @@
 //! The two values of `SkillMetadata.allowed_tools` (RFC §24.2).
 
+use serde_json::Value;
+
+/// Parse skill tool names or patterns, preserving order and duplicates (RFC §24.2).
+///
+/// Text is comma-separated, optionally wrapped in brackets. Array entries are
+/// converted to Python-style text before trimming; other values yield no names.
+/// Python tuples use arrays here. Convert non-JSON Python objects to their
+/// Python text before constructing an array (HITL 63fe8e98).
+pub fn parse_tool_names(value: &Value) -> Vec<String> {
+    match value {
+        Value::String(text) => text_names(text),
+        Value::Array(items) => names(items.iter().map(|item| {
+            item.as_str()
+                .map_or_else(|| crate::memory::repr::repr(item), str::to_owned)
+        })),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::Object(_) => Vec::new(),
+    }
+}
+
+fn strip(text: &str) -> &str {
+    text.trim_matches(|c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c))
+}
+
+fn text_names(text: &str) -> Vec<String> {
+    let text = strip(text);
+    let inner = text
+        .strip_prefix('[')
+        .and_then(|text| text.strip_suffix(']'));
+    let text = inner
+        .filter(|inner| !inner.contains(['[', ']']))
+        .unwrap_or(text);
+    names(text.split(','))
+}
+
+fn names(entries: impl IntoIterator<Item = impl AsRef<str>>) -> Vec<String> {
+    entries
+        .into_iter()
+        .filter_map(|entry| {
+            let name = strip(strip(entry.as_ref()).trim_matches(['\'', '"']));
+            (!name.is_empty()).then(|| name.to_owned())
+        })
+        .collect()
+}
+
 /// Python's text-or-list value, retained without changing its public shape.
 /// `None` on [`super::SkillMetadata::allowed_tools`] means no value.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -12,25 +56,10 @@ pub enum SkillToolNames {
 
 impl SkillToolNames {
     pub(crate) fn names(&self) -> Vec<String> {
-        let entries: Vec<&str> = match self {
-            Self::List(entries) => entries.iter().map(String::as_str).collect(),
-            Self::Text(text) => {
-                let text = text.trim();
-                let inner = text
-                    .strip_prefix('[')
-                    .and_then(|text| text.strip_suffix(']'));
-                let text = inner
-                    .filter(|inner| !inner.contains(['[', ']']))
-                    .unwrap_or(text);
-                text.split(',').collect()
-            }
-        };
-        entries
-            .into_iter()
-            .map(|entry| entry.trim().trim_matches(['\'', '"']).trim())
-            .filter(|entry| !entry.is_empty())
-            .map(str::to_owned)
-            .collect()
+        match self {
+            Self::List(entries) => names(entries),
+            Self::Text(text) => text_names(text),
+        }
     }
 
     /// Repeated keys cannot erase an earlier gate (RFC §24.1).

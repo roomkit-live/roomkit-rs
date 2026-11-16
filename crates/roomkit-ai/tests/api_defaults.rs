@@ -17,6 +17,29 @@ use roomkit_ai::{FromToolOptions, ToolDeclarationOrigin};
 use std::time::Duration;
 
 #[test]
+fn standalone_skill_helpers_default_as_python() {
+    let mut metadata = roomkit_ai::SkillMetadata::new("local", "");
+    metadata
+        .extra_metadata
+        .insert("requires".into(), serde_json::json!("lookup"));
+    // roomkit.skills.missing_required_tools(closed) = ()
+    assert_eq!(
+        roomkit_ai::missing_required_tools(&metadata, ["lookup"], &[], None),
+        Ok(Vec::new())
+    );
+    // roomkit.skills.missing_required_tools(match) = <function serves_exactly>
+    assert_eq!(
+        roomkit_ai::missing_required_tools(&metadata, ["lookup_extra"], &[], None),
+        Ok(vec!["lookup".to_owned()])
+    );
+    // roomkit.skills.safe_join_filename(kind) = 'file'
+    assert!(
+        roomkit_ai::safe_join_filename(std::path::Path::new("references"), "../outside", None)
+            .is_err_and(|error| error.to_string().starts_with("Invalid file filename"))
+    );
+}
+
+#[test]
 fn skill_registry_options_default_as_python() {
     let options = roomkit_ai::SkillRegistryOptions::default();
     // roomkit.SkillRegistry.__init__(requires_match) = <function serves_exactly>

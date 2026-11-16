@@ -35,11 +35,13 @@ mod validation;
 
 pub use self::error::SkillError;
 pub use self::file_error::{SkillFileError, SkillPathError};
-pub use self::matcher::{CopyOptions, RequiresMatch, SkillRegistryOptions};
+pub use self::matcher::{CopyOptions, RequiresMatch, SkillRegistryOptions, serves_exactly};
 pub use self::model::{DiscoverOptions, Skill, SkillMetadata};
+pub use self::paths::safe_join_filename;
 pub use self::registry::SkillRegistry;
+pub use self::requirements::missing_required_tools;
 #[doc(hidden)]
 pub use self::texts::dumps;
 pub(crate) use self::texts::dumps_unescaped;
 pub(crate) use self::texts::{ACTIVATE_SKILL, quoted_name};
-pub use self::tool_names::SkillToolNames;
+pub use self::tool_names::{SkillToolNames, parse_tool_names};

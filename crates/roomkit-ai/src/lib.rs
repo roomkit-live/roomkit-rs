@@ -138,7 +138,8 @@ pub use self::router::{
 pub use self::skills::dumps;
 pub use self::skills::{
     CopyOptions, DiscoverOptions, RequiresMatch, Skill, SkillError, SkillFileError, SkillMetadata,
-    SkillPathError, SkillRegistry, SkillRegistryOptions, SkillToolNames,
+    SkillPathError, SkillRegistry, SkillRegistryOptions, SkillToolNames, missing_required_tools,
+    parse_tool_names, safe_join_filename, serves_exactly,
 };
 pub use self::steering::SteerOptions;
 pub use self::tool_search::{TOOL_FIND_TOOLS, TOOL_LIST_TOOLS, TOOL_SEARCH_INFRA_TOOL_NAMES};
