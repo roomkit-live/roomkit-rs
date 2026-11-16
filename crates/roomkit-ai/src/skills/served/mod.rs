@@ -4,10 +4,12 @@ mod entry;
 mod json_tree;
 mod parse;
 mod resource;
+mod server;
 
 pub use entry::{SkillEntry, SkillEntryKeyError, SkillResources};
 pub use parse::parse_entry;
 pub use resource::{SkillResource, SkillResourceSize, verify_skill_resource};
+pub use server::{McpSkillServer, McpSkillServerError, McpSkillServerFuture};
 
 /// The MCP Skills extension's identifier (RFC §24.7).
 pub const SKILLS_EXTENSION: &str = "io.modelcontextprotocol/skills";

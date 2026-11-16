@@ -13,5 +13,6 @@ mod host;
 #[cfg(target_os = "linux")]
 mod lifecycle;
 mod listing;
+mod skill_server;
 mod structured;
 mod support;

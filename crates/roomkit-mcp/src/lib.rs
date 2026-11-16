@@ -73,6 +73,7 @@ mod raw_stdio;
 mod resources;
 mod results;
 mod server;
+mod skills;
 mod structured;
 mod texts;
 mod wire;

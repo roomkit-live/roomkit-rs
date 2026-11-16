@@ -45,8 +45,9 @@ pub use self::paths::safe_join_filename;
 pub use self::registry::SkillRegistry;
 pub use self::requirements::missing_required_tools;
 pub use self::served::{
-    MAX_RESOURCES_PER_SKILL, MAX_TOTAL_SIZE, SKILLS_EXTENSION, SkillEntry, SkillEntryKeyError,
-    SkillResource, SkillResourceSize, SkillResources, parse_entry, verify_skill_resource,
+    MAX_RESOURCES_PER_SKILL, MAX_TOTAL_SIZE, McpSkillServer, McpSkillServerError,
+    McpSkillServerFuture, SKILLS_EXTENSION, SkillEntry, SkillEntryKeyError, SkillResource,
+    SkillResourceSize, SkillResources, parse_entry, verify_skill_resource,
 };
 #[doc(hidden)]
 pub use self::texts::dumps;

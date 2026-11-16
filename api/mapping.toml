@@ -111,6 +111,7 @@ roomkit_postgres = ["roomkit.store", "roomkit.knowledge"]
 # Served-entry constructor integers and a missing frontmatter accessor key (HITL 450fa510).
 "roomkit_ai::SkillResourceSize" = { python = "int" }
 "roomkit_ai::SkillEntryKeyError" = { python = "KeyError", members = ["key"] }
+"roomkit_ai::McpSkillServerError" = { python = "Exception" }
 # Python's streams (decision 12, the architecture table's "Channels"):
 # `deliver_stream`'s `text_stream`, an `AsyncIterator[str]` whose items are
 # the text and the response's rows, which its annotation does not name, and
@@ -279,6 +280,23 @@ reason = "Python's str | list[str] in SkillMetadata.allowed_tools: Text(String) 
 rust = "roomkit_ai::SkillResources"
 approved = "2026-11-16"
 reason = "Python's tuple[SkillResource, ...] | Literal['dynamic']: Listed(Vec<SkillResource>) or Dynamic, frozen after construction (HITL 450fa510, RMK-1709)"
+
+[[exception]]
+rust = "roomkit_ai::McpSkillServerFuture"
+approved = "2026-11-16"
+reason = "A boxed Send future makes Python's async protocol methods usable through a Rust trait object, borrowing the request inputs for one call (HITL 766277b2, RMK-1709)"
+
+[[exception]]
+python = "roomkit.MCPSkillServer.__init__"
+params = ["args", "kwargs"]
+approved = "2026-11-16"
+reason = "The synthetic constructor of Python's Protocol is not a skill-server operation; the approved Rust protocol is a three-method trait with no constructor (HITL 766277b2, RMK-1709)"
+
+[[exception]]
+rust = "roomkit_ai::McpSkillServer::request"
+params = ["params"]
+approved = "2026-11-16"
+reason = "Rust has no default call arguments: None preserves Python's omitted params and Some borrows them for the request (HITL 766277b2, RMK-1709)"
 
 [[exception]]
 rust = "roomkit_ai::SkillEntry"
