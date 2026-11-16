@@ -42,7 +42,7 @@ impl Peer {
             requests: vec![],
             problems: vec![],
         }));
-        let shared = state.clone();
+        let shared = Arc::clone(&state);
         let (stop, mut stopped) = oneshot::channel();
         let task = tokio::spawn(async move {
             let mut clients = JoinSet::new();
@@ -51,7 +51,7 @@ impl Peer {
                     _ = &mut stopped => break,
                     client = listener.accept() => match client {
                         Ok((socket, _)) => {
-                            let shared = shared.clone();
+                            let shared = Arc::clone(&shared);
                             clients.spawn(async move {
                                 if let Err(error) = exchange(socket, &shared).await {
                                     shared.lock().unwrap().problems.push(error);
@@ -134,9 +134,9 @@ impl State {
             && let Some(meta) = params.get_mut("_meta").and_then(Value::as_object_mut)
             && meta.get("progressToken").is_some_and(Value::is_u64)
         {
-            meta.remove("progressToken");
+            meta.shift_remove("progressToken");
             if meta.is_empty() {
-                params.remove("_meta");
+                params.shift_remove("_meta");
             }
         }
         self.requests.push(observed.clone());

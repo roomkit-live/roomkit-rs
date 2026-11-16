@@ -309,7 +309,9 @@ Every accessor refuses outside a live connection.
 
 `request` sends caller parameters unchanged, including `_meta`; `None`
 sends an explicit empty object. Raw request results preserve extension fields,
-omitting null model fields as Python does. Resource results retain explicitly
+omitting null model fields as Python does; its known `_meta` field remains
+validated. Handshake extras remain intact even where a newer Rust SDK gives
+them a more restrictive type. Resource results retain explicitly
 sent nulls, validate their known model fields and normalize URIs. A malformed
 resource input/result returns `McpError::Validation`, the representation of
 Python's Pydantic validation error.

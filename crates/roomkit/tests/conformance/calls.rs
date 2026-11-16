@@ -136,7 +136,6 @@ pub(crate) async fn call(
     let name = spec["call"].as_str().unwrap_or_default();
     let event_of = |value: &Value| value.get("id").and_then(Value::as_str).map(str::to_owned);
     Ok(match name {
-        "mcp_session" => (Ok(crate::mcp_host::session(spec).await?), None),
         "process_inbound" => {
             let message: InboundMessage = field(spec, "message")?;
             let options = ProcessInboundOptions {
@@ -369,6 +368,9 @@ async fn other_call(
     name: &str,
     spec: &Value,
 ) -> Result<Called, Unreadable> {
+    if name == "mcp_session" {
+        return crate::mcp_host::session(spec).await.map(Ok);
+    }
     if name == "acp.close" {
         return crate::acp_agents::control::close(run, spec).await;
     }

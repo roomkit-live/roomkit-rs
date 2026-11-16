@@ -110,9 +110,9 @@ pub enum McpError {
         /// message ends with them; empty when it wrote none.
         stderr: Vec<String>,
     },
-    /// A resource input or result violates the public model: Python's
+    /// A host request result or resource value violates the public model: Python's
     /// Pydantic `ValidationError`. No server payload is included.
-    #[error("invalid MCP resource value: {reason}")]
+    #[error("invalid MCP value: {reason}")]
     Validation {
         /// The model constraint that failed.
         reason: &'static str,

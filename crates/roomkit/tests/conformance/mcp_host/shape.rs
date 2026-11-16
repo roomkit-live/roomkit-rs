@@ -13,10 +13,8 @@ fn object(value: &Value, fields: &[&str], path: &str, found: &mut Vec<String>) -
 }
 
 fn initialization(value: &Value, path: &str, found: &mut Vec<String>) {
-    for field in ["server_info", "extensions"] {
-        if value.get(field).is_some_and(|v| !v.is_object()) {
-            found.push(format!("{path}.{field}: expected an object"));
-        }
+    if value.get("server_info").is_some_and(|v| !v.is_object()) {
+        found.push(format!("{path}.server_info: expected an object"));
     }
     if value.get("instructions").is_some_and(|v| !v.is_string()) {
         found.push(format!("{path}.instructions: expected a string"));

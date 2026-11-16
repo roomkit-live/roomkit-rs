@@ -36,13 +36,10 @@ pub(crate) async fn session(spec: &Value) -> Result<Value, Unreadable> {
     }
     let provider =
         McpToolProvider::from_url(&peer.url, options).map_err(|error| error.to_string())?;
-    let mut results = Vec::new();
-    for operation in spec["operations"].as_array().unwrap() {
-        peer.discovery(operation["method"] == "connect" && discover);
-        results.push(observed(&provider, operation).await);
-    }
+    let results = observations(&provider, &peer, spec, discover).await;
     provider.close().await;
     let requests = peer.finish().await?;
+    let results = results?;
     Ok(json!({
         "results_json": canonical(&Value::Array(results.clone())),
         "requests_json": canonical(&requests),
@@ -50,16 +47,25 @@ pub(crate) async fn session(spec: &Value) -> Result<Value, Unreadable> {
     }))
 }
 
-async fn observed(provider: &McpToolProvider, op: &Value) -> Value {
-    match operation(provider, op).await {
+async fn observations(
+    provider: &McpToolProvider,
+    peer: &peer::Peer,
+    spec: &Value,
+    discover: bool,
+) -> Result<Vec<Value>, Unreadable> {
+    let mut results = Vec::new();
+    for operation in spec["operations"].as_array().unwrap() {
+        peer.discovery(operation["method"] == "connect" && discover);
+        results.push(observed(provider, operation).await?);
+    }
+    Ok(results)
+}
+
+async fn observed(provider: &McpToolProvider, op: &Value) -> Result<Value, Unreadable> {
+    Ok(match operation(provider, op).await {
         Ok(mut value) => {
             if let Some(mutation) = op.get("mutate") {
-                let keys = mutation["path"].as_array().unwrap();
-                let mut target = &mut value;
-                for key in &keys[..keys.len() - 1] {
-                    target = &mut target[key.as_str().unwrap()];
-                }
-                target[keys.last().unwrap().as_str().unwrap()] = mutation["value"].clone();
+                mutate(&mut value, mutation)?;
             }
             json!({"result": value})
         }
@@ -67,8 +73,26 @@ async fn observed(provider: &McpToolProvider, op: &Value) -> Value {
         Err(McpError::CallTimeout { .. }) => json!({"error":"timeout"}),
         Err(McpError::Validation { .. }) => json!({"error":"validation_error"}),
         Err(McpError::Call { message }) => json!({"error":"mcp_error","message":message}),
-        Err(error) => json!({"error":"unexpected","message":error.to_string()}),
+        Err(error) => return Err(format!("unexpected MCP host error: {error}")),
+    })
+}
+
+fn mutate(value: &mut Value, mutation: &Value) -> Result<(), Unreadable> {
+    let keys = mutation["path"].as_array().unwrap();
+    let mut target = value;
+    for key in &keys[..keys.len() - 1] {
+        target = target
+            .get_mut(key.as_str().unwrap())
+            .ok_or("snapshot mutation parent is absent")?;
     }
+    target
+        .as_object_mut()
+        .ok_or("snapshot mutation parent is not an object")?
+        .insert(
+            keys.last().unwrap().as_str().unwrap().into(),
+            mutation["value"].clone(),
+        );
+    Ok(())
 }
 
 async fn operation(provider: &McpToolProvider, op: &Value) -> Result<Value, McpError> {
@@ -121,8 +145,37 @@ fn canonical(value: &Value) -> String {
                 Value::Object(ordered.into_iter().collect())
             }
             Value::Array(items) => Value::Array(items.iter().map(sorted).collect()),
-            value => value.clone(),
+            value @ (Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_)) => {
+                value.clone()
+            }
         }
     }
     sorted(value).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn an_unexpected_connection_error_is_a_fixture_failure() {
+        let spec = json!({
+            "discover":false,
+            "peer":{"server_info":{"name":42,"version":"1"},"replies":[]},
+            "operations":[{"method":"connect"}]
+        });
+        assert!(session(&spec).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_snapshot_mutation_cannot_create_a_missing_parent() {
+        for path in [json!(["absent", "child"]), json!(["name", "child"])] {
+            let spec = json!({
+                "discover":false,"peer":{"replies":[]},
+                "operations":[{"method":"connect"},{"method":"server_info",
+                    "mutate":{"path":path,"value":true}}]
+            });
+            assert!(session(&spec).await.is_err());
+        }
+    }
 }
