@@ -185,7 +185,13 @@ impl Registering<'_> {
         let name = name(&registered);
         if mark.is_some() || created {
             release(&mut state, &self.room_id, &name);
-            if let Some(mark) = mark {
+            // A mark is never lowered: the room read may be gone already.
+            if let Some(mark) = mark
+                && state
+                    .marks
+                    .get(&self.room_id)
+                    .is_none_or(|held| *held < mark)
+            {
                 state.marks.insert(self.room_id.clone(), mark);
             }
         } else {
@@ -335,6 +341,27 @@ mod tests {
     #[test]
     fn a_registration_the_rooms_creation_overtakes_is_that_rooms() {
         assert_eq!(kept_by_the_next_creation(true), BTreeSet::new());
+    }
+
+    // Python: tests/test_room_org_scoping.py::TestScopedRoomHooks::test_a_registration_that_read_a_room_gone_keeps_the_later_rooms_hooks.
+    // A registration that read a room gone ends after a later room's mark
+    // was taken: the mark is not lowered, so the later room's hooks are not
+    // forgotten as an earlier room's (RFC §9.1, §17.2).
+    #[test]
+    fn a_registration_that_read_a_room_gone_lowers_no_mark() {
+        let lifetime = RoomHookLifetime::default();
+        let room = RoomId::new("r1").unwrap();
+        let (gone, later) = (
+            Timestamp::UNIX_EPOCH,
+            Timestamp::from_unix_millis(1000).unwrap(),
+        );
+        let registering = lifetime.registering(&room);
+        lock(&lifetime.state).marks.insert(room.clone(), later);
+        registering
+            .note(Some(gone), || Ok::<_, ()>(()), |()| "h".to_owned())
+            .unwrap();
+        drop(registering);
+        assert_eq!(lock(&lifetime.state).marks.get(&room), Some(&later));
     }
 
     // Python: tests/conformance/scenarios/tenancy/a-deleted-room-s-turn-runs-none-of-the-hooks-of-the-room-created-again.json.
