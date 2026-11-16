@@ -290,9 +290,10 @@ fn delivers_to_another(
     }
     let named = match (&binding.participant_id, form.map(|form| form.held(binding))) {
         (Some(named), _) => named.as_str().to_owned(),
-        (None, None) => return true,
+        // No channel to read the recipient, or a value no one is reached
+        // at: someone else's.
+        (None, None | Some(Held::NotARecipient(_))) => return true,
         (None, Some(Held::Nothing)) => return false,
-        (None, Some(Held::NotARecipient(_))) => return true,
         (None, Some(Held::Recipient(recipient))) => recipient,
     };
     let theirs = named == participant.id.as_str()
