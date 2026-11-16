@@ -255,16 +255,17 @@ class Comparison:
         if item["kind"] == "enum" and "Error" in item.get("impls", []):
             self._error_family(item, cls)
         bases, inherited = self._inherited(item)
+        own_methods = set(cls.methods)
         cls.owners = {name: owner for name, (owner, _) in inherited.items() if name not in cls.methods}
         cls.methods = {name: method for name, (_, method) in inherited.items()} | cls.methods
         maps = self.member_maps.get(cls.path, {})
         for member, member_spec in spec.items():
-            if any(base.get(member) == member_spec for base in bases):
-                continue  # the base's, compared on the trait it maps to
             entry = maps.get((python, member))
+            rust_name = self.surface.split(entry.rust)[1] if entry else None
+            if any(base.get(member) == member_spec for base in bases) and (rust_name or member) not in own_methods:
+                continue  # the base's, compared on the trait it maps to
             if entry is not None:
                 self.applied.add(id(entry))
-            rust_name = self.surface.split(entry.rust)[1] if entry else None
             renames = entry.params if entry else {}
             if member_spec[0] == "member":
                 self._enum_member(cls, member)

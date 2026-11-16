@@ -465,6 +465,24 @@ class Members(unittest.TestCase):
             ],
         )
 
+    def test_an_inherent_property_shadowing_a_trait_is_still_compared(self) -> None:
+        trait = {
+            "path": "roomkit::ConversationStore", "kind": "trait",
+            "methods": [], "constants": [], "impls": [],
+            "required": [surface_reader.parse_fn("fn connected(&self) -> bool")],
+            "provided": [], "types": [],
+        }
+        for arguments, expected in [("", []), (", extra: u8", [("rust", "roomkit::InMemoryStore::connected")])]:
+            with self.subTest(arguments=arguments):
+                report = run(
+                    [trait, struct("roomkit::InMemoryStore", methods=[f"pub fn connected(&self{arguments}) -> bool"], impls=["ConversationStore"])],
+                    {"roomkit.ConversationStore": {"connected": ["property"]},
+                     "roomkit.InMemoryStore": {"connected": ["property"]}},
+                )
+                self.assertEqual(found(report), expected)
+                if expected:
+                    self.assertIn("a property", report.findings[0].detail)
+
     def test_an_alias_for_a_python_class_with_members(self) -> None:
         report = run(
             [{"path": "roomkit_ai::ProviderError", "kind": "type", "aliased": "Box<dyn Error>"}],

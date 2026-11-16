@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Compare inherent API methods even when a matching trait declares the same Python member.
+
 - Add served-skill entry/resource models, manifest parsing, fingerprints and byte verification (RFC §24.7).
 
 - Keep stdio-only MCP builds warning-free when the optional HTTP transport is disabled.
