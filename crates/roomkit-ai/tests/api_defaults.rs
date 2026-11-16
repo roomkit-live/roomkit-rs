@@ -17,6 +17,60 @@ use roomkit_ai::{FromToolOptions, ToolDeclarationOrigin};
 use std::time::Duration;
 
 #[test]
+fn script_result_defaults_as_python() {
+    let result = roomkit_ai::ScriptResult::new(7);
+    // roomkit.skills.ScriptResult.__init__(stdout) = ''
+    assert_eq!(result.stdout, "");
+    // roomkit.skills.ScriptResult.__init__(stderr) = ''
+    assert_eq!(result.stderr, "");
+    // roomkit.skills.ScriptResult.__init__(success) = True
+    assert!(result.success);
+    // roomkit.skills.ScriptResult.__init__(metadata) = <factory>
+    assert!(result.metadata.is_empty());
+    assert_eq!(result.exit_code, 7);
+}
+
+struct ScriptArguments;
+impl roomkit_ai::ScriptExecutor for ScriptArguments {
+    fn execute<'a>(
+        &'a self,
+        _: &'a roomkit_ai::Skill,
+        _: &'a str,
+        arguments: Option<&'a roomkit::model::Metadata>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn Future<Output = Result<roomkit_ai::ScriptResult, roomkit_ai::ToolError>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            assert!(arguments.is_none());
+            Ok(roomkit_ai::ScriptResult::new(0))
+        })
+    }
+}
+
+#[tokio::test]
+async fn script_arguments_default_as_python() {
+    use roomkit_ai::ScriptExecutor;
+    let skill = roomkit_ai::Skill {
+        metadata: roomkit_ai::SkillMetadata::new("local", ""),
+        instructions: String::new(),
+        path: std::path::PathBuf::new(),
+    };
+    // roomkit.ScriptExecutor.execute(arguments) = None
+    assert_eq!(
+        ScriptArguments
+            .execute(&skill, "run", None)
+            .await
+            .unwrap()
+            .exit_code,
+        0
+    );
+}
+
+#[test]
 fn standalone_skill_helpers_default_as_python() {
     let mut metadata = roomkit_ai::SkillMetadata::new("local", "");
     metadata
@@ -209,6 +263,8 @@ fn ai_channel_options_defaults_as_python() {
     assert!(defaults.skills.is_none());
     // roomkit.AIChannel.__init__(skills_in_prompt) = True
     assert!(defaults.skills_in_prompt);
+    // roomkit.AIChannel.__init__(script_executor) = None
+    assert!(defaults.script_executor.is_none());
     // roomkit.AIChannel.__init__(system_prompt) = None
     assert!(defaults.system_prompt.is_none());
     // roomkit.AIChannel.__init__(temperature) = 0.7

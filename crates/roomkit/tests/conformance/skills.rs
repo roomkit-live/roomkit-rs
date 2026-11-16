@@ -14,9 +14,15 @@ use serde_json::Value;
 
 use crate::run::lock;
 
+#[path = "skills/scripts.rs"]
+mod scripts;
+
 /// The directories a run's registries read.
 #[derive(Default)]
-pub(crate) struct SkillDirectories(Mutex<Vec<PathBuf>>);
+pub(crate) struct SkillDirectories {
+    paths: Mutex<Vec<PathBuf>>,
+    executors: scripts::Executors,
+}
 
 impl SkillDirectories {
     /// The registry holding `skills`, written to a new directory.
@@ -32,7 +38,7 @@ impl SkillDirectories {
             NEXT.fetch_add(1, Ordering::SeqCst)
         ));
         std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
-        lock(&self.0).push(directory.clone());
+        lock(&self.paths).push(directory.clone());
         let skills = skills.as_array().ok_or("skills: not a list")?;
         let directories = skills
             .iter()
@@ -82,7 +88,7 @@ fn requires_match(value: &Value) -> Result<RequiresMatch, String> {
 
 impl Drop for SkillDirectories {
     fn drop(&mut self) {
-        for directory in lock(&self.0).drain(..) {
+        for directory in lock(&self.paths).drain(..) {
             drop(std::fs::remove_dir_all(directory));
         }
     }
@@ -131,7 +137,23 @@ fn write_skill(root: &std::path::Path, index: usize, skill: &Value) -> Result<Pa
         )
         .map_err(|error| error.to_string())?;
     }
+    write_scripts(&directory, &skill["scripts"])?;
     Ok(directory)
+}
+
+fn write_scripts(directory: &std::path::Path, scripts: &Value) -> Result<(), String> {
+    if scripts.is_null() {
+        return Ok(());
+    }
+    let directory = directory.join("scripts");
+    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    for (name, content) in scripts.as_object().ok_or("scripts: not an object")? {
+        let path = roomkit_ai::safe_join_filename(&directory, name, Some("script"))
+            .map_err(|error| error.to_string())?;
+        let content = content.as_str().ok_or("script contents: not text")?;
+        std::fs::write(path, content).map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 fn write_frontmatter(directory: &std::path::Path, skill: &Value) -> std::io::Result<()> {

@@ -243,6 +243,12 @@ reason = "Python's **options, which go to RoomKit.delegate's keywords that are d
 # The architecture table's exceptions, approved with the plan on 2026-10-27.
 
 [[exception]]
+rust = "roomkit_ai::ScriptExecutor::execute"
+params = ["arguments"]
+approved = "2026-11-16"
+reason = "Rust has no default call arguments: None preserves Python's omitted arguments and Some borrows the host mapping (HITL 213974fa, RMK-1709)"
+
+[[exception]]
 rust = "roomkit_ai::missing_required_tools"
 params = ["closed", "match"]
 approved = "2026-11-16"
@@ -1118,14 +1124,14 @@ reason = "Python's `async with` (`__aenter__`, `__aexit__`): Rust has no async c
 python = "roomkit.AIChannel.__init__"
 params = [
     "continuation",
-    "script_executor", "sandbox",
+    "sandbox",
     "external_tool_handler",
     "enable_planning",
     "speak_policy", "speak_timeout", "thinker",
     "think_wait",
 ]
 scope = "text"
-reason = "not in 0.x: continuation, thinking, scripts and sandbox, external and human tools, planning, tool search, speaking turns and the thinker"
+reason = "not in 0.x: continuation, thinking, sandbox, external tools, planning, speaking turns and the thinker"
 
 [[missing]]
 python = "roomkit.AIChannel"

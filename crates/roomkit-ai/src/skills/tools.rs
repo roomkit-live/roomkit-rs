@@ -13,21 +13,22 @@ use super::activation::{self, Activations};
 use super::files;
 use super::registry::SkillRegistry;
 use super::texts::{
-    self, ACTIVATE_DESCRIPTION, ACTIVATE_SKILL, ACTIVE_HEADING, ALREADY_ACTIVE, PREAMBLE,
-    READ_DESCRIPTION, READ_SKILL_REFERENCE, RUN_SKILL_SCRIPT, quoted_name,
+    self, ACTIVATE_DESCRIPTION, ACTIVATE_SKILL, ACTIVE_HEADING, ALREADY_ACTIVE, NO_SCRIPTS_NOTE,
+    PREAMBLE, READ_DESCRIPTION, READ_SKILL_REFERENCE, RUN_SKILL_SCRIPT, quoted_name,
 };
+use super::{ScriptExecutor, executor};
 use crate::tools::{AiTool, BoxFuture, DynToolset, ToolContext, ToolError, ToolResult};
 
 /// The skills an agent serves: the registry, read only, and which skills
 /// are active in each room, a record its turns share whichever registry each
 /// reads (RFC §24.3, §24.4).
-#[derive(Debug)]
 pub(crate) struct SkillTools {
     registry: SkillRegistry,
     manifest: String,
     /// Whether the system prompt lists the skills (Python's
     /// `skills_in_prompt`).
     listed: bool,
+    executor: Option<Arc<dyn ScriptExecutor>>,
     activations: Arc<Mutex<Activations>>,
 }
 
@@ -43,16 +44,34 @@ pub(crate) struct SkillTurn<'a> {
     /// Whether the turn is an instruction that stands alone, which reads
     /// none of the room's working state (RFC §10.1.1 rule 7).
     pub(crate) stands_alone: bool,
+    /// Whether the channel's policy admits script execution.
+    pub(crate) scripts_allowed: bool,
+}
+
+impl std::fmt::Debug for SkillTools {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SkillTools")
+            .field("registry", &self.registry)
+            .field("listed", &self.listed)
+            .field("executor", &self.executor.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl SkillTools {
     /// The tools of `registry`, the system prompt listing its skills when
     /// `listed`.
-    pub(crate) fn new(registry: SkillRegistry, listed: bool) -> Self {
+    pub(crate) fn new(
+        registry: SkillRegistry,
+        listed: bool,
+        executor: Option<Arc<dyn ScriptExecutor>>,
+    ) -> Self {
         Self {
             manifest: registry.to_prompt_xml(),
             registry,
             listed,
+            executor,
             activations: Arc::default(),
         }
     }
@@ -64,6 +83,7 @@ impl SkillTools {
             manifest: registry.to_prompt_xml(),
             registry,
             listed: self.listed,
+            executor: self.executor.clone(),
             activations: Arc::clone(&self.activations),
         }
     }
@@ -71,7 +91,11 @@ impl SkillTools {
     /// The tools these skills declare: none for a registry with no skill
     /// (RFC §24.3).
     pub(crate) fn declared(&self) -> Vec<AiTool> {
-        self.registry.tool_definitions()
+        let mut tools = self.registry.tool_definitions();
+        if self.registry.has_entries() && self.executor.is_some() {
+            tools.push(executor::definition());
+        }
+        tools
     }
 
     /// The skills active in `room`, least recently used first.
@@ -174,7 +198,12 @@ impl SkillTools {
         }
         if self.listed {
             let before = prompt.unwrap_or_default();
-            prompt = Some(format!("{before}\n\n{PREAMBLE}\n\n{}", self.manifest));
+            let note = if self.executor.is_some() && turn.scripts_allowed {
+                ""
+            } else {
+                NO_SCRIPTS_NOTE
+            };
+            prompt = Some(format!("{before}\n\n{PREAMBLE}{note}\n\n{}", self.manifest));
         }
         if turn.stands_alone {
             return prompt;
@@ -320,6 +349,16 @@ impl SkillTools {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
     }
+
+    async fn run_script(&self, call: &ToolCall) -> Result<ToolResult, ToolError> {
+        match self.executor.as_deref() {
+            Some(executor) => executor::run(&self.registry, executor, call).await,
+            None => Ok(ToolResult::Text(texts::object(&[(
+                "error",
+                json!("Script execution is not available"),
+            )]))),
+        }
+    }
 }
 
 impl DynToolset for SkillTools {
@@ -331,6 +370,8 @@ impl DynToolset for SkillTools {
         Box::pin(async move {
             if call.name == ACTIVATE_SKILL {
                 self.activate(&call, &context).await
+            } else if call.name == RUN_SKILL_SCRIPT {
+                self.run_script(&call).await
             } else {
                 self.read(&call).await
             }
@@ -404,7 +445,7 @@ async fn blocking<T: Send + 'static>(read: impl FnOnce() -> T + Send + 'static) 
     tokio::task::spawn_blocking(read).await.ok()
 }
 
-fn unavailable(name: &str, reason: &str) -> String {
+pub(super) fn unavailable(name: &str, reason: &str) -> String {
     format!(
         "Skill {} is unavailable in this context: {reason}",
         quoted_name(name)

@@ -13,12 +13,13 @@
 //!   again from the room's stored rows after a restart.
 //!
 //! Prerequisites (`requires`) use the admitted catalogue and the host's matcher,
-//! exact by default. No skill script runs,
+//! exact by default. Script execution uses the host's [`ScriptExecutor`],
 //! and skills an MCP server serves (RFC §24.7) remain unsupported.
 
 mod activation;
 mod availability;
 mod error;
+mod executor;
 mod file_error;
 mod files;
 mod frontmatter;
@@ -34,6 +35,7 @@ pub(crate) mod tools;
 mod validation;
 
 pub use self::error::SkillError;
+pub use self::executor::{ScriptExecutor, ScriptResult};
 pub use self::file_error::{SkillFileError, SkillPathError};
 pub use self::matcher::{CopyOptions, RequiresMatch, SkillRegistryOptions, serves_exactly};
 pub use self::model::{DiscoverOptions, Skill, SkillMetadata};

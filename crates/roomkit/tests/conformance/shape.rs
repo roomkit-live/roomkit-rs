@@ -120,6 +120,7 @@ const CHANNEL: &[&str] = &[
     "max_tokens",
     "config_provider",
     "skills",
+    "script_executor",
     "skills_requires_match",
     "skills_in_prompt",
     "thinking_budget",
@@ -191,6 +192,7 @@ const SKILL: &[&str] = &[
     "description",
     "instructions",
     "references",
+    "scripts",
     "allowed_tools",
     "requires",
     "unavailable",
@@ -394,6 +396,7 @@ const EXPECT: &[&str] = &[
     "actions",
     "lifecycle",
     "models",
+    "script_executors",
     "acp_wire",
     "acp_permissions",
     "acp_handlers",
@@ -902,6 +905,9 @@ fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
         }
     }
     skills(&channel["skills"], &format!("{path}.skills"), found);
+    if let Some(executor) = channel.get("script_executor") {
+        script_executor(executor, &format!("{path}.script_executor"), found);
+    }
 }
 
 fn skills(skills: &Value, path: &str, found: &mut Vec<String>) {
@@ -1291,6 +1297,26 @@ fn provider_result(output: &Value, path: &str, found: &mut Vec<String>) {
     }
     if receipt.get("metadata").is_some_and(|v| !v.is_object()) {
         found.push(format!("{at}.metadata: not an object"));
+    }
+}
+
+fn script_executor(executor: &Value, path: &str, found: &mut Vec<String>) {
+    members(executor, &["result", "raises"], path, found);
+    if let Some(result) = executor.get("result") {
+        members(
+            result,
+            &["exit_code", "stdout", "stderr", "success", "metadata"],
+            &format!("{path}.result"),
+            found,
+        );
+    }
+    if let Some(raises) = executor.get("raises") {
+        members(
+            raises,
+            &["kind", "message"],
+            &format!("{path}.raises"),
+            found,
+        );
     }
 }
 

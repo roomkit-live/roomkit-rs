@@ -168,6 +168,8 @@ impl Toolbox {
     ) -> Result<(), AiError> {
         let position = self.toolsets.len();
         self.insert(toolset, declared, true)?;
+        // Script execution is governed by policy, unlike reading or activation.
+        self.exempt.remove("run_skill_script");
         self.skills = Some(position);
         self.skill_names
             .extend(names.iter().map(|name| (*name).to_owned()));
@@ -191,7 +193,9 @@ impl Toolbox {
         turn.served.retain(|_, at| *at != position);
         for tool in declared {
             turn.served.insert(tool.name.clone(), position);
-            turn.exempt.insert(tool.name.clone());
+            if tool.name != "run_skill_script" {
+                turn.exempt.insert(tool.name.clone());
+            }
             turn.tools.push((tool, position));
         }
         turn
@@ -261,6 +265,7 @@ impl Toolbox {
     /// Whether Tool Search never hides `name`.
     fn never_hidden_name(&self, name: &str) -> bool {
         self.exempt.contains(name)
+            || self.skill_names.contains(name)
             || self.person_tools.contains(name)
             || self.injected.contains(name)
     }
@@ -268,7 +273,9 @@ impl Toolbox {
     /// Whether a skill activation's hint may name `name`: not a tool the agent
     /// serves itself nor one that asks a person (RFC §24.4).
     pub(crate) fn hintable(&self, name: &str) -> bool {
-        !self.exempt.contains(name) && !self.person_tools.contains(name)
+        !self.exempt.contains(name)
+            && !self.skill_names.contains(name)
+            && !self.person_tools.contains(name)
     }
 
     /// What Tool Search never hides: the agent's own tools, a person's, what

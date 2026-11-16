@@ -43,7 +43,25 @@ pub(crate) fn compare(run: &Run, scenario: &Value, observed: &Observed) -> Vec<S
     comparison.channel_calls();
     comparison.side_effects();
     comparison.models();
+    comparison.script_executors(&run.skills);
     comparison.found
+}
+
+impl Comparison<'_> {
+    fn script_executors(&mut self, skills: &crate::skills::SkillDirectories) {
+        let snapshots = skills.script_snapshots();
+        for (channel, expected) in self.expect["script_executors"]
+            .as_object()
+            .into_iter()
+            .flatten()
+        {
+            self.check(
+                expected,
+                snapshots.get(channel),
+                &format!("script_executors.{channel}"),
+            );
+        }
+    }
 }
 
 /// The comparison of a run's records with a scenario's expectations, the

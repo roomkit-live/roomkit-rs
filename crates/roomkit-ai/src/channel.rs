@@ -39,8 +39,8 @@ use crate::provider::{AiContentPart, AiMessage, AiProvider, DynAiProvider, check
 use crate::router::{AiRouter, RouteRequest, Routed};
 use crate::rows;
 use crate::server_instructions::ServerInstructions;
-use crate::skills::SkillRegistry;
 use crate::skills::tools::{SkillTools, SkillTurn};
+use crate::skills::{ScriptExecutor, SkillRegistry};
 use crate::steering::{Loops, SteerOptions};
 use crate::tool_eviction::{DEFAULT_EVICT_THRESHOLD_TOKENS, Reread, ToolEviction};
 use crate::tool_loop::TurnTelemetry;
@@ -229,6 +229,8 @@ pub struct AiChannelOptions {
     /// them in its own prompt, and the active skills' instructions are
     /// carried all the same.
     pub skills_in_prompt: bool,
+    /// Host-owned local script execution (RFC §24.6); absent by default.
+    pub script_executor: Option<Arc<dyn ScriptExecutor>>,
     /// Which tools the model may call (RFC §21.1); `None` allows every
     /// tool.
     pub tool_policy: Option<ToolPolicy>,
@@ -340,6 +342,7 @@ impl Default for AiChannelOptions {
             evict_threshold_tokens: DEFAULT_EVICT_THRESHOLD_TOKENS,
             skills: None,
             skills_in_prompt: true,
+            script_executor: None,
             tool_policy: None,
             server_instructions: Vec::new(),
             tool_call_intents: false,
@@ -457,6 +460,7 @@ pub struct AiChannel<P> {
     /// How its turns read their authors' media (RFC §6.4).
     media: MediaReading,
     skills: Option<Arc<SkillTools>>,
+    script_executor: Option<Arc<dyn ScriptExecutor>>,
     intents: Intents,
     /// The turns' running loops, which steering reaches (RFC §21.3).
     loops: Arc<Loops>,
@@ -577,6 +581,7 @@ impl<P> Clone for AiChannel<P> {
             memory: Arc::clone(&self.memory),
             media: self.media.clone(),
             skills: self.skills.clone(),
+            script_executor: self.script_executor.clone(),
             intents: self.intents.clone(),
             loops: Arc::clone(&self.loops),
             room_turns: self.room_turns,
@@ -681,72 +686,42 @@ impl<P: AiProvider> AiChannel<P> {
         serving: Serving<P>,
         options: AiChannelOptions,
     ) -> Result<Self, AiError> {
-        let AiChannelOptions {
-            system_prompt,
-            temperature,
-            max_tokens,
-            thinking_budget,
-            enable_thinking,
-            thinking_coalesce_ms,
-            thinking_coalesce_chars,
-            text_coalesce_ms,
-            text_coalesce_chars,
-            publish_text_deltas,
-            publish_thinking_text,
-            reasoning_effort,
-            response_schema,
-            config_provider,
-            max_context_events,
-            memory,
-            tool_handler,
-            tools,
-            max_tool_rounds,
-            tool_loop_timeout,
-            tool_loop_warn_after,
-            max_empty_retries,
-            retry_policy,
-            tool_timeout,
-            tool_timeouts,
-            turn_budget_tokens,
-            turn_budget_usd,
-            describe_empty_event,
-            max_author_images,
-            skills,
-            skills_in_prompt,
-            tool_policy,
-            server_instructions,
-            tool_call_intents: intents,
-            tool_call_intents_required: required,
-            tool_call_intents_only: only,
-            image_resolver,
-            serialize_room_turns,
-            steer_room_turns,
-            human_input_handler,
-            tool_search: mode,
-            tool_search_pinned: pinned,
-            tool_search_threshold: count,
-            tool_search_threshold_pct: share,
-            tool_search_miss_hint: miss_hint,
-            tool_search_threshold_tokens: tokens,
-            evict_threshold_tokens,
-        } = options;
         // Python's ToolPolicy, RetryPolicy and AITool refuse as they are
         // built, before its constructor runs.
-        let policy = tool_policy.unwrap_or_default();
+        let policy = options.tool_policy.unwrap_or_default();
         refuse_bracketed(&policy)?;
         let (provider, router) = serving.split();
-        let resilience = Resilience::checked(retry_policy, router)?;
-        refuse_tool_names(&tools)?;
+        let resilience = Resilience::checked(options.retry_policy, router)?;
+        refuse_tool_names(&options.tools)?;
         // Then in the order Python's constructor stores them.
         let own = provider.as_deref().map(as_dyn);
-        check_budgets(turn_budget_tokens, turn_budget_usd, own)?;
-        let instructions = instructions_of(&server_instructions)?;
-        response_schema.as_ref().map(portable).transpose()?;
-        refuse_zero_bounds(tool_timeout, &tool_timeouts)?;
-        let search = ToolSearch::checked(mode, pinned, (count, share, tokens), miss_hint)?;
-        let skilled = (skills, skills_in_prompt);
-        let setup = (&channel_id, &search, evict_threshold_tokens);
-        let surface = tool_surface(setup, tool_handler, tools, human_input_handler, skilled)?;
+        check_budgets(options.turn_budget_tokens, options.turn_budget_usd, own)?;
+        let instructions = instructions_of(&options.server_instructions)?;
+        options.response_schema.as_ref().map(portable).transpose()?;
+        refuse_zero_bounds(options.tool_timeout, &options.tool_timeouts)?;
+        let search = ToolSearch::checked(
+            options.tool_search,
+            options.tool_search_pinned,
+            (
+                options.tool_search_threshold,
+                options.tool_search_threshold_pct,
+                options.tool_search_threshold_tokens,
+            ),
+            options.tool_search_miss_hint,
+        )?;
+        let skilled = (
+            options.skills,
+            options.skills_in_prompt,
+            options.script_executor.clone(),
+        );
+        let setup = (&channel_id, &search, options.evict_threshold_tokens);
+        let surface = tool_surface(
+            setup,
+            options.tool_handler,
+            options.tools,
+            options.human_input_handler,
+            skilled,
+        )?;
         Ok(Self {
             capabilities: ai_channel_capabilities(),
             channel_id,
@@ -755,30 +730,52 @@ impl<P: AiProvider> AiChannel<P> {
             tool_handler: surface.tool_handler,
             policy,
             bounds: loop_bounds(
-                (max_tool_rounds, tool_loop_timeout, tool_loop_warn_after),
-                max_empty_retries,
-                (tool_timeout, tool_timeouts),
+                (
+                    options.max_tool_rounds,
+                    options.tool_loop_timeout,
+                    options.tool_loop_warn_after,
+                ),
+                options.max_empty_retries,
+                (options.tool_timeout, options.tool_timeouts),
             ),
-            turn_budget_tokens,
-            turn_budget_usd,
+            turn_budget_tokens: options.turn_budget_tokens,
+            turn_budget_usd: options.turn_budget_usd,
             resilience,
-            system_prompt: Arc::new(RwLock::new(system_prompt.filter(|text| !text.is_empty()))),
-            temperature,
-            max_tokens,
-            thinking: (thinking_budget, enable_thinking),
-            thinking_coalesce: (thinking_coalesce_ms, thinking_coalesce_chars),
-            text_deltas: publish_text_deltas.then_some((text_coalesce_ms, text_coalesce_chars)),
-            publish_thinking_text,
-            reasoning_effort,
-            response_schema,
-            turn_configs: TurnConfigs::new(config_provider),
+            system_prompt: Arc::new(RwLock::new(
+                options.system_prompt.filter(|text| !text.is_empty()),
+            )),
+            temperature: options.temperature,
+            max_tokens: options.max_tokens,
+            thinking: (options.thinking_budget, options.enable_thinking),
+            thinking_coalesce: (
+                options.thinking_coalesce_ms,
+                options.thinking_coalesce_chars,
+            ),
+            text_deltas: options
+                .publish_text_deltas
+                .then_some((options.text_coalesce_ms, options.text_coalesce_chars)),
+            publish_thinking_text: options.publish_thinking_text,
+            reasoning_effort: options.reasoning_effort,
+            response_schema: options.response_schema,
+            turn_configs: TurnConfigs::new(options.config_provider),
             server_instructions: instructions,
-            memory: memory.unwrap_or_else(|| sliding_window(max_context_events)),
-            media: MediaReading::new(image_resolver, max_author_images, describe_empty_event),
+            memory: options
+                .memory
+                .unwrap_or_else(|| sliding_window(options.max_context_events)),
+            media: MediaReading::new(
+                options.image_resolver,
+                options.max_author_images,
+                options.describe_empty_event,
+            ),
             skills: surface.skills,
-            intents: Intents::of(intents, required, only),
+            script_executor: options.script_executor,
+            intents: Intents::of(
+                options.tool_call_intents,
+                options.tool_call_intents_required,
+                options.tool_call_intents_only,
+            ),
             loops: Arc::default(),
-            room_turns: RoomTurns::of(serialize_room_turns, steer_room_turns),
+            room_turns: RoomTurns::of(options.serialize_room_turns, options.steer_room_turns),
             human_input: surface.human_input,
             tool_search: Arc::new(search),
             eviction: surface.eviction,
@@ -1153,6 +1150,7 @@ impl<P: AiProvider> AiChannel<P> {
                     agent: &self.channel_id,
                     history: self.tool_memory_rows(context),
                     stands_alone,
+                    scripts_allowed: self.policy.is_allowed("run_skill_script"),
                 };
                 skills.system_prompt(prompt.as_deref(), turn)
             }
@@ -1518,11 +1516,12 @@ fn serve_skills(
     toolbox: &mut Toolbox,
     skills: Option<SkillRegistry>,
     in_prompt: bool,
+    executor: Option<Arc<dyn ScriptExecutor>>,
 ) -> Result<Option<Arc<SkillTools>>, AiError> {
     let Some(skills) = skills else {
         return Ok(None);
     };
-    let skill_tools = Arc::new(SkillTools::new(skills, in_prompt));
+    let skill_tools = Arc::new(SkillTools::new(skills, in_prompt, executor));
     let own: Arc<dyn DynToolset> = Arc::<SkillTools>::clone(&skill_tools);
     toolbox.add_skills(own, skill_tools.declared(), &SkillTools::RESERVED_NAMES)?;
     Ok(Some(skill_tools))
@@ -1582,7 +1581,11 @@ fn tool_surface(
     tool_handler: Option<ToolHandler>,
     tools: Vec<ToolEntry>,
     human_input_handler: Option<HumanInputToolHandler>,
-    (skills, skills_in_prompt): (Option<SkillRegistry>, bool),
+    (skills, skills_in_prompt, executor): (
+        Option<SkillRegistry>,
+        bool,
+        Option<Arc<dyn ScriptExecutor>>,
+    ),
 ) -> Result<ToolSurface, AiError> {
     let mut toolbox = Toolbox::default();
     // The re-read of stored results, which no tool may take (RFC §21.5).
@@ -1613,7 +1616,7 @@ fn tool_surface(
     if skills.is_some() {
         reserve_skill_names(&toolbox)?;
     }
-    let skills = serve_skills(&mut toolbox, skills, skills_in_prompt)?;
+    let skills = serve_skills(&mut toolbox, skills, skills_in_prompt, executor)?;
     Ok(ToolSurface {
         toolbox,
         tool_handler,
@@ -2031,6 +2034,9 @@ impl<P: AiProvider> Channel for AiChannel<P> {
             };
             human.handler().close(options).await;
         }
+        if let Some(executor) = &self.script_executor {
+            executor.close().await;
+        }
     }
 
     /// The handler its person's tools keep their requests in, which the
@@ -2138,7 +2144,7 @@ mod tests {
         let id = ChannelId::new("ai1").unwrap();
         let mut agent =
             AiChannel::new(id, ScriptedProvider::new([]), AiChannelOptions::default()).unwrap();
-        let skills = Arc::new(SkillTools::new(SkillRegistry::default(), false));
+        let skills = Arc::new(SkillTools::new(SkillRegistry::default(), false, None));
         agent.skills = Some(Arc::clone(&skills));
         let (room, other) = (RoomId::new("r1").unwrap(), RoomId::new("r2").unwrap());
         let image = ToolResult::Parts(vec![ToolResultPart::Image(AiImagePart {

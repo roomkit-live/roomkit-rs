@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Execute local skill scripts through a host ScriptExecutor, with policy and path checks and Python-compatible results.
+
 - `resolve_participant` names the identity on the binding of the participant's channel only when that binding delivers to no one or to the participant, as its channel reads it: one naming another correspondent, or delivering to another number, keeps its correspondent, and so does one naming no one on a channel the kit does not hold; the participant's next message then opens a room of their own (RFC §5.5, RMK-1421).
 
 - A delivery status naming a recipient on a channel not registered finds no room through a binding naming no participant (and not `group`), so never the one room bound to the channel delivering to another number; a binding naming the recipient as its participant still takes it (RFC §10.4, RMK-1420).

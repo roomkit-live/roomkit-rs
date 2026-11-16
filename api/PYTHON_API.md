@@ -144,6 +144,9 @@ the mapping and its tests. The check does not generate or update this document.
 | `roomkit_ai::RoundTranscript` | — | `thinking` |
 | `roomkit_ai::ToolError` | — | Whole type |
 | `roomkit_ai::SkillFileError` | Exceptions from `Skill` file helpers | Whole type: `Path(SkillPathError)`, `Io(std::io::Error)`, `Encoding(FromUtf8Error)` (HITL 45d6fce8) |
+| `roomkit_ai::ScriptExecutor` | `ScriptExecutor` | Borrowed skill/name and `Option<&Metadata>` (`None` for omitted arguments), boxed futures, `ToolError` for execute failures; `close` follows `Channel::close` (HITL 213974fa) |
+| `roomkit_ai::ScriptExecutor::execute` | `roomkit.ScriptExecutor.execute` | Explicit `None` for Python's omitted `arguments`; `Some` borrows its mapping (HITL 213974fa) |
+| `roomkit_ai::ScriptResult` | `roomkit.skills.ScriptResult` | `new(exit_code: i64)` requires the code; remaining public fields use Python's defaults, `success=true` independent of that code; serde JSON (HITL 213974fa) |
 | `roomkit_ai::Skill::{list_scripts,list_references}` | Same names | `Vec<OsString>` preserves native filenames, including non-UTF-8 bytes; sorted as Python's decoded names (HITL 45d6fce8) |
 | `roomkit::RoomKit::start` | — | Whole type |
 | `roomkit::telemetry::SpanGuard` | — | Whole type |
@@ -279,3 +282,16 @@ while newer pathlib can fail at the later file-existence check.
 The standalone `safe_join_filename` does not check file existence: Python 3.13+
 can return an unresolved cyclic path successfully. Rust retains Python 3.12's
 explicit `SkillPathError` for that case (HITL ef1a3d62).
+
+
+Local script execution uses `AiChannelOptions.script_executor`, default `None`.
+The host implements `ScriptExecutor`; the channel resolves containment before
+calling it, and tool policy governs `run_skill_script`. The executor receives
+`None` for omitted arguments and `Some` for an object, including an empty one.
+Script calls are neither deferred nor replayed as tool memory, matching Python's
+channel tool traits. The channel owns and closes its executor even without a
+skill registry, after ending running calls. A panic from executor close reaches
+a direct caller and is aggregated by kit close, following the existing channel
+convention (HITL 213974fa, 2026-11-16). RoomKit supplies no OS process runner.
+The shared `skill-scripts/` corpus and native `skills::script_execution` tests
+cover this local contract; MCP-served scripts remain separate work.
