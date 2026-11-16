@@ -143,8 +143,9 @@ impl McpCommand {
         self,
         cancelled: impl Future<Output = ()> + Send,
         filter: Option<ToolFilter>,
+        discover: bool,
     ) -> Result<McpServer, McpError> {
-        McpServer::connect(self, cancelled, filter).await
+        McpServer::connect(self, cancelled, filter, discover).await
     }
 
     /// The program, as errors and logs name the server: never its

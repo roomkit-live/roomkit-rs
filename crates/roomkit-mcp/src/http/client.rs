@@ -52,6 +52,7 @@ impl Failure {
 pub(super) struct Client {
     lease: Arc<Lease>,
     failure: Failure,
+    pub(super) capture: crate::raw::Capture,
 }
 
 /// TLS with rustls's ring provider and the webpki roots, as the OpenAI
@@ -78,7 +79,9 @@ struct Lease {
     _finished: tokio::sync::oneshot::Sender<()>,
 }
 impl Client {
-    pub(super) fn new() -> Result<(Self, tokio::sync::oneshot::Receiver<()>, Failure), McpError> {
+    pub(super) fn new(
+        capture: crate::raw::Capture,
+    ) -> Result<(Self, tokio::sync::oneshot::Receiver<()>, Failure), McpError> {
         let failed = || McpError::Http {
             status: None,
             reason: "HTTP client setup failed",
@@ -101,6 +104,7 @@ impl Client {
                     _finished: done,
                 }),
                 failure: failure.clone(),
+                capture,
             },
             finished,
             failure,
@@ -177,10 +181,13 @@ impl Client {
         headers: Headers,
         limit: usize,
     ) -> Result<StreamableHttpPostResponse, Error> {
+        self.capture.outgoing(&message);
+        let wire =
+            crate::wire::message(&message).map_err(|_| self.error(None, "Invalid MCP request"))?;
         let response = self
             .send(
                 self.request(Method::POST, &uri, session.as_deref(), auth, headers)
-                    .json(&message),
+                    .json(&wire),
             )
             .await?;
         let status = response.status();
@@ -254,7 +261,9 @@ impl Client {
             return Err(self.error(None, "Expected an MCP JSON or SSE response"));
         }
         let body = self.body(response).await?;
-        match serde_json::from_slice(&body) {
+        let parsed = serde_json::from_slice(&body)
+            .and_then(|value| serde_json::from_value(self.capture.incoming(value)));
+        match parsed {
             Ok(message) => Ok(StreamableHttpPostResponse::Json(message, session)),
             Err(_) if notification && body.is_empty() => Ok(StreamableHttpPostResponse::Accepted),
             Err(_) => Err(self.error(None, "Invalid MCP JSON response")),

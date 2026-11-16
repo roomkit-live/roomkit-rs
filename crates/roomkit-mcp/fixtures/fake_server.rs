@@ -32,6 +32,8 @@
     reason = "a test fixture reads its JSON by key, an absent key reading null"
 )]
 
+mod host;
+
 use std::io::{self, BufRead, Write};
 use std::process::ExitCode;
 
@@ -91,7 +93,11 @@ fn main() -> ExitCode {
         }
         _ => {}
     }
-    serve(&options);
+    if matches!(options.mode.as_str(), "host" | "host-modern") {
+        host::serve(options.mode == "host-modern");
+    } else {
+        serve(&options);
+    }
     if matches!(options.mode.as_str(), "deaf" | "silent-deaf") {
         loop {
             std::thread::park();

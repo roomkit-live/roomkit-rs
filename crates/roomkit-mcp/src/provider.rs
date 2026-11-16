@@ -45,6 +45,8 @@ pub struct FromCommandOptions {
     pub label: Option<String>,
     /// How long the start, the handshake and the listing may take.
     pub connect_timeout: Duration,
+    /// List tools while connecting; false opens a resource-only connection.
+    pub discover: bool,
 }
 
 impl Default for FromCommandOptions {
@@ -56,6 +58,7 @@ impl Default for FromCommandOptions {
             tool_filter: None,
             label: None,
             connect_timeout: Duration::from_secs(60),
+            discover: true,
         }
     }
 }
@@ -69,6 +72,7 @@ impl fmt::Debug for FromCommandOptions {
             .field("env", &self.env.keys().collect::<Vec<_>>())
             .field("cwd", &self.cwd)
             .field("label", &self.label)
+            .field("discover", &self.discover)
             .field("connect_timeout", &self.connect_timeout)
             .finish_non_exhaustive()
     }
@@ -92,6 +96,8 @@ pub struct FromUrlOptions {
     pub label: Option<String>,
     /// How long the handshake and the listing may take.
     pub connect_timeout: Duration,
+    /// List tools while connecting; false opens a resource-only connection.
+    pub discover: bool,
 }
 
 #[cfg(feature = "http")]
@@ -102,6 +108,7 @@ impl Default for FromUrlOptions {
             headers: BTreeMap::new(),
             label: None,
             connect_timeout: Duration::from_secs(60),
+            discover: true,
         }
     }
 }
@@ -112,6 +119,7 @@ impl fmt::Debug for FromUrlOptions {
         f.debug_struct("FromUrlOptions")
             .field("headers", &self.headers.keys().collect::<Vec<_>>())
             .field("label", &self.label)
+            .field("discover", &self.discover)
             .field("connect_timeout", &self.connect_timeout)
             .finish_non_exhaustive()
     }
@@ -178,6 +186,7 @@ struct Inner {
     tool_filter: Option<ToolFilter>,
     label: Option<String>,
     server: RwLock<Option<McpServer>>,
+    discover: bool,
 }
 
 impl McpToolProvider {
@@ -210,6 +219,7 @@ impl McpToolProvider {
             tool_filter,
             label,
             connect_timeout,
+            discover,
         } = options;
         let mut built = McpCommand::new(command)
             .args(args)
@@ -221,7 +231,7 @@ impl McpToolProvider {
             built = built.current_dir(cwd);
         }
         built.check()?;
-        Self::over(Target::Command(built), tool_filter, label)
+        Self::over(Target::Command(built), tool_filter, label, discover)
     }
 
     /// The server at `url`, over Streamable HTTP: Python's
@@ -244,18 +254,20 @@ impl McpToolProvider {
             headers,
             label,
             connect_timeout,
+            discover,
         } = options;
         let mut http = crate::http::McpHttp::new(url)?.connect_timeout(connect_timeout);
         for (name, value) in &headers {
             http = http.header(name, value)?;
         }
-        Self::over(Target::Url(http), tool_filter, label)
+        Self::over(Target::Url(http), tool_filter, label, discover)
     }
 
     fn over(
         target: Target,
         tool_filter: Option<ToolFilter>,
         label: Option<String>,
+        discover: bool,
     ) -> Result<Self, McpError> {
         if let Some(label) = &label {
             check_label(label)?;
@@ -266,6 +278,7 @@ impl McpToolProvider {
                 tool_filter,
                 label,
                 server: RwLock::new(None),
+                discover,
             }),
         })
     }
@@ -302,16 +315,21 @@ impl McpToolProvider {
         }
         let server = match &self.inner.target {
             Target::Command(command) => {
-                command
-                    .clone()
-                    .connect_until(cancelled, self.inner.tool_filter.clone())
-                    .await?
+                Box::pin(command.clone().connect_until(
+                    cancelled,
+                    self.inner.tool_filter.clone(),
+                    self.inner.discover,
+                ))
+                .await?
             }
             #[cfg(feature = "http")]
             Target::Url(http) => {
-                http.clone()
-                    .connect_until(cancelled, self.inner.tool_filter.clone())
-                    .await?
+                Box::pin(http.clone().connect_until(
+                    cancelled,
+                    self.inner.tool_filter.clone(),
+                    self.inner.discover,
+                ))
+                .await?
             }
         };
         *held = Some(server);
@@ -460,6 +478,7 @@ impl McpToolProvider {
             tool_filter,
             label,
             server,
+            discover,
         } = inner;
         Self {
             inner: Arc::new(Inner {
@@ -467,6 +486,7 @@ impl McpToolProvider {
                 tool_filter,
                 label,
                 server,
+                discover,
             }),
         }
     }
@@ -547,7 +567,7 @@ impl McpToolProvider {
     }
 
     /// The server, while it is connected.
-    fn connected_server(&self) -> Result<McpServer, McpError> {
+    pub(crate) fn connected_server(&self) -> Result<McpServer, McpError> {
         self.server()
             .filter(McpServer::is_connected)
             .ok_or(McpError::NotConnected)
@@ -578,6 +598,7 @@ fn raised(error: &McpError) -> ToolError {
     let kind = match error {
         McpError::NotConnected | McpError::AlreadyConnected => "RuntimeError",
         McpError::CallTimeout { .. } => "TimeoutError",
+        McpError::Validation { .. } => "ValidationError",
         McpError::Call { .. }
         | McpError::Http { .. }
         | McpError::Configuration { .. }

@@ -4,9 +4,8 @@
 use std::fmt;
 use std::sync::Arc;
 
-use rmcp::model::{CallToolRequestParams, CallToolResult};
+use rmcp::model::{CallToolRequestParams, CallToolResult, ClientConfig};
 use rmcp::service::{Peer, RoleClient, RunningService};
-use rmcp::transport::async_rw::AsyncRwTransport;
 use rmcp::{ClientCacheConfig, ServiceExt};
 use roomkit::model::Metadata;
 use roomkit_ai::AiTool;
@@ -15,8 +14,9 @@ use tokio::sync::{Mutex, OnceCell};
 
 use crate::command::McpCommand;
 use crate::error::{McpError, stderr_ending};
-use crate::listing::{self, ToolFilter};
+use crate::listing::{self, Listed, ToolFilter};
 use crate::process::{ServerProcess, Started, Stderr};
+use crate::raw::Capture;
 use crate::texts::bounded_message;
 
 /// The largest message the server may send, one line of JSON-RPC, in
@@ -58,7 +58,8 @@ pub(crate) struct McpServer {
 struct Inner {
     program: String,
     peer: Peer<RoleClient>,
-    tools: Vec<AiTool>,
+    tools: Listed,
+    capture: Capture,
     instructions: Option<String>,
     pid: Option<u32>,
     close_grace: std::time::Duration,
@@ -68,7 +69,7 @@ struct Inner {
 
 /// What a connection holds until it is closed.
 struct Connection {
-    service: RunningService<RoleClient, ()>,
+    service: RunningService<RoleClient, ClientConfig>,
     process: Option<ServerProcess>,
     #[cfg(feature = "http")]
     http_finished: Option<tokio::sync::oneshot::Receiver<()>>,
@@ -82,6 +83,7 @@ impl McpServer {
         command: McpCommand,
         cancelled: impl Future<Output = ()> + Send,
         filter: Option<ToolFilter>,
+        discover: bool,
     ) -> Result<Self, McpError> {
         let program = command.program();
         let Started {
@@ -90,7 +92,15 @@ impl McpServer {
             stdout,
             stderr,
         } = ServerProcess::start(&command)?;
-        let connecting = handshake(stdout, stdin, &program, filter.as_ref());
+        let capture = Capture::default();
+        let connecting = handshake(
+            stdout,
+            stdin,
+            &program,
+            filter.as_ref(),
+            discover,
+            capture.clone(),
+        );
         let connected = tokio::select! {
             biased;
             () = cancelled => Err(McpError::Cancelled),
@@ -113,7 +123,7 @@ impl McpServer {
         tracing::info!(
             target: "roomkit::mcp",
             server = program,
-            tools = tools.len(),
+            tools = tools.tools.len(),
             "connected to an MCP server"
         );
         Ok(Self {
@@ -121,6 +131,7 @@ impl McpServer {
                 program,
                 peer: service.peer().clone(),
                 tools,
+                capture,
                 instructions,
                 pid: process.id(),
                 close_grace: command.close_grace,
@@ -137,8 +148,9 @@ impl McpServer {
 
     #[cfg(feature = "http")]
     pub(crate) fn from_http(
-        service: RunningService<RoleClient, ()>,
-        tools: Vec<AiTool>,
+        service: RunningService<RoleClient, ClientConfig>,
+        tools: Listed,
+        capture: Capture,
         finished: tokio::sync::oneshot::Receiver<()>,
     ) -> Self {
         let instructions = service
@@ -149,6 +161,7 @@ impl McpServer {
                 program: "http".into(),
                 peer: service.peer().clone(),
                 tools,
+                capture,
                 instructions,
                 pid: None,
                 close_grace: std::time::Duration::from_secs(10),
@@ -248,7 +261,8 @@ async fn failed(error: McpError, process: ServerProcess, stderr: Stderr) -> McpE
         | McpError::NotConnected
         | McpError::AlreadyConnected
         | McpError::Call { .. }
-        | McpError::CallTimeout { .. }) => error,
+        | McpError::CallTimeout { .. }
+        | McpError::Validation { .. }) => error,
     }
 }
 
@@ -259,19 +273,31 @@ async fn handshake<R, W>(
     input: W,
     program: &str,
     filter: Option<&ToolFilter>,
-) -> Result<(RunningService<RoleClient, ()>, Vec<AiTool>), McpError>
+    discover: bool,
+    capture: Capture,
+) -> Result<(RunningService<RoleClient, ClientConfig>, Listed), McpError>
 where
     R: AsyncRead + Send + Unpin + 'static,
     W: AsyncWrite + Send + Unpin + 'static,
 {
-    let transport = AsyncRwTransport::new_client(output, input).with_max_line_length(MESSAGE_LIMIT);
-    let service =
-        ().serve(transport)
-            .await
-            .map_err(|error| McpError::Handshake {
-                program: program.to_owned(),
-                message: bounded_message(&error.to_string()),
-            })?;
+    let transport = crate::raw_stdio::transport(output, input, capture);
+    let service = crate::protocol::client()
+        .serve(transport)
+        .await
+        .map_err(|error| McpError::Handshake {
+            program: program.to_owned(),
+            message: bounded_message(&error.to_string()),
+        })?;
+    if !service
+        .peer_info()
+        .is_some_and(|info| crate::protocol::supported(&info.protocol_version))
+    {
+        let _ended = service.cancel().await;
+        return Err(McpError::Handshake {
+            program: program.to_owned(),
+            message: "unsupported MCP protocol version".into(),
+        });
+    }
     // rmcp keeps each page a server marks fresh (`ttlMs`) for as long as
     // the connection is open; a connection lists once, and keeps only the
     // tools it takes.
@@ -279,6 +305,9 @@ where
         .peer()
         .set_response_cache_config(ClientCacheConfig::disabled())
         .await;
+    if !discover {
+        return Ok((service, Listed::default()));
+    }
     match listing::tools(service.peer(), program, filter).await {
         Ok(tools) => Ok((service, tools)),
         Err(error) => {
@@ -289,9 +318,21 @@ where
 }
 
 impl McpServer {
+    pub(crate) fn host_capture(&self) -> &Capture {
+        &self.inner.capture
+    }
+
+    pub(crate) fn host_peer(&self) -> &Peer<RoleClient> {
+        &self.inner.peer
+    }
+
+    pub(crate) fn tool_meta(&self) -> std::collections::BTreeMap<String, Metadata> {
+        self.inner.tools.metadata.clone()
+    }
+
     /// The tools the server listed, as it names them.
     pub(crate) fn listed(&self) -> Vec<AiTool> {
-        self.inner.tools.clone()
+        self.inner.tools.tools.clone()
     }
 
     /// Calls the tool `name`, as the server names it, with `arguments`: the
@@ -316,6 +357,7 @@ impl fmt::Debug for McpServer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let names: Vec<&str> = self
             .inner
+            .tools
             .tools
             .iter()
             .map(|tool| tool.name.as_str())
@@ -402,12 +444,14 @@ mod tests {
         let listings = Arc::new(AtomicUsize::new(0));
         tokio::spawn(fresh_for_a_day(server, Arc::clone(&listings)));
         let (read, write) = tokio::io::split(client);
-        let (service, tools) = handshake(read, write, "fresh", None).await.unwrap();
+        let (service, tools) = handshake(read, write, "fresh", None, true, Capture::default())
+            .await
+            .unwrap();
         let again = service.peer().list_tools(None).await.unwrap();
         let _ended = service.cancel().await;
         assert_eq!(
             (
-                tools.len(),
+                tools.tools.len(),
                 again.tools.len(),
                 listings.load(Ordering::SeqCst)
             ),

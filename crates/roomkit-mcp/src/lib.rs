@@ -63,13 +63,19 @@ mod http;
 mod command;
 mod error;
 mod group;
+mod host;
 mod listing;
 mod process;
+mod protocol;
 mod provider;
+mod raw;
+mod raw_stdio;
+mod resources;
 mod results;
 mod server;
 mod structured;
 mod texts;
+mod wire;
 
 pub use self::error::McpError;
 #[cfg(feature = "http")]
@@ -77,3 +83,5 @@ pub use self::provider::FromUrlOptions;
 pub use self::provider::{
     AsToolHandlerOptions, CallToolOptions, FromCommandOptions, McpToolProvider,
 };
+
+pub use self::host::{ReadResourceOptions, RequestOptions};

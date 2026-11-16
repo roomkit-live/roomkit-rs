@@ -67,6 +67,11 @@ impl Fake {
         self
     }
 
+    pub(crate) fn discover(mut self, discover: bool) -> Self {
+        self.options.discover = discover;
+        self
+    }
+
     /// The provider of this server, not connected, given [`GRACE`] to exit.
     pub(crate) fn provider(self) -> McpToolProvider {
         self.built().unwrap()

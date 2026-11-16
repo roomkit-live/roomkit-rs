@@ -3,7 +3,8 @@ mod client;
 mod sse;
 
 use crate::error::McpError;
-use crate::listing::{self, ToolFilter};
+use crate::listing::{self, Listed, ToolFilter};
+use crate::raw::Capture;
 use crate::server::{MESSAGE_LIMIT, McpServer};
 use reqwest::{
     Url,
@@ -131,8 +132,10 @@ impl McpHttp {
         self,
         cancelled: impl Future<Output = ()> + Send,
         filter: Option<ToolFilter>,
+        discover: bool,
     ) -> Result<McpServer, McpError> {
-        let (client, finished, failure) = client::Client::new()?;
+        let capture = Capture::default();
+        let (client, finished, failure) = client::Client::new(capture.clone())?;
         let config = StreamableHttpClientTransportConfig::with_uri(self.url.as_str())
             .custom_headers(self.headers)
             .max_sse_event_size(MESSAGE_LIMIT)
@@ -141,14 +144,24 @@ impl McpHttp {
         let transport = StreamableHttpClientTransport::with_client(client, config);
         let stop = transport.cancel_token();
         let connecting = async {
-            let service =
-                ().serve(transport)
-                    .await
-                    .map_err(|_| failure.error("MCP handshake failed"))?;
+            let service = crate::protocol::client()
+                .serve(transport)
+                .await
+                .map_err(|_| failure.error("MCP handshake failed"))?;
+            if !service
+                .peer_info()
+                .is_some_and(|info| crate::protocol::supported(&info.protocol_version))
+            {
+                let _closed = service.cancel().await;
+                return Err(failure.error("unsupported MCP protocol version"));
+            }
             service
                 .peer()
                 .set_response_cache_config(ClientCacheConfig::disabled())
                 .await;
+            if !discover {
+                return Ok((service, Listed::default()));
+            }
             if let Ok(tools) = listing::tools(service.peer(), "http", filter.as_ref()).await {
                 Ok((service, tools))
             } else {
@@ -163,7 +176,7 @@ impl McpHttp {
             result = bounded(self.timeout, connecting) => result,
         };
         match connected {
-            Ok((service, tools)) => Ok(McpServer::from_http(service, tools, finished)),
+            Ok((service, tools)) => Ok(McpServer::from_http(service, tools, capture, finished)),
             Err(error) => {
                 stop.cancel();
                 let _finished = finished.await;

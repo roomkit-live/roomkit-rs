@@ -137,6 +137,8 @@ the mapping and its tests. The check does not generate or update this document.
 | `roomkit_acp::AcpContextContributor` | `ACPContextContributor` | Cloneable `new(callback)`, owned context/event and `Result<Vec<String>, AcpError>`; one string becomes `vec![text]`, invalid dynamic returns are unrepresentable (HITL 52031019) |
 | — | `roomkit.ACPTransport.open` | `queue` |
 | `roomkit_mcp::McpToolProvider` | — | `connect`, `close` |
+| `roomkit_mcp::McpToolProvider` | `roomkit.tools.MCPToolProvider` | `request(method, params: Option<&Metadata>, RequestOptions)`, `read_resource(uri, ReadResourceOptions)`; timeout defaults to 30 s. Host snapshots are owned values returned by methods (HITL 70a4bdc7). |
+| `roomkit_mcp::McpToolProvider::read_resource` | `MCPToolProvider.read_resource` | `Metadata` keeps the SDK model's complete resource JSON, including extensions and explicit nulls; URI validation/normalization is preserved (HITL 3de23e53). |
 | `roomkit_ai::MockAiProvider` | — | `calls` |
 | `roomkit_ai::memory::MockMemoryProvider` | — | `retrieve_calls`, `ingest_calls`, `clear_calls`, `closed` |
 | `roomkit_ai::knowledge::MockKnowledgeSource` | — | `search_calls`, `index_calls`, `closed` |
@@ -295,3 +297,25 @@ a direct caller and is aggregated by kit close, following the existing channel
 convention (HITL 213974fa, 2026-11-16). RoomKit supplies no OS process runner.
 The shared `skill-scripts/` corpus and native `skills::script_execution` tests
 cover this local contract; MCP-served scripts remain separate work.
+
+
+## MCP host access
+
+`FromCommandOptions.discover` and `FromUrlOptions.discover` default to true;
+false opens a resource-only connection with no tool listing. The host can
+still call tools directly. `tool_meta` reads the admitted listing once,
+while `server_info` and `server_extensions` read the handshake snapshots.
+Every accessor refuses outside a live connection.
+
+`request` sends caller parameters unchanged, including `_meta`; `None`
+sends an explicit empty object. Raw request results preserve extension fields,
+omitting null model fields as Python does. Resource results retain explicitly
+sent nulls, validate their known model fields and normalize URIs. A malformed
+resource input/result returns `McpError::Validation`, the representation of
+Python's Pydantic validation error.
+
+The connection advertises MCP 2025-11-25 and accepts the same initialize-based
+protocol versions as Python's pinned SDK. Protocol 2026 is deferred for joint
+support (HITL 9496ae52). The existing serde and url versions are direct
+dependencies for lossless serialization and URI parsing (HITL 04bbf03c).
+No arbitrary request is replayed after a timeout or session loss.

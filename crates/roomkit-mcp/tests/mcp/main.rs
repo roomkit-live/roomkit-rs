@@ -9,6 +9,7 @@
 
 mod agent;
 mod calls;
+mod host;
 #[cfg(target_os = "linux")]
 mod lifecycle;
 mod listing;

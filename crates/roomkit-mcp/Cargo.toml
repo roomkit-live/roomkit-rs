@@ -29,6 +29,9 @@ roomkit-core.workspace = true
 # connection reports.
 rmcp.workspace = true
 serde_json.workspace = true
+# Lossless host requests and the Python resource URI contract.
+serde.workspace = true
+url.workspace = true
 thiserror.workspace = true
 # The server's process, its pipes, and the bounds on connecting and closing.
 tokio = { workspace = true, features = ["process", "io-util", "time"] }

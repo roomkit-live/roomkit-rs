@@ -9,6 +9,7 @@ pub(super) fn stream(
     failure: Failure,
     limit: usize,
 ) -> BoxedSseResponse {
+    let capture = lease.capture.clone();
     let bytes = try_unfold(
         (response, lease, failure, Bound::default()),
         move |(mut response, lease, failure, mut bound)| async move {
@@ -25,7 +26,18 @@ pub(super) fn stream(
             Ok(Some((chunk, (response, lease, failure, bound))))
         },
     );
-    sse_stream::SseStream::from_bytes_stream(bytes).boxed()
+    sse_stream::SseStream::from_bytes_stream(bytes)
+        .map(move |event| {
+            event.map(|mut event| {
+                if let Some(data) = &event.data
+                    && let Ok(value) = serde_json::from_str(data)
+                {
+                    event.data = Some(capture.incoming(value).to_string());
+                }
+                event
+            })
+        })
+        .boxed()
 }
 #[derive(Default)]
 struct Bound {

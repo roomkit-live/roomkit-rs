@@ -243,6 +243,12 @@ reason = "Python's **options, which go to RoomKit.delegate's keywords that are d
 # The architecture table's exceptions, approved with the plan on 2026-10-27.
 
 [[exception]]
+rust = "roomkit_mcp::McpToolProvider::request"
+params = ["params"]
+approved = "2026-11-16"
+reason = "Rust has no default call arguments: None preserves Python's omitted params and Some borrows the host mapping (HITL 70a4bdc7, RMK-1709)"
+
+[[exception]]
 rust = "roomkit_ai::ScriptExecutor::execute"
 params = ["arguments"]
 approved = "2026-11-16"
@@ -1177,23 +1183,16 @@ reason = "not in 0.x: an injected HTTP transport; the provider builds its own cl
 [[missing]]
 python = "roomkit.tools.MCPToolProvider"
 members = [
-    "__init__", "call_tool_result", "get_tools_as_dicts", "read_resource",
-    "request", "server_extensions", "server_info", "tool_meta",
+    "__init__", "call_tool_result", "get_tools_as_dicts",
 ]
 scope = "text"
-reason = "not in 0.x: the constructor taking every transport's keywords (from_command and from_url build a provider), the raw result, resources, raw requests and what the handshake said of the server"
-
-[[missing]]
-python = "roomkit.tools.MCPToolProvider.from_command"
-params = ["discover"]
-scope = "text"
-reason = "not in 0.x: connecting without listing the tools"
+reason = "not in 0.x: the constructor taking every transport's keywords (from_command and from_url build a provider), the raw tool result and dictionary tool definitions"
 
 [[missing]]
 python = "roomkit.tools.MCPToolProvider.from_url"
-params = ["transport", "discover"]
+params = ["transport"]
 scope = "text"
-reason = "not in 0.x: the legacy SSE transport, and connecting without listing the tools"
+reason = "not in 0.x: the legacy SSE transport"
 
 [[exception]]
 rust = "roomkit_ai::MockAiProvider"

@@ -2,7 +2,8 @@
 //! its cursor leads to, within bounds, each tool a definition the model
 //! can be handed.
 
-use std::collections::HashSet;
+use roomkit::model::Metadata;
+use std::collections::{BTreeMap, HashSet};
 
 use rmcp::model::{PaginatedRequestParams, Tool};
 use rmcp::service::{Peer, RoleClient};
@@ -49,7 +50,7 @@ pub(crate) async fn tools(
     peer: &Peer<RoleClient>,
     program: &str,
     filter: Option<&ToolFilter>,
-) -> Result<Vec<AiTool>, McpError> {
+) -> Result<Listed, McpError> {
     let mut kept = Catalogue::new(program);
     let mut seen: HashSet<String> = HashSet::new();
     let mut params: Option<PaginatedRequestParams> = None;
@@ -68,11 +69,17 @@ pub(crate) async fn tools(
             .filter(|tool| filter.is_none_or(|admits| admits(tool.name.as_ref())));
         for tool in admitted {
             if !kept.take(tool) {
-                return Ok(kept.tools);
+                return Ok(Listed {
+                    tools: kept.tools,
+                    metadata: kept.metadata,
+                });
             }
         }
         let Some(cursor) = page.next_cursor.filter(|cursor| !cursor.is_empty()) else {
-            return Ok(kept.tools);
+            return Ok(Listed {
+                tools: kept.tools,
+                metadata: kept.metadata,
+            });
         };
         if !brought || !seen.insert(cursor.clone()) {
             break;
@@ -85,7 +92,17 @@ pub(crate) async fn tools(
         tools = kept.tools.len(),
         "an MCP server pages tools/list without end; the tools read are kept"
     );
-    Ok(kept.tools)
+    Ok(Listed {
+        tools: kept.tools,
+        metadata: kept.metadata,
+    })
+}
+
+/// The one catalogue read at connection, including admitted tools' metadata.
+#[derive(Default)]
+pub(crate) struct Listed {
+    pub(crate) tools: Vec<AiTool>,
+    pub(crate) metadata: BTreeMap<String, Metadata>,
 }
 
 /// The tools kept so far, and their names.
@@ -93,6 +110,7 @@ struct Catalogue<'a> {
     program: &'a str,
     tools: Vec<AiTool>,
     names: HashSet<String>,
+    metadata: BTreeMap<String, Metadata>,
 }
 
 impl<'a> Catalogue<'a> {
@@ -101,6 +119,7 @@ impl<'a> Catalogue<'a> {
             program,
             tools: Vec::new(),
             names: HashSet::new(),
+            metadata: BTreeMap::new(),
         }
     }
 
@@ -117,6 +136,10 @@ impl<'a> Catalogue<'a> {
             return false;
         }
         if let Some(definition) = self.definition(tool) {
+            if let Some(meta) = &tool.meta {
+                self.metadata
+                    .insert(definition.name.clone(), meta.0.clone());
+            }
             self.names.insert(definition.name.clone());
             self.tools.push(definition);
         }

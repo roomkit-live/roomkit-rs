@@ -4,7 +4,7 @@
 //! in scope has.
 
 use roomkit_mcp::AsToolHandlerOptions;
-use roomkit_mcp::CallToolOptions;
+use roomkit_mcp::{CallToolOptions, ReadResourceOptions, RequestOptions};
 use roomkit_mcp::FromCommandOptions;
 #[cfg(feature = "http")]
 use roomkit_mcp::FromUrlOptions;
@@ -27,6 +27,8 @@ fn call_tool_options_defaults_as_python() {
 #[test]
 fn from_command_options_defaults_as_python() {
     let defaults = FromCommandOptions::default();
+    // roomkit.tools.MCPToolProvider.from_command(discover) = True
+    assert!(defaults.discover);
     // roomkit.tools.MCPToolProvider.from_command(args) = ()
     assert_eq!(defaults.args, Vec::<std::ffi::OsString>::new());
     // roomkit.tools.MCPToolProvider.from_command(connect_timeout) = 60.0
@@ -45,6 +47,8 @@ fn from_command_options_defaults_as_python() {
 #[test]
 fn from_url_options_defaults_as_python() {
     let defaults = FromUrlOptions::default();
+    // roomkit.tools.MCPToolProvider.from_url(discover) = True
+    assert!(defaults.discover);
     // roomkit.tools.MCPToolProvider.from_url(connect_timeout) = 60.0
     assert_eq!(defaults.connect_timeout, Duration::from_secs(60));
     // roomkit.tools.MCPToolProvider.from_url(headers) = None
@@ -53,4 +57,13 @@ fn from_url_options_defaults_as_python() {
     assert!(defaults.label.is_none());
     // roomkit.tools.MCPToolProvider.from_url(tool_filter) = None
     assert!(defaults.tool_filter.is_none());
+}
+
+
+#[test]
+fn host_options_defaults_as_python() {
+    // roomkit.tools.MCPToolProvider.request(timeout) = 30.0
+    assert_eq!(RequestOptions::default().timeout, Duration::from_secs(30));
+    // roomkit.tools.MCPToolProvider.read_resource(timeout) = 30.0
+    assert_eq!(ReadResourceOptions::default().timeout, Duration::from_secs(30));
 }
