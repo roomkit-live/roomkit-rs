@@ -8,11 +8,11 @@ struct HeldProvider {
     release: Arc<Notify>,
 }
 impl AiProvider for HeldProvider {
-    fn model_name(&self) -> &str {
+    fn model_name(&self) -> &'static str {
         "held"
     }
     async fn generate(&self, _: &AiContext) -> Result<AiResponse, ProviderError> {
-        let _dropped = Dropped(self.trace.clone());
+        let _dropped = Dropped(Arc::clone(&self.trace));
         self.started.notify_one();
         self.release.notified().await;
         Ok(AiResponse::new("late"))
@@ -31,7 +31,12 @@ async fn a_second_close_does_not_wait_again_for_a_turn_the_first_cut() {
         started: Arc::default(),
         release: Arc::default(),
     };
-    let agent = AiChannel::new("ai".parse().unwrap(), model.clone(), Default::default()).unwrap();
+    let agent = AiChannel::new(
+        "ai".parse().unwrap(),
+        model.clone(),
+        AiChannelOptions::default(),
+    )
+    .unwrap();
     let task = tokio::spawn(turn(agent.clone()));
     model.started.notified().await;
     let began = tokio::time::Instant::now();

@@ -80,7 +80,7 @@ impl Loop {
         let mut ran = called.call.clone();
         match steering
             .lifetime()
-            .call(self.serve_call(called, nth, &mut ran))
+            .call(Box::pin(self.serve_call(called, nth, &mut ran)))
             .await
         {
             Some(end) => end,

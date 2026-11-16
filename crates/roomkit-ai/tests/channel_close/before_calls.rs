@@ -12,6 +12,7 @@ async fn a_close_while_the_start_row_is_read_never_starts_the_call() {
     }
 }
 
+#[expect(clippy::panic, reason = "a test fails on an unexpected stored row")]
 async fn closes_before_call(streaming: bool) {
     let ran = Arc::new(AtomicUsize::new(0));
     let model = Model {
@@ -22,7 +23,7 @@ async fn closes_before_call(streaming: bool) {
         streaming,
         trace: Arc::default(),
     };
-    let called = ran.clone();
+    let called = Arc::clone(&ran);
     let agent = AiChannel::new(
         "ai".parse().unwrap(),
         model.clone(),
@@ -38,18 +39,18 @@ async fn closes_before_call(streaming: bool) {
     .unwrap();
     let (kit, reports) = kit::room(agent.clone()).await;
     let took: Arc<Mutex<Vec<Duration>>> = Arc::default();
-    let times = took.clone();
+    let times = Arc::clone(&took);
     kit.hook(
         HookTrigger::BeforeBroadcast,
         move |event: RoomEvent, _| {
-            let (agent, times) = (agent.clone(), times.clone());
+            let (agent, times) = (agent.clone(), Arc::clone(&times));
             async move {
                 if event.r#type == EventType::ToolCallStart {
                     let now = tokio::time::Instant::now();
                     agent.close().await;
                     times.lock().unwrap().push(now.elapsed());
                 }
-                HookResult::allow(Default::default())
+                HookResult::allow(roomkit::model::hook::AllowOptions::default())
             }
         },
         HookOptions {
@@ -67,9 +68,11 @@ async fn closes_before_call(streaming: bool) {
     assert_eq!(model.inner.requests().len(), 1);
     let reports = reports.lock().unwrap().clone();
     assert_eq!(reports.len(), 1);
-    assert!(reports[0].cancelled && reports[0].is_error);
+    assert!(reports.first().unwrap().cancelled && reports.first().unwrap().is_error);
     assert!(
-        reports[0]
+        reports
+            .first()
+            .unwrap()
             .result
             .as_ref()
             .unwrap()
@@ -78,14 +81,17 @@ async fn closes_before_call(streaming: bool) {
     );
     let ends: Vec<_> = kit
         .store()
-        .list_events(&"r".parse().unwrap(), Default::default())
+        .list_events(
+            &"r".parse().unwrap(),
+            roomkit::store::ListEventsOptions::default(),
+        )
         .await
         .unwrap()
         .into_iter()
         .filter(|row| row.r#type == EventType::ToolCallEnd)
         .collect();
     assert_eq!(ends.len(), 1);
-    let EventContent::ToolCall(call) = &ends[0].content else {
+    let EventContent::ToolCall(call) = &ends.first().unwrap().content else {
         panic!("tool row")
     };
     assert_eq!(call.outcome, Some(ToolCallOutcome::Cancelled));

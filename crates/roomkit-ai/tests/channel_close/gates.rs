@@ -18,7 +18,7 @@ async fn a_close_cuts_a_pending_gate_without_invoking_the_tool() {
         streaming: true,
         trace: Arc::default(),
     };
-    let called = ran.clone();
+    let called = Arc::clone(&ran);
     let agent = AiChannel::new(
         "ai".parse().unwrap(),
         model.clone(),
@@ -33,14 +33,14 @@ async fn a_close_cuts_a_pending_gate_without_invoking_the_tool() {
     )
     .unwrap();
     let (kit, reports) = kit::room(agent.clone()).await;
-    let entered = started.clone();
+    let entered = Arc::clone(&started);
     kit.hook(
         HookTrigger::BeforeToolUse,
         move |_: ToolCallEvent, _| {
             entered.notify_one();
             async {
                 std::future::pending::<()>().await;
-                HookResult::allow(Default::default())
+                HookResult::allow(roomkit::model::hook::AllowOptions::default())
             }
         },
         HookOptions {
@@ -60,7 +60,7 @@ async fn a_close_cuts_a_pending_gate_without_invoking_the_tool() {
     assert_eq!(model.inner.requests().len(), 1);
     let reports = reports.lock().unwrap().clone();
     assert_eq!(reports.len(), 1);
-    assert!(reports[0].cancelled && reports[0].is_error);
+    assert!(reports.first().unwrap().cancelled && reports.first().unwrap().is_error);
     assert_eq!(kit::rows(&kit).await, [ToolCallOutcome::Cancelled]);
     kit.close().await.unwrap();
 }
@@ -79,7 +79,7 @@ async fn a_close_keeps_an_already_decided_result() {
         streaming: true,
         trace: Arc::default(),
     };
-    let entered = started.clone();
+    let entered = Arc::clone(&started);
     let agent = AiChannel::new(
         "ai".parse().unwrap(),
         model.clone(),
@@ -89,7 +89,7 @@ async fn a_close_keeps_an_already_decided_result() {
                 .map(|name| AiTool::new(name, name).unwrap().into())
                 .collect(),
             tool_handler: Some(ToolHandler::new(move |name, _| {
-                let entered = entered.clone();
+                let entered = Arc::clone(&entered);
                 async move {
                     if name == "held" {
                         entered.notify_one();
@@ -103,7 +103,7 @@ async fn a_close_keeps_an_already_decided_result() {
     )
     .unwrap();
     let (kit, reports) = kit::room(agent.clone()).await;
-    let noted = served.clone();
+    let noted = Arc::clone(&served);
     kit.hook(
         HookTrigger::OnToolCall,
         move |event: ToolCallEvent, _| {

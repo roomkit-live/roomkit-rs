@@ -35,7 +35,7 @@ pub(super) async fn room(agent: AiChannel<Model>) -> (RoomKit, Reports) {
         .unwrap();
     }
     let reports: Reports = Arc::default();
-    let observed = reports.clone();
+    let observed = Arc::clone(&reports);
     kit.hook(
         HookTrigger::OnToolCall,
         move |event: ToolCallEvent, _| {
@@ -66,14 +66,20 @@ pub(super) async fn says(kit: RoomKit) {
 
 pub(super) async fn rows(kit: &RoomKit) -> Vec<ToolCallOutcome> {
     kit.store()
-        .list_events(&"r".parse().unwrap(), Default::default())
+        .list_events(
+            &"r".parse().unwrap(),
+            roomkit::store::ListEventsOptions::default(),
+        )
         .await
         .unwrap()
         .into_iter()
         .filter(|row| row.r#type == EventType::ToolCallEnd)
-        .filter_map(|row| match row.content {
-            EventContent::ToolCall(call) => call.outcome,
-            _ => None,
+        .filter_map(|row| {
+            if let EventContent::ToolCall(call) = row.content {
+                call.outcome
+            } else {
+                None
+            }
         })
         .collect()
 }
@@ -97,12 +103,12 @@ async fn cut(streaming: bool, through_kit: bool) {
             ScriptedRound::answering("late"),
         ]),
         streaming,
-        trace: trace.clone(),
+        trace: Arc::clone(&trace),
     };
     let handler = {
-        let (trace, started) = (trace.clone(), started.clone());
+        let (trace, started) = (Arc::clone(&trace), Arc::clone(&started));
         ToolHandler::new(move |_, _| {
-            let (trace, started) = (trace.clone(), started.clone());
+            let (trace, started) = (Arc::clone(&trace), Arc::clone(&started));
             async move {
                 let _dropped = Dropped(trace);
                 started.notify_one();
@@ -139,9 +145,11 @@ async fn cut(streaming: bool, through_kit: bool) {
     assert_eq!(trace.lock().unwrap().first(), Some(&"call ended"));
     let reports = reports.lock().unwrap().clone();
     assert_eq!(reports.len(), 1);
-    assert!(reports[0].cancelled && reports[0].is_error);
+    assert!(reports.first().unwrap().cancelled && reports.first().unwrap().is_error);
     assert!(
-        reports[0]
+        reports
+            .first()
+            .unwrap()
             .result
             .as_ref()
             .unwrap()
@@ -179,9 +187,9 @@ async fn a_close_from_a_hook_of_the_turn_does_not_wait_for_that_turn() {
         .unwrap();
         let (kit, reports) = room(agent.clone()).await;
         let took: Arc<Mutex<Vec<Duration>>> = Arc::default();
-        let times = took.clone();
+        let times = Arc::clone(&took);
         let close = move || {
-            let (agent, times) = (agent.clone(), times.clone());
+            let (agent, times) = (agent.clone(), Arc::clone(&times));
             async move {
                 let start = tokio::time::Instant::now();
                 agent.close().await;
@@ -199,7 +207,7 @@ async fn a_close_from_a_hook_of_the_turn_does_not_wait_for_that_turn() {
                     let closing = close();
                     async {
                         closing.await;
-                        HookResult::allow(Default::default())
+                        HookResult::allow(roomkit::model::hook::AllowOptions::default())
                     }
                 },
                 opts,
@@ -212,7 +220,7 @@ async fn a_close_from_a_hook_of_the_turn_does_not_wait_for_that_turn() {
                     let closing = close();
                     async {
                         closing.await;
-                        HookResult::allow(Default::default())
+                        HookResult::allow(roomkit::model::hook::AllowOptions::default())
                     }
                 },
                 opts,
@@ -223,7 +231,7 @@ async fn a_close_from_a_hook_of_the_turn_does_not_wait_for_that_turn() {
         roomkit::testing::idle(&kit).await;
         assert_eq!(*took.lock().unwrap(), [Duration::ZERO]);
         assert_eq!(reports.lock().unwrap().len(), 1);
-        assert!(!reports.lock().unwrap()[0].cancelled);
+        assert!(!reports.lock().unwrap().first().unwrap().cancelled);
         assert_eq!(rows(&kit).await, [ToolCallOutcome::Served]);
         assert_eq!(
             model.inner.requests().len(),

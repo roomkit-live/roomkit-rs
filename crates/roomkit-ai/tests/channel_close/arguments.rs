@@ -12,6 +12,7 @@ async fn a_closed_call_reports_the_arguments_its_handler_ran_with() {
     }
 }
 
+#[expect(clippy::panic, reason = "a test fails on an unexpected stored row")]
 async fn rewritten(streaming: bool) {
     let started = Arc::new(Notify::new());
     let model = Model {
@@ -22,7 +23,7 @@ async fn rewritten(streaming: bool) {
         streaming,
         trace: Arc::default(),
     };
-    let entered = started.clone();
+    let entered = Arc::clone(&started);
     let agent = AiChannel::new(
         "ai".parse().unwrap(),
         model.clone(),
@@ -30,7 +31,7 @@ async fn rewritten(streaming: bool) {
             tools: vec![AiTool::new("lookup", "Lookup").unwrap().into()],
             tool_handler: Some(ToolHandler::new(move |_, arguments| {
                 assert_eq!(arguments.get("q"), Some(&json!("rewritten")));
-                let entered = entered.clone();
+                let entered = Arc::clone(&entered);
                 async move {
                     entered.notify_one();
                     std::future::pending::<()>().await;
@@ -46,7 +47,7 @@ async fn rewritten(streaming: bool) {
         HookTrigger::BeforeToolUse,
         |mut event: ToolCallEvent, _| async move {
             event.arguments.insert("q".into(), json!("rewritten"));
-            HookResult::modify(event, Default::default())
+            HookResult::modify(event, roomkit::model::hook::ModifyOptions::default())
         },
         HookOptions {
             name: "rewrite".into(),
@@ -61,9 +62,14 @@ async fn rewritten(streaming: bool) {
     roomkit::testing::idle(&kit).await;
     let reports = reports.lock().unwrap().clone();
     assert_eq!(reports.len(), 1);
-    assert_eq!(reports[0].arguments.get("q"), Some(&json!("rewritten")));
+    assert_eq!(
+        reports.first().unwrap().arguments.get("q"),
+        Some(&json!("rewritten"))
+    );
     assert!(
-        reports[0]
+        reports
+            .first()
+            .unwrap()
             .result
             .as_ref()
             .unwrap()
@@ -72,14 +78,17 @@ async fn rewritten(streaming: bool) {
     );
     let ends: Vec<_> = kit
         .store()
-        .list_events(&"r".parse().unwrap(), Default::default())
+        .list_events(
+            &"r".parse().unwrap(),
+            roomkit::store::ListEventsOptions::default(),
+        )
         .await
         .unwrap()
         .into_iter()
         .filter(|row| row.r#type == EventType::ToolCallEnd)
         .collect();
     assert_eq!(ends.len(), 1);
-    let EventContent::ToolCall(call) = &ends[0].content else {
+    let EventContent::ToolCall(call) = &ends.first().unwrap().content else {
         panic!("tool row")
     };
     assert_eq!(call.arguments.get("q"), Some(&json!("rewritten")));

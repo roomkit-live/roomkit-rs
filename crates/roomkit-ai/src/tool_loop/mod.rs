@@ -327,7 +327,7 @@ impl Loop {
                 let current = crate::tools::closing_context().in_turn(steering.lifetime());
                 crate::tools::within_closing_context(
                     current,
-                    self.rounds(conversation, out, steering),
+                    Box::pin(self.rounds(conversation, out, steering)),
                 )
                 .await;
             })
