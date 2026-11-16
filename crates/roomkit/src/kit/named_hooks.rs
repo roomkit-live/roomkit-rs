@@ -25,6 +25,9 @@ pub struct DisableRoomHookOptions {
 impl<S: ConversationStore> RoomKit<S> {
     /// Enables a named executor hook for the room's subsequent turns (RFC §10.6.6).
     /// Repeated activation preserves its place and does not duplicate it.
+    /// A name enabled for an id no room holds waits for the room created
+    /// under it, and ends with that room, as a room hook does
+    /// ([`add_room_hook`](Self::add_room_hook)).
     ///
     /// # Errors
     /// Refuses a closed kit, a foreign organization, or a name the kit's room hooks hold.
@@ -35,10 +38,18 @@ impl<S: ConversationStore> RoomKit<S> {
         options: EnableRoomHookOptions,
     ) -> Result<(), RoomKitError> {
         self.inner.open()?;
-        self.reached(room_id, options.organization_id.as_deref())
+        let registering = self.inner.room_hook_lifetime.registering(room_id);
+        let held = self
+            .room_held(room_id, options.organization_id.as_deref())
             .await?;
-        self.inner
-            .try_change_config(|config| config.hooks.enable_room_hook(room_id, name))?;
+        registering.note(
+            held,
+            || {
+                self.inner
+                    .try_change_config(|config| config.hooks.enable_room_hook(room_id, name))
+            },
+            |()| name.to_owned(),
+        )?;
         Ok(())
     }
 
@@ -59,6 +70,9 @@ impl<S: ConversationStore> RoomKit<S> {
         let Ok(removed) = self.inner.try_change_config(|config| {
             Ok::<_, std::convert::Infallible>(config.hooks.disable_room_hook(room_id, name))
         });
+        if removed {
+            self.inner.room_hook_lifetime.released(room_id, name);
+        }
         Ok(removed)
     }
 }

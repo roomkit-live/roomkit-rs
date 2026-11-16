@@ -7,6 +7,7 @@
 //! hooks fire for that room's payloads alone, beside the kit's.
 
 mod named;
+mod room_end;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Weak};

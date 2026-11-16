@@ -55,6 +55,7 @@ mod preparation;
 mod read_markers;
 mod regenerate;
 mod registry;
+mod room_hook_lifetime;
 mod room_hooks;
 mod room_settings;
 mod rooms;
@@ -308,6 +309,9 @@ pub(crate) struct Inner<S> {
     pub(crate) default_orchestration: Option<Arc<dyn crate::Orchestration<S>>>,
     /// The strategies installed through the kit, by room (RFC §19.7).
     pub(crate) room_strategies: strategies::RoomStrategies<S>,
+    /// The room hooks waiting for the room created under their id: a
+    /// room's hooks end with the room (RFC §9.1, §17.2).
+    pub(crate) room_hook_lifetime: room_hook_lifetime::RoomHookLifetime,
     /// The strategies' runners of their agents' turns, kept by the owner
     /// (RFC §10.6.1).
     pub(crate) turn_runners: crate::turn_runners::TurnRunners<S>,
@@ -464,6 +468,7 @@ impl<S: ConversationStore> RoomKit<S> {
             delivery_keys: Arc::default(),
             default_orchestration: orchestration,
             room_strategies: strategies::RoomStrategies::default(),
+            room_hook_lifetime: room_hook_lifetime::RoomHookLifetime::default(),
             turn_runners: crate::turn_runners::TurnRunners::default(),
             discussions: discussions::DiscussionSeams::default(),
         });

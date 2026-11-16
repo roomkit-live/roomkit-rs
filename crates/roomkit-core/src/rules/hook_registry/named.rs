@@ -231,3 +231,26 @@ impl HookRegistry {
             .collect()
     }
 }
+
+impl NamedHooks {
+    /// Stops the room `room` enabling the names not in `keep`, its
+    /// executor's selection following when one is dropped, as
+    /// [`disable_room_hook`](HookRegistry::disable_room_hook) does.
+    pub(super) fn forget_enabled(&mut self, room: &RoomId, keep: &BTreeSet<String>) {
+        let Some(names) = self.enabled.get_mut(room) else {
+            return;
+        };
+        let before = names.len();
+        names.retain(|name| keep.contains(name));
+        if names.len() == before {
+            return;
+        }
+        let selected = names.clone();
+        if selected.is_empty() {
+            self.enabled.remove(room);
+            self.selected.remove(room);
+        } else {
+            self.selected.insert(room.clone(), selected);
+        }
+    }
+}

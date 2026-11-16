@@ -120,9 +120,12 @@ impl<S: ConversationStore> HookEngine<S> {
     /// Registers `hook` for the room `room_id` alone (RFC §9.1) and returns
     /// the registration held, under the name it was given or made unique
     /// among the room's hooks: Python's `HookEngine.add_room_hook(room_id,
-    /// hook)`. It reads no room: a room id no room holds yet takes the
-    /// hook, which waits for it. [`RoomKit::add_room_hook`] reads the room
-    /// with the caller's organization first (RFC §17.2).
+    /// hook)`. It reads no room, and the hook counts as one registered while
+    /// a room held `room_id`: the kit's next
+    /// [`create_room`](RoomKit::create_room) of the id forgets it (RFC
+    /// §9.1); a hook for a room not created yet is
+    /// [`RoomKit::add_room_hook`]'s to register, which reads the room first
+    /// (RFC §17.2).
     ///
     /// # Errors
     ///
@@ -324,7 +327,7 @@ impl<S> Inner<S> {
     /// hooks it read, as the Python implementation's chain runs the list it
     /// took. Lets go of each retired hook no copy of the registry holds any
     /// more, which no operation can ask for.
-    pub(super) fn retire(&self, removed: Option<Removed>) {
+    pub(super) fn retire(&self, removed: impl IntoIterator<Item = Removed>) {
         let mut retired = write(&self.retired_hooks);
         retired.extend(removed);
         let mut handlers = write(&self.hooks);

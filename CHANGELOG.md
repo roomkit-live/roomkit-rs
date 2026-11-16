@@ -12,6 +12,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Closing an AI channel cancels its active tool calls before releasing resources, preserves a handler that closes its own channel, and prevents another model round (RFC §9.3, RMK-1709).
 
+- A room hook, or a name `enable_room_hook` enabled, ends with its room: `create_room` forgets those registered for an earlier room of the id, deleted from the store, as it forgets the id's strategy, and keeps those added while no room held the id; without an organization, `add_room_hook` and `enable_room_hook` read whether a room holds the id. A room hook registered below the kit (`HookEngine::add_room_hook`) reads no room and counts as one registered while a room held the id: the next `create_room` of the id forgets it (RFC §9.1, §17.2, RMK-963).
+
 - A handler of a framework event a turn's work emits (`RoomKit::on`), during the turn or after it, keeps the turn's response depth for as long as it runs, as an ASYNC hook's body does: an `ai_response` handler that posts at each answer ends at `max_chain_depth` instead of looping at depth 0, a slower ASYNC `ON_AI_RESPONSE` hook beside it or not (RFC §8.3, RMK-1699).
 
 - Export `parse_tool_names`, `serves_exactly`, `missing_required_tools` and `safe_join_filename`; tool names now trim Python's full whitespace set (RFC §24.2–24.6, RMK-1709).

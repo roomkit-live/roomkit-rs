@@ -50,33 +50,43 @@ impl<S: ConversationStore> RoomKit<S> {
     /// [`install_strategy`](Self::install_strategy) returns, the room kept,
     /// unannounced, holding the strategy only when the install could not be
     /// read or taken back whole.
+    ///
+    /// A room's hooks end with the room (RFC §9.1, §17.2): the room hooks
+    /// and enabled names an earlier room of the id left, deleted from the
+    /// store, are forgotten before the room is announced, as its strategy
+    /// is; those registered while no room held the id are the new room's.
     pub async fn create_room(&self, options: CreateRoomOptions<S>) -> Result<Room, RoomKitError> {
         let orchestration = options
             .orchestration
             .clone()
             .unwrap_or_else(|| self.inner.default_orchestration.clone());
-        let forgets = options
-            .room_id
-            .as_ref()
-            .is_some_and(|room_id| self.holds_strategy_record(room_id));
+        let forgets = options.room_id.as_ref().is_some_and(|room_id| {
+            self.holds_strategy_record(room_id) || self.holds_earlier_room_hooks(room_id)
+        });
         if orchestration.is_none() && !forgets {
-            return self.create_room_record(options, true).await;
+            let room = self.create_room_record(options, true).await?;
+            // The hooks that waited for the room are its own from now on.
+            self.inner.room_hook_lifetime.room_created(&room.id, |_| {});
+            return Ok(room);
         }
         // Boxed: a room created with no strategy keeps a small future.
         Box::pin(self.create_room_with_strategy(options, orchestration)).await
     }
 
-    /// The room `options` describes, written, then the strategy recorded
-    /// for its id taken back, its strategy installed and its creation
-    /// announced, in that order: its `ON_ROOM_CREATED` hooks see what the
-    /// install set up (RFC §19.7).
+    /// The room `options` describes, written, then the room hooks an
+    /// earlier room of its id left and the strategy recorded for the id
+    /// taken back, its strategy installed and its creation announced, in
+    /// that order: its `ON_ROOM_CREATED` hooks see what the install set up
+    /// (RFC §19.7).
     async fn create_room_with_strategy(
         &self,
         options: CreateRoomOptions<S>,
         orchestration: Option<Arc<dyn Orchestration<S>>>,
     ) -> Result<Room, RoomKitError> {
         let room = self.create_room_record(options, false).await?;
-        // A strategy recorded for this id belonged to a room that is gone.
+        // The room hooks registered while an earlier room held the id
+        // belonged to that room, and so did the strategy recorded for it.
+        self.forget_room_hooks(&room.id);
         self.forget_strategy(&room.id).await?;
         if let Some(strategy) = orchestration {
             // The path install_strategy() takes: claimed, recorded (RFC §19.7).

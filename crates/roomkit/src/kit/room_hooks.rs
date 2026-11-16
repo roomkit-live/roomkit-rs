@@ -73,6 +73,13 @@ impl<S: ConversationStore> RoomKit<S> {
     /// priority, the kit's first at equal priority. A name is unique among
     /// the room's hooks; it may be one of the kit's.
     ///
+    /// With no organization in `options`, the kit reads whether a room of
+    /// any organization holds `room_id`: a room id the store does not hold
+    /// takes the hook, which waits for the room created under it. A room's
+    /// hooks end with the room (RFC §17.2): once the store deleted it,
+    /// [`create_room`](Self::create_room) under its id forgets them, and
+    /// keeps those added while no room held the id.
+    ///
     /// ```
     /// # async fn add(kit: &roomkit::RoomKit) -> Result<(), roomkit::RoomKitError> {
     /// use roomkit::model::hook::BlockOptions;
@@ -120,7 +127,9 @@ impl<S: ConversationStore> RoomKit<S> {
         R: IntoHookReturn<P>,
     {
         self.inner.open()?;
-        self.reached(room_id, options.organization_id.as_deref())
+        let registering = self.inner.room_hook_lifetime.registering(room_id);
+        let held = self
+            .room_held(room_id, options.organization_id.as_deref())
             .await?;
         let hook = HookRegistration {
             priority: options.priority,
@@ -129,7 +138,11 @@ impl<S: ConversationStore> RoomKit<S> {
             needs_lock: options.needs_lock,
             ..HookRegistration::new(trigger, execution, r#fn)
         };
-        self.hook_engine().add_room_hook(room_id, hook)
+        registering.note(
+            held,
+            || self.hook_engine().add_room_hook(room_id, hook),
+            |registered| registered.name.clone(),
+        )
     }
 
     /// Removes the hook named `name` added for the room `room_id`: whether
@@ -152,6 +165,10 @@ impl<S: ConversationStore> RoomKit<S> {
         self.inner.open()?;
         self.reached(room_id, options.organization_id.as_deref())
             .await?;
-        Ok(self.hook_engine().remove_room_hook(room_id, name))
+        let removed = self.hook_engine().remove_room_hook(room_id, name);
+        if removed {
+            self.inner.room_hook_lifetime.released(room_id, name);
+        }
+        Ok(removed)
     }
 }
