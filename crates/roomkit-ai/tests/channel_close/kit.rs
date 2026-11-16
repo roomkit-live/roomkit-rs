@@ -79,7 +79,7 @@ pub(super) async fn rows(kit: &RoomKit) -> Vec<ToolCallOutcome> {
 }
 
 // Python: tests/test_channel_close_turns.py::test_a_close_cancels_the_running_call_and_reports_it_once
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_close_cancels_the_running_call_and_reports_it_once() {
     for streaming in [false, true] {
         for through_kit in [false, true] {

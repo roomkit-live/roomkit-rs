@@ -54,7 +54,7 @@ use roomkit::model::{
     LoopEndMarker, LoopEndReason, Metadata, ToolCall, ToolCallOutcome, UsageMarker, add_usage,
     reports_counters,
 };
-use roomkit::{ToolCallReport, TurnHost, TurnRecord};
+use roomkit::{TurnHost, TurnRecord};
 use roomkit_core::rules::transcript::{Message, Role};
 use serde_json::{Map, Value};
 use spans::TurnSpan;
@@ -126,6 +126,8 @@ pub(crate) struct ToolEnd {
     pub(crate) result: ToolResult,
     /// How long it took, its gate included.
     pub(crate) duration: Duration,
+    /// Announced but never entered: its end has no result and zero duration.
+    pub(crate) announced_only: bool,
     /// The structured copy a surface renders of its result, which the model
     /// never reads: what the kit's hooks left of it (RFC §9.3).
     pub(crate) structured_content: Option<Value>,
@@ -780,7 +782,7 @@ impl Loop {
         let mut running = Running::start(events, made);
         let started = Instant::now();
         let ends = if unrun {
-            self.unstarted_calls(&generation.calls, steering)
+            self.unstarted_calls(&generation.calls)
         } else {
             let calls = &generation.calls;
             let serving = calls.iter().enumerate().map(|(position, called)| {
@@ -856,32 +858,6 @@ type Ending<'a> = (
     &'a Steering,
     &'a Yielder<Result<TurnItem, ProviderError>>,
 );
-
-impl Loop {
-    /// The end of an announced call a `Cancel` kept from running (RFC
-    /// §21.3): failed, `cancelled`, reported to the kit's observers once as
-    /// a call the turn cut (RFC §9.3).
-    fn unrun(&self, call: ToolCall) -> ToolEnd {
-        if let Some(turn) = &self.turn {
-            let tool = serde_json::to_string(&call.name).unwrap_or_default();
-            let read = format!(
-                "{{\"error\": \"Tool call cancelled\", \"tool\": {tool}, \"hint\": \"The turn ended before its result.\"}}"
-            );
-            let report = ToolCallReport::new(call.clone())
-                .ended(ToolCallOutcome::Cancelled, Value::String(read))
-                .with_error_detail("cancelled".to_owned());
-            turn.report_tool_call(&report);
-        }
-        ToolEnd {
-            call,
-            outcome: ToolCallOutcome::Cancelled,
-            result: ToolResult::Text("cancelled".to_owned()),
-            duration: Duration::ZERO,
-            structured_content: None,
-            references: Vec::new(),
-        }
-    }
-}
 
 /// Whether the round `generation` read, which made no call to run after a
 /// round of calls or none (`had_tool_round`), is tried again under `limits`

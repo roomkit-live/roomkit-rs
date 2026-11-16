@@ -84,10 +84,6 @@ impl Turn {
         !current.turns.iter().any(|own| Arc::ptr_eq(own, self))
     }
 
-    pub(crate) fn is_closing(&self) -> bool {
-        lock(&self.state).closing
-    }
-
     pub(crate) fn end(&self) {
         self.ended.set();
     }

@@ -37,26 +37,37 @@ enum Gated {
 }
 
 impl Loop {
-    /// Calls announced before close but not started have the same cancelled
-    /// report as interrupted calls; ordinary steering retains its own hint.
-    pub(super) fn unstarted_calls(&self, calls: &[Called], steering: &Steering) -> Vec<ToolEnd> {
-        let closing = steering.lifetime().is_closing();
+    /// Announced calls a stop kept from entering: no gate or result, zero duration.
+    /// Their report is the turn's cut, rather than a running call's close.
+    pub(super) fn unstarted_calls(&self, calls: &[Called]) -> Vec<ToolEnd> {
         calls
             .iter()
             .enumerate()
             .map(|(position, called)| {
-                if closing {
-                    self.closed_call(
-                        called,
-                        super::place_under_its_id(calls, position),
-                        called.call.clone(),
-                        Duration::ZERO,
-                    )
-                } else {
-                    self.unrun(called.call.clone())
-                }
+                self.unrun(called, super::place_under_its_id(calls, position))
             })
             .collect()
+    }
+
+    fn unrun(&self, called: &Called, nth: usize) -> ToolEnd {
+        let call = called.call.clone();
+        let tool = serde_json::to_string(&call.name).unwrap_or_default();
+        let text = format!(
+            "{{\"error\": \"Tool call cancelled\", \"tool\": {tool}, \"hint\": \"The turn ended before its result.\"}}"
+        );
+        let report = ended(call.clone(), ToolCallOutcome::Cancelled, text)
+            .with_error_detail("cancelled".to_owned());
+        let end = ToolEnd {
+            call,
+            outcome: ToolCallOutcome::Cancelled,
+            result: ToolResult::Json(Value::Null),
+            duration: Duration::ZERO,
+            announced_only: true,
+            structured_content: None,
+            references: Vec::new(),
+        };
+        self.tell(called, nth, &report, &end);
+        end
     }
 
     /// Serves `called`, the `nth` of its round's calls under its id: its
@@ -95,6 +106,7 @@ impl Loop {
             outcome: ToolCallOutcome::Cancelled,
             result: ToolResult::Text(text),
             duration,
+            announced_only: false,
             structured_content: None,
             references: Vec::new(),
         };
@@ -166,6 +178,7 @@ impl Loop {
             call: reported.call.clone(),
             result,
             duration: started.elapsed(),
+            announced_only: false,
             structured_content: reported.structured_content.clone(),
         };
         self.tell(called, nth, &reported, &end);

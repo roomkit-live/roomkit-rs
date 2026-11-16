@@ -4,6 +4,8 @@
 
 #[path = "channel_close/arguments.rs"]
 mod arguments;
+#[path = "channel_close/before_calls.rs"]
+mod before_calls;
 #[path = "channel_close/gates.rs"]
 mod gates;
 #[path = "channel_close/kit.rs"]
@@ -256,7 +258,7 @@ async fn own_close(from_child: bool) {
     kit.close().await.unwrap();
 }
 
-async fn bounded<F: std::future::Future>(work: F) -> F::Output {
+async fn bounded<F: Future>(work: F) -> F::Output {
     tokio::time::timeout(Duration::from_secs(3), work)
         .await
         .unwrap()

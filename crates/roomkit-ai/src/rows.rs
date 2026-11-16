@@ -269,6 +269,11 @@ pub(crate) fn end_row(end: ToolEnd) -> ToolCallContent {
         ToolCallStatus::Failed
     };
     row.outcome = Some(end.outcome);
+    if end.announced_only {
+        row.duration_ms = Some(0);
+        row.error = Some("cancelled".to_owned());
+        return row;
+    }
     row.error = (!served).then(|| end.result.as_text());
     let (result, structured) = end.result.into_row_payload(end.structured_content);
     row.result = result;
