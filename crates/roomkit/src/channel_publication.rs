@@ -15,6 +15,8 @@ type Publish =
 #[derive(Clone, Default)]
 pub struct ChannelPublication {
     publisher: Arc<Mutex<Option<Publish>>>,
+    /// The last publication outside a turn, which the next one follows.
+    last: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 impl std::fmt::Debug for ChannelPublication {
@@ -44,9 +46,20 @@ impl ChannelPublication {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
-        if let Some(publish) = publisher {
+        let Some(publish) = publisher else {
+            return;
+        };
+        // Handed over in order and not waited for: marking it reads the
+        // store (RFC §8.4, §17.2), which the session's reader does not wait
+        // for, as it waited for no read before.
+        let mut last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
+        let previous = last.take();
+        *last = Some(tokio::spawn(async move {
+            if let Some(previous) = previous {
+                drop(previous.await);
+            }
             publish(event).await;
-        }
+        }));
     }
 
     pub(crate) fn wire<S: ConversationStore>(&self, kit: &RoomKit<S>) {
