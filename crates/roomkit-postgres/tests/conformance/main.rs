@@ -43,6 +43,8 @@ mod input_calls;
 mod locks;
 #[path = "../../../roomkit/tests/conformance/matching.rs"]
 mod matching;
+#[path = "../../../roomkit/tests/conformance/mcp_host.rs"]
+mod mcp_host;
 #[path = "../../../roomkit/tests/conformance/mcp_servers.rs"]
 mod mcp_servers;
 #[path = "../../../roomkit/tests/conformance/media.rs"]

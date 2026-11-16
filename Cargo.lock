@@ -2063,11 +2063,13 @@ dependencies = [
  "roomkit-ai",
  "roomkit-core",
  "rustls",
+ "serde",
  "serde_json",
  "sse-stream",
  "thiserror",
  "tokio",
  "tracing",
+ "url",
  "webpki-roots",
 ]
 

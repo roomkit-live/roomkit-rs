@@ -430,6 +430,9 @@ const STEPS: &[(&str, &[&str])] = &[
 
 /// Each call's arguments, beside `call` and `organization_id`.
 fn arguments(call: &str) -> Option<&'static [&'static str]> {
+    if call == "mcp_session" {
+        return Some(&["peer", "operations", "discover", "tool_filter"]);
+    }
     Some(match call {
         "close" | "kit_executor.close" | "kit_executor.closed" => &[],
         "process_inbound" => &["message", "room_id", "defer_delivery"],
@@ -1165,6 +1168,7 @@ fn call(call: &Value, extra: &[&str], path: &str, found: &mut Vec<String>) {
         outcome(&call["expect"], &format!("{path}.expect"), found);
     }
     match name {
+        "mcp_session" => crate::mcp_host::validate(call, path, found),
         "create_room" => members(&call["room"], NEW_ROOM, &format!("{path}.room"), found),
         "register_channel" => channel(&call["channel"], &format!("{path}.channel"), found),
         "register_hook" => hook(&call["hook"], &format!("{path}.hook"), found),
