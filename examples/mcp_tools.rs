@@ -144,10 +144,10 @@ async fn shop_room(
             .collect(),
         tool_handler: Some(server.as_tool_handler(AsToolHandlerOptions::default())?),
         server_instructions: vec![("shop".to_owned(), server.instructions()?)],
-        tool_policy: Some(ToolPolicy {
+        tool_policy: Some(ToolPolicy::new(roomkit_ai::ToolPolicyOptions {
             deny: vec!["wipe_*".into()],
-            ..ToolPolicy::default()
-        }),
+            ..Default::default()
+        })?),
         ..AiChannelOptions::default()
     };
     let agent = AiChannel::new(ChannelId::new("assistant")?, endpoint.provider()?, options)?;

@@ -46,14 +46,16 @@ async fn an_unregistered_handler_needs_no_service_or_hook_callback() {
 #[tokio::test]
 async fn a_policy_applies_before_registration() {
     for policy in [
-        ToolPolicy {
+        ToolPolicy::new(roomkit_ai::ToolPolicyOptions {
             deny: vec!["Bash".into()],
             ..Default::default()
-        },
-        ToolPolicy {
+        })
+        .expect("valid tool policy"),
+        ToolPolicy::new(roomkit_ai::ToolPolicyOptions {
             allow: vec!["Read".into(), "Write".into()],
             ..Default::default()
-        },
+        })
+        .expect("valid tool policy"),
     ] {
         let handler =
             PolicyExternalToolHandler::new(roomkit_ai::PolicyExternalToolHandlerOptions {

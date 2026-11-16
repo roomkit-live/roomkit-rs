@@ -134,6 +134,7 @@ roomkit_postgres = ["roomkit.store", "roomkit.knowledge"]
 # values, read from the Python source (the snapshot holds none), each a
 # variant's snake_case name.
 [rules.literals]
+"roomkit_ai::RoleOverrideMode" = { field = "roomkit.RoleOverride.__init__(mode)", values = ["restrict", "replace"] }
 "roomkit::model::HookAction" = { field = "roomkit.HookResult.__init__(action)", values = ["allow", "block", "modify"] }
 "roomkit::model::DeliveryResultStatus" = { field = "roomkit.DeliveryResult.__init__(status)", values = ["sent", "queued", "failed"] }
 "roomkit::model::DeliveryOutcomeStatus" = { field = "roomkit.DeliveryOutcome.__init__(status)", values = ["queued", "sent", "blocked", "unavailable", "failed", "unknown"] }
@@ -968,17 +969,11 @@ params = ["session"]
 scope = "media"
 reason = "not in 0.x: voice and video"
 
-[[missing]]
-python = "roomkit.ToolPolicy"
-members = ["as_filter", "resolve"]
-scope = "text"
-reason = "not in 0.x: Rust has no roles"
-
-[[missing]]
-python = "roomkit.ToolPolicy.__init__"
-params = ["role_overrides"]
-scope = "text"
-reason = "not in 0.x: Rust has no roles"
+[[exception]]
+rust = "roomkit_ai::ToolPolicy::resolve"
+params = ["role"]
+approved = "2026-11-16"
+reason = "language: explicit Option<&str>, None for Python's default, with a fallible Cow preserving unchanged identity or an owned resolved policy (RMK-1709)"
 
 [[missing]]
 python = "roomkit.TurnHost"

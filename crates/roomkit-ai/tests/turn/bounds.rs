@@ -591,9 +591,11 @@ fn a_channel_refuses_in_python_s_order() {
     };
     let bad_label = || vec![("no identifier!".to_owned(), None)];
     let policy = refused(AiChannelOptions {
-        tool_policy: Some(ToolPolicy {
-            allow: vec!["[a]".to_owned()],
-            deny: Vec::new(),
+        tool_policy: Some({
+            let mut policy = ToolPolicy::default();
+            // Reach channel validation after a public field mutation.
+            policy.allow.push("[a]".to_owned());
+            policy
         }),
         ..zero_budget()
     });

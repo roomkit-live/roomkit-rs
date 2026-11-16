@@ -234,10 +234,13 @@ async fn the_policy_does_not_govern_the_skill_tools() {
     ]);
     let room = Room::new(model.clone(), skills(&tree), |options| AiChannelOptions {
         tools: tools.into(),
-        tool_policy: Some(ToolPolicy {
-            deny: vec!["*".into()],
-            ..ToolPolicy::default()
-        }),
+        tool_policy: Some(
+            ToolPolicy::new(roomkit_ai::ToolPolicyOptions {
+                deny: vec!["*".into()],
+                ..Default::default()
+            })
+            .expect("valid tool policy"),
+        ),
         ..options
     })
     .await;

@@ -572,3 +572,26 @@ fn external_policy_default_as_python() {
             .is_none()
     );
 }
+
+#[test]
+fn role_policy_defaults_as_python() {
+    let role = roomkit_ai::RoleOverrideOptions::default();
+    // roomkit.RoleOverride.__init__(allow) = <factory>
+    assert_eq!(role.allow, Vec::<String>::new());
+    // roomkit.RoleOverride.__init__(deny) = <factory>
+    assert_eq!(role.deny, Vec::<String>::new());
+    // roomkit.RoleOverride.__init__(mode) = 'restrict'
+    assert_eq!(role.mode, roomkit_ai::RoleOverrideMode::Restrict);
+    let policy = roomkit_ai::ToolPolicyOptions::default();
+    // roomkit.ToolPolicy.__init__(allow) = <factory>
+    assert_eq!(policy.allow, Vec::<String>::new());
+    // roomkit.ToolPolicy.__init__(deny) = <factory>
+    assert_eq!(policy.deny, Vec::<String>::new());
+    // roomkit.ToolPolicy.__init__(role_overrides) = <factory>
+    assert!(policy.role_overrides.is_empty());
+    let policy = roomkit_ai::ToolPolicy::default();
+    // roomkit.ToolPolicy.resolve(role) = None
+    assert!(
+        matches!(policy.resolve(None).unwrap(), std::borrow::Cow::Borrowed(value) if std::ptr::eq(value, std::ptr::from_ref(&policy)))
+    );
+}

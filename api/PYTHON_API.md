@@ -13,6 +13,10 @@ the mapping and its tests. The check does not generate or update this document.
 
 | Rust name | Python name | Members or parameters |
 | --- | --- | --- |
+| `roomkit_ai::RoleOverrideMode` | `roomkit.RoleOverride.mode` | `Restrict` / `Replace` represent the Python literal values (approved 2026-11-16, RMK-1709). |
+| `roomkit_ai::RoleOverrideOptions`, `roomkit_ai::ToolPolicyOptions` | `roomkit.RoleOverride`, `roomkit.ToolPolicy` | Constructor keywords with the same defaults, passed to fallible `new`; role maps own their overrides (approved 2026-11-16, RMK-1709). |
+| `roomkit_ai::ToolPolicy::resolve` | `roomkit.ToolPolicy.resolve` | `role: Option<&str>`, default `None`; `Result<Cow<'_, Self>, AiError>` borrows for absent/empty/unknown roles and owns a resolved policy otherwise (approved 2026-11-16, RMK-1709). |
+| `roomkit_ai::ToolPolicy::as_filter` | `roomkit.ToolPolicy.as_filter` | A predicate borrowing the policy; mutation waits until its borrow ends. A static host callback can own an `Arc<ToolPolicy>` and call the predicate inside its move closure (approved 2026-11-16, RMK-1709). |
 | `roomkit_ai::parse_tool_names` | `roomkit.skills.parse_tool_names` | `value: &serde_json::Value`: text/arrays read as Python; other values give no names. Tuples use arrays; non-JSON Python objects are supplied as their Python text (HITL 63fe8e98). |
 | `roomkit_ai::serves_exactly` | `roomkit.skills.serves_exactly` | `offered`: an iterable of borrowed or owned names; exact membership (HITL 63fe8e98). |
 | `roomkit_ai::missing_required_tools` | `roomkit.skills.missing_required_tools` | `closed: &[String]`, empty by default; explicit `r#match: Option<&RequiresMatch>`, `None` for exact matching; fallible result preserves callback errors (HITL 63fe8e98). |
@@ -343,3 +347,17 @@ value within that bound can be accepted as on Python 3.14 even when Python
 3.12/3.13 rejects it at an interpreter recursion limit (HITL 1566ac3f).
 The existing large-JSON-integer and YAML deferrals remain unchanged; these helpers
 do not yet register, refresh, activate or execute a server's skills.
+
+## Role policy ownership
+
+`ToolPolicy::new(ToolPolicyOptions { ..Default::default() })` replaces the old
+two-field struct literal: private intersection state now accompanies the public
+`allow`, `deny` and `role_overrides` fields. A cloned policy owns independent
+lists and overrides. Edit a retained override through `policy.role_overrides`;
+Rust does not retain Python's external mutable alias to a nested model.
+
+A resolved restriction survives cloning and equality comparisons but is absent
+from serialized data, matching Python's `model_dump`. Deserialization validates
+fresh overrides; the typed constructor accepts an already constructed override
+without revalidating its edits. Resolution validates only the lists Python
+reconstructs. These forms and the source migration were approved on 2026-11-16 (RMK-1709).

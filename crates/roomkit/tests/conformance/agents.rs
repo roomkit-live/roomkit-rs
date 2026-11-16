@@ -330,7 +330,7 @@ pub(crate) fn scripted_agent_of(
         ..AiChannelOptions::default()
     };
     if let Some(policy) = spec.get("tool_policy") {
-        options.tool_policy = Some(tool_policy(policy));
+        options.tool_policy = Some(tool_policy(policy)?);
     }
     bounds(spec, &mut options)?;
     agent_settings(spec, &mut options)?;
@@ -1381,7 +1381,7 @@ fn milliseconds(bound: &Value, member: &str) -> Result<Option<Duration>, String>
     Ok(Some(Duration::from_millis(bound)))
 }
 
-fn tool_policy(spec: &Value) -> ToolPolicy {
+fn tool_policy(spec: &Value) -> Result<ToolPolicy, String> {
     let patterns = |key: &str| {
         spec[key]
             .as_array()
@@ -1391,10 +1391,12 @@ fn tool_policy(spec: &Value) -> ToolPolicy {
             .map(str::to_owned)
             .collect::<Vec<_>>()
     };
-    ToolPolicy {
+    ToolPolicy::new(roomkit_ai::ToolPolicyOptions {
         allow: patterns("allow"),
         deny: patterns("deny"),
-    }
+        ..Default::default()
+    })
+    .map_err(|error| format!("tool_policy: {error}"))
 }
 
 /// Each request `model` received, as the scenario reads it: the messages

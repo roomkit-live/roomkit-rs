@@ -63,7 +63,9 @@ pub use self::handler::{
     Tool, ToolCallContext, ToolEntry, ToolFuture, ToolHandler, compose_tool_handlers,
     current_response_metadata,
 };
-pub use self::policy::ToolPolicy;
+pub use self::policy::{
+    RoleOverride, RoleOverrideMode, RoleOverrideOptions, ToolPolicy, ToolPolicyOptions,
+};
 #[doc(hidden)]
 pub use self::policy::{alias_server, served_tool_name};
 pub(crate) use self::result::read as read_tool_result;

@@ -74,10 +74,10 @@ fn main() -> Result<(), Box<dyn Error>> {
 async fn run() -> Result<(), Box<dyn Error>> {
     let handler = Arc::new(AuditedHandler {
         policy: PolicyExternalToolHandler::new(roomkit_ai::PolicyExternalToolHandlerOptions {
-            policy: Some(ToolPolicy {
+            policy: Some(ToolPolicy::new(roomkit_ai::ToolPolicyOptions {
                 allow: vec!["Read".to_owned()],
                 ..Default::default()
-            }),
+            })?),
         }),
         calls: Mutex::new(Vec::new()),
     });

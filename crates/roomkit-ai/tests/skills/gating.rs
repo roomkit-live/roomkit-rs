@@ -116,10 +116,12 @@ fn a_skill_and_a_policy_agree_on_their_globs() {
     ] {
         let mut metadata = SkillMetadata::new("research", "d");
         metadata.allowed_tools = Some(value);
-        let policy = ToolPolicy {
+        let policy = ToolPolicy::new(roomkit_ai::ToolPolicyOptions {
             allow: metadata.gated_tool_names(),
             deny: vec![],
-        };
+            ..Default::default()
+        })
+        .expect("valid tool policy");
         for (name, expected) in [
             ("search_web", true),
             ("search_", true),

@@ -164,10 +164,10 @@ async fn shop_room(
         system_prompt: Some(SYSTEM_PROMPT.to_owned()),
         tools: shop()?,
         tool_handler: Some(serving_shop()),
-        tool_policy: Some(ToolPolicy {
+        tool_policy: Some(ToolPolicy::new(roomkit_ai::ToolPolicyOptions {
             deny: vec!["delete_*".into()],
-            ..ToolPolicy::default()
-        }),
+            ..Default::default()
+        })?),
         tool_timeout: Some(BOUND),
         ..AiChannelOptions::default()
     };

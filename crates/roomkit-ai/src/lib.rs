@@ -59,10 +59,10 @@
 //!     system_prompt: Some("You answer a shop's customers.".into()),
 //!     tools: vec![lookup.into()],
 //!     tool_handler: Some(handler),
-//!     tool_policy: Some(ToolPolicy {
+//!     tool_policy: Some(ToolPolicy::new(roomkit_ai::ToolPolicyOptions {
 //!         deny: vec!["admin_*".into()],
-//!         ..ToolPolicy::default()
-//!     }),
+//!         ..Default::default()
+//!     })?),
 //!     ..AiChannelOptions::default()
 //! };
 //! let agent = AiChannel::new(ChannelId::new("assistant")?, model, options)?;
@@ -151,10 +151,11 @@ pub use self::tools::{
     AiTool, BeforeToolDecision, ExternalToolFuture, ExternalToolHandler, ExternalToolHandlerState,
     FireBeforeHookOptions, FireOnToolHookOptions, OnToolCancelledOptions, OnToolRefusedOptions,
     OnToolResultOptions, PolicyExternalToolHandler, PolicyExternalToolHandlerOptions,
-    ProcessToolCallOptions, Tool, ToolCallContext, ToolDecision, ToolEntry, ToolError, ToolFuture,
-    ToolHandler, ToolPolicy, ToolResult, ToolResultPart, ToolStructuredContent,
-    ToolTurnContextOptions, compose_tool_handlers, current_response_metadata,
-    current_tool_actor_id, current_tool_allowed_names, current_tool_call, current_tool_chain_depth,
+    ProcessToolCallOptions, RoleOverride, RoleOverrideMode, RoleOverrideOptions, Tool,
+    ToolCallContext, ToolDecision, ToolEntry, ToolError, ToolFuture, ToolHandler, ToolPolicy,
+    ToolPolicyOptions, ToolResult, ToolResultPart, ToolStructuredContent, ToolTurnContextOptions,
+    compose_tool_handlers, current_response_metadata, current_tool_actor_id,
+    current_tool_allowed_names, current_tool_call, current_tool_chain_depth,
     current_tool_requester, current_tool_room, current_tool_room_id, tool_turn_context,
 };
 #[doc(hidden)]

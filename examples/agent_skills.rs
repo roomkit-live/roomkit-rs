@@ -167,10 +167,10 @@ impl Shop {
         let options = AiChannelOptions {
             system_prompt: Some(SYSTEM_PROMPT.to_owned()),
             skills: Some(skills),
-            tool_policy: Some(ToolPolicy {
+            tool_policy: Some(ToolPolicy::new(roomkit_ai::ToolPolicyOptions {
                 deny: vec!["*".into()],
-                ..ToolPolicy::default()
-            }),
+                ..Default::default()
+            })?),
             ..AiChannelOptions::default()
         };
         let agent = AiChannel::new(ChannelId::new("assistant")?, endpoint.provider()?, options)?;

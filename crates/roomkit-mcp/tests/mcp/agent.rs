@@ -112,10 +112,13 @@ async fn a_tool_the_policy_denies_is_not_declared_and_refused() {
     let server = connected("normal").await;
     let model = calling(&[("call_1", "fails", "{}")]);
     let agent = serving(&model, &server, |options| AiChannelOptions {
-        tool_policy: Some(ToolPolicy {
-            deny: vec!["fail*".into()],
-            ..ToolPolicy::default()
-        }),
+        tool_policy: Some(
+            ToolPolicy::new(roomkit_ai::ToolPolicyOptions {
+                deny: vec!["fail*".into()],
+                ..Default::default()
+            })
+            .expect("valid tool policy"),
+        ),
         ..options
     });
     let room = Room::with(agent).await;

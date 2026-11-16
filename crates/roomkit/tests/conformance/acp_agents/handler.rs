@@ -108,10 +108,17 @@ pub(crate) fn build(
     lock(&run.acp_handlers).insert(channel.to_owned(), Arc::clone(&calls));
     Ok(Some(Arc::new(Scripted {
         policy: PolicyExternalToolHandler::new(roomkit_ai::PolicyExternalToolHandlerOptions {
-            policy: spec.policy.map(|p| ToolPolicy {
-                allow: p.allow,
-                deny: p.deny,
-            }),
+            policy: spec
+                .policy
+                .map(|p| {
+                    ToolPolicy::new(roomkit_ai::ToolPolicyOptions {
+                        allow: p.allow,
+                        deny: p.deny,
+                        ..Default::default()
+                    })
+                })
+                .transpose()
+                .map_err(|error| format!("acp.external_tool_handler.policy: {error}"))?,
         }),
         replies: Mutex::new(spec.decisions),
         reports: spec.reports,

@@ -1,58 +1,170 @@
 //! Which tools an agent may call (RFC §21.1 `ToolPolicy`).
 
-/// Glob patterns over tool names (`*` any characters, `?` one), applied to
-/// every tool the agent declares or runs (RFC §21.1): Python's
-/// `ToolPolicy(allow=[], deny=[])`.
-///
-/// 1. With neither list, every tool is allowed.
-/// 2. A name `deny` matches is denied, whatever `allow` says.
-/// 3. With `allow` given, a name it does not match is denied.
-/// 4. Any other name is allowed.
-///
-/// A denied tool is never declared to the model, and a call to it is
-/// refused before its arguments are read: `Tool 'x' is not permitted by the
-/// agent's tool policy.`
+mod patterns;
+mod role_override;
+
+use crate::AiError;
+use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
+use std::collections::BTreeMap;
+
+pub(crate) use patterns::glob_matches;
+pub use role_override::{RoleOverride, RoleOverrideMode, RoleOverrideOptions};
+
+/// Python's `ToolPolicy` constructor keywords (RFC §21.1).
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct ToolPolicyOptions {
+    /// Allowed name patterns; empty imposes no restriction.
+    pub allow: Vec<String>,
+    /// Denied name patterns, which always win.
+    pub deny: Vec<String>,
+    /// Overrides selected by participant role.
+    pub role_overrides: BTreeMap<String, RoleOverride>,
+}
+
+/// Allow and deny patterns over tool names, with per-role overrides
+/// (RFC §21.1). `*` matches any characters and `?` one character.
+/// Empty allow lists impose no restriction; deny always wins.
 ///
 /// ```
-/// use roomkit_ai::ToolPolicy;
-///
-/// let policy = ToolPolicy {
+/// use roomkit_ai::{ToolPolicy, ToolPolicyOptions};
+/// let policy = ToolPolicy::new(ToolPolicyOptions {
 ///     allow: vec!["search_*".into(), "get_?".into()],
 ///     deny: vec!["search_admin*".into()],
-/// };
+///     ..Default::default()
+/// })?;
 /// assert!(policy.is_allowed("search_orders"));
 /// assert!(policy.is_allowed("get_x"));
 /// assert!(!policy.is_allowed("search_admin_users"));
 /// assert!(!policy.is_allowed("delete_orders"));
+/// # Ok::<(), roomkit_ai::AiError>(())
 /// ```
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "ToolPolicyOptions")]
 pub struct ToolPolicy {
-    /// The names allowed: with one pattern given, only the names they
-    /// match are.
+    /// Allowed name patterns; empty imposes no restriction.
     pub allow: Vec<String>,
-    /// The names denied, whatever `allow` says.
+    /// Denied name patterns, which always win.
     pub deny: Vec<String>,
+    /// Overrides selected by participant role.
+    pub role_overrides: BTreeMap<String, RoleOverride>,
+    // Python's private attribute survives cloning but not model_dump.
+    #[serde(skip)]
+    restrict_allow: Vec<String>,
 }
 
 impl ToolPolicy {
-    /// Whether the agent may call the tool `tool_name`.
+    /// Construct a policy from Python's keywords (RFC §21.1).
+    /// Already constructed overrides are retained without revalidation.
+    ///
+    /// # Errors
+    /// Returns [`AiError::ToolPattern`] if an allow or deny rule holds a bracket.
+    pub fn new(options: ToolPolicyOptions) -> Result<Self, AiError> {
+        validate_patterns(&options.allow, &options.deny)?;
+        Ok(Self {
+            allow: options.allow,
+            deny: options.deny,
+            role_overrides: options.role_overrides,
+            restrict_allow: Vec::new(),
+        })
+    }
+
+    /// The effective policy for `role` (RFC §21.1). None, empty and unknown
+    /// roles borrow this policy; a known role produces an owned policy without
+    /// overrides. Restrict intersects allows and merges denies; replace uses
+    /// only the override's rules.
+    ///
+    /// # Errors
+    /// Returns [`AiError::ToolPattern`] if public edits introduced a bracket
+    /// into a list reconstructed by resolution. Restrict reconstructs base
+    /// allow and merged deny, replace reconstructs the override's lists.
+    pub fn resolve(&self, role: Option<&str>) -> Result<Cow<'_, Self>, AiError> {
+        let Some(override_) = role
+            .filter(|role| !role.is_empty())
+            .and_then(|role| self.role_overrides.get(role))
+        else {
+            return Ok(Cow::Borrowed(self));
+        };
+        if override_.mode == RoleOverrideMode::Replace {
+            return Self::new(ToolPolicyOptions {
+                allow: override_.allow.clone(),
+                deny: override_.deny.clone(),
+                ..Default::default()
+            })
+            .map(Cow::Owned);
+        }
+        self.restrict(override_).map(Cow::Owned)
+    }
+
+    fn restrict(&self, override_: &RoleOverride) -> Result<Self, AiError> {
+        // Test membership against the original base: keep duplicates of a
+        // new override rule as well as duplicates already in the base.
+        let deny = self
+            .deny
+            .iter()
+            .chain(
+                override_
+                    .deny
+                    .iter()
+                    .filter(|pattern| !self.deny.contains(pattern)),
+            )
+            .cloned()
+            .collect();
+        let mut resolved = Self::new(ToolPolicyOptions {
+            allow: self.allow.clone(),
+            deny,
+            ..Default::default()
+        })?;
+        // Python copies this private constraint without revalidating it.
+        resolved.restrict_allow.clone_from(&override_.allow);
+        Ok(resolved)
+    }
+
+    /// Whether `tool_name` passes every allow constraint and no deny rule.
     pub fn is_allowed(&self, tool_name: &str) -> bool {
         let matches = |pattern: &String| glob_matches(pattern, tool_name);
-        !self.deny.iter().any(matches) && (self.allow.is_empty() || self.allow.iter().any(matches))
+        !self.deny.iter().any(matches)
+            && [&self.allow, &self.restrict_allow]
+                .into_iter()
+                .all(|allowed| allowed.is_empty() || allowed.iter().any(matches))
+    }
+
+    /// A predicate borrowing this policy, Python's `as_filter` (RFC §21.1).
+    /// The borrow keeps the policy alive and prevents mutation while retained.
+    pub fn as_filter(&self) -> impl Fn(&str) -> bool + '_ {
+        |tool_name| self.is_allowed(tool_name)
     }
 }
 
-/// The server an MCP alias `mcp__<server>__<tool>` names, `None` for a name
-/// that is not an alias (RFC §21.2): the label a labelled MCP provider
-/// serves aliases under. For the MCP crate.
+impl TryFrom<ToolPolicyOptions> for ToolPolicy {
+    type Error = AiError;
+    fn try_from(options: ToolPolicyOptions) -> Result<Self, Self::Error> {
+        Self::new(options)
+    }
+}
+
+fn validate_patterns(allow: &[String], deny: &[String]) -> Result<(), AiError> {
+    match allow
+        .iter()
+        .chain(deny)
+        .find(|pattern| pattern.contains(['[', ']']))
+    {
+        Some(pattern) => Err(AiError::ToolPattern {
+            pattern: pattern.clone(),
+        }),
+        None => Ok(()),
+    }
+}
+
+/// The server in `mcp__<server>__<tool>`, for the MCP crate (RFC §21.2).
 #[doc(hidden)]
 pub fn alias_server(name: &str) -> Option<&str> {
     let (server, _tool) = name.strip_prefix("mcp__")?.split_once("__")?;
     Some(server)
 }
 
-/// The tool a call to `name` runs: an MCP alias `mcp__<server>__<tool>`
-/// runs `<tool>`, any other name runs as itself. For the MCP crate.
+/// The bare tool an MCP alias runs, or the unchanged name (RFC §21.2).
 #[doc(hidden)]
 pub fn served_tool_name(name: &str) -> &str {
     name.strip_prefix("mcp__")
@@ -60,95 +172,23 @@ pub fn served_tool_name(name: &str) -> &str {
         .map_or(name, |(_server, tool)| tool)
 }
 
-/// Whether `policy` admits a call to `name` under every name it is judged
-/// by: the name called, and the tool an MCP alias runs, so that no policy
-/// is passed by calling a tool under its alias (RFC §21.1).
+/// An alias call must pass under both its alias and bare name (RFC §21.1).
 pub(crate) fn call_admitted(policy: &ToolPolicy, name: &str) -> bool {
     policy.is_allowed(name) && policy.is_allowed(served_tool_name(name))
 }
 
-/// Whether `policy` lets a tool called by its bare name run on the server
-/// its MCP `alias` (`mcp__<server>__<tool>`) names (RFC §21.2): only a
-/// policy that names a server keeps one out, by a deny pattern covering the
-/// alias or by allow patterns naming aliases (one starts with `mcp__`) of
-/// which none covers it. An allow list of bare names alone keeps none out:
-/// Python's `alias_admitted`.
+/// Server selection for a bare call (RFC §21.2). Each allow list naming
+/// an MCP alias must match; a list of bare names imposes no server constraint.
 pub(crate) fn alias_admitted(policy: &ToolPolicy, alias: &str) -> bool {
     let covers = |pattern: &String| glob_matches(pattern, alias);
-    if policy.deny.iter().any(covers) {
-        return false;
-    }
-    !policy
-        .allow
-        .iter()
-        .any(|pattern| pattern.starts_with("mcp__"))
-        || policy.allow.iter().any(covers)
-}
-
-/// Whether `pattern`, where `*` matches any characters and `?` one, matches
-/// the whole of `name`.
-pub(crate) fn glob_matches(pattern: &str, name: &str) -> bool {
-    let pattern: Vec<char> = pattern.chars().collect();
-    let name: Vec<char> = name.chars().collect();
-    // The positions after the last `*` and the name's character it stands
-    // for so far, to go back to when what follows fails.
-    let (mut p, mut n) = (0, 0);
-    let mut star: Option<(usize, usize)> = None;
-    while n < name.len() {
-        match pattern.get(p) {
-            Some('*') => {
-                star = Some((p + 1, n));
-                p += 1;
-            }
-            Some(&wanted) if wanted == '?' || Some(&wanted) == name.get(n) => {
-                p += 1;
-                n += 1;
-            }
-            Some(_) | None => match star {
-                Some((after, taken)) => {
-                    p = after;
-                    n = taken + 1;
-                    star = Some((after, taken + 1));
-                }
-                None => return false,
-            },
-        }
-    }
-    pattern
-        .get(p..)
-        .unwrap_or_default()
-        .iter()
-        .all(|&c| c == '*')
+    !policy.deny.iter().any(covers)
+        && [&policy.allow, &policy.restrict_allow]
+            .into_iter()
+            .all(|allowed| {
+                !allowed.iter().any(|pattern| pattern.starts_with("mcp__"))
+                    || allowed.iter().any(covers)
+            })
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_glob_matches_the_whole_name() {
-        let cases = [
-            ("admin_*", "admin_wipe", true),
-            ("admin_*", "my_admin_wipe", false),
-            ("*_order", "lookup_order", true),
-            ("get_?", "get_x", true),
-            ("get_?", "get_xy", false),
-            ("*", "", true),
-            ("a*b*c", "aXbYc", true),
-            ("a*b*c", "aXbY", false),
-            ("lookup", "lookup", true),
-        ];
-        for (pattern, name, matched) in cases {
-            assert_eq!(glob_matches(pattern, name), matched, "{pattern} {name}");
-        }
-    }
-
-    #[test]
-    fn deny_wins_over_allow() {
-        let policy = ToolPolicy {
-            allow: vec!["*".into()],
-            deny: vec!["admin_*".into()],
-        };
-        assert!(!policy.is_allowed("admin_wipe"));
-    }
-}
+mod tests;
