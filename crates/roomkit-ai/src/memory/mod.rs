@@ -142,8 +142,8 @@ pub(crate) fn after_memory(memory: &[AiMessage], mut rest: Vec<AiMessage>) -> Ve
 }
 
 /// `messages`, those a memory built, with each copy of a runtime mark that
-/// runs over consecutive user messages among them cut where it starts and
-/// dropped where it runs on, a message of such a run left with no text then
+/// runs over consecutive unlabelled user messages among them cut where it
+/// starts and dropped where it runs on, a message of such a run left with no text then
 /// left out (RFC §6.4): an API may merge consecutive user messages.
 /// Python's `cut_split_copies` over a memory's messages.
 pub(crate) fn split_copies_cut(mut messages: Vec<AiMessage>) -> Vec<AiMessage> {
@@ -153,7 +153,7 @@ pub(crate) fn split_copies_cut(mut messages: Vec<AiMessage>) -> Vec<AiMessage> {
         let rest = messages.get(start..).unwrap_or_default();
         let run = rest
             .iter()
-            .take_while(|message| message.role == AiRole::User)
+            .take_while(|message| is_split_piece(message))
             .count();
         if run > 1
             && let Some(group) = messages.get_mut(start..start + run)
@@ -170,8 +170,8 @@ pub(crate) fn split_copies_cut(mut messages: Vec<AiMessage>) -> Vec<AiMessage> {
     without(messages, &emptied)
 }
 
-/// The texts of the user messages `messages`, a memory's, end on, oldest
-/// first, each text part of one a text: what an API may merge with the
+/// The texts of the unlabelled user messages `messages`, a memory's, end on,
+/// oldest first, each text part of one a text: what an API may merge with the
 /// conversation after them (RFC §6.4).
 pub(crate) fn ending_texts(messages: &[AiMessage]) -> Vec<String> {
     let first = messages.len().saturating_sub(ending_run(messages));
@@ -205,13 +205,20 @@ pub(crate) fn with_ending_texts(
     without(messages, &emptied)
 }
 
-/// How many user messages `messages` end on.
+/// How many unlabelled user messages `messages` end on.
 fn ending_run(messages: &[AiMessage]) -> usize {
     messages
         .iter()
         .rev()
-        .take_while(|message| message.role == AiRole::User)
+        .take_while(|message| is_split_piece(message))
         .count()
+}
+
+/// Python's `_a_piece`: a labelled message is already quoted under its
+/// author, so a cut crossing it could remove that author's label (RFC §6.4).
+/// Presence of the metadata key is the barrier, including a null value.
+fn is_split_piece(message: &AiMessage) -> bool {
+    message.role == AiRole::User && !message.metadata.contains_key("speaker")
 }
 
 /// Whether the message at `at` of `group` holds nothing but blank text.
