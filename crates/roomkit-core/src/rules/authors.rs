@@ -288,7 +288,7 @@ fn name_keys(salt: &str, name: &str) -> BTreeSet<String> {
 
 /// The name, rank and source `event` was committed with, when it carries a
 /// well-formed record.
-fn recorded_author(event: &RoomEvent) -> Option<(String, u32, String)> {
+pub(crate) fn recorded_author(event: &RoomEvent) -> Option<(String, u32, String)> {
     let Some(Value::Object(record)) = event.metadata.get(AUTHOR) else {
         return None;
     };

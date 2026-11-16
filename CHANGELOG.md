@@ -14,6 +14,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Add served-skill entry/resource models, manifest parsing, fingerprints and byte verification (RFC §24.7).
 
+- A passage `RetrievalMemory` gives back from a turn reads after its author's label, fixed when the message is indexed (`metadata["speaker"]`): `Alice: "…"`, as a labelled turn reads; a document's passage keeps its form, as Python's (RFC §6.4, §20.2, RMK-633).
+
 - Keep stdio-only MCP builds warning-free when the optional HTTP transport is disabled.
 
 - Add MCP host requests, resource reads, handshake/tool metadata and optional discovery over stdio and HTTP, preserving Python parameters and results on the shared MCP 2025 protocol (RFC §21.2).

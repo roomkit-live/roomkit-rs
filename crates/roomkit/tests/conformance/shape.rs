@@ -283,7 +283,7 @@ const COMPACTING: &[&str] = &[
     "min_events",
 ];
 const RETRIEVAL: &[&str] = &["sources", "max_results", "min_query_length"];
-const SOURCE: &[&str] = &["name", "results", "fails"];
+const SOURCE: &[&str] = &["name", "results", "fails", "indexes"];
 const SOURCE_RESULT: &[&str] = &["content", "score", "source"];
 const SUMMARIZING: &[&str] = &[
     "max_context_tokens",

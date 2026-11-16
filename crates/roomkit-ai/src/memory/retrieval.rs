@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use roomkit::ChannelError;
 use roomkit::model::{EventContent, Metadata, RoomContext, RoomEvent, RoomId};
-use roomkit_core::rules::transcript::fence;
+use roomkit_core::rules::transcript::{committed_label, fence, json_text_line};
 use serde_json::Value;
 
 use super::{CompactOptions, IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions};
@@ -110,14 +110,28 @@ fn best(results: Vec<KnowledgeResult>, limit: usize) -> Vec<KnowledgeResult> {
 fn note(passages: &[KnowledgeResult]) -> String {
     let mut lines = vec!["Relevant context from knowledge sources:".to_owned()];
     for passage in passages {
-        let prefix = if passage.source.is_empty() {
-            String::new()
-        } else {
-            format!("[{}] ", passage.source)
-        };
-        lines.push(fence("knowledge", &format!("{prefix}{}", passage.content)));
+        lines.push(fence("knowledge", &passage_text(passage)));
     }
     lines.join("\n")
+}
+
+/// `passage` as the note reads it: one taken from a turn (`event_id` in
+/// its metadata) as a line of the conversation, its text a JSON string
+/// after the label of its author the runtime set when indexing it, so a
+/// name its author typed reads as their words (RFC §6.4); one indexed with
+/// no label quoted alone; a document after its source. Python's `_passage`.
+fn passage_text(passage: &KnowledgeResult) -> String {
+    if !passage.metadata.contains_key("event_id") {
+        if passage.source.is_empty() {
+            return passage.content.clone();
+        }
+        return format!("[{}] {}", passage.source, passage.content);
+    }
+    let text = json_text_line(&passage.content);
+    match passage.metadata.get("speaker").and_then(Value::as_str) {
+        Some(speaker) if !speaker.is_empty() => format!("{speaker}: {text}"),
+        _ => text,
+    }
 }
 
 /// The author's words in `content` (RFC §6.6): its text, a media's
@@ -219,6 +233,7 @@ impl MemoryProvider for RetrievalMemory {
             let mut metadata = Metadata::new();
             metadata.insert("room_id".to_owned(), Value::from(room_id.as_str()));
             metadata.insert("event_id".to_owned(), Value::from(event.id.as_str()));
+            metadata.insert("speaker".to_owned(), Value::from(committed_label(event)));
             let indexing = self.sources.iter().map(|source| {
                 let options = IndexOptions {
                     metadata: Some(metadata.clone()),

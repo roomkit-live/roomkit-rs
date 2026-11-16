@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use roomkit::ChannelError;
 use roomkit::model::{ChannelId, Metadata, RoomContext, RoomEvent, RoomId};
-use roomkit_ai::knowledge::{KnowledgeResult, KnowledgeSource, SearchOptions};
+use roomkit_ai::knowledge::{IndexOptions, KnowledgeResult, KnowledgeSource, SearchOptions};
 use roomkit_ai::memory::{
     BudgetAwareMemory, BudgetAwareMemoryOptions, CompactOptions, CompactingMemory,
     CompactingMemoryOptions, IngestOptions, MemoryProvider, MemoryResult, RetrievalMemory,
@@ -209,11 +209,15 @@ pub(crate) fn scripted_memory(
 }
 
 /// A knowledge source answering every search with its results, at most
-/// the search's limit, or failing with its `fails`.
+/// the search's limit, or failing with its `fails`; with `indexes`, the
+/// passages it was handed to index first, the latest first, each with its
+/// metadata at score 1, one whose content is the query itself left out.
 struct ScriptedSource {
     name: String,
     results: Vec<KnowledgeResult>,
     fails: Option<String>,
+    indexes: bool,
+    indexed: Mutex<Vec<KnowledgeResult>>,
 }
 
 impl KnowledgeSource for ScriptedSource {
@@ -223,14 +227,43 @@ impl KnowledgeSource for ScriptedSource {
 
     fn search<'a>(
         &'a self,
-        _query: &'a str,
+        query: &'a str,
         options: SearchOptions,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<KnowledgeResult>, ChannelError>> + Send + 'a>> {
-        let answer = match &self.fails {
-            Some(fails) => Err(fails.clone().into()),
-            None => Ok(self.results.iter().take(options.limit).cloned().collect()),
+        let answer = if let Some(fails) = &self.fails {
+            Err(fails.clone().into())
+        } else {
+            let indexed = self.indexed.lock().unwrap_or_else(PoisonError::into_inner);
+            let passages = indexed
+                .iter()
+                .rev()
+                .filter(|passage| passage.content != query);
+            Ok(passages
+                .chain(&self.results)
+                .take(options.limit)
+                .cloned()
+                .collect())
         };
         Box::pin(std::future::ready(answer))
+    }
+
+    fn index<'a>(
+        &'a self,
+        content: &'a str,
+        options: IndexOptions,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ChannelError>> + Send + 'a>> {
+        if self.indexes {
+            let passage = KnowledgeResult {
+                score: 1.0,
+                metadata: options.metadata.unwrap_or_default(),
+                ..KnowledgeResult::new(content)
+            };
+            self.indexed
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(passage);
+        }
+        Box::pin(std::future::ready(Ok(())))
     }
 }
 
@@ -258,6 +291,8 @@ fn retrieval(
                 name: source["name"].as_str().unwrap_or_default().to_owned(),
                 results,
                 fails: source["fails"].as_str().map(str::to_owned),
+                indexes: source["indexes"].as_bool().unwrap_or(false),
+                indexed: Mutex::new(Vec::new()),
             });
             source
         })

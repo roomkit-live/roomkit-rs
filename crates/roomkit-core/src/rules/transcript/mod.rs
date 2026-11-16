@@ -94,9 +94,10 @@ pub use self::quote::quoted;
 use self::rounds::{ToolRound, tool_rounds};
 use self::speakers::{Speaker, labelled_lines, labels_turns, speaker, tell_apart};
 pub use self::speakers::{people_note, people_taking_part};
-use super::authors::Authors;
+use super::authors::{Authors, recorded_author};
 use super::edits::{is_deleted, opens_no_turn};
 use super::instructions::is_standalone;
+use super::lookalike::person_name;
 use super::transcoding::text_of;
 use crate::model::{ChannelId, EventStatus, EventType, RoomContext, RoomEvent, ToolCall};
 
@@ -1050,6 +1051,22 @@ pub fn without_quote_lookalikes(text: &str) -> String {
 /// `channel_label`.
 pub(crate) fn channel_label(channel_id: &ChannelId) -> String {
     speakers::channel_label(channel_id)
+}
+
+/// The label of `event`'s author as its commit fixed it, for a reader that
+/// has no room to read it in (a passage a memory indexes, RFC §6.4): the
+/// name and rank of its record (`Alice`, `Alice (2)`), else its channel
+/// (`@sms1`). Python's private `committed_label`, which roomkit-ai reads.
+#[doc(hidden)]
+pub fn committed_label(event: &RoomEvent) -> String {
+    let named = recorded_author(event)
+        .map(|(name, rank, _)| (person_name(&name), rank))
+        .filter(|(name, _)| !name.is_empty());
+    match named {
+        Some((name, 1)) => name,
+        Some((name, rank)) => format!("{name} ({rank})"),
+        None => channel_label(&event.source.channel_id),
+    }
 }
 
 /// `value` as the runtime gives an identifier outside a quote (RFC §6.4):
