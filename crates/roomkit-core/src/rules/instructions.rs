@@ -16,6 +16,7 @@ use sha2::{Digest, Sha256};
 
 use crate::model::{ChannelId, EventType, Metadata, RoomContext, RoomEvent, Visibility};
 use crate::rules::transcoding;
+use crate::rules::transcript::RUNTIME_RECORD;
 
 /// The metadata key under which a response records the instruction that
 /// produced it (RFC §10.1.1 rule 6). The pipeline's alone: it writes the key
@@ -109,17 +110,44 @@ pub fn is_standalone(event: &RoomEvent) -> bool {
         && event.metadata.get(STANDALONE) == Some(&Value::Bool(true))
 }
 
-/// The text of `event` the turn it opens keeps for its later turns (RFC
-/// §10.1.1): an instruction's, as the turn reads it (its text form, before
-/// the runtime marks it), never a standalone one's, whose turn reads nothing
-/// of the room and is no part of its conversation (rules 6 and 7); `None`
-/// for any other event, or a text that reads as nothing. Python's
+/// The instruction a turn read, which the kit keeps as the agent's own
+/// `instruction_read` row for its later turns (RFC §10.1.1): its text as
+/// the turn read it, and its runtime record when the runtime wrote it (a
+/// background result handed back, RFC §6.4), which the row carries and its
+/// later turns keep the runtime's marks by. Python's private
+/// `InstructionReadMarker`.
+#[doc(hidden)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InstructionReadMarker {
+    /// The instruction's text form, before the runtime marks it.
+    pub text: String,
+    /// What the runtime wrote, when it did: `handback`.
+    pub runtime_record: Option<String>,
+}
+
+/// What of `event` the turn it opens keeps for its later turns (RFC
+/// §10.1.1): an instruction's text, as the turn reads it (its text form,
+/// before the runtime marks it), never a standalone one's, whose turn reads
+/// nothing of the room and is no part of its conversation (rules 6 and 7),
+/// with its runtime record when the runtime wrote it (RFC §6.4); `None` for
+/// any other event, or a text that reads as nothing. Python's
 /// `kept_instruction`.
-pub fn kept_instruction(event: &RoomEvent) -> Option<String> {
+pub fn kept_instruction(event: &RoomEvent) -> Option<InstructionReadMarker> {
     if event.r#type != EventType::Instruction || is_standalone(event) {
         return None;
     }
-    Some(transcoding::text_of(&event.content)).filter(|text| !text.is_empty())
+    let text = transcoding::text_of(&event.content);
+    if text.is_empty() {
+        return None;
+    }
+    let runtime_record = match event.metadata.get(RUNTIME_RECORD) {
+        Some(Value::String(kind)) => Some(kind.clone()),
+        _ => None,
+    };
+    Some(InstructionReadMarker {
+        text,
+        runtime_record,
+    })
 }
 
 /// Puts back on `modified`, a hook's replacement of `original`, what the

@@ -287,10 +287,13 @@ impl Pump<'_> {
                 self.sender.send(&Frame::Item { item }).map(drop)
             }
             Some(Ok(ResponseItem::Usage(marker))) => self.send_usage(marker),
-            Some(Ok(ResponseItem::InstructionRead(text))) => self
+            Some(Ok(ResponseItem::InstructionRead(marker))) => self
                 .sender
                 .send(&Frame::Item {
-                    item: Item::InstructionRead { text },
+                    item: Item::InstructionRead {
+                        text: marker.text,
+                        runtime_record: marker.runtime_record,
+                    },
                 })
                 .map(drop),
             Some(Err(error)) => {

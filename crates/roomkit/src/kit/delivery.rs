@@ -176,6 +176,21 @@ impl<S: ConversationStore> RoomKit<S> {
         content: impl Into<String>,
         options: DeliverOptions<S>,
     ) -> Result<DeliveryOutcome, RoomKitError> {
+        self.deliver_with_record(room_id, content.into(), options, None)
+            .await
+    }
+
+    /// [`deliver`](Self::deliver), and for the runtime's own text (a
+    /// background result handed back) its `runtime_record`, which the
+    /// delivered event carries as its runtime record (RFC §6.4) and no
+    /// caller of `deliver` sets. Python's private `_deliver`.
+    pub(crate) async fn deliver_with_record(
+        &self,
+        room_id: &RoomId,
+        content: String,
+        options: DeliverOptions<S>,
+        runtime_record: Option<String>,
+    ) -> Result<DeliveryOutcome, RoomKitError> {
         self.inner.open()?;
         let DeliverOptions {
             channel_id,
@@ -214,6 +229,7 @@ impl<S: ConversationStore> RoomKit<S> {
             session_id,
             chain_depth,
             instruction,
+            runtime_record,
             strategy: serialize_strategy(Some(&*strategy)),
             ..DeliveryItem::new(room_id.clone(), content)
         };
@@ -295,12 +311,14 @@ impl<S: ConversationStore> RoomKit<S> {
     }
 
     /// Publishes `message`, the delivery path's, into the room `room_id`,
-    /// its delivery deferred, its key `publishing` admitted (RFC §22.1).
+    /// its delivery deferred, the key `publishing` names admitted (RFC
+    /// §22.1) and the runtime record it names stamped on its event (RFC
+    /// §6.4).
     pub(crate) async fn publish_delivery(
         &self,
         message: roomkit_core::model::InboundMessage,
         room_id: &RoomId,
-        publishing: Option<String>,
+        publishing: super::Publishing,
     ) -> Result<crate::inbound::InboundResult, RoomKitError> {
         let options = ProcessInboundOptions {
             room_id: Some(room_id.clone()),

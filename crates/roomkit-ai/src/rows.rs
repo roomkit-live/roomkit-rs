@@ -243,7 +243,7 @@ fn response_item(item: TurnItem) -> ResponseItem {
         TurnItem::SegmentBreak => ResponseItem::SegmentBreak,
         TurnItem::Thinking(delta) => ResponseItem::Thinking(delta),
         TurnItem::Usage(marker) => ResponseItem::Usage(marker),
-        TurnItem::InstructionRead(text) => ResponseItem::InstructionRead(text),
+        TurnItem::InstructionRead(marker) => ResponseItem::InstructionRead(marker),
     }
 }
 

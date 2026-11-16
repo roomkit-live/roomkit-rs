@@ -112,6 +112,7 @@ impl<S> Waiting<S> {
             && left.addressed_to == right.addressed_to
             && left.chain_depth == right.chain_depth
             && left.instruction == right.instruction
+            && left.runtime_record == right.runtime_record
             && left.session_id == right.session_id
             && left.metadata == right.metadata
     }
@@ -1039,9 +1040,10 @@ mod tests {
     #[tokio::test]
     async fn test_queued_never_merges_an_instruction_with_a_message() {
         let kit = RoomKit::new(RoomKitOptions::default());
-        let request = |instruction: bool| {
+        let request = |instruction: bool, runtime_record: Option<&str>| {
             let context = DeliveryContext {
                 instruction,
+                runtime_record: runtime_record.map(str::to_owned),
                 ..DeliveryContext::new(kit.clone(), room(), "x".to_owned())
             };
             let (result, _outcome) = oneshot::channel();
@@ -1053,8 +1055,12 @@ mod tests {
                 turn: None,
             }
         };
-        assert!(!request(true).compatible(&request(false)));
-        assert!(request(true).compatible(&request(true)));
+        assert!(!request(true, None).compatible(&request(false, None)));
+        assert!(request(true, None).compatible(&request(true, None)));
+        // Nor the runtime's own text (a hand-back) with the application's:
+        // the batch would carry one provenance for both (RFC §6.4).
+        let handback = request(true, Some("handback"));
+        assert!(!handback.compatible(&request(true, None)));
         kit.close().await.unwrap();
     }
 

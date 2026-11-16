@@ -127,6 +127,7 @@ async fn run_strategy<S: ConversationStore>(
         session_id: item.session_id.clone(),
         chain_depth: item.chain_depth,
         instruction: item.instruction,
+        runtime_record: item.runtime_record.clone(),
         ..DeliveryContext::new(kit.clone(), item.room_id.clone(), String::new())
     };
     match strategy.deliver(delivery).await {

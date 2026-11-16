@@ -55,6 +55,7 @@ use roomkit::model::{
     reports_counters,
 };
 use roomkit::{TurnHost, TurnRecord};
+use roomkit_core::rules::instructions::InstructionReadMarker;
 use roomkit_core::rules::transcript::{Message, Role};
 use serde_json::{Map, Value};
 use spans::TurnSpan;
@@ -110,8 +111,9 @@ pub(crate) enum TurnItem {
     /// What a generation used, told after it (RFC §6.4).
     Usage(UsageMarker),
     /// The application's instruction the turn read, handed first, which the
-    /// kit keeps as the agent's own row for its later turns (RFC §10.1.1).
-    InstructionRead(String),
+    /// kit keeps as the agent's own row for its later turns (RFC §10.1.1),
+    /// with its runtime record when the runtime wrote it (RFC §6.4).
+    InstructionRead(InstructionReadMarker),
 }
 
 /// How a call ended.
@@ -260,7 +262,7 @@ pub(crate) struct Loop {
     /// The application's instruction the turn read, which its stream hands
     /// the kit first, to keep for its later turns (RFC §10.1.1); none for a
     /// turn no instruction opened, or one that stands alone.
-    pub(crate) instruction: Option<String>,
+    pub(crate) instruction: Option<InstructionReadMarker>,
 }
 
 impl Loop {

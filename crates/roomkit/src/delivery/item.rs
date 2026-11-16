@@ -38,7 +38,8 @@ pub enum DeliveryItemStatus {
 /// (RFC §22.2): Python's `DeliveryItem(*, id=<factory>, room_id, content,
 /// channel_id=None, addressed_to=None, idempotency_key=None,
 /// session_id=None, chain_depth=0, instruction=False, strategy=<factory>,
-/// metadata=<factory>, retry_count=0, max_retries=3, created_at=<factory>,
+/// metadata=<factory>, runtime_record=None, retry_count=0, max_retries=3,
+/// created_at=<factory>,
 /// status=PENDING, worker_id=None, error=None, outcome=None)`. It keeps the
 /// request's address, key, session and intent across retries, and its
 /// strategy in its serialized form.
@@ -76,6 +77,12 @@ pub struct DeliveryItem {
     /// The metadata of the event it publishes.
     #[serde(default)]
     pub metadata: Metadata,
+    /// What the runtime wrote, when it delivers its own text (a background
+    /// result handed back, `"handback"`): the delivered event carries it as
+    /// its runtime record (RFC §6.4), which `deliver()` never sets and the
+    /// inbound pipeline removes from what a caller's metadata brings.
+    #[serde(default)]
+    pub runtime_record: Option<String>,
     /// The retries it took after its first attempt.
     #[serde(default)]
     pub retry_count: u32,
@@ -141,6 +148,7 @@ impl DeliveryItem {
             instruction: false,
             strategy: immediate(),
             metadata: Metadata::new(),
+            runtime_record: None,
             retry_count: 0,
             max_retries: MAX_RETRIES,
             created_at: now(),

@@ -10,18 +10,21 @@
 //! cache keeps it (RMK-1407).
 
 use super::content::TurnContent;
+use super::written_by_runtime;
 use crate::model::{ChannelId, EventContent, EventDirection, EventType, RoomEvent};
 use crate::rules::edits::is_deleted;
 
 /// An instruction an earlier turn read: the timeline index of the row the
-/// channel kept it in, the turn it opened (the row's `correlation_id`), and
-/// its text as the turn read it, before the runtime marks it. Python's
-/// `ReplayedInstruction`.
+/// channel kept it in, the turn it opened (the row's `correlation_id`), its
+/// text as the turn read it, before the runtime marks it, and whether the
+/// runtime wrote it (a background result handed back, RFC §6.4), its
+/// marks then kept. Python's `ReplayedInstruction`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct KeptInstruction {
     pub(super) index: u64,
     pub(super) turn: Option<String>,
     pub(super) text: String,
+    pub(super) runtime: bool,
 }
 
 impl KeptInstruction {
@@ -50,6 +53,7 @@ pub(super) fn kept_instructions(
                 index: event.index,
                 turn: event.correlation_id.clone(),
                 text: text.body.clone(),
+                runtime: written_by_runtime(event),
             })
         })
         .collect()

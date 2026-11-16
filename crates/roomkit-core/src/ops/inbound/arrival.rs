@@ -25,6 +25,8 @@
 
 use std::mem;
 
+use serde_json::Value;
+
 use super::answers::MessageAnswers;
 use super::charge::DeliveryCharge;
 use super::deadline::Stopped;
@@ -45,6 +47,7 @@ use crate::ops::{ChannelConfig, Cx, KitConfig, Progress};
 use crate::rules::chain_depth::Draw;
 use crate::rules::instructions::InstructionRefusal;
 use crate::rules::routing::{self, RouteQuery, Sender};
+use crate::rules::transcript::RUNTIME_RECORD;
 use crate::rules::{addresses, idempotency, permissions, publications};
 
 /// How many times a message is routed before it gets a new room: once, then
@@ -187,6 +190,9 @@ pub(super) struct Arrival {
     /// The key the delivery path publishes the message under, the one key
     /// of the publication namespace its event may keep (RFC §22.1).
     publication: Option<String>,
+    /// What the runtime wrote, when the delivery path publishes the
+    /// runtime's own text: its event's runtime record (RFC §6.4).
+    runtime_record: Option<String>,
     state: State,
 }
 
@@ -246,6 +252,7 @@ impl Arrival {
             identified: None,
             release_error: None,
             publication: None,
+            runtime_record: None,
             state: State::Start,
         }
     }
@@ -257,6 +264,7 @@ impl Arrival {
         if let Some(answers) = answers {
             self.chain_floor = answers.chain_floor;
             self.publication.clone_from(&answers.publication);
+            self.runtime_record.clone_from(&answers.runtime_record);
             self.sender = answers.sender(&self.message);
         }
         self
@@ -728,6 +736,14 @@ impl Arrival {
             })
         })?;
         let mut event = stamp::stamp_trigger(*parsed, &self.message, id);
+        // The runtime's own text, which the delivery path publishes (a
+        // background result handed back): its runtime record, stamped once
+        // the caller's was dropped (RFC §6.4).
+        if let Some(kind) = &self.runtime_record {
+            event
+                .metadata
+                .insert(RUNTIME_RECORD.to_owned(), Value::String(kind.clone()));
+        }
         event.room_id.clone_from(&context.room.id);
         // A key in the framework's publication namespace is the delivery
         // path's alone (RFC §22.1): dropped from any other message, whoever

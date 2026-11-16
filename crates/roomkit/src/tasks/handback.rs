@@ -11,7 +11,7 @@
 use std::num::NonZeroUsize;
 
 use roomkit_core::model::{ChannelCategory, ChannelId, Metadata, RoomId};
-use roomkit_core::rules::transcript::fence;
+use roomkit_core::rules::transcript::{HANDBACK, fence, handback_text};
 
 use crate::delivery::outcome::{DeliveryOutcome, DeliveryOutcomeStatus};
 use crate::error::RoomKitError;
@@ -61,9 +61,11 @@ pub(crate) fn result_text(header: &str, body: &str) -> String {
 /// Delivers `text` in `room_id` to `notify`, at `chain_depth`, with
 /// `metadata`: an intelligence channel is told it as an instruction
 /// addressed to it, closed on [`RESULT_TURN_NOTE`]; any other channel is
-/// delivered it. A channel the room does not bind is told nothing
-/// (`None`), nor is anyone once the kit's close began. Python's
-/// `hand_back(kit, room_id, notify, text, chain_depth, *, metadata)`.
+/// delivered it. The text is the runtime's: cleaned as it is written
+/// ([`handback_text`]), it carries [`HANDBACK`] as its runtime record (RFC §6.4).
+/// A channel the room does not bind is told nothing (`None`), nor is anyone
+/// once the kit's close began. Python's `hand_back(kit, room_id, notify,
+/// text, chain_depth, *, metadata)`.
 ///
 /// # Errors
 ///
@@ -87,6 +89,7 @@ pub(crate) async fn hand_back<S: ConversationStore>(
     let intelligence = kit
         .get_channel(notify)
         .is_some_and(|channel| channel.category() == ChannelCategory::Intelligence);
+    let text = handback_text(&text);
     let (text, options) = if intelligence {
         let options = DeliverOptions {
             addressed_to: Some(vec![notify.clone()]),
@@ -105,7 +108,9 @@ pub(crate) async fn hand_back<S: ConversationStore>(
         };
         (text, options)
     };
-    let outcome = kit.deliver(room_id, text, options).await?;
+    let outcome = kit
+        .deliver_with_record(room_id, text, options, Some(HANDBACK.to_owned()))
+        .await?;
     log_not_delivered(notify, room_id, &outcome, kit.inner.tasks.is_closing());
     Ok(Some(outcome))
 }

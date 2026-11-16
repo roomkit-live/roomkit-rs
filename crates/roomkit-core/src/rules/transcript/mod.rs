@@ -84,6 +84,8 @@ pub use self::marks::SPEAKER_NOTE as SPEAKER_ATTRIBUTION_NOTE;
 pub use self::marks::SUMMARY_HEADER;
 #[doc(hidden)]
 pub use self::marks::TURN_IMAGES_HEADER;
+#[doc(hidden)]
+pub use self::marks::{DELEGATION_HANDBACK_OPENING, HANDBACK, HANDBACK_OPENING};
 use self::marks::{
     INSTRUCTION_MARK, NOTES_HEADER, SPEAKER_NOTE, without_copies, without_copies_after,
     without_header_copies,
@@ -272,6 +274,16 @@ pub fn conversation(
 /// sender supplies. Python's `RUNTIME_RECORD`.
 pub const RUNTIME_RECORD: &str = "runtime_record";
 
+/// Whether the runtime wrote `event`: it carries a [`RUNTIME_RECORD`], which
+/// the inbound pipeline drops from what a sender supplies (RFC §6.4).
+/// Python's `written_by_runtime`.
+fn written_by_runtime(event: &RoomEvent) -> bool {
+    matches!(
+        event.metadata.get(RUNTIME_RECORD),
+        Some(serde_json::Value::String(_))
+    )
+}
+
 /// What a turn's memory adds to the conversation beside the history it
 /// retrieved (RFC §20.2): Python's `MemoryResult.notes` and `.speakers`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -409,14 +421,20 @@ pub fn conversation_with_input(
 /// event says, who said it, whether it is the application's instruction,
 /// its event's place in the timeline, the turn of the channel's own that
 /// wrote it (its `correlation_id`), the rounds of tool calls read after it,
-/// and whether the first of them is the round the turn's text was sent
-/// with.
+/// whether the first of them is the round the turn's text was sent with,
+/// and whether the runtime wrote it (a background result handed back),
+/// whose header is its own (RFC §6.4).
 #[derive(Clone, Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent facts of one turn, each read on its own"
+)]
 struct Turn {
     role: Role,
     content: TurnContent,
     speaker: Option<Speaker>,
     instruction: bool,
+    runtime: bool,
     index: u64,
     written_in: Option<String>,
     rounds: Vec<ToolRound>,
@@ -438,6 +456,7 @@ impl Turn {
             content: read(event),
             speaker: if own { None } else { speaker(event, authors) },
             instruction: false,
+            runtime: written_by_runtime(event),
             index: event.index,
             written_in: own.then(|| event.correlation_id.clone()).flatten(),
             rounds: Vec::new(),
@@ -467,6 +486,7 @@ impl Turn {
                 speaker(event, authors)
             },
             instruction,
+            runtime: written_by_runtime(event),
             index: event.index,
             written_in: None,
             rounds: Vec::new(),
@@ -484,6 +504,7 @@ impl Turn {
             content: instruction.content(),
             speaker: None,
             instruction: true,
+            runtime: instruction.runtime,
             index: instruction.index,
             written_in: None,
             rounds: Vec::new(),
@@ -504,10 +525,10 @@ impl Turn {
     }
 
     /// Whether a copy of a mark may run from this turn into the next one:
-    /// a user turn the runtime does not label. A labelled turn is strings
-    /// after its author's label, which no copy runs out of.
+    /// a user turn the runtime does not label, nor wrote. A labelled turn is
+    /// strings after its author's label, which no copy runs out of.
     fn is_piece(&self, labelled: bool) -> bool {
-        self.role == Role::User && !(labelled && self.speaker.is_some())
+        self.role == Role::User && !self.runtime && !(labelled && self.speaker.is_some())
     }
 }
 
@@ -646,14 +667,28 @@ fn is_conversation(event: &RoomEvent) -> bool {
 /// turn, over its text parts, and over each run of consecutive user turns
 /// the runtime does not label, which an API may merge into one message, the
 /// first run read after `ends_on`, the texts of the user messages a memory
-/// ends on; a replayed round ends a run, and is never rewritten. A turn a
-/// copy wholly held is left out, the rounds read after it then read after
+/// ends on; a replayed round ends a run, and is never rewritten. A turn the
+/// runtime wrote (a result handed back) is read on its own, its header kept
+/// ([`handback_text`]). A turn a copy wholly
+/// held is left out, the rounds read after it then read after
 /// the turn before it. Returns `ends_on` too, a copy that runs from them
 /// into the first run cut.
 fn cleaned(mut turns: Vec<Turn>, labelled: bool, ends_on: &[String]) -> (Vec<Turn>, Vec<String>) {
     let mut ends_on = ends_on.to_vec();
     let mut start = 0;
     while start < turns.len() {
+        if let Some(turn) = turns.get_mut(start).filter(|turn| turn.runtime) {
+            let texts: Vec<String> = turn
+                .content
+                .texts()
+                .iter()
+                .map(|text| handback_text(text))
+                .collect();
+            let content = std::mem::replace(&mut turn.content, TurnContent::Parts(Vec::new()));
+            turn.content = content.with_texts(texts);
+            start += 1;
+            continue;
+        }
         let rest = turns.get(start..).unwrap_or_default();
         let pieces = rest.iter().take_while(|turn| turn.is_piece(labelled));
         // A run ends with the first of its turns a round is read after.
@@ -798,7 +833,11 @@ pub fn earlier_turns(events: &[RoomEvent], channel_id: &ChannelId) -> Vec<Replay
         .map(|kept| Replayed {
             messages: vec![Message::new(
                 Role::User,
-                mark_instruction(&without_mark_copies(&kept.text)),
+                mark_instruction(&if kept.runtime {
+                    handback_text(&kept.text)
+                } else {
+                    without_mark_copies(&kept.text)
+                }),
             )],
             index: kept.index,
             turn: kept.turn,
@@ -1010,6 +1049,21 @@ pub fn mark_instruction(text: &str) -> String {
 #[doc(hidden)]
 pub fn without_split_copies(texts: &[String]) -> Vec<String> {
     without_copies_after(texts, &[]).0
+}
+
+/// `text`, a background result the runtime hands back, as a reader keeps
+/// it: the opening of its header kept, the runtime's mark, and each copy of
+/// a mark after it replaced, what a model or a hook wrote into it included
+/// (RFC §6.4). The runtime writes it so, and every reader reads it so.
+/// Python's `handback_text`.
+#[doc(hidden)]
+pub fn handback_text(text: &str) -> String {
+    let opening = [HANDBACK_OPENING, DELEGATION_HANDBACK_OPENING]
+        .into_iter()
+        .find(|opening| text.starts_with(opening))
+        .unwrap_or_default();
+    let rest = text.get(opening.len()..).unwrap_or_default();
+    format!("{opening}{}", without_mark_copies(rest))
 }
 
 /// `text` with each copy of a runtime mark it holds replaced (RFC §6.4):

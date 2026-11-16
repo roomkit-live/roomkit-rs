@@ -47,6 +47,7 @@ mod local_executor;
 mod locks;
 mod members;
 mod message;
+pub(crate) use message::Publishing;
 mod named_hooks;
 mod options;
 mod output;
@@ -628,7 +629,8 @@ impl<S: ConversationStore> RoomKit<S> {
         message: InboundMessage,
         options: ProcessInboundOptions,
     ) -> Result<InboundResult, RoomKitError> {
-        self.run_message(message, options, None).await
+        self.run_message(message, options, Publishing::default())
+            .await
     }
 
     fn config(&self) -> Arc<KitConfig> {

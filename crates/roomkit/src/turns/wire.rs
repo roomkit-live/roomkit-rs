@@ -231,8 +231,14 @@ pub(crate) enum Item {
     /// The stream's end.
     StreamEnd,
     /// The application's instruction the turn read, which the owner keeps
-    /// as the agent's own row (RFC §10.1.1): Python's `instruction_read`.
-    InstructionRead { text: String },
+    /// as the agent's own row (RFC §10.1.1), with its runtime record when
+    /// the runtime wrote it, written only then (RFC §6.4): Python's
+    /// `instruction_read`.
+    InstructionRead {
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        runtime_record: Option<String>,
+    },
 }
 
 /// What a loop's end crosses the wire with: Python's `LoopEndMarker` fields.
@@ -717,6 +723,7 @@ mod tests {
     fn the_instruction_a_turn_read_crosses_as_python_writes_it() {
         let item = Item::InstructionRead {
             text: "Introduce yourself.".to_owned(),
+            runtime_record: None,
         };
         let written = serde_json::to_value(&item).unwrap();
         assert_eq!(
@@ -724,6 +731,21 @@ mod tests {
             json!({"kind": "instruction_read", "text": "Introduce yourself."})
         );
         assert_eq!(serde_json::from_value::<Item>(written).unwrap(), item);
+        // One the runtime wrote carries its runtime record (RMK-645).
+        let handback = Item::InstructionRead {
+            text: "[Your background workers completed.]".to_owned(),
+            runtime_record: Some("handback".to_owned()),
+        };
+        let written = serde_json::to_value(&handback).unwrap();
+        assert_eq!(
+            written,
+            json!({
+                "kind": "instruction_read",
+                "text": "[Your background workers completed.]",
+                "runtime_record": "handback",
+            })
+        );
+        assert_eq!(serde_json::from_value::<Item>(written).unwrap(), handback);
     }
 
     // Python: roomkit/turns/wire.py CommittedEvent, as ChannelControlEnvelope's

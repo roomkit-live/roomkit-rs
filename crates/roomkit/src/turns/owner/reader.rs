@@ -10,6 +10,7 @@ use roomkit_core::model::{
     ToolCallStatus,
 };
 use roomkit_core::ops::TURN_CUT;
+use roomkit_core::rules::instructions::InstructionReadMarker;
 use tokio::sync::{mpsc, watch};
 
 use super::{Canceller, Main, OwnerState, Steerable, cancel};
@@ -295,9 +296,16 @@ impl OwnerTurn {
                 provider,
             }),
             Item::StreamEnd => Read::Ended,
-            Item::InstructionRead { text } => {
+            Item::InstructionRead {
+                text,
+                runtime_record,
+            } => {
                 self.window.read_other();
-                Read::Item(RemoteItem::Item(ResponseItem::InstructionRead(text)))
+                let marker = InstructionReadMarker {
+                    text,
+                    runtime_record,
+                };
+                Read::Item(RemoteItem::Item(ResponseItem::InstructionRead(marker)))
             }
         }
     }

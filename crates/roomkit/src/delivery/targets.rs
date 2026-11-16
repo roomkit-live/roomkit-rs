@@ -20,7 +20,7 @@ use crate::context::ExecutionContext;
 use crate::driver;
 use crate::error::RoomKitError;
 use crate::inbound::{DeliveryHandle, InboundResult};
-use crate::kit::RoomKit;
+use crate::kit::{Publishing, RoomKit};
 use crate::locks::HeldLock;
 use crate::store::ConversationStore;
 
@@ -219,7 +219,11 @@ impl<S: ConversationStore> RoomKit<S> {
             Prepared::Channel(channel_id) => channel_id,
             Prepared::Done(outcome) => return Ok(*outcome),
         };
-        let (message, publishing) = publication(request, channel_id);
+        let (message, key) = publication(request, channel_id);
+        let publishing = Publishing {
+            key,
+            runtime_record: request.runtime_record.clone(),
+        };
         let result = self
             .publish_within(section, message, &request.room_id, publishing)
             .await?;
@@ -297,7 +301,7 @@ impl<S: ConversationStore> RoomKit<S> {
         section: Option<HeldLock>,
         message: InboundMessage,
         room_id: &RoomId,
-        publishing: Option<String>,
+        publishing: Publishing,
     ) -> Result<InboundResult, RoomKitError> {
         let Some(guard) = section else {
             return self.publish_delivery(message, room_id, publishing).await;

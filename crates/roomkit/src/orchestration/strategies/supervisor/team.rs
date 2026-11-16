@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
 use roomkit_core::model::{ChannelId, Metadata, RoomId};
+use roomkit_core::rules::transcript::HANDBACK_OPENING;
 use serde_json::{Value, json};
 use tokio::time::Instant;
 
@@ -432,11 +433,13 @@ fn outcome_text(results: Option<&Vec<Presented>>) -> String {
         })
         .collect();
     let header = if why_failed(results).is_none() {
-        "[Your background workers completed. Share their results with the user.]"
+        format!("{HANDBACK_OPENING} workers completed. Share their results with the user.]")
     } else {
-        "[Your background workers could not complete the work. Tell the user what failed.]"
+        format!(
+            "{HANDBACK_OPENING} workers could not complete the work. Tell the user what failed.]"
+        )
     };
-    workers_text(header, &format_worker_results(&each_bounded))
+    workers_text(&header, &format_worker_results(&each_bounded))
 }
 
 /// What `delegate_workers` answers inside a delegated step's room: Python's

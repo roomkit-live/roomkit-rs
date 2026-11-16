@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use roomkit_core::model::{ChannelId, Metadata, RoomId};
+use roomkit_core::rules::transcript::HANDBACK_OPENING;
 use serde_json::{Value, json};
 
 use super::Team;
@@ -255,7 +256,9 @@ fn worker_told(worker_id: &ChannelId, outcome: Option<&WorkerOutcome>) -> String
         &outcome.output
     };
     result_text(
-        &format!("[Your background task for {worker} {status}. Share the outcome with the user.]"),
+        &format!(
+            "{HANDBACK_OPENING} task for {worker} {status}. Share the outcome with the user.]"
+        ),
         &bounded(output),
     )
 }

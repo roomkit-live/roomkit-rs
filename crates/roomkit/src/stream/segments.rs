@@ -25,8 +25,8 @@ use roomkit_core::model::{
     RoomEvent, TextContent, ToolCallContent, ToolCallOutcome, ToolCallStatus, Visibility,
 };
 use roomkit_core::rules::chain_depth::response_depth;
-use roomkit_core::rules::instructions::mark_response;
-use roomkit_core::rules::transcript::is_blank;
+use roomkit_core::rules::instructions::{InstructionReadMarker, mark_response};
+use roomkit_core::rules::transcript::{RUNTIME_RECORD, is_blank};
 use roomkit_core::rules::turn_end::recorded_turn_end;
 use serde_json::Value;
 
@@ -147,14 +147,24 @@ impl Segments {
         &self.text
     }
 
-    /// The agent's own copy of the instruction its turn read, `text` (RFC
+    /// The agent's own copy of the instruction its turn read, `marker` (RFC
     /// §10.1.1): a record of its own, visible to it alone, the turn's id and
     /// the instruction's fingerprint on it, as the response's rows carry
-    /// them, answering the instruction one hop deeper. Its id and its
-    /// instant are the writer's to give; the store holds it apart from the
-    /// response's rows, no reader handed it, the turn's record never on it.
-    pub(super) fn instruction_read(&self, text: String) -> RoomEvent {
+    /// them, answering the instruction one hop deeper, and the runtime
+    /// record of an instruction the runtime wrote, by which its later turns
+    /// keep its marks (RFC §6.4). Its id and its instant are the writer's to
+    /// give; the store holds it apart from the response's rows, no reader
+    /// handed it, the turn's record never on it.
+    pub(super) fn instruction_read(&self, marker: InstructionReadMarker) -> RoomEvent {
+        let InstructionReadMarker {
+            text,
+            runtime_record,
+        } = marker;
         let mut row = self.draft(EventType::InstructionRead, TextContent::new(text).into());
+        if let Some(kind) = runtime_record {
+            row.metadata
+                .insert(RUNTIME_RECORD.to_owned(), Value::String(kind));
+        }
         row.status = EventStatus::Delivered;
         row.chain_depth = response_depth(&self.answers);
         row.responds_to = Some(self.answers.id.clone());

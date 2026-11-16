@@ -13,6 +13,7 @@
 use std::sync::Arc;
 
 use roomkit_core::model::{ChannelId, Metadata, RoomId};
+use roomkit_core::rules::transcript::HANDBACK_OPENING;
 
 use crate::channel::BoxFuture;
 use crate::error::RoomKitError;
@@ -29,7 +30,7 @@ use crate::tasks::{Kind, Marks, Phase};
 /// `background_failure_text`.
 pub(crate) fn background_failure_text(what: &str) -> String {
     format!(
-        "[Your background {what} failed: The delegated work could not be completed. Tell the \
+        "{HANDBACK_OPENING} {what} failed: The delegated work could not be completed. Tell the \
          user.]"
     )
 }

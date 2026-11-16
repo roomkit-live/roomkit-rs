@@ -37,6 +37,13 @@ pub struct MessageAnswers {
     /// pipeline admits on it, a key in that namespace being dropped from
     /// any other message; `None` for every message but a publication.
     pub publication: Option<String>,
+    /// What the runtime wrote, when the delivery path publishes the
+    /// runtime's own text (a background result handed back, `handback`):
+    /// the message's event carries it as its runtime record once what the
+    /// caller's metadata brought was removed (RFC §6.4); `None` for every
+    /// other message. Python's `DeliveryItem.runtime_record`, which the
+    /// delivery path sets.
+    pub runtime_record: Option<String>,
 }
 
 impl MessageAnswers {
@@ -61,6 +68,7 @@ impl MessageAnswers {
             reply_metadata,
             chain_floor: 0,
             publication: None,
+            runtime_record: None,
         }
     }
 

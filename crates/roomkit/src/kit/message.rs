@@ -22,6 +22,17 @@ enum Preflight {
     Refused(Box<InboundResult>),
 }
 
+/// What the delivery path publishes a message under; neither for any
+/// other message.
+#[derive(Debug, Default)]
+pub(crate) struct Publishing {
+    /// The key of the publication namespace its event may keep (RFC §22.1).
+    pub(crate) key: Option<String>,
+    /// The runtime record of the runtime's own text (a background result
+    /// handed back), which its event carries (RFC §6.4).
+    pub(crate) runtime_record: Option<String>,
+}
+
 /// What belongs to this call before any await, kept through its arrival.
 struct MessageCall {
     deadline: CallDeadline,
@@ -35,7 +46,7 @@ impl<S: ConversationStore> RoomKit<S> {
         &self,
         mut message: InboundMessage,
         options: ProcessInboundOptions,
-        publication: Option<String>,
+        publication: Publishing,
     ) -> Result<InboundResult, RoomKitError> {
         let deadline = CallDeadline::new(self.config().process_timeout);
         message.content.check()?;
@@ -147,7 +158,7 @@ impl<S: ConversationStore> RoomKit<S> {
         &self,
         mut message: InboundMessage,
         options: ProcessInboundOptions,
-        publication: Option<String>,
+        publication: Publishing,
         call: MessageCall,
         ask_channel: bool,
     ) -> Result<InboundResult, RoomKitError> {
@@ -155,7 +166,8 @@ impl<S: ConversationStore> RoomKit<S> {
             .then(|| self.inner.answer(&message))
             .flatten()
             .map(|mut answers| {
-                answers.publication = publication;
+                answers.publication = publication.key;
+                answers.runtime_record = publication.runtime_record;
                 answers
             });
         let ProcessInboundOptions {

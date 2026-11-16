@@ -16,6 +16,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - The opening of a two-word runtime mark written as one identifier (`print(conversation_summary)`, `{"conversation_summary": "x"}`, `Optional[ConversationSummary]`, `conversation.summary`) is code, not a copy, behind any bracket; with a space or an invisible character between its words it is one, and an opening of three words or more counts however its words are joined, as Python reads it (RFC §6.4, RMK-1734).
 
+- The headers over a background result the runtime hands back (`[Your background …`, `[Background task from …`) are runtime marks, short ones: a participant's copy is replaced. The hand-back carries the runtime record `handback`, which the runtime alone sets (new `DeliveryItem::runtime_record` and `DeliveryContext::runtime_record`, as Python's; `deliver()` takes no argument for it, and the inbound pipeline stamps it once it removed the caller's), so its header is kept in the turn it opens and in the turns that replay it, and a copy of a mark after the header (in the task, a worker's output or a hook's rewrite) is replaced; `Queued` never merges a hand-back with another delivery (RFC §6.4, RMK-645).
+
 - A passage `RetrievalMemory` gives back from a turn reads after its author's label, fixed when the message is indexed (`metadata["speaker"]`): `Alice: "…"`, as a labelled turn reads; a document's passage keeps its form, as Python's (RFC §6.4, §20.2, RMK-633).
 
 - Keep stdio-only MCP builds warning-free when the optional HTTP transport is disabled.

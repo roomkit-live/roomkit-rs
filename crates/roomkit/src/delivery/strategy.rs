@@ -28,7 +28,7 @@ pub(crate) type Delivering<'a> =
 /// One delivery request, as a strategy is given it (RFC §22.1): Python's
 /// `DeliveryContext(kit, room_id, content, channel_id=None, metadata=None,
 /// addressed_to=None, idempotency_key=None, session_id=None,
-/// chain_depth=0, instruction=False)`.
+/// chain_depth=0, instruction=False, runtime_record=None)`.
 pub struct DeliveryContext<S = InMemoryStore> {
     /// The kit it delivers through.
     pub kit: RoomKit<S>,
@@ -50,6 +50,9 @@ pub struct DeliveryContext<S = InMemoryStore> {
     pub chain_depth: u32,
     /// Whether it is the application's direction to an agent (RFC §10.1.1).
     pub instruction: bool,
+    /// The runtime record of the runtime's own text
+    /// ([`DeliveryItem::runtime_record`](crate::DeliveryItem::runtime_record)).
+    pub runtime_record: Option<String>,
     /// Whether its publication waits for the turn it asks for: a batch
     /// `Queued` delivers for others does not.
     pub(crate) wait_for_turn: bool,
@@ -68,6 +71,7 @@ impl<S> Clone for DeliveryContext<S> {
             session_id: self.session_id.clone(),
             chain_depth: self.chain_depth,
             instruction: self.instruction,
+            runtime_record: self.runtime_record.clone(),
             wait_for_turn: self.wait_for_turn,
         }
     }
@@ -85,6 +89,7 @@ impl<S> fmt::Debug for DeliveryContext<S> {
             .field("session_id", &self.session_id)
             .field("chain_depth", &self.chain_depth)
             .field("instruction", &self.instruction)
+            .field("runtime_record", &self.runtime_record)
             .finish_non_exhaustive()
     }
 }
@@ -104,6 +109,7 @@ impl<S: ConversationStore> DeliveryContext<S> {
             session_id: None,
             chain_depth: 0,
             instruction: false,
+            runtime_record: None,
             wait_for_turn: true,
         }
     }

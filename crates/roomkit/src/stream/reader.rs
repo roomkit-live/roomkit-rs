@@ -1052,9 +1052,9 @@ impl Producer {
             // The agent's own copy of the instruction its turn read, kept
             // before anything else of the turn, delivered to no channel and
             // handed to no reader (RFC §10.1.1); the turn began.
-            Some(Ok(RemoteItem::Item(ResponseItem::InstructionRead(text)))) => {
+            Some(Ok(RemoteItem::Item(ResponseItem::InstructionRead(marker)))) => {
                 self.segments.handed();
-                (self.keeper)(self.segments.instruction_read(text)).await;
+                (self.keeper)(self.segments.instruction_read(marker)).await;
             }
             Some(Ok(RemoteItem::Item(ResponseItem::ToolCallStart(start)))) => {
                 self.segments.call_started();
