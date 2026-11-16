@@ -72,6 +72,10 @@ fn prepend(path: &Path, steps: &mut VecDeque<Step>) {
     }
 }
 
+pub(super) fn is_symlink_loop(path: &Path) -> bool {
+    resolve(path).is_err_and(|error| error.kind() == ErrorKind::InvalidInput)
+}
+
 /// Like Path.resolve(strict=False): follow even dangling links, allow missing
 /// components, and reject loops. Canonicalizing only the nearest existing parent
 /// would miss a dangling link that already points outside the bundled directory.
@@ -110,21 +114,15 @@ fn resolve_component(
         }
         Some(Component::Normal(name)) => {
             resolved.push(name);
-            match std::fs::read_link(&resolved) {
-                Ok(target) => {
-                    if !active_links.insert(resolved.clone()) {
-                        return Err(io::Error::new(ErrorKind::InvalidInput, "symlink loop"));
-                    }
-                    steps.push_front(Step::LinkResolved(resolved.clone()));
-                    resolved.pop();
-                    prepend(&target, steps);
+            // Non-strict resolution retains an unresolved component; the
+            // following metadata/read operation reports filesystem failures.
+            if let Ok(target) = std::fs::read_link(&resolved) {
+                if !active_links.insert(resolved.clone()) {
+                    return Err(io::Error::new(ErrorKind::InvalidInput, "symlink loop"));
                 }
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        ErrorKind::NotFound | ErrorKind::NotADirectory | ErrorKind::InvalidInput
-                    ) => {}
-                Err(error) => return Err(error),
+                steps.push_front(Step::LinkResolved(resolved.clone()));
+                resolved.pop();
+                prepend(&target, steps);
             }
         }
         Some(Component::RootDir | Component::Prefix(_)) => resolved.push(part),

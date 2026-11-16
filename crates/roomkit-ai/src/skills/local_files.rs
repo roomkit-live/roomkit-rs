@@ -2,7 +2,7 @@
 
 use std::ffi::{OsStr, OsString};
 use std::io::{self, ErrorKind};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::paths::{contained_directory, safe_join_filename};
 use super::{Skill, SkillFileError};
@@ -69,7 +69,7 @@ impl Skill {
         label: &str,
     ) -> Result<PathBuf, SkillFileError> {
         let path = safe_join_filename(&self.path.join(directory), name, kind)?;
-        if !path.is_file() {
+        if !file_metadata(&path)?.is_some_and(|metadata| metadata.is_file()) {
             return Err(
                 io::Error::new(ErrorKind::NotFound, format!("{label} not found: {name}")).into(),
             );
@@ -83,7 +83,7 @@ impl Skill {
         kind: &str,
     ) -> Result<Option<PathBuf>, SkillFileError> {
         let path = self.path.join(directory);
-        if !path.is_dir() {
+        if !file_metadata(&path)?.is_some_and(|metadata| metadata.is_dir()) {
             return Ok(None);
         }
         Ok(Some(contained_directory(&path, kind)?))
@@ -103,12 +103,24 @@ impl Skill {
         let mut names = Vec::new();
         for entry in std::fs::read_dir(path)? {
             let entry = entry?;
-            if entry.path().is_file() {
+            if file_metadata(&entry.path())?.is_some_and(|metadata| metadata.is_file()) {
                 names.push(entry.file_name());
             }
         }
         names.sort_by_cached_key(|name| filename_order(name));
         Ok(names)
+    }
+}
+
+/// Preserve stat failures rather than reporting an inaccessible path as absent.
+fn file_metadata(path: &Path) -> io::Result<Option<std::fs::Metadata>> {
+    match std::fs::metadata(path) {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(error) if matches!(error.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => {
+            Ok(None)
+        }
+        Err(_) if super::paths::is_symlink_loop(path) => Ok(None),
+        Err(error) => Err(error),
     }
 }
 

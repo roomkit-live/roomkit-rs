@@ -264,3 +264,9 @@ cannot be passed as Rust strings (HITL 45d6fce8). `read_reference` uses UTF-8 an
 universal newlines without the model tool's byte bound. `resolve_script` resolves
 a contained file and never executes it. Filename NFKC uses `unicode-normalization`
 with default features disabled, approved in HITL 19458017.
+
+The direct helpers retain stat permission failures, as Python 3.12 does, instead
+of treating inaccessible directories or targets as absent. Python 3.14's pathlib
+masks some stat errors; the Rust form keeps the explicit filesystem error agreed
+in HITL 45d6fce8. Both runtimes refuse symlink loops; Rust reports a path error as
+Python 3.12 does, while newer pathlib can fail at the later file-existence check.

@@ -155,6 +155,63 @@ mod symlinks {
     use super::*;
     use crate::support::link;
 
+    // Python: tests/skills/test_local_files.py::test_listing_propagates_permission_errors_on_a_link_target
+    #[test]
+    fn test_listing_propagates_permission_errors_on_a_link_target() {
+        use std::os::unix::fs::PermissionsExt;
+        let files = TempDir::new();
+        let skill = skill(&files);
+        let target = files.file("local/hidden/body", "Body");
+        for directory in ["scripts", "references"] {
+            let path = files.dir(&format!("local/{directory}"));
+            link(&target, &path.join("link"));
+        }
+        let hidden = skill.path.join("hidden");
+        std::fs::set_permissions(&hidden, std::fs::Permissions::from_mode(0o0)).unwrap();
+        if std::fs::metadata(&target).is_ok() {
+            std::fs::set_permissions(&hidden, std::fs::Permissions::from_mode(0o700)).unwrap();
+            return; // Root can traverse a mode-zero directory.
+        }
+        let results = [skill.list_scripts(), skill.list_references()];
+        std::fs::set_permissions(&hidden, std::fs::Permissions::from_mode(0o700)).unwrap();
+        for result in results {
+            assert!(
+                matches!(result, Err(SkillFileError::Io(error)) if error.kind() == ErrorKind::PermissionDenied)
+            );
+        }
+    }
+
+    // Python: tests/skills/test_local_files.py::test_directory_stat_permission_errors_are_not_empty_results
+    #[test]
+    fn test_directory_stat_permission_errors_are_not_empty_results() {
+        use std::os::unix::fs::PermissionsExt;
+        let files = TempDir::new();
+        let skill = skill(&files);
+        for directory in ["scripts", "references"] {
+            files.dir(&format!("local/{directory}"));
+        }
+        std::fs::set_permissions(&skill.path, std::fs::Permissions::from_mode(0o0)).unwrap();
+        let probe = std::fs::metadata(skill.path.join("scripts"));
+        if probe.is_ok() {
+            std::fs::set_permissions(&skill.path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            return; // Root can traverse a mode-zero directory.
+        }
+        let results = [
+            skill.has_scripts(),
+            skill.has_references(),
+            skill.list_scripts().map(|_| true),
+            skill.list_references().map(|_| true),
+            skill.read_reference("body").map(|_| true),
+            skill.resolve_script("body").map(|_| true),
+        ];
+        std::fs::set_permissions(&skill.path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        for result in results {
+            assert!(
+                matches!(result, Err(SkillFileError::Io(error)) if error.kind() == ErrorKind::PermissionDenied)
+            );
+        }
+    }
+
     // Python: tests/skills/test_local_files.py::test_direct_file_helpers_follow_links_that_stay_inside_the_skill
     #[test]
     fn test_direct_file_helpers_follow_links_that_stay_inside_the_skill() {
