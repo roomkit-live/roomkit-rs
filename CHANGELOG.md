@@ -10,6 +10,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Add role-based ToolPolicy resolution and filters; replace policy struct literals with validated ToolPolicyOptions construction (RFC §21.1).
 
+- Expose MCP get_tools_as_dicts with complete, independent catalogue snapshots.
+
 - Add the transport-independent McpSkillServer protocol and its connected MCP provider adapter (RFC §24.7).
 
 - Compare inherent API methods even when a matching trait declares the same Python member.

@@ -16,3 +16,4 @@ mod listing;
 mod skill_server;
 mod structured;
 mod support;
+mod tool_dicts;

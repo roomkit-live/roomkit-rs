@@ -1217,10 +1217,10 @@ reason = "not in 0.x: an injected HTTP transport; the provider builds its own cl
 [[missing]]
 python = "roomkit.tools.MCPToolProvider"
 members = [
-    "__init__", "call_tool_result", "get_tools_as_dicts",
+    "__init__", "call_tool_result",
 ]
 scope = "text"
-reason = "not in 0.x: the constructor taking every transport's keywords (from_command and from_url build a provider), the raw tool result and dictionary tool definitions"
+reason = "not in 0.x: the constructor taking every transport's keywords (from_command and from_url build a provider) and the raw tool result"
 
 [[missing]]
 python = "roomkit.tools.MCPToolProvider.from_url"

@@ -108,6 +108,7 @@ async fn operation(provider: &McpToolProvider, op: &Value) -> Result<Value, McpE
         }
         "connected" => json!(provider.connected()),
         "tool_names" => json!(provider.tool_names()?),
+        "get_tools_as_dicts" => json!(provider.get_tools_as_dicts()?),
         "tool_meta" => json!(provider.tool_meta()?),
         "server_info" => json!(provider.server_info()?),
         "server_extensions" => json!(provider.server_extensions()?),

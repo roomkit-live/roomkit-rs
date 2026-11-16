@@ -76,6 +76,7 @@ mod server;
 mod skills;
 mod structured;
 mod texts;
+mod tool_dicts;
 mod wire;
 
 pub use self::error::McpError;

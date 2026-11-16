@@ -100,7 +100,9 @@ fn peer(value: &Value, path: &str, found: &mut Vec<String>) {
 
 fn operation(op: &Value, path: &str, found: &mut Vec<String>) {
     let fields: &[&str] = match op["method"].as_str() {
-        Some("connect" | "close" | "connected" | "tool_names") => &["method"],
+        Some("connect" | "close" | "connected" | "tool_names" | "get_tools_as_dicts") => {
+            &["method"]
+        }
         Some("tool_meta" | "server_info" | "server_extensions") => &["method", "mutate"],
         Some("request") => &["method", "name", "params", "timeout_ms"],
         Some("read_resource") => &["method", "uri", "timeout_ms"],
