@@ -234,7 +234,7 @@ pub(crate) async fn run(scenario: &Value) -> Vec<String> {
         step_outcomes.extend(run_step(&run, step, &format!("steps[{position}]")).await);
     }
     run.idle().await;
-    if records_ephemerals(scenario) {
+    if records_ephemerals(scenario) || scenario["expect"].get("subscribers").is_some() {
         // The realtime backend's own tasks hand what it was published.
         for _ in 0..20 {
             tokio::task::yield_now().await;

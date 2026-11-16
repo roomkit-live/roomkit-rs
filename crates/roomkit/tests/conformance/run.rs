@@ -482,6 +482,14 @@ impl Run {
             .push(event);
     }
 
+    /// What the subscriber `name` read, `None` once it subscribes (README:
+    /// `subscribers`).
+    pub(crate) fn record_subscriber(&self, name: &str, event: Option<Value>) {
+        let mut observed = lock(&self.observed);
+        let read = observed.subscribers.entry(name.to_owned()).or_default();
+        read.extend(event);
+    }
+
     pub(crate) fn record_custom_event(&self, room_id: &str, event: Value) {
         lock(&self.observed)
             .custom_events
@@ -946,6 +954,11 @@ impl Run {
 /// The calls a call's `kit` may run on another process (README, "Calls").
 const KIT_CALLS: &[&str] = &[
     "process_inbound",
+    "create_room",
+    "attach_channel",
+    "add_room_hook",
+    "subscribe_room",
+    "publish_typing",
     "regenerate_response",
     "install_strategy",
     "uninstall_strategy",

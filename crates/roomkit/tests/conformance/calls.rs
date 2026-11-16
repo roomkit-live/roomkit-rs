@@ -473,7 +473,8 @@ async fn lifecycle_call(
         }
         "create_room" => {
             let orchestration = crate::strategy_calls::room_orchestration(run, spec)?;
-            create_room(run, &spec["room"], orchestration).await?
+            let kit = run.kit_of(spec)?;
+            create_room_on(run, &kit, &spec["room"], orchestration).await?
         }
         "attach_channel" => {
             let (room, channel) = (room_id(spec)?, channel_id(spec)?);
@@ -481,7 +482,10 @@ async fn lifecycle_call(
                 organization_id: organization_id(spec),
                 ..binding_options(spec)?
             };
-            let outcome = run.kit().attach_channel(&room, &channel, options).await;
+            let outcome = run
+                .kit_of(spec)?
+                .attach_channel(&room, &channel, options)
+                .await;
             finish(run, name, outcome, dump)
         }
         "detach_channel" => {
@@ -520,6 +524,9 @@ async fn lifecycle_call(
         | "enable_room_hook"
         | "disable_room_hook" => crate::kit_executor::call(run, name, spec).await?,
         "add_room_hook" | "remove_room_hook" => room_hook_call(run, name, spec).await?,
+        "subscribe_room" | "publish_typing" => {
+            crate::subscription_calls::call(run, name, spec).await?
+        }
         "mute_output" | "unmute_output" => output_call(run, name, spec).await?,
         "process_delivery_status" | "process_webhook" => status_call(run, name, spec).await?,
         other => return Err(format!("no call {other}")),
@@ -646,6 +653,20 @@ pub(crate) async fn create_room(
     room: &Value,
     orchestration: Option<Option<crate::strategy_calls::Strategy>>,
 ) -> Result<Called, Unreadable> {
+    create_room_on(run, run.kit(), room, orchestration).await
+}
+
+/// [`create_room`] on `kit`, the run's own or another process's.
+#[expect(
+    clippy::option_option,
+    reason = "CreateRoomOptions::orchestration's three cases"
+)]
+async fn create_room_on(
+    run: &std::sync::Arc<Run>,
+    kit: &crate::Kit,
+    room: &Value,
+    orchestration: Option<Option<crate::strategy_calls::Strategy>>,
+) -> Result<Called, Unreadable> {
     // The whole timers, an explicit last activity among them, which the
     // room keeps (Python's `create_room(timers=)`).
     let timers = optional::<RoomTimers>(room, "timers")?;
@@ -657,7 +678,7 @@ pub(crate) async fn create_room(
         orchestration,
         ..Default::default()
     };
-    let outcome = run.kit().create_room(options).await;
+    let outcome = kit.create_room(options).await;
     Ok(finish(run, "create_room", outcome, dump))
 }
 
@@ -863,7 +884,7 @@ fn add_room_hook(
         needs_lock: optional(hook, "needs_lock")?.unwrap_or(defaults.needs_lock),
         organization_id: organization_id(spec),
     };
-    let (kit, room) = (run.kit().clone(), room.clone());
+    let (kit, room) = (run.kit_of(spec)?, room.clone());
     let router = hook
         .get("router")
         .map(crate::routing_calls::router)

@@ -59,11 +59,12 @@ const NO_EXECUTOR_APART: &str = "§10.6.7: an executor apart needs a public turn
     reason = "the suite prints its known failures, as a test does"
 )]
 fn reported_apart(id: &str, failing: &mut Vec<String>) -> bool {
-    // This discussion scenario also requires a separately started executor
-    // (RFC §19.7.5, RMK-1626), which the runner cannot create yet. Remove
-    // this exact case when the public executor and its runner are ported.
+    // These scenarios also require a separately started executor (RFC
+    // §19.7.5, RMK-1626), which the runner cannot create yet. Remove these
+    // exact cases when the public executor and its runner are ported.
     let apart = (id.starts_with(APART) && id != "executors/releasing-an-unknown-channel-fails")
-        || id == "discussion/an-offline-agent-s-turn-is-skipped-not-failed";
+        || id == "discussion/an-offline-agent-s-turn-is-skipped-not-failed"
+        || id == "tenancy/a-deleted-room-s-turn-reaches-nothing-of-the-room-created-again";
     if apart {
         println!("known failure {id}:\n  {NO_EXECUTOR_APART}");
         failing.push(id.to_owned());

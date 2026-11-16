@@ -62,6 +62,8 @@ pub(crate) struct Observed {
     /// The tool call events each room's subscribers read (README: `tool_events`).
     pub(crate) tool_events: BTreeMap<String, Vec<Value>>,
     pub(crate) custom_events: BTreeMap<String, Vec<Value>>,
+    /// Per subscriber a `subscribe_room` call named, the events it read.
+    pub(crate) subscribers: BTreeMap<String, Vec<Value>>,
     pub(crate) text_events: BTreeMap<String, Vec<Value>>,
     pub(crate) tasks: BTreeMap<String, Vec<Value>>,
     pub(crate) steps: Vec<Value>,

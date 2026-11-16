@@ -340,6 +340,11 @@ impl Comparison<'_> {
                 );
             }
         }
+        for (name, expected) in expect["subscribers"].as_object().into_iter().flatten() {
+            let read = self.observed.subscribers.get(name).cloned();
+            let read = Value::Array(read.unwrap_or_default());
+            self.check(expected, Some(&read), &format!("subscribers.{name}"));
+        }
         for (label, expected) in expect["actions"].as_object().into_iter().flatten() {
             let outcomes = self
                 .observed

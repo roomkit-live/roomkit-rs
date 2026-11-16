@@ -394,6 +394,7 @@ const EXPECT: &[&str] = &[
     "thinking_events",
     "tool_events",
     "custom_events",
+    "subscribers",
     "text_events",
     "tasks",
     "actions",
@@ -495,6 +496,8 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
         "kit_executor.remove_room_hook" => &["name"],
         "enable_room_hook" | "disable_room_hook" | "remove_room_hook" => &["room_id", "name"],
         "add_room_hook" => &["room_id", "hook"],
+        "subscribe_room" => &["room_id", "subscriber"],
+        "publish_typing" => &["room_id", "user_id", "is_typing"],
         "process_delivery_status" => &["status"],
         "process_webhook" => &["meta", "channel_id"],
         "deliver" => &[

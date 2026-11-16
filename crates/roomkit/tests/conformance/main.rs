@@ -53,6 +53,7 @@ mod shape;
 mod skills;
 mod store_calls;
 mod strategy_calls;
+mod subscription_calls;
 mod task_calls;
 mod templates;
 mod verification_calls;
