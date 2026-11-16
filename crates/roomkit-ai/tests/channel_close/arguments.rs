@@ -55,9 +55,9 @@ async fn rewritten(streaming: bool) {
     )
     .unwrap();
     let task = tokio::spawn(kit::says(kit.clone()));
-    started.notified().await;
-    agent.close().await;
-    task.await.unwrap();
+    bounded(started.notified()).await;
+    bounded(agent.close()).await;
+    bounded(task).await.unwrap();
     roomkit::testing::idle(&kit).await;
     let reports = reports.lock().unwrap().clone();
     assert_eq!(reports.len(), 1);

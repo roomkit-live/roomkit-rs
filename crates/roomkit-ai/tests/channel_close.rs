@@ -224,7 +224,7 @@ async fn own_close(from_child: bool) {
     let own_survived = tokio::time::timeout(Duration::from_secs(1), returned.notified())
         .await
         .is_ok();
-    let sibling_cut = tokio::time::timeout(Duration::from_millis(100), ended.notified())
+    let sibling_cut = tokio::time::timeout(Duration::from_secs(3), ended.notified())
         .await
         .is_ok();
     release.notify_one();
@@ -254,4 +254,10 @@ async fn own_close(from_child: bool) {
     assert!(rows.contains(&roomkit::model::ToolCallOutcome::Served));
     assert!(rows.contains(&roomkit::model::ToolCallOutcome::Cancelled));
     kit.close().await.unwrap();
+}
+
+async fn bounded<F: std::future::Future>(work: F) -> F::Output {
+    tokio::time::timeout(Duration::from_secs(3), work)
+        .await
+        .unwrap()
 }

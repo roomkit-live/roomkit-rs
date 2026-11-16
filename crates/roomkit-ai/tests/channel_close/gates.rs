@@ -53,8 +53,8 @@ async fn a_close_cuts_a_pending_gate_without_invoking_the_tool() {
     tokio::time::timeout(Duration::from_secs(3), started.notified())
         .await
         .unwrap();
-    agent.close().await;
-    task.await.unwrap();
+    bounded(agent.close()).await;
+    bounded(task).await.unwrap();
     roomkit::testing::idle(&kit).await;
     assert_eq!(ran.load(Ordering::SeqCst), 0);
     assert_eq!(model.inner.requests().len(), 1);
@@ -120,10 +120,10 @@ async fn a_close_keeps_an_already_decided_result() {
     )
     .unwrap();
     let task = tokio::spawn(kit::says(kit.clone()));
-    started.notified().await;
-    served.notified().await;
-    agent.close().await;
-    task.await.unwrap();
+    bounded(started.notified()).await;
+    bounded(served.notified()).await;
+    bounded(agent.close()).await;
+    bounded(task).await.unwrap();
     roomkit::testing::idle(&kit).await;
     assert_eq!(model.inner.requests().len(), 1);
     let outcomes: Vec<_> = reports
