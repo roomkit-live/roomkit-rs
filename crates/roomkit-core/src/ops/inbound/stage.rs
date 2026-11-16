@@ -15,9 +15,6 @@
 //! - the trigger's pass over, the call releases the admission ticket it
 //!   holds (`ReleasingTicket`) and goes back to its cascade, as it releases
 //!   it first when it ends holding it;
-//! - once nothing is queued or running, step 15's write of what no delivery
-//!   set stored: a record's side effects, a discussion's stopped turn's
-//!   observation (`Persisting`);
 //! - the call ends from any stage: it waits for the entries it adopted and
 //!   its delivery sets (`Ending`), then is over (`Done`).
 //!
@@ -35,7 +32,6 @@ use super::off_lock::OffLockCheck;
 use super::rerun::RerunWork;
 use super::work_read::WorkRead;
 use super::{Call, InboundError, InboundResult};
-use crate::model::Task;
 use crate::ops::protocol::EffectId;
 use crate::ops::section::Section;
 
@@ -64,10 +60,6 @@ pub(super) enum Stage {
         effect: EffectId,
         then: Box<AfterTicket>,
     },
-    /// Step 15's write of what no set stored, outstanding until answered.
-    Persisting {
-        side_effects: (EffectId, Vec<Task>),
-    },
     /// The call's outcome waits for every entry it adopted to be settled,
     /// and every event committed to be delivered.
     Ending(Box<Result<InboundResult, InboundError>>),
@@ -86,7 +78,6 @@ enum StageName {
     Cascade,
     Rerunning,
     ReleasingTicket,
-    Persisting,
     Ending,
     Done,
 }
@@ -103,7 +94,6 @@ impl Stage {
             Self::Cascade => StageName::Cascade,
             Self::Rerunning(_) => StageName::Rerunning,
             Self::ReleasingTicket { .. } => StageName::ReleasingTicket,
-            Self::Persisting { .. } => StageName::Persisting,
             Self::Ending(_) => StageName::Ending,
             Self::Done => StageName::Done,
         }
@@ -115,8 +105,8 @@ impl Stage {
 /// work it started still runs, else into `Done`.
 fn follows(from: StageName, to: StageName) -> bool {
     use StageName::{
-        Arriving, Cascade, Checking, Done, Ending, Persisting, Posting, Reading, ReadingWork,
-        ReleasingTicket, Rerunning, Start,
+        Arriving, Cascade, Checking, Done, Ending, Posting, Reading, ReadingWork, ReleasingTicket,
+        Rerunning, Start,
     };
     match from {
         // A message arrives; a direct injection from the room's work has
@@ -144,11 +134,9 @@ fn follows(from: StageName, to: StageName) -> bool {
         // The check over, the pass; a call that ends holding the ticket
         // releases it first.
         Checking => matches!(to, Checking | Cascade | ReleasingTicket | Ending | Done),
-        // The trigger's pass over, its ticket is released; once nothing is
-        // queued or running, step 15's write of what no set stored.
-        Cascade => matches!(to, ReleasingTicket | Persisting | Ending | Done),
+        // The trigger's pass over, its ticket is released.
+        Cascade => matches!(to, ReleasingTicket | Ending | Done),
         ReleasingTicket => matches!(to, Cascade | Ending | Done),
-        Persisting => matches!(to, Persisting | Ending | Done),
         Ending => to == Done,
         Done => false,
     }

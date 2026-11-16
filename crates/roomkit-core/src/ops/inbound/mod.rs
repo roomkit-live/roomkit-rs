@@ -113,7 +113,6 @@ pub use self::arrival::InboundTarget;
 use self::cascade::Trigger;
 use self::failure_reader::FailureReader;
 pub(crate) use self::metadata_write::MetadataWrite;
-use self::persist::SideEffects;
 pub(crate) use self::persist::stored_tasks;
 use self::queues::{Cascade, Lineage};
 use self::stage::{CallStage, Stage};
@@ -484,10 +483,8 @@ impl Inbound {
                 message_precharged: false,
                 adopted: Adoptions::default(),
                 adopted_deliveries: BTreeMap::new(),
-                side_effects: SideEffects::default(),
                 outcome: None,
                 answers_before_its_entries: false,
-                stores_at_its_end: false,
             }),
         }
     }
@@ -690,17 +687,12 @@ struct Machine {
     /// its entry's cascade is over, so that it carries the answers that
     /// cascade delivered (Python's `InboundResult.response_events`).
     adopted_deliveries: BTreeMap<EntryId, InboundResult>,
-    side_effects: SideEffects,
     outcome: Option<Result<InboundResult, InboundError>>,
     /// Whether the call, once its own work is over, answers its caller
     /// without waiting for the entries it adopted: a call past its deadline
     /// (RFC §13.6, §9.5.1 Reentrance), and a call whose own cascade is over
     /// while theirs still deliver (`answer_once_its_own_cascade_is_over`).
     answers_before_its_entries: bool,
-    /// Whether a pass left tasks or observations that the call stores at
-    /// its end, an instruction a discussion took (RFC §10.1 step 15): its
-    /// caller is then answered only once they are stored.
-    stores_at_its_end: bool,
 }
 
 /// What the call is, learned as it goes: its room, its kind, its channel,
@@ -847,9 +839,6 @@ impl Machine {
                 effect: expected,
                 then,
             } if expected == effect => self.on_ticket_released(cx, *then, outcome),
-            Stage::Persisting { side_effects } => {
-                self.on_persisting(cx, side_effects, effect, outcome);
-            }
             stage @ (Stage::Start(_)
             | Stage::Cascade
             | Stage::ReleasingTicket { .. }

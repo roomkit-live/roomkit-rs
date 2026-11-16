@@ -672,6 +672,71 @@ mod a_blocked_instruction {
     }
 }
 
+/// RFC §19.7.5 rule 7: an instruction to an agent of the discussion holding
+/// the room gives that agent a turn of the discussion's, and has no
+/// delivery set.
+mod an_instruction_a_discussion_takes {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    /// The room with the agent `ai` in the discussion it holds, and a hook
+    /// that gives each instruction a task and an observation.
+    fn discussion_room() -> Sim {
+        let mut sim = with_agent();
+        sim.room.metadata.insert(
+            "_discussion".to_owned(),
+            json!({"agents": ["ai"], "max_depth": 5}),
+        );
+        hook_seeing(&mut sim, "triage", |event| {
+            if event.r#type != EventType::Instruction {
+                return HookResult::allow(AllowOptions::default());
+            }
+            HookResult {
+                tasks: vec![Task::at(
+                    TaskId::new("task_1").unwrap(),
+                    room_id(),
+                    "follow the summary up",
+                    event.created_at,
+                )],
+                observations: vec![Observation::at(
+                    ObservationId::new("obs_1").unwrap(),
+                    room_id(),
+                    channel("app"),
+                    "a summary was asked",
+                    event.created_at,
+                )],
+                ..HookResult::allow(AllowOptions::default())
+            }
+        });
+        sim
+    }
+
+    /// RFC §10.1.1 rule 4, Python's `_write_decision`: with no set to store
+    /// them with, its hooks' task and observation are written in its locked
+    /// section once the discussion took it, before the lock is released,
+    /// and the task's `ON_TASK_CREATED` observers run; not once the call's
+    /// cascade is over.
+    #[test]
+    fn writes_its_hooks_side_effects_before_releasing_the_lock() {
+        let mut sim = discussion_room();
+        sim.observer("follow_up", HookTrigger::OnTaskCreated);
+        sim.send(instruction()).unwrap();
+        let locked: Vec<&str> = sim
+            .under_lock
+            .iter()
+            .map(String::as_str)
+            .filter(|line| line.starts_with("discussion") || line.starts_with("persist"))
+            .collect();
+        assert_eq!(
+            (locked, sim.async_triggers()),
+            (
+                vec!["discussion under room_1", "persist under room_1"],
+                vec![HookTrigger::OnTaskCreated]
+            )
+        );
+    }
+}
+
 /// RFC §10.1.1 rule 6: the response records the instruction's
 /// fingerprint, never its text.
 mod the_response {

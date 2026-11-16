@@ -110,10 +110,9 @@ impl Machine {
     /// Python's adopted call runs one of its own and its adopter returns
     /// without waiting for it (RFC §9.5.1 Reentrance). Not before every
     /// entry is answered and every pass is over, which may fold a failure
-    /// into the result, the ticket and a handed lock released, and nothing
-    /// left that the call stores at its end; never for a call whose own
-    /// delivery was cancelled. The operation still ends once their work is
-    /// over.
+    /// into the result, and the ticket and a handed lock released; never
+    /// for a call whose own delivery was cancelled. The operation still
+    /// ends once their work is over.
     pub(super) fn answer_once_its_own_cascade_is_over(&mut self, cx: &mut Cx<'_>) {
         if self.answers_before_its_entries
             || !matches!(self.stage.current(), Stage::Cascade)
@@ -125,7 +124,6 @@ impl Machine {
             || self.trigger.releasing_hand.is_some()
             || self.trigger.result.cancellation_reason.is_some()
             || self.cascade.is_cut(Lineage::Call)
-            || self.stores_at_its_end
         {
             return;
         }

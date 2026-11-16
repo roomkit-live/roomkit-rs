@@ -540,7 +540,7 @@ impl CommitPass {
             result
         };
         if matches!(result, PassResult::Blocked { .. }) {
-            return self.store_blocked(cx, result);
+            return self.store_hook_effects(cx, result);
         }
         let PassResult::Delivered { event, .. } = &result else {
             return self.release(cx, Ok(result));
@@ -628,7 +628,9 @@ impl CommitPass {
 
     /// The discussion has been told. A failure of its own on a committed
     /// event is logged, and never leaves it undelivered; an instruction it
-    /// did not take is lost, which its caller is told (RFC §19.7.5).
+    /// did not take is lost, which its caller is told (RFC §19.7.5). An
+    /// instruction it took, with no delivery set, has its hooks' side
+    /// effects written before the lock is released (RFC §10.1.1 rule 4).
     pub(super) fn on_told(
         &mut self,
         cx: &mut Cx<'_>,
@@ -647,6 +649,9 @@ impl CommitPass {
                 message = %error.message,
                 "the room's discussion did not read the event"
             );
+        }
+        if matches!(result, PassResult::Stored { .. }) {
+            return self.store_hook_effects(cx, result);
         }
         self.release(cx, Ok(result))
     }

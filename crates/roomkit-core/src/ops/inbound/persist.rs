@@ -11,11 +11,11 @@
 //! its drop (Python's `_store_dropped_side_effects`). A set reads its room
 //! first, and writes none of it once the room it read is gone, deleted or
 //! created again under its id (RFC §13.5), the log saying why (Python's
-//! `_side_effects_room_gone`). A record stored blocked writes its hooks'
-//! side effects at its commit (`pass::blocked`), and a discussion's stopped
-//! turn its observation with its record. What no set stores, the hooks'
-//! side effects of an instruction a discussion took, is stored once the
-//! cascade's passes and sets are over; then the operation ends.
+//! `_side_effects_room_gone`). An event with no set writes its hooks' side
+//! effects at its decision, under the lock (`pass::hook_effects`): a record
+//! stored blocked, a blocked instruction, and an instruction a discussion
+//! took; and a discussion's stopped turn writes its observation with its
+//! record.
 //!
 //! A write the store fails is logged, at ERROR (RFC §15.2), and the call
 //! goes on, a failed write never its error: each task and observation is
@@ -24,12 +24,8 @@
 //! `_persist_side_effects` and `_write_metadata_updates` do.
 
 use super::metadata_write::MetadataWrite;
-use super::{Machine, Stage, report};
-use std::collections::HashMap;
 
-use crate::model::{
-    ErrorRecord, Metadata, Observation, RoomContext, RoomEvent, RoomId, Task, TaskId, Timestamp,
-};
+use crate::model::{ErrorRecord, Metadata, Observation, RoomId, Task, Timestamp};
 use crate::ops::protocol::{EffectId, KIT_CLOSED, Outcome, StoreRequest, Unpersisted};
 use crate::ops::{Cx, Progress, RecentEvents};
 
@@ -177,63 +173,6 @@ fn room_unread(room_id: &RoomId, error: &ErrorRecord) {
         error = %error.message,
         "Could not read room {room_id} before writing its side effects"
     );
-}
-
-/// What the call's passes and sets left for the end of its cascade: the
-/// tasks and observations no set stored, and the room as the last pass or
-/// set that filed tasks left it, which their `ON_TASK_CREATED` observers
-/// read.
-#[derive(Debug, Default)]
-pub(super) struct SideEffects {
-    tasks: Vec<Task>,
-    observations: Vec<Observation>,
-    task_context: Option<Box<RoomContext>>,
-    /// The event each task was made for, by the task: the one its
-    /// `ON_TASK_CREATED` event carries the source and content of.
-    made_for: HashMap<TaskId, RoomEvent>,
-}
-
-impl SideEffects {
-    /// Keeps the tasks and observations a pass or a set collected for
-    /// `made_for`, the event its step handled; the room as `context` holds
-    /// it is the one their tasks' observers read, when it filed tasks and
-    /// left a room.
-    pub(super) fn collect(
-        &mut self,
-        tasks: Vec<Task>,
-        observations: Vec<Observation>,
-        context: Option<&RoomContext>,
-        made_for: Option<&RoomEvent>,
-    ) {
-        if !tasks.is_empty()
-            && let Some(context) = context
-        {
-            self.task_context = Some(Box::new(context.clone()));
-        }
-        if let Some(event) = made_for {
-            for task in &tasks {
-                self.made_for.insert(task.id.clone(), event.clone());
-            }
-        }
-        self.tasks.extend(tasks);
-        self.observations.extend(observations);
-    }
-
-    /// The tasks and observations to store, none once taken.
-    fn take_stored(&mut self) -> Option<(Vec<Task>, Vec<Observation>)> {
-        if self.tasks.is_empty() && self.observations.is_empty() {
-            return None;
-        }
-        Some((
-            std::mem::take(&mut self.tasks),
-            std::mem::take(&mut self.observations),
-        ))
-    }
-
-    /// The room the observers of the stored tasks read.
-    fn task_context(&self) -> Option<&RoomContext> {
-        self.task_context.as_deref()
-    }
 }
 
 /// What one delivery set stores once it is over, before its event's
@@ -433,68 +372,5 @@ impl SetEffects {
             return Progress::Waiting;
         }
         Progress::Done(std::mem::take(&mut self.written))
-    }
-}
-
-impl Machine {
-    /// Stores what no set stored once the cascade's passes and sets are
-    /// over (RFC §10.1 step 15), then ends.
-    pub(super) fn persist_side_effects(&mut self, cx: &mut Cx<'_>) {
-        let side_effects = self.issue_side_effects(cx);
-        self.await_persisted(cx, side_effects);
-    }
-
-    /// Asks for the collected tasks and observations to be stored, if any.
-    fn issue_side_effects(&mut self, cx: &mut Cx<'_>) -> Option<(EffectId, Vec<Task>)> {
-        let room_id = self.call.room_id.clone()?;
-        let (tasks, observations) = self.side_effects.take_stored()?;
-        let effect = cx.io.issue(StoreRequest::PersistSideEffects {
-            room_id,
-            tasks: tasks.clone(),
-            observations,
-        });
-        Some((effect, tasks))
-    }
-
-    /// Takes the answer of step 15's write.
-    pub(super) fn on_persisting(
-        &mut self,
-        cx: &mut Cx<'_>,
-        side_effects: (EffectId, Vec<Task>),
-        effect: EffectId,
-        outcome: Outcome,
-    ) {
-        let (expected, tasks) = side_effects;
-        if expected != effect {
-            debug_assert!(false, "inbound received {effect:?} while persisting");
-            self.stage.put_back(Stage::Persisting {
-                side_effects: (expected, tasks),
-            });
-            return;
-        }
-        self.on_persisted(cx, outcome, tasks);
-        self.await_persisted(cx, None);
-    }
-
-    /// Waits for step 15's write, or ends once it is answered.
-    fn await_persisted(&mut self, cx: &mut Cx<'_>, side_effects: Option<(EffectId, Vec<Task>)>) {
-        let Some(side_effects) = side_effects else {
-            let result = std::mem::take(&mut self.trigger.result);
-            return self.end(cx, Ok(result));
-        };
-        self.stage.enter(Stage::Persisting { side_effects });
-    }
-
-    /// The side effects are stored, but those the store failed, logged:
-    /// each stored task's `ON_TASK_CREATED` observers run (RFC §10.1 step
-    /// 15).
-    fn on_persisted(&mut self, cx: &mut Cx<'_>, outcome: Outcome, tasks: Vec<Task>) {
-        let Some(room_id) = self.call.room_id.as_ref() else {
-            return;
-        };
-        let tasks = stored_tasks(room_id, tasks, outcome.into_persisted());
-        if let Some(context) = self.side_effects.task_context() {
-            report::tasks_created(cx, &tasks, &self.side_effects.made_for, context);
-        }
     }
 }

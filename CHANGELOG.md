@@ -419,7 +419,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   depth limit stops with its record, as Python's: they waited for the end
   of the call's cascade, `ON_TASK_CREATED` with them, and went into a room
   created again meanwhile; an event the room refuses once its hooks ran
-  keeps none of theirs, where they were written too (RMK-1713).
+  keeps none of theirs, where they were written too (RMK-1713). Those a
+  hook gives an instruction the room's discussion takes are written so
+  too, under the room's lock once the discussion has it, as Python's now
+  does: they waited for the end of the call's cascade (RMK-1715).
 - A name the kit quotes as Python's `repr` (a rename's record, an error's
   text, a skill's or a memory's message) escapes every character Python's
   `str.isprintable` refuses, as Python does: `'Bob\xa0Smith'` and

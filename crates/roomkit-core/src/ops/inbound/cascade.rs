@@ -199,37 +199,23 @@ impl Machine {
         report: PassReport,
         origin: &PassOrigin,
     ) {
-        let (context, made_for) = match &report.result {
-            PassResult::Delivered { context, event, .. }
-            | PassResult::Blocked { context, event, .. }
-            | PassResult::Stored { context, event } => (Some(&**context), Some(&**event)),
-            PassResult::Refused { .. }
-            | PassResult::DiscussionOver
-            | PassResult::Duplicate { .. }
-            | PassResult::EditRefused { .. } => (None, None),
-        };
         // A delivered event's hooks' side effects are stored with its set's,
-        // before its AFTER_BROADCAST hooks run (RFC §10.1 steps 15 and 16);
-        // a record stored blocked stored its own at its commit (steps 10
-        // and 11), and a pass the room refused once its hooks ran stores
-        // none of theirs (step 9a), as Python's `_gate_commit` keeps none.
-        // An instruction a discussion took, which has no set, leaves its
-        // own for the cascade's end.
-        let mut hook_effects = (Vec::new(), Vec::new());
-        match &report.result {
-            PassResult::Delivered { .. } => hook_effects = (report.tasks, report.observations),
-            PassResult::Stored { .. } => {
-                self.stores_at_its_end |=
-                    !report.tasks.is_empty() || !report.observations.is_empty();
-                self.side_effects
-                    .collect(report.tasks, report.observations, context, made_for);
-            }
-            PassResult::Blocked { .. }
+        // before its AFTER_BROADCAST hooks run (RFC §10.1 steps 15 and 16).
+        // An event with no set stored its own at its decision, under the
+        // lock: a record stored blocked at its commit (steps 10 and 11), an
+        // instruction blocked or taken by the discussion once decided
+        // (§10.1.1 rule 4). A pass the room refused once its hooks ran
+        // stores none of theirs (step 9a), as Python's `_gate_commit` keeps
+        // none.
+        let hook_effects = match &report.result {
+            PassResult::Delivered { .. } => (report.tasks, report.observations),
+            PassResult::Stored { .. }
+            | PassResult::Blocked { .. }
             | PassResult::Refused { .. }
             | PassResult::DiscussionOver
             | PassResult::Duplicate { .. }
-            | PassResult::EditRefused { .. } => {}
-        }
+            | PassResult::EditRefused { .. } => (Vec::new(), Vec::new()),
+        };
         // The failed release of a pass an adopted entry's answer waits for
         // is that entry's, as Python's adopted call collects its own.
         self.note_release_error(origin.owed(), report.release_error);

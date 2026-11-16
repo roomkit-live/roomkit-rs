@@ -30,9 +30,9 @@
 //! carries the outcome of the trigger's off-lock check, which step 9
 //! applies first, running only the hooks that need the lock (RFC §9.5.1).
 
-mod blocked;
 mod decision;
 mod gates;
+mod hook_effects;
 
 use std::collections::VecDeque;
 use std::mem;
@@ -158,12 +158,13 @@ pub(super) enum PassResult {
         /// Why.
         refusal: EditRefusal,
     },
-    /// Committed with nothing to deliver from: the greeting of an agent the
-    /// room does not bind (RFC §19.1).
+    /// Decided with no delivery set: the greeting of an agent the room does
+    /// not bind, committed (RFC §19.1), or an instruction the discussion
+    /// holding the room took, never committed (RFC §10.1.1, §19.7.5 rule 7).
     Stored {
-        /// The committed event.
+        /// The committed greeting, or the instruction as its hooks left it.
         event: Box<RoomEvent>,
-        /// The room's context at the commit.
+        /// The room's context at the commit or the decision.
         context: Box<RoomContext>,
     },
 }
@@ -432,10 +433,10 @@ enum State {
         effect: EffectId,
         result: PassResult,
     },
-    /// A record stored blocked, or a blocked instruction, has its hooks'
-    /// tasks and observations written, under the lock (RFC §10.1 steps 10
-    /// and 11).
-    StoringBlocked {
+    /// A record stored blocked, a blocked instruction or an instruction the
+    /// discussion took has its hooks' tasks and observations written, under
+    /// the lock (RFC §10.1 steps 10 and 11, §10.1.1 rule 4).
+    StoringHookEffects {
         effect: EffectId,
         result: PassResult,
         tasks: Vec<Task>,
@@ -468,7 +469,7 @@ impl State {
             | Self::WritingUnstored { effect, .. }
             | Self::Placing { effect, .. }
             | Self::TellingDiscussion { effect, .. }
-            | Self::StoringBlocked { effect, .. }
+            | Self::StoringHookEffects { effect, .. }
             | Self::Releasing { effect, .. } => Some(*effect),
             Self::Start | Self::Finished(_) | Self::Reported => None,
         }
@@ -654,8 +655,8 @@ impl CommitPass {
             State::WritingUnstored { result, .. } => self.on_unstored_written(cx, result, outcome),
             State::Placing { result, .. } => self.on_placed(cx, result, outcome),
             State::TellingDiscussion { result, .. } => self.on_told(cx, result, outcome),
-            State::StoringBlocked { result, tasks, .. } => {
-                self.on_blocked_stored(cx, result, tasks, outcome)
+            State::StoringHookEffects { result, tasks, .. } => {
+                self.on_hook_effects_stored(cx, result, tasks, outcome)
             }
             State::Releasing { result, .. } => {
                 let released = outcome.into_released();
@@ -741,7 +742,7 @@ impl CommitPass {
             | State::WritingUnstored { .. }
             | State::Placing { .. }
             | State::TellingDiscussion { .. }
-            | State::StoringBlocked { .. }
+            | State::StoringHookEffects { .. }
             | State::Releasing { .. }
             | State::Finished(_)
             | State::Reported) => {

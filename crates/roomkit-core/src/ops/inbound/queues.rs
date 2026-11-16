@@ -715,7 +715,8 @@ impl Machine {
             && self.cascade.is_idle()
             && self.adopted.is_idle()
         {
-            self.persist_side_effects(cx);
+            let result = std::mem::take(&mut self.trigger.result);
+            self.end(cx, Ok(result));
         } else {
             self.answer_once_its_own_cascade_is_over(cx);
         }
