@@ -317,8 +317,14 @@ pub(crate) fn scripted_agent_of(
             .flatten()
     };
     let (model, paced) = scripted_model(&spec["model"], run, id.as_str(), shared(id.as_str()))?;
+    let servers = run.mcp.of(id.as_str());
+    if spec.get("mcp_servers").is_some() && servers.is_empty() {
+        return Err("mcp_servers: only a setup channel's servers are connected".to_owned());
+    }
+    let mut declared = crate::mcp_servers::declared(&servers)?;
+    declared.extend(Vec::<ToolEntry>::from(tools(spec, run)));
     let mut options = AiChannelOptions {
-        tools: tools(spec, run).into(),
+        tools: declared,
         serialize_room_turns: spec["serialize_room_turns"] == true,
         steer_room_turns: spec["steer_room_turns"] == true,
         ..AiChannelOptions::default()
@@ -379,7 +385,13 @@ pub(crate) fn scripted_agent_of(
         let memory = agent_memory(memory, (&id, run), options.max_context_events, &mut models)?;
         options.memory = Some(memory);
     }
-    options.tool_handler = undeclared_tools(spec, run);
+    let mut chain = crate::mcp_servers::handlers(&servers)?;
+    chain.extend(undeclared_tools(spec, run));
+    options.tool_handler = if chain.len() > 1 {
+        Some(roomkit_ai::compose_tool_handlers(chain).map_err(|e| e.to_string())?)
+    } else {
+        chain.pop()
+    };
     crate::audits::audit_tools(spec, run, &mut options);
     if let Some(human) = spec.get("human_input") {
         options.human_input_handler = Some(human_input(human)?);
@@ -1468,6 +1480,7 @@ fn request(request: &AiContext) -> Value {
         "enable_thinking": request.enable_thinking,
         "response_schema": request.response_schema,
         "tools": tools,
+        "tool_definitions": request.tools.iter().map(|tool| (tool.name.clone(), json!({ "description": tool.description, "parameters": tool.parameters }))).collect::<serde_json::Map<_, _>>(),
         "deferred_tools": request.tools.iter().filter(|tool| tool.defer_loading).map(|tool| &tool.name).collect::<Vec<_>>(),
         "reopened_tools": request.messages.iter().filter(|message| message.metadata.get("reopening") == Some(&Value::Bool(true))).flat_map(AiMessage::tool_results).flat_map(|result| result.references.iter()).collect::<Vec<_>>(),
     })

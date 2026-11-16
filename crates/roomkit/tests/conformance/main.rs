@@ -36,6 +36,7 @@ mod input_calls;
 mod kit_executor;
 mod locks;
 mod matching;
+mod mcp_servers;
 mod media;
 mod member_calls;
 mod memory;

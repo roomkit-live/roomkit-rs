@@ -104,6 +104,7 @@ const CHANNEL: &[&str] = &[
     "on_room_detached",
     "model",
     "acp",
+    "mcp_servers",
     "tools",
     "tool_policy",
     "max_tool_rounds",
@@ -251,6 +252,8 @@ const TOOL: &[&str] = &[
 ];
 const RAISES: &[&str] = &["kind", "message"];
 const POLICY: &[&str] = &["allow", "deny"];
+const MCP_SERVER: &[&str] = &["label", "gate_discovery", "declare", "tools"];
+const MCP_TOOL: &[&str] = &["name", "description", "input_schema", "returns"];
 const MEMORY: &[&str] = &[
     "max_events",
     "returns_current_event",
@@ -885,6 +888,18 @@ fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
         &format!("{path}.tool_policy"),
         found,
     );
+    for (index, server) in items(&channel["mcp_servers"]) {
+        let server_path = format!("{path}.mcp_servers[{index}]");
+        members(server, MCP_SERVER, &server_path, found);
+        for (position, tool) in items(&server["tools"]) {
+            members(
+                tool,
+                MCP_TOOL,
+                &format!("{server_path}.tools[{position}]"),
+                found,
+            );
+        }
+    }
     optional(
         &channel["addresses"],
         ADDRESSES,

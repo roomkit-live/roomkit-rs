@@ -39,6 +39,9 @@ roomkit-acp.workspace = true
 # roomkit: a request written to a local server (`net`, `io-util`).
 roomkit-openai.workspace = true
 roomkit-anthropic.workspace = true
+# The conformance runner's `mcp_servers` (roomkit's runner, shared).
+roomkit-mcp = { workspace = true, features = ["http"] }
+axum.workspace = true
 tokio = { workspace = true, features = ["net", "io-util"] }
 sha2.workspace = true
 # The conformance runner's, which the suite includes from roomkit.

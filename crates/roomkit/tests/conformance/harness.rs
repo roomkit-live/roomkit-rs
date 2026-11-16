@@ -202,6 +202,7 @@ pub(crate) async fn run(scenario: &Value) -> Vec<String> {
     *lock(&run.backend) = backend;
     *lock(&run.strategies) = strategies;
     if let Err(problem) = set_up(&run, &setup).await {
+        run.mcp.close().await;
         return vec![format!("setup: {problem}")];
     }
     for process in setup["processes"].as_array().into_iter().flatten() {
@@ -243,6 +244,7 @@ pub(crate) async fn run(scenario: &Value) -> Vec<String> {
     for kit in run.open_kits() {
         kit.close().await.unwrap();
     }
+    run.mcp.close().await;
     run.observer_store().close().await;
     observed.text_events = std::mem::take(&mut *lock(&text_events));
     let mut found = lock(&run.problems).clone();
@@ -252,6 +254,7 @@ pub(crate) async fn run(scenario: &Value) -> Vec<String> {
 
 async fn set_up(run: &Arc<Run>, setup: &Value) -> Result<(), String> {
     run.auditors.set_up(&setup["session_auditor"], run.kit())?;
+    run.mcp.connect(&setup["channels"]).await?;
     for channel in setup["channels"].as_array().into_iter().flatten() {
         calls::register_channel(run, channel)?
             .map_err(|error| format!("register {channel}: {error}"))?;

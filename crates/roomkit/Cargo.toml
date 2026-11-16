@@ -54,6 +54,10 @@ roomkit-acp.workspace = true
 # Completions rendering, to a local server (`net`, `io-util`).
 roomkit-openai.workspace = true
 roomkit-anthropic.workspace = true
+# The conformance runner's `mcp_servers`: roomkit-mcp's provider over
+# streamable HTTP, to a server the runner serves in process.
+roomkit-mcp = { workspace = true, features = ["http"] }
+axum.workspace = true
 sha2.workspace = true
 # The turn backend's liveness, tested on tokio's paused clock.
 tokio = { workspace = true, features = ["test-util", "net", "io-util"] }
