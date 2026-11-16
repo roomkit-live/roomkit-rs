@@ -490,6 +490,21 @@ impl Run {
         read.extend(event);
     }
 
+    /// How many ephemerals the run's subscribers read so far, of every kind.
+    pub(crate) fn ephemerals_read(&self) -> usize {
+        let observed = lock(&self.observed);
+        [
+            &observed.thinking_events,
+            &observed.tool_events,
+            &observed.custom_events,
+            &observed.subscribers,
+        ]
+        .iter()
+        .flat_map(|kind| kind.values())
+        .map(Vec::len)
+        .sum()
+    }
+
     pub(crate) fn record_custom_event(&self, room_id: &str, event: Value) {
         lock(&self.observed)
             .custom_events

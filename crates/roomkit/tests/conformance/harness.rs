@@ -235,10 +235,7 @@ pub(crate) async fn run(scenario: &Value) -> Vec<String> {
     }
     run.idle().await;
     if records_ephemerals(scenario) || scenario["expect"].get("subscribers").is_some() {
-        // The realtime backend's own tasks hand what it was published.
-        for _ in 0..20 {
-            tokio::task::yield_now().await;
-        }
+        settle_ephemerals(&run).await;
     }
     let mut observed = observe(&run, step_outcomes).await;
     for kit in run.open_kits() {
@@ -419,6 +416,23 @@ async fn wait_for_lock(run: &Arc<Run>, room_id: &str, waiters: usize) -> bool {
 
 /// Whether the scenario expects what a room's subscribers read of a turn's
 /// reasoning or of its tool calls (README: `thinking_events`, `tool_events`).
+/// Waits until the realtime backend's own tasks, on any of the runtime's
+/// workers, have handed the subscribers what was published: what they read
+/// holds still over 20 checks a millisecond apart, within two seconds.
+async fn settle_ephemerals(run: &Arc<Run>) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let (mut read, mut still) = (run.ephemerals_read(), 0);
+    while still < 20 && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        let now = run.ephemerals_read();
+        if now == read {
+            still += 1;
+        } else {
+            (read, still) = (now, 0);
+        }
+    }
+}
+
 fn records_ephemerals(scenario: &Value) -> bool {
     ["thinking_events", "tool_events", "custom_events"]
         .iter()
