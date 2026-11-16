@@ -8,16 +8,10 @@ use std::sync::Arc;
 use super::availability::Marks;
 use super::error::SkillError;
 use super::files::{self, OpenFailure, ReadFailure, SKILL_FILE_MAX};
-use super::frontmatter::{self, Fields};
+use super::frontmatter;
 use super::model::{DiscoverOptions, Skill, SkillMetadata};
-use super::texts::quoted_name;
+use super::validation::{invalid, memory_errors};
 use super::{CopyOptions, RequiresMatch, SkillRegistryOptions};
-
-/// The most characters a skill's name takes (RFC §24.1).
-const NAME_MAX: usize = 64;
-
-/// The most characters a skill's description takes.
-const DESCRIPTION_MAX: usize = 1024;
 
 /// The most characters the manifest takes: every system prompt carries it.
 pub(crate) const MANIFEST_MAX: usize = 64 * 1024;
@@ -27,7 +21,7 @@ pub(crate) const MANIFEST_MAX: usize = 64 * 1024;
 /// gives its `name` and `description`, read line by line within RFC
 /// §24.1's bounds, with no YAML reader (step 4, decision 11).
 ///
-/// Discovery and registration are strict and atomic (RFC §24.5): the first
+/// Directory discovery and registration are strict and atomic (RFC §24.5): the first
 /// skill that cannot be loaded fails the call, which names it and why, and
 /// leaves the registry as it was. A skill is refused when:
 ///
@@ -46,7 +40,8 @@ pub(crate) const MANIFEST_MAX: usize = 64 * 1024;
 /// Discovery that is not strict ([`DiscoverOptions::strict`]) logs and
 /// skips each directory it cannot scan and each skill it cannot load; the
 /// manifest's bound still fails it. A skill registered under a name the
-/// registry holds replaces it, keeping its place.
+/// registry holds replaces it, keeping its place. [`Self::add`] accepts an already
+/// built skill without reading a file or imposing directory metadata constraints.
 ///
 /// ```
 /// use roomkit_ai::{DiscoverOptions, SkillRegistry};
@@ -143,6 +138,26 @@ impl SkillRegistry {
         let metadata = skill.metadata.clone();
         self.commit(vec![skill])?;
         Ok(metadata)
+    }
+
+    /// Adds a skill built in memory, retaining its instructions and path (RFC §24.3).
+    /// Replaces an earlier skill of the same name and clears its availability marks.
+    /// No file is read and directory metadata constraints do not apply.
+    ///
+    /// # Errors
+    /// Returns [`SkillError::Validation`] for a name containing `:` (reserved for
+    /// served skills) or a bracketed tool pattern, and [`SkillError::ManifestTooLarge`]
+    /// past the manifest bound. A rejected addition leaves the registry unchanged.
+    pub fn add(&mut self, skill: Skill) -> Result<(), SkillError> {
+        let reasons = memory_errors(&skill.metadata);
+        if !reasons.is_empty() {
+            return Err(SkillError::Validation {
+                skill: skill.name().to_owned(),
+                reasons,
+            });
+        }
+        self.commit(vec![skill])?;
+        Ok(())
     }
 
     /// The metadata of the skill `name`.
@@ -386,76 +401,5 @@ fn skill_file(directory: &Path, label: &str) -> Result<String, SkillError> {
             ReadFailure::NotText => "SKILL.md is not UTF-8 text".to_owned(),
             ReadFailure::Io(error) => format!("Unable to read SKILL.md: {error}"),
         })
-    })
-}
-
-/// What is wrong with `fields`, the frontmatter of the skill in the
-/// directory `label`, in the reference implementation's words and order.
-fn invalid(fields: &Fields, label: &str) -> Vec<String> {
-    let mut reasons = pattern_errors(fields);
-    let name = fields.name.as_deref().unwrap_or_default();
-    let characters = name.chars().count();
-    if name.is_empty() {
-        reasons.push("Missing required field: name".to_owned());
-    } else if !is_kebab_case(name) {
-        reasons.push(format!(
-            "Invalid name {}: must be kebab-case (lowercase alphanumeric + hyphens)",
-            quoted_name(name)
-        ));
-    } else if characters > NAME_MAX {
-        reasons.push(format!(
-            "Name too long: {characters} chars (max {NAME_MAX})"
-        ));
-    }
-    if !name.is_empty() && name != label {
-        reasons.push(format!(
-            "Name {} does not match directory name {}",
-            quoted_name(name),
-            quoted_name(label)
-        ));
-    }
-    let description = fields.description.as_deref().unwrap_or_default();
-    let characters = description.chars().count();
-    if description.is_empty() {
-        reasons.push("Missing required field: description".to_owned());
-    } else if characters > DESCRIPTION_MAX {
-        reasons.push(format!(
-            "Description too long: {characters} chars (max {DESCRIPTION_MAX})"
-        ));
-    }
-    reasons
-}
-
-/// Bracketed patterns would not match as character classes.
-fn pattern_errors(fields: &Fields) -> Vec<String> {
-    let mut reasons = Vec::new();
-    for (key, value) in [
-        ("allowed_tools", &fields.allowed_tools),
-        ("requires", &fields.requires),
-    ] {
-        if let Some(gates) = value {
-            for pattern in gates
-                .names()
-                .into_iter()
-                .filter(|name| name.contains(['[', ']']))
-            {
-                reasons.push(format!(
-                    "{key}: tool pattern {} holds a bracket: a pattern reads * and ? alone",
-                    quoted_name(&pattern),
-                ));
-            }
-        }
-    }
-    reasons
-}
-
-/// Whether `name` is lowercase ASCII letters and digits in runs a hyphen
-/// separates.
-fn is_kebab_case(name: &str) -> bool {
-    name.split('-').all(|run| {
-        !run.is_empty()
-            && run
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
     })
 }

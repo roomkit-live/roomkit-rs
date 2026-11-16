@@ -186,6 +186,7 @@ const TURN_CONFIG: &[&str] = &[
 ];
 const TURN_TOOL: &[&str] = &["name", "description", "parameters"];
 const SKILL: &[&str] = &[
+    "in_memory",
     "name",
     "description",
     "instructions",
@@ -906,6 +907,12 @@ fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
 fn skills(skills: &Value, path: &str, found: &mut Vec<String>) {
     for (index, skill) in items(skills) {
         members(skill, SKILL, &format!("{path}[{index}]"), found);
+        if skill
+            .get("in_memory")
+            .is_some_and(|value| !value.is_boolean())
+        {
+            found.push(format!("{path}[{index}].in_memory: expected a boolean"));
+        }
     }
 }
 
@@ -1291,6 +1298,21 @@ fn provider_result(output: &Value, path: &str, found: &mut Vec<String>) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // Python: tests/conformance/test_skill_fixture.py::test_the_in_memory_control_requires_a_boolean
+    #[test]
+    fn test_the_in_memory_control_requires_a_boolean() {
+        for value in [json!(null), json!(1), json!("true"), json!([]), json!({})] {
+            let scenario = json!({"setup":{"channels":[{"id":"agent","type":"ai",
+                "skills":[{"name":"local","description":"Stored","in_memory":value}]
+            }]}});
+            assert!(
+                unknown_members(&scenario)
+                    .iter()
+                    .any(|problem| problem.contains("in_memory: expected a boolean"))
+            );
+        }
+    }
 
     // Python: tests/conformance/test_acp_fixture.py::test_directory_fixture_rejects_malformed_lists
     #[test]

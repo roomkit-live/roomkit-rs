@@ -26,6 +26,7 @@ tracing.workspace = true
 # The id minted for a call its provider gave none, as Python's
 # `minted_call_id` (`uuid4().hex[:12]`).
 uuid.workspace = true
+unicode-normalization.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true

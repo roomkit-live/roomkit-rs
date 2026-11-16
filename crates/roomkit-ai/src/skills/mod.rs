@@ -19,17 +19,22 @@
 mod activation;
 mod availability;
 mod error;
+mod file_error;
 mod files;
 mod frontmatter;
+mod local_files;
 mod matcher;
 mod model;
+mod paths;
 mod registry;
 mod requirements;
 mod texts;
 mod tool_names;
 pub(crate) mod tools;
+mod validation;
 
 pub use self::error::SkillError;
+pub use self::file_error::{SkillFileError, SkillPathError};
 pub use self::matcher::{CopyOptions, RequiresMatch, SkillRegistryOptions};
 pub use self::model::{DiscoverOptions, Skill, SkillMetadata};
 pub use self::registry::SkillRegistry;

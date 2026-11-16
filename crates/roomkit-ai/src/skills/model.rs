@@ -13,10 +13,10 @@ use roomkit::model::Metadata;
 /// allowed_tools=None, extra_metadata={})`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SkillMetadata {
-    /// Its name: lowercase letters and digits in hyphen-separated runs, at
-    /// most 64 characters, its directory's name.
+    /// Its name. Directory registration requires kebab-case, at most 64
+    /// characters, matching its directory; in-memory addition reserves `:` only.
     pub name: String,
-    /// What it does, at most 1,024 characters.
+    /// What it does. Directory registration limits this to 1,024 characters.
     pub description: String,
     /// Its license, when its frontmatter names one.
     pub license: Option<String>,
@@ -80,16 +80,17 @@ impl SkillMetadata {
     }
 }
 
-/// A skill whole (RFC §24.1): its metadata, its instructions, the body of
-/// its `SKILL.md`, and its directory, resolved, where its references are
-/// read. Python's `Skill(metadata, instructions, path)`.
+/// A complete skill (RFC §24.1): metadata, instructions and its bundled-file
+/// directory. Directory registration resolves the path and reads SKILL.md;
+/// in-memory addition preserves the supplied values. Python's
+/// `Skill(metadata, instructions, path)`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Skill {
     /// What its frontmatter declares.
     pub metadata: SkillMetadata,
-    /// Its instructions: its `SKILL.md`'s body.
+    /// Its instructions, loaded from SKILL.md or supplied by the host.
     pub instructions: String,
-    /// Its directory, resolved.
+    /// Its directory, resolved by directory registration or supplied by the host.
     pub path: PathBuf,
 }
 

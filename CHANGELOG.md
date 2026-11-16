@@ -6,6 +6,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Add direct `Skill` file helpers with contained, normalized paths, unbounded UTF-8 reference reads and distinct path/filesystem/encoding errors (RFC §24.6, RMK-1709).
+
+- Register in-memory skills through `SkillRegistry::add`, preserving their paths and instructions, clearing stale marks and rejecting invalid or oversized replacements atomically (RFC §24.3, RMK-1709).
+
 - Skill unavailable marks and copies reject manifests past 65,536 escaped characters atomically. Handle the new `Result` from `mark_unavailable` and `copy` (HITL 7196c294, RMK-1709).
 
 - Skill registries accept a host prerequisite matcher and copy availability marks optionally. Use `SkillRegistry::new(SkillRegistryOptions)` (or `default()`) and `copy(names, CopyOptions)` in place of `new()` and `copy(names)` (HITL 73da84cd, RMK-1709).

@@ -9,7 +9,10 @@
 mod availability;
 mod copy_matcher;
 mod discovery;
+mod file_boundaries;
 mod gating;
+mod local_files;
+mod local_registration;
 mod manifest_bound;
 mod requirements;
 mod support;

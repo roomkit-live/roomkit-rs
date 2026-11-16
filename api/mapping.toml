@@ -889,24 +889,15 @@ scope = "media"
 reason = "not in 0.x: recording"
 
 [[missing]]
-python = "roomkit.Skill"
-members = [
-    "has_references", "has_scripts", "list_references", "list_scripts",
-    "read_reference", "resolve_script",
-]
-scope = "text"
-reason = "not in 0.x: direct skill reference/script helpers, skills served by MCP, in-memory registration and execution tool patterns"
-
-[[missing]]
 python = "roomkit.SkillRegistry"
 members = [
-    "add", "add_mcp_server",
+    "add_mcp_server",
     "execution_tool_patterns",
     "has_served", "is_served", "load_skill",
     "origin", "read_file",
 ]
 scope = "text"
-reason = "not in 0.x: direct skill reference/script helpers, skills served by MCP, in-memory registration and execution tool patterns"
+reason = "not yet ported: skills served by MCP and execution tool patterns (RMK-1709)"
 
 [[missing]]
 python = "roomkit.ToolCallEvent.__init__"
@@ -1220,6 +1211,11 @@ reason = "Python's instance attribute `thinking`, which the snapshot lists no at
 rust = "roomkit_ai::ToolError"
 approved = "2026-11-01"
 reason = "what a tool handler raises, one enum for a handler's Result: Python's ToolRefusedError (Refused), ToolFailedError (Failed) and UnservedToolCallError (UnservedToolCall), each a RoomKitError of its own with no family base, and any other exception (Raised, its class named by kind) (step 5 plan, ToolError's variants; architecture: Errors)"
+
+[[exception]]
+rust = "roomkit_ai::SkillFileError"
+approved = "2026-11-16"
+reason = "Result error for direct Skill file helpers: Path(SkillPathError), Io(std::io::Error, including NotFound), Encoding(FromUtf8Error) preserve Python's path, filesystem and UTF-8 exception categories (HITL 45d6fce8, RMK-1709)"
 
 [[exception]]
 rust = "roomkit::RoomKit::start"

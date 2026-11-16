@@ -139,6 +139,8 @@ the mapping and its tests. The check does not generate or update this document.
 | `roomkit_ai::ThinkingBlocks` | — | `last_signature` |
 | `roomkit_ai::RoundTranscript` | — | `thinking` |
 | `roomkit_ai::ToolError` | — | Whole type |
+| `roomkit_ai::SkillFileError` | Exceptions from `Skill` file helpers | Whole type: `Path(SkillPathError)`, `Io(std::io::Error)`, `Encoding(FromUtf8Error)` (HITL 45d6fce8) |
+| `roomkit_ai::Skill::{list_scripts,list_references}` | Same names | `Vec<OsString>` preserves native filenames, including non-UTF-8 bytes; sorted as Python's decoded names (HITL 45d6fce8) |
 | `roomkit::RoomKit::start` | — | Whole type |
 | `roomkit::telemetry::SpanGuard` | — | Whole type |
 | `roomkit::telemetry::MockTelemetryProvider` | — | `completed_spans`, `metrics` |
@@ -251,3 +253,14 @@ at 65,536 Unicode characters, and rejection leaves the source unchanged
 Rust exposes no mutable reference to stored metadata, so every reachable
 registry state already fits and `to_prompt_xml` remains an infallible `String`.
 Python's shared mutable metadata instead requires a final rendering guard.
+
+All six direct `Skill` file helpers return `Result<_, SkillFileError>`.
+`has_scripts` and `has_references` count any directory entry; the lists include
+files only. A listed symlink still has to pass containment when read or resolved.
+`SkillPathError` maps Python's `ValueError` subclass to a typed error; filesystem
+failures retain `io::ErrorKind`, and invalid UTF-8 retains the decoding error.
+Read/resolve names are `&str`; non-UTF-8 names can be listed as `OsString` but
+cannot be passed as Rust strings (HITL 45d6fce8). `read_reference` uses UTF-8 and
+universal newlines without the model tool's byte bound. `resolve_script` resolves
+a contained file and never executes it. Filename NFKC uses `unicode-normalization`
+with default features disabled, approved in HITL 19458017.
