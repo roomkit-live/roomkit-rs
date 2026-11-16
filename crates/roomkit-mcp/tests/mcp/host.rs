@@ -16,6 +16,7 @@ async fn test_from_command_connects_without_listing() {
     let provider = fake("host").discover(false).connect().await.unwrap();
     assert_eq!(provider.tool_names().unwrap(), Vec::<String>::new());
     assert!(provider.tool_meta().unwrap().is_empty());
+    assert!(provider.get_tools().unwrap().is_empty());
     let state = provider
         .request("host/state", None, RequestOptions::default())
         .await
@@ -46,7 +47,17 @@ async fn test_from_command_connects_without_listing() {
 // Python: tests/test_mcp_server_instructions.py::test_the_provider_keeps_what_the_server_published
 #[tokio::test]
 async fn test_the_provider_keeps_what_the_server_published() {
-    let provider = fake("host").connect().await.unwrap();
+    let provider = fake("host").provider();
+    assert!(matches!(
+        provider.instructions(),
+        Err(McpError::NotConnected)
+    ));
+    assert!(matches!(
+        provider.server_info(),
+        Err(McpError::NotConnected)
+    ));
+    provider.connect().await.unwrap();
+    assert_eq!(provider.tool_names().unwrap(), ["board"]);
     assert_eq!(
         provider.instructions().unwrap().as_deref(),
         Some("Use the host.")

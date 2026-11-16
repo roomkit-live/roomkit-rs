@@ -93,14 +93,7 @@ impl Capture {
             if let Some(result) = message.get("result") {
                 state.handshake = result.clone();
             }
-            // Python ignores an extension's non-object settings individually;
-            // the SDK's typed capability map would reject the whole handshake.
-            if let Some(extensions) = message
-                .pointer_mut("/result/capabilities/extensions")
-                .and_then(Value::as_object_mut)
-            {
-                extensions.retain(|_, settings| settings.is_object());
-            }
+            crate::protocol::compatible_handshake(&mut message);
         }
         if let Some(slot) = state.pending.remove(&id).and_then(|weak| weak.upgrade())
             && let Some(result) = message.get_mut("result")

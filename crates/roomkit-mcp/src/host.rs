@@ -71,7 +71,8 @@ impl McpToolProvider {
     ///
     /// # Errors
     /// Returns `NotConnected`, a server/transport `Call` error, or
-    /// `CallTimeout` when the configured deadline expires.
+    /// `CallTimeout` when the configured deadline expires. A malformed result
+    /// metadata field returns `Validation`, as Python's generic result model.
     pub async fn request(
         &self,
         method: &str,
@@ -81,6 +82,7 @@ impl McpToolProvider {
         let mut result = self
             .host_request(method, params.cloned().unwrap_or_default(), options.timeout)
             .await?;
+        validate_metadata(&result)?;
         // Python's generic Result.model_dump(exclude_none=True) removes null
         // model fields, but leaves nulls inside nested JSON values intact.
         result.retain(|_, value| !value.is_null());
@@ -140,4 +142,16 @@ impl McpToolProvider {
                 message: "expected an MCP result object".into(),
             })
     }
+}
+
+fn validate_metadata(result: &Metadata) -> Result<(), McpError> {
+    if result
+        .get("_meta")
+        .is_some_and(|value| !value.is_null() && !value.is_object())
+    {
+        return Err(McpError::Validation {
+            reason: "expected result metadata to be an object or null",
+        });
+    }
+    Ok(())
 }
