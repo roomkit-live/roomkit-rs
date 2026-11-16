@@ -251,7 +251,8 @@ const TOOL: &[&str] = &[
     "returns_parts",
 ];
 const RAISES: &[&str] = &["kind", "message"];
-const POLICY: &[&str] = &["allow", "deny"];
+const POLICY: &[&str] = &["allow", "deny", "role_overrides"];
+const ROLE_OVERRIDE: &[&str] = &["allow", "deny", "mode"];
 const MCP_SERVER: &[&str] = &["label", "gate_discovery", "declare", "tools"];
 const MCP_TOOL: &[&str] = &["name", "description", "input_schema", "returns"];
 const MEMORY: &[&str] = &[
@@ -901,12 +902,9 @@ fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
             found,
         );
     }
-    optional(
-        &channel["tool_policy"],
-        POLICY,
-        &format!("{path}.tool_policy"),
-        found,
-    );
+    if let Some(policy) = channel.get("tool_policy") {
+        tool_policy(policy, &format!("{path}.tool_policy"), found);
+    }
     mcp_servers(&channel["mcp_servers"], path, found);
     optional(
         &channel["addresses"],
@@ -1352,6 +1350,25 @@ fn script_executor(executor: &Value, path: &str, found: &mut Vec<String>) {
     }
 }
 
+fn tool_policy(policy: &Value, path: &str, found: &mut Vec<String>) {
+    members(policy, POLICY, path, found);
+    let Some(overrides) = policy.get("role_overrides") else {
+        return;
+    };
+    let Some(overrides) = overrides.as_object() else {
+        found.push(format!("{path}.role_overrides: not an object"));
+        return;
+    };
+    for (role, value) in overrides {
+        members(
+            value,
+            ROLE_OVERRIDE,
+            &format!("{path}.role_overrides.{role}"),
+            found,
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1473,6 +1490,26 @@ mod tests {
             json!({"setup": {"channels": [{"id": "sms", "type": "sms", "deliver": [reaction]}]}});
         for invalid in [after, observer, channel] {
             assert_ne!(unknown_members(&invalid), Vec::<String>::new());
+        }
+    }
+
+    // Python: test_scripted_models.py::test_role_policy_controls_are_not_silently_ignored
+    #[test]
+    fn role_policy_controls_are_not_silently_ignored() {
+        for policy in [
+            json!(null),
+            json!({"role_overrides": []}),
+            json!({"role_overrides": {"observer": null}}),
+            json!({"role_overrides": {"observer": {"denny": ["*"]}}}),
+        ] {
+            let scenario = json!({"setup": {"channels": [
+                {"id": "agent", "type": "ai", "tool_policy": policy}
+            ]}});
+            assert!(
+                unknown_members(&scenario)
+                    .iter()
+                    .any(|problem| problem.contains("tool_policy"))
+            );
         }
     }
 }

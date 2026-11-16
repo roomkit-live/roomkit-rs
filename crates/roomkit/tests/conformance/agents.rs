@@ -1382,21 +1382,7 @@ fn milliseconds(bound: &Value, member: &str) -> Result<Option<Duration>, String>
 }
 
 fn tool_policy(spec: &Value) -> Result<ToolPolicy, String> {
-    let patterns = |key: &str| {
-        spec[key]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .map(str::to_owned)
-            .collect::<Vec<_>>()
-    };
-    ToolPolicy::new(roomkit_ai::ToolPolicyOptions {
-        allow: patterns("allow"),
-        deny: patterns("deny"),
-        ..Default::default()
-    })
-    .map_err(|error| format!("tool_policy: {error}"))
+    serde_json::from_value(spec.clone()).map_err(|error| format!("tool_policy: {error}"))
 }
 
 /// Each request `model` received, as the scenario reads it: the messages
