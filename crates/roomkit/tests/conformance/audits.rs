@@ -3,15 +3,18 @@
 //! its own, and a scripted agent's tool handler wrapped to record to one
 //! of them.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock, Weak};
+use std::sync::{Arc, OnceLock};
 
 use roomkit::orchestration::{JsonlSessionAuditor, JsonlToolAuditor, SessionAuditor, ToolAuditor};
 use roomkit_ai::orchestration::audit_tool_handler;
-use roomkit_ai::{AiChannelOptions, AiTool, ToolEntry, ToolError, ToolHandler};
+use roomkit_ai::{
+    AiChannelOptions, Tool, ToolEntry, ToolError, ToolHandler, compose_tool_handlers,
+};
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::run::Run;
 
@@ -127,46 +130,44 @@ impl Drop for Auditors {
 /// declared as definitions and served by one tool handler, as Python's
 /// runner serves them, that handler wrapped in `audit_tool_handler` under
 /// the agent's id (README, "Scripted agents").
-pub(crate) fn audit_tools(spec: &Value, run: &Arc<Run>, options: &mut AiChannelOptions) {
+pub(crate) fn audit_tools(
+    spec: &Value,
+    run: &Arc<Run>,
+    options: &mut AiChannelOptions,
+) -> Result<(), String> {
     let Some(auditor) = spec["audit"]
         .as_str()
         .and_then(|audit| run.auditors.named(audit))
     else {
-        return;
+        return Ok(());
     };
-    let scripted: Vec<Value> = spec["tools"].as_array().cloned().unwrap_or_default();
-    options.tools = scripted
-        .iter()
-        .filter(|tool| tool["declared"] != false)
-        .map(|tool| {
-            ToolEntry::Definition(AiTool {
-                parameters: tool
-                    .get("parameters")
-                    .cloned()
-                    .unwrap_or_else(|| json!({ "type": "object" })),
-                ..AiTool::new(
-                    tool["name"].as_str().unwrap_or_default(),
-                    tool["description"].as_str().unwrap_or_default(),
-                )
-                .unwrap()
-            })
-        })
-        .collect();
-    let run = Arc::downgrade(run);
-    let handler = ToolHandler::new(move |name, _arguments| {
-        let behaviour = scripted.iter().find(|tool| tool["name"] == name).cloned();
-        let run = Weak::clone(&run);
-        async move {
-            let Some(behaviour) = behaviour else {
-                return Err(ToolError::unserved(format!("{name} is not this handler's")));
-            };
-            crate::agents::write_record(&behaviour);
-            if let (Some(gate), Some(run)) = (behaviour["gate"].as_str(), run.upgrade()) {
-                run.gates.hold(gate).await;
-            }
-            crate::agents::answer(&behaviour).await
-        }
-    });
+    let scripted = serving_definitions(&mut options.tools);
+    let handler = match options.tool_handler.take() {
+        Some(prior) => compose_tool_handlers(vec![prior, scripted]).map_err(|e| e.to_string())?,
+        None => scripted,
+    };
     let agent_id = spec["id"].as_str().unwrap_or_default();
     options.tool_handler = Some(audit_tool_handler(handler, auditor, agent_id));
+    Ok(())
+}
+
+/// Keep every definition and its traits, including MCP's, and serve each
+/// scripted tool through the audited handler instead of bypassing it.
+fn serving_definitions(entries: &mut [ToolEntry]) -> ToolHandler {
+    let mut tools: HashMap<String, Arc<dyn Tool>> = HashMap::new();
+    for entry in entries {
+        if let ToolEntry::Tool(tool) = entry {
+            let definition = tool.definition();
+            tools.insert(definition.name.clone(), Arc::clone(tool));
+            *entry = ToolEntry::Definition(definition);
+        }
+    }
+    ToolHandler::new(move |name, arguments| {
+        let tool = tools.get(&name).cloned();
+        async move {
+            let tool =
+                tool.ok_or_else(|| ToolError::unserved(format!("{name} is not this handler's")))?;
+            tool.handler(name, arguments).await
+        }
+    })
 }

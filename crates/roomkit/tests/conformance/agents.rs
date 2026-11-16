@@ -392,7 +392,7 @@ pub(crate) fn scripted_agent_of(
     } else {
         chain.pop()
     };
-    crate::audits::audit_tools(spec, run, &mut options);
+    crate::audits::audit_tools(spec, run, &mut options)?;
     if let Some(human) = spec.get("human_input") {
         options.human_input_handler = Some(human_input(human)?);
     }
