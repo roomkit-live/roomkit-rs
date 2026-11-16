@@ -20,7 +20,8 @@ use roomkit::{
 use roomkit_core::rules::edits::opens_no_turn;
 use roomkit_core::rules::instructions::kept_instruction;
 use roomkit_core::rules::transcript::{
-    Message, Replayed, TurnMemory, conversation_with_input, earlier_turns, people_taking_part,
+    Replayed, TurnConversation, TurnMemory, conversation_with_input, earlier_turns,
+    people_taking_part,
 };
 use serde_json::{Map, Value};
 
@@ -33,7 +34,8 @@ use crate::error::AiError;
 use crate::human_input::HumanInputToolHandler;
 use crate::memory::{
     IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions, SlidingWindowMemory,
-    SlidingWindowMemoryOptions, TurnFootprint, measured, runtime_or_cleaned,
+    SlidingWindowMemoryOptions, TurnFootprint, ending_texts, measured, runtime_or_cleaned,
+    split_copies_cut, with_ending_texts,
 };
 use crate::provider::{AiContentPart, AiMessage, AiProvider, DynAiProvider, check_portable_schema};
 use crate::router::{AiRouter, RouteRequest, Routed};
@@ -1266,17 +1268,22 @@ impl<P: AiProvider> AiChannel<P> {
         };
         let mut recent_events = events;
         recent_events.extend(rows.into_iter().cloned());
+        // A copy of a mark split over its consecutive user messages is cut,
+        // and so, by the conversation, is one running from the user messages
+        // it ends on into the turns after them (RFC §6.4).
+        let messages = split_copies_cut(messages.into_iter().map(runtime_or_cleaned).collect());
         Ok(Recalled {
             history: RoomContext {
                 recent_events,
                 ..context.clone()
             },
-            messages: messages.into_iter().map(runtime_or_cleaned).collect(),
             memory: TurnMemory {
                 notes,
                 speakers,
+                ends_on: ending_texts(&messages),
                 ..TurnMemory::default()
             },
+            messages,
         })
     }
 
@@ -1652,7 +1659,7 @@ impl<P: AiProvider> AiChannel<P> {
         memory: &TurnMemory,
         images: &AuthorImages,
         vision: bool,
-    ) -> (Vec<Message>, Option<usize>) {
+    ) -> TurnConversation {
         let reader = TurnReader {
             images,
             vision,
@@ -1789,7 +1796,6 @@ impl<P: AiProvider> AiChannel<P> {
             )
             .await
             .map_err(rows::provider_failure)?;
-        looped.remembered = recalled.messages;
         let images = (self.author_images((&read, &recalled.history), &kit, vision)).await;
         looped.sent_images = Some(SentImages {
             refused: Arc::clone(&self.media.refused),
@@ -1797,8 +1803,9 @@ impl<P: AiProvider> AiChannel<P> {
             keys: images.sent(),
         });
         let memory = with_discussion_turn(&event, recalled.memory, notes);
-        let (messages, input) =
-            self.conversation((&read, &recalled.history), &memory, &images, vision);
+        let conversation = self.conversation((&read, &recalled.history), &memory, &images, vision);
+        looped.remembered = with_ending_texts(recalled.messages, conversation.ends_on);
+        let (messages, input) = (conversation.messages, conversation.input);
         // The context takes the settings once the conversation is read, as
         // Python's AIContext validates them.
         settings.validated()?;

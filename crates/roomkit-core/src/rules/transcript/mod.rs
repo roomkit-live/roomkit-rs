@@ -82,8 +82,11 @@ use self::kept::{KeptInstruction, kept_instructions};
 pub use self::marks::COMPACTION_HEADER;
 pub use self::marks::SPEAKER_NOTE as SPEAKER_ATTRIBUTION_NOTE;
 pub use self::marks::SUMMARY_HEADER;
+#[doc(hidden)]
+pub use self::marks::TURN_IMAGES_HEADER;
 use self::marks::{
-    INSTRUCTION_MARK, NOTES_HEADER, SPEAKER_NOTE, without_copies, without_header_copies,
+    INSTRUCTION_MARK, NOTES_HEADER, SPEAKER_NOTE, without_copies, without_copies_after,
+    without_header_copies,
 };
 #[doc(hidden)]
 pub use self::quote::FENCED_TAGS;
@@ -288,6 +291,26 @@ pub struct TurnMemory {
     /// before what was said after it, rounds of tool calls included, rather
     /// than as the conversation's last message (RFC §19.7.5).
     pub in_place: bool,
+    /// The texts of the user messages the memory's messages end on, oldest
+    /// first, each text part of one a text: an API may merge them with the
+    /// conversation's first user turns, so a copy of a runtime mark that
+    /// runs from them into those turns is cut (RFC §6.4).
+    /// [`conversation_with_input`] hands them back, cut.
+    pub ends_on: Vec<String>,
+}
+
+/// The conversation a turn reads, as [`conversation_with_input`] builds it.
+#[doc(hidden)]
+#[derive(Clone, Debug, Default)]
+pub struct TurnConversation {
+    /// Its messages, the turn's notes after the last when it is a user's.
+    pub messages: Vec<Message>,
+    /// Where the event the turn answers sits among them, when it does.
+    pub input: Option<usize>,
+    /// [`TurnMemory::ends_on`], each copy of a runtime mark that runs from
+    /// them into the conversation's first user turns cut where it starts
+    /// and dropped where it runs on (RFC §6.4).
+    pub ends_on: Vec<String>,
 }
 
 /// [`conversation`], with what the turn's memory adds beside its history
@@ -305,7 +328,7 @@ pub fn conversation_with_memory(
     memory: &TurnMemory,
     read: impl Fn(&RoomEvent) -> TurnContent,
 ) -> Vec<Message> {
-    conversation_with_input(channel_id, event, context, history, memory, read).0
+    conversation_with_input(channel_id, event, context, history, memory, read).messages
 }
 
 /// The conversation and the position of the event this turn answers, before
@@ -319,7 +342,7 @@ pub fn conversation_with_input(
     history: usize,
     memory: &TurnMemory,
     read: impl Fn(&RoomEvent) -> TurnContent,
-) -> (Vec<Message>, Option<usize>) {
+) -> TurnConversation {
     let mut authors = Authors::new(context);
     let mut turns = past_turns(channel_id, event, context, history, &mut authors, &read);
     let input = Turn::input(event, &mut authors, &read);
@@ -366,14 +389,19 @@ pub fn conversation_with_input(
         people_taking_part(context, channel_id)
     };
     let labelled = labels_turns(sources, people.len());
-    let turns = cleaned(turns, labelled);
+    let (turns, ends_on) = cleaned(turns, labelled, &memory.ends_on);
     let notes = Notes {
         labelled,
         people: &people,
         discussion: &memory.turn_notes,
         remembered: &memory.notes,
     };
-    rendered(turns, &notes)
+    let (messages, input) = rendered(turns, &notes);
+    TurnConversation {
+        messages,
+        input,
+        ends_on,
+    }
 }
 
 /// A turn of the conversation before it is rendered: its role, what its
@@ -615,11 +643,14 @@ fn is_conversation(event: &RoomEvent) -> bool {
 
 /// `turns` with each copy of a runtime mark replaced (RFC §6.4): in each
 /// turn, over its text parts, and over each run of consecutive user turns
-/// the runtime does not label, which an API may merge into one message; a
-/// replayed round ends a run, and is never rewritten. A turn a copy wholly
-/// held is left out, the rounds read after it then read after the turn
-/// before it.
-fn cleaned(mut turns: Vec<Turn>, labelled: bool) -> Vec<Turn> {
+/// the runtime does not label, which an API may merge into one message, the
+/// first run read after `ends_on`, the texts of the user messages a memory
+/// ends on; a replayed round ends a run, and is never rewritten. A turn a
+/// copy wholly held is left out, the rounds read after it then read after
+/// the turn before it. Returns `ends_on` too, a copy that runs from them
+/// into the first run cut.
+fn cleaned(mut turns: Vec<Turn>, labelled: bool, ends_on: &[String]) -> (Vec<Turn>, Vec<String>) {
+    let mut ends_on = ends_on.to_vec();
     let mut start = 0;
     while start < turns.len() {
         let rest = turns.get(start..).unwrap_or_default();
@@ -637,7 +668,19 @@ fn cleaned(mut turns: Vec<Turn>, labelled: bool) -> Vec<Turn> {
                 .map(|turn| turn.content.texts().len())
                 .collect();
             let texts: Vec<String> = group.iter().flat_map(|turn| turn.content.texts()).collect();
-            let mut cleaned = without_copies(&texts).into_iter();
+            // The memory's last user messages run into the first turns when
+            // the first is one a copy may run into.
+            let after_memory =
+                start == 0 && group.first().is_some_and(|turn| turn.is_piece(labelled));
+            let (cut, cleaned) = if after_memory {
+                without_copies_after(&ends_on, &texts)
+            } else {
+                (Vec::new(), without_copies(&texts))
+            };
+            if after_memory {
+                ends_on = cut;
+            }
+            let mut cleaned = cleaned.into_iter();
             for (turn, count) in group.iter_mut().zip(counts) {
                 let own: Vec<String> = cleaned.by_ref().take(count).collect();
                 let content = std::mem::replace(&mut turn.content, TurnContent::Parts(Vec::new()));
@@ -654,7 +697,7 @@ fn cleaned(mut turns: Vec<Turn>, labelled: bool) -> Vec<Turn> {
             before.rounds.extend(turn.rounds);
         }
     }
-    kept
+    (kept, ends_on)
 }
 
 /// The speakers a memory's messages name that no turn's speaker is, each
@@ -957,6 +1000,15 @@ pub fn people_count(context: &RoomContext, channel_id: &ChannelId) -> usize {
 /// 6): marked, never attributed. Python's `mark_instruction`.
 pub fn mark_instruction(text: &str) -> String {
     format!("{INSTRUCTION_MARK}\n{text}")
+}
+
+/// `texts`, those of consecutive user messages a memory built, each
+/// cleaned already, with each copy of a runtime mark that runs over two of
+/// them or more cut where it starts and dropped where it runs on (RFC
+/// §6.4): an API may merge them into one message. Python's `_cut_texts`.
+#[doc(hidden)]
+pub fn without_split_copies(texts: &[String]) -> Vec<String> {
+    without_copies_after(texts, &[]).0
 }
 
 /// `text` with each copy of a runtime mark it holds replaced (RFC §6.4):
