@@ -14,6 +14,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Add served-skill entry/resource models, manifest parsing, fingerprints and byte verification (RFC §24.7).
 
+- The opening of a two-word runtime mark written as one identifier (`print(conversation_summary)`, `{"conversation_summary": "x"}`, `Optional[ConversationSummary]`, `conversation.summary`) is code, not a copy, behind any bracket; with a space or an invisible character between its words it is one, and an opening of three words or more counts however its words are joined, as Python reads it (RFC §6.4, RMK-1734).
+
 - A passage `RetrievalMemory` gives back from a turn reads after its author's label, fixed when the message is indexed (`metadata["speaker"]`): `Alice: "…"`, as a labelled turn reads; a document's passage keeps its form, as Python's (RFC §6.4, §20.2, RMK-633).
 
 - Keep stdio-only MCP builds warning-free when the optional HTTP transport is disabled.
