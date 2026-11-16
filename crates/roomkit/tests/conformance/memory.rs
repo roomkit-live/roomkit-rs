@@ -364,7 +364,18 @@ fn message(spec: &Value) -> Result<AiMessage, String> {
         Some("assistant") => AiRole::Assistant,
         other => return Err(format!("memory message role: {other:?}")),
     };
-    // A message held as text parts, in order, or as a text.
+    let metadata = match spec.get("metadata") {
+        None => Metadata::new(),
+        Some(Value::Object(metadata)) => metadata.clone(),
+        Some(_) => return Err("memory message metadata: expected an object".into()),
+    };
+    let mut message = AiMessage::new(role, message_content(spec)?);
+    message.metadata = metadata;
+    Ok(message)
+}
+
+/// A message held as text parts, in order, or as a text.
+fn message_content(spec: &Value) -> Result<AiMessageContent, String> {
     if let Some(parts) = spec["parts"].as_array() {
         let parts = parts
             .iter()
@@ -374,11 +385,10 @@ fn message(spec: &Value) -> Result<AiMessage, String> {
             })
             .collect::<Option<Vec<_>>>()
             .ok_or("memory message parts: not texts")?;
-        return Ok(AiMessage::new(role, AiMessageContent::Parts(parts)));
+        return Ok(AiMessageContent::Parts(parts));
     }
-    Ok(AiMessage::new(
-        role,
-        spec["text"].as_str().unwrap_or_default(),
+    Ok(AiMessageContent::Text(
+        spec["text"].as_str().unwrap_or_default().into(),
     ))
 }
 
@@ -394,4 +404,24 @@ fn texts(spec: &Value) -> Vec<String> {
 fn count_of(value: &Value, name: &str) -> Result<usize, String> {
     let count = value.as_u64().ok_or(format!("{name}: not a count"))?;
     usize::try_from(count).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Python: tests/conformance/test_memory_fixture.py::test_a_memory_message_keeps_its_speaker_metadata
+    #[test]
+    fn test_a_memory_message_keeps_its_speaker_metadata() {
+        for speaker in [json!("runtime"), Value::Null] {
+            for mut spec in [
+                json!({"role":"user","text":"labelled"}),
+                json!({"role":"user","parts":["labelled"]}),
+            ] {
+                spec["metadata"] = json!({"speaker":speaker});
+                let built = message(&spec).unwrap();
+                assert_eq!(built.metadata.get("speaker"), Some(&speaker));
+            }
+        }
+    }
 }

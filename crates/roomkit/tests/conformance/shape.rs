@@ -938,10 +938,18 @@ fn memory(memory: &Value, path: &str, found: &mut Vec<String>) {
     for (index, message) in items(&memory["messages"]) {
         members(
             message,
-            MEMORY_MESSAGE,
+            &["role", "text", "parts", "metadata"],
             &format!("{path}.messages[{index}]"),
             found,
         );
+        if message
+            .get("metadata")
+            .is_some_and(|value| !value.is_object())
+        {
+            found.push(format!(
+                "{path}.messages[{index}].metadata: expected an object"
+            ));
+        }
     }
     for (index, answer) in items(&memory["compacts"]) {
         let at = format!("{path}.compacts[{index}]");
@@ -1324,6 +1332,21 @@ fn script_executor(executor: &Value, path: &str, found: &mut Vec<String>) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // Python: tests/conformance/test_memory_fixture.py::test_memory_metadata_requires_an_object
+    #[test]
+    fn test_memory_metadata_requires_an_object() {
+        for metadata in [Value::Null, json!([]), json!(""), json!(false)] {
+            let scenario = json!({"setup":{"channels":[{"id":"ai","type":"ai",
+                "memory":{"messages":[{"role":"user","text":"text","metadata":metadata}]}
+            }]}});
+            assert!(
+                unknown_members(&scenario)
+                    .iter()
+                    .any(|problem| problem.contains("metadata: expected an object"))
+            );
+        }
+    }
 
     // Python: tests/conformance/test_skill_fixture.py::test_the_in_memory_control_requires_a_boolean
     #[test]
