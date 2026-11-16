@@ -16,7 +16,10 @@ async fn test_from_command_connects_without_listing() {
     let provider = fake("host").discover(false).connect().await.unwrap();
     assert_eq!(provider.tool_names().unwrap(), Vec::<String>::new());
     assert!(provider.tool_meta().unwrap().is_empty());
-    assert!(provider.get_tools().unwrap().is_empty());
+    assert_eq!(
+        provider.get_tools().unwrap(),
+        Vec::<roomkit_ai::AiTool>::new()
+    );
     let state = provider
         .request("host/state", None, RequestOptions::default())
         .await
