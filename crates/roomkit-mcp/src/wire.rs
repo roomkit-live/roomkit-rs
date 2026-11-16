@@ -1,13 +1,14 @@
 //! Write only explicitly marked host parameters verbatim. Ordinary MCP
 //! requests retain SDK serialization and its progress metadata.
-use rmcp::model::{
-    ClientJsonRpcMessage, ClientRequest, Extensions, GetExtensions, GetMeta, RequestMetaObject,
-};
+#[cfg(feature = "http")]
+use rmcp::model::ClientJsonRpcMessage;
+use rmcp::model::{ClientRequest, Extensions, GetExtensions, GetMeta, RequestMetaObject};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
 use crate::raw::Slot;
 
+#[cfg(feature = "http")]
 pub(crate) fn message(message: &ClientJsonRpcMessage) -> Result<Value, serde_json::Error> {
     let mut value = serde_json::to_value(message)?;
     if let ClientJsonRpcMessage::Request(request) = message {

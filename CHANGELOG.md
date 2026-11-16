@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Keep stdio-only MCP builds warning-free when the optional HTTP transport is disabled.
+
 - Add MCP host requests, resource reads, handshake/tool metadata and optional discovery over stdio and HTTP, preserving Python parameters and results on the shared MCP 2025 protocol (RFC §21.2).
 
 - Preserve memory messages' speaker labels when removing split runtime marks, including at the next turn's boundary (RFC §6.4).
