@@ -3,9 +3,10 @@
 //! they answer, each answer JSON written as Python's `json.dumps` writes
 //! it.
 
-use std::fmt::Write as _;
+mod json;
 
-use roomkit_core::model::python_float;
+pub(super) use self::json::fits_map;
+use self::json::{write_object, write_value};
 /// A name written for a message as Python's `repr` of a `str` writes it.
 pub(crate) use roomkit_core::rules::python_repr as quoted_name;
 use serde_json::Value;
@@ -53,7 +54,7 @@ skill's own instructions (activate_skill already loads them) and NOT for stored 
 /// character past ASCII escaped.
 pub(crate) fn object(members: &[(&str, Value)]) -> String {
     let mut written = String::new();
-    write_object(
+    let _infallible = write_object(
         &mut written,
         members.iter().map(|(name, value)| (*name, value)),
         true,
@@ -68,7 +69,7 @@ pub(crate) fn object(members: &[(&str, Value)]) -> String {
 #[doc(hidden)]
 pub fn dumps(value: &Value) -> String {
     let mut written = String::new();
-    json(&mut written, value, true);
+    let _infallible = write_value(&mut written, value, true);
     written
 }
 
@@ -76,81 +77,8 @@ pub fn dumps(value: &Value) -> String {
 /// `", "` and `": "` between members, every character as itself.
 pub(crate) fn dumps_unescaped(value: &Value) -> String {
     let mut written = String::new();
-    json(&mut written, value, false);
+    let _infallible = write_value(&mut written, value, false);
     written
-}
-
-/// `members` as a JSON object, in order, written as Python's `json.dumps`
-/// writes one, characters past ASCII escaped when `ascii`.
-fn write_object<'a>(
-    written: &mut String,
-    members: impl Iterator<Item = (&'a str, &'a Value)>,
-    ascii: bool,
-) {
-    written.push('{');
-    for (at, (name, value)) in members.enumerate() {
-        if at > 0 {
-            written.push_str(", ");
-        }
-        string(written, name, ascii);
-        written.push_str(": ");
-        json(written, value, ascii);
-    }
-    written.push('}');
-}
-
-/// `value`, written as Python's `json.dumps` writes it, characters past
-/// ASCII escaped when `ascii`.
-fn json(written: &mut String, value: &Value, ascii: bool) {
-    match value {
-        Value::String(text) => string(written, text, ascii),
-        Value::Array(items) => {
-            written.push('[');
-            for (at, item) in items.iter().enumerate() {
-                if at > 0 {
-                    written.push_str(", ");
-                }
-                json(written, item, ascii);
-            }
-            written.push(']');
-        }
-        Value::Object(members) => {
-            let members = members.iter().map(|(name, value)| (name.as_str(), value));
-            write_object(written, members, ascii);
-        }
-        // A float as Python's `float.__repr__`, which `json.dumps` writes:
-        // `1e-05`, not `0.00001` (RMK-1262).
-        Value::Number(number) if number.is_f64() => {
-            written.push_str(&python_float(number.as_f64().unwrap_or_default()));
-        }
-        Value::Null | Value::Bool(_) | Value::Number(_) => written.push_str(&value.to_string()),
-    }
-}
-
-/// `text` as a JSON string, its control characters escaped, and every
-/// character past ASCII as `\uXXXX` when `ascii`.
-fn string(written: &mut String, text: &str, ascii: bool) {
-    written.push('"');
-    for character in text.chars() {
-        match character {
-            '"' => written.push_str("\\\""),
-            '\\' => written.push_str("\\\\"),
-            '\n' => written.push_str("\\n"),
-            '\r' => written.push_str("\\r"),
-            '\t' => written.push_str("\\t"),
-            '\u{8}' => written.push_str("\\b"),
-            '\u{c}' => written.push_str("\\f"),
-            // Python's `ensure_ascii` escapes all but `' '` to `'~'`, DEL too.
-            c if u32::from(c) < 0x20 || (ascii && (!c.is_ascii() || c == '\u{7f}')) => {
-                let mut units = [0_u16; 2];
-                for unit in c.encode_utf16(&mut units) {
-                    let _infallible = write!(written, "\\u{unit:04x}");
-                }
-            }
-            c => written.push(c),
-        }
-    }
-    written.push('"');
 }
 
 /// `text` escaped as an XML element's text or attribute, as Python's

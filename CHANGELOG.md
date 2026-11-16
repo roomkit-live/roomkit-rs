@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Add served-skill entry/resource models, manifest parsing, fingerprints and byte verification (RFC §24.7).
+
 - Keep stdio-only MCP builds warning-free when the optional HTTP transport is disabled.
 
 - Add MCP host requests, resource reads, handshake/tool metadata and optional discovery over stdio and HTTP, preserving Python parameters and results on the shared MCP 2025 protocol (RFC §21.2).

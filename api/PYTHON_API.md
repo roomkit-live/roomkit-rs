@@ -150,6 +150,9 @@ the mapping and its tests. The check does not generate or update this document.
 | `roomkit_ai::ScriptExecutor::execute` | `roomkit.ScriptExecutor.execute` | Explicit `None` for Python's omitted `arguments`; `Some` borrows its mapping (HITL 213974fa) |
 | `roomkit_ai::ScriptResult` | `roomkit.skills.ScriptResult` | `new(exit_code: i64)` requires the code; remaining public fields use Python's defaults, `success=true` independent of that code; serde JSON (HITL 213974fa) |
 | `roomkit_ai::Skill::{list_scripts,list_references}` | Same names | `Vec<OsString>` preserves native filenames, including non-UTF-8 bytes; sorted as Python's decoded names (HITL 45d6fce8) |
+| `roomkit_ai::SkillEntry`, `SkillResource` | Same names | Non-validating constructors and frozen outer fields exposed by borrowed accessors. Frontmatter is owned, editable through `frontmatter_mut`; copying a retained map does not preserve Python's external alias (HITL 450fa510). |
+| `roomkit_ai::SkillResources`, `SkillResourceSize` | Entry resources and resource size | `Listed(Vec<SkillResource>)` / `Dynamic`; integer inputs from i64 through u64's range, including smaller primitives, with exact i128 size/total accessors. No arbitrary-precision JSON expansion (HITL 450fa510). |
+| `roomkit_ai::SkillEntryKeyError` | `KeyError` | Fallible `name`/`description` return Python's string value, or the missing `key`; no validation error or panic for missing keys (HITL 450fa510). |
 | `roomkit::RoomKit::start` | — | Whole type |
 | `roomkit::telemetry::SpanGuard` | — | Whole type |
 | `roomkit::telemetry::MockTelemetryProvider` | — | `completed_spans`, `metrics` |
@@ -230,7 +233,7 @@ use `..SkillMetadata::new(name, description)` (approved in HITL ed472959).
 | `roomkit_ai::ResponseSchemaFailure` | Values of `roomkit.ResponseSchemaError.__init__(reason)`: `unsupported`, `refusal`, `truncated`, `invalid_json` |
 | `roomkit::RoomKitError` | `roomkit.RoomNotFoundError`, `roomkit.RoomAlreadyExistsError`, `roomkit.RoomClosedError`, `roomkit.TransitionRefusedError`, `roomkit.ProcessTimeoutError`, `roomkit.ChangeRefusedError`, `roomkit.ReentrantCallError`, `roomkit.ReentryLoopCapError`, `roomkit.ChannelNotFoundError`, `roomkit.ChannelNotRegisteredError`, `roomkit.ChannelAlreadyRegisteredError`, `roomkit.ParticipantNotFoundError`, `roomkit.IdentityNotFoundError`, `roomkit.AddressLinkedError`, `roomkit.EventNotFoundError`, `roomkit.HumanInputRejectedError`, `roomkit.ToolNameCollisionError`, `roomkit.VerificationRefusedError`, `roomkit.IdempotencyKeyTakenError`, `roomkit.ProviderDeliveryError`, `roomkit.KitClosedError`, `roomkit.ShutdownCancelledError`, `roomkit.RemoteTurnError`, `roomkit.TurnLinkError` |
 | `roomkit::StoreError` | `roomkit.RoomAlreadyExistsError`, `roomkit.RoomNotFoundError`, `roomkit.ParticipantExistsError`, `roomkit.ParticipantNotFoundError`, `roomkit.IdentityNotFoundError`, `roomkit.AddressLinkedError`, `roomkit.EventNotFoundError`, `roomkit.TaskNotFoundError`, `roomkit.IdempotencyKeyTakenError` |
-| `roomkit_ai::SkillError` | `roomkit.skills.SkillDiscoveryError`, `roomkit.skills.SkillParseError`, `roomkit.skills.SkillValidationError`, `roomkit.skills.SkillManifestTooLargeError` |
+| `roomkit_ai::SkillError` | `roomkit.skills.SkillDiscoveryError`, `roomkit.skills.SkillParseError`, `roomkit.skills.SkillValidationError`, `roomkit.skills.SkillManifestTooLargeError`, `roomkit.skills.SkillVerificationError` |
 
 ## External tool handlers
 
@@ -321,3 +324,20 @@ protocol versions as Python's pinned SDK. Protocol 2026 is deferred for joint
 support (HITL 9496ae52). The existing serde and url versions are direct
 dependencies for lossless serialization and URI parsing (HITL 04bbf03c).
 No arbitrary request is replayed after a timeout or session loss.
+
+Served-skill entry parsing preserves the reference URI/path spelling, frontmatter
+JSON character bound, resource-list checks and error order. Direct construction
+remains non-validating; a parsed entry owns its frontmatter copy. File verification
+checks length before SHA-256. Entry fingerprints sort complete URI/digest lines,
+without sizes or a trailing newline. The listed count and total-byte limits are
+reported by `limit_exceeded`, not enforced as parse failures.
+
+`SkillError::EntryValidation` carries the served entry's exact
+`SkillValidationError` message without the local skill variant's prefix;
+`Verification` carries `SkillVerificationError` (HITL 450fa510).
+JSON formatting, copying, equality and disposal traverse containers iteratively.
+Only the existing 65,536-character JSON bound limits `parse_entry`: a deeply nested
+value within that bound can be accepted as on Python 3.14 even when Python
+3.12/3.13 rejects it at an interpreter recursion limit (HITL 1566ac3f).
+The existing large-JSON-integer and YAML deferrals remain unchanged; these helpers
+do not yet register, refresh, activate or execute a server's skills.

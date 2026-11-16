@@ -2,9 +2,8 @@
 
 use std::path::PathBuf;
 
-/// Why skills could not be loaded: a deployment error, never a runtime
-/// condition (RFC §24.5). Discovery and registration fail on the first one,
-/// name the skill or the directory, and leave the registry as it was.
+/// Why a local skill could not be loaded (RFC §24.5), or an entry or file
+/// served by an MCP server could not be admitted or verified (RFC §24.7).
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum SkillError {
@@ -41,6 +40,18 @@ pub enum SkillError {
         characters: usize,
         /// Its bound.
         limit: usize,
+    },
+    /// A served entry violates the extension's manifest contract.
+    #[error("{message}")]
+    EntryValidation {
+        /// The reference validation message, including its URI when available.
+        message: String,
+    },
+    /// Served bytes differ from the entry that describes them.
+    #[error("{message}")]
+    Verification {
+        /// The reference verification message.
+        message: String,
     },
 }
 

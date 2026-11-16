@@ -97,7 +97,7 @@ fn bracket_errors(fields: [(&str, Vec<String>); 2]) -> Vec<String> {
 
 /// Whether `name` is lowercase ASCII letters and digits in runs a hyphen
 /// separates.
-fn is_kebab_case(name: &str) -> bool {
+pub(super) fn is_kebab_case(name: &str) -> bool {
     name.split('-').all(|run| {
         !run.is_empty()
             && run

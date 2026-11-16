@@ -48,7 +48,7 @@ roomkit = ["roomkit"]
 "roomkit::model" = ["roomkit", "roomkit.models"]
 "roomkit::testing" = ["roomkit.testing"]
 "roomkit::tools" = ["roomkit.tools"]
-roomkit_ai = ["roomkit.providers.ai", "roomkit", "roomkit.tools", "roomkit.skills"]
+roomkit_ai = ["roomkit.providers.ai", "roomkit", "roomkit.tools", "roomkit.skills", "roomkit.skills.mcp"]
 "roomkit_ai::memory" = ["roomkit.memory", "roomkit"]
 "roomkit_ai::knowledge" = ["roomkit.knowledge"]
 roomkit_openai = ["roomkit.providers.openai"]
@@ -108,6 +108,9 @@ roomkit_postgres = ["roomkit.store", "roomkit.knowledge"]
 # An AI channel's and a tool definition's refusal, Python's constructors'
 # `ValueError` (a tool name two tools take, `ToolNameCollisionError`, is one).
 "roomkit_ai::AiError" = { python = "ValueError" }
+# Served-entry constructor integers and a missing frontmatter accessor key (HITL 450fa510).
+"roomkit_ai::SkillResourceSize" = { python = "int" }
+"roomkit_ai::SkillEntryKeyError" = { python = "KeyError", members = ["key"] }
 # Python's streams (decision 12, the architecture table's "Channels"):
 # `deliver_stream`'s `text_stream`, an `AsyncIterator[str]` whose items are
 # the text and the response's rows, which its annotation does not name, and
@@ -195,6 +198,7 @@ roomkit_postgres = ["roomkit.store", "roomkit.knowledge"]
 "roomkit.skills.SkillParseError" = ["skill", "reason"]
 "roomkit.skills.SkillValidationError" = ["skill", "reasons"]
 "roomkit.skills.SkillManifestTooLargeError" = []
+"roomkit.skills.SkillVerificationError" = ["message"]
 
 # The architecture table's mappings that a rule gives no name to.
 
@@ -270,6 +274,23 @@ reason = "Rust has no default call arguments: None selects Python's kind='file',
 rust = "roomkit_ai::SkillToolNames"
 approved = "2026-11-15"
 reason = "Python's str | list[str] in SkillMetadata.allowed_tools: Text(String) or List(Vec<String>), inside Option for None; new(name, description) still defaults to None; explicit struct literals add allowed_tools (HITL ed472959, RMK-1709)"
+
+[[exception]]
+rust = "roomkit_ai::SkillResources"
+approved = "2026-11-16"
+reason = "Python's tuple[SkillResource, ...] | Literal['dynamic']: Listed(Vec<SkillResource>) or Dynamic, frozen after construction (HITL 450fa510, RMK-1709)"
+
+[[exception]]
+rust = "roomkit_ai::SkillEntry"
+members = ["frontmatter_mut"]
+approved = "2026-11-16"
+reason = "An owned Metadata map inside a frozen outer entry: exclusive mutable access preserves host edits without retaining Python's external constructor alias (HITL 450fa510, RMK-1709)"
+
+[[exception]]
+rust = "roomkit_ai::SkillError"
+members = ["EntryValidation"]
+approved = "2026-11-16"
+reason = "A second representation of SkillValidationError for served entries: its exact message has no local-skill Validation prefix or reasons list (HITL 450fa510, RMK-1709)"
 
 [[exception]]
 rust = "roomkit::ConversationStore"

@@ -14,7 +14,8 @@
 //!
 //! Prerequisites (`requires`) use the admitted catalogue and the host's matcher,
 //! exact by default. Script execution uses the host's [`ScriptExecutor`],
-//! and skills an MCP server serves (RFC §24.7) remain unsupported.
+//! and transport-independent served-skill entries can be parsed and verified
+//! (RFC §24.7). Registering, loading and activating served skills remain separate.
 
 mod activation;
 mod availability;
@@ -29,6 +30,7 @@ mod model;
 mod paths;
 mod registry;
 mod requirements;
+mod served;
 mod texts;
 mod tool_names;
 pub(crate) mod tools;
@@ -42,6 +44,10 @@ pub use self::model::{DiscoverOptions, Skill, SkillMetadata};
 pub use self::paths::safe_join_filename;
 pub use self::registry::SkillRegistry;
 pub use self::requirements::missing_required_tools;
+pub use self::served::{
+    MAX_RESOURCES_PER_SKILL, MAX_TOTAL_SIZE, SKILLS_EXTENSION, SkillEntry, SkillEntryKeyError,
+    SkillResource, SkillResourceSize, SkillResources, parse_entry, verify_skill_resource,
+};
 #[doc(hidden)]
 pub use self::texts::dumps;
 pub(crate) use self::texts::dumps_unescaped;

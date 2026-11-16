@@ -1,0 +1,83 @@
+{
+  "fingerprints": [
+    {
+      "name": "listed",
+      "files": [
+        {
+          "uri": "skill://acme/check/SKILL.md",
+          "digest": "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+          "size": 5
+        },
+        {
+          "uri": "skill://acme/check/reference.md",
+          "digest": "sha256:3ff6c05723bb069d19953340320fa9512f0be584742703e60226ded28bb43861",
+          "size": 3
+        }
+      ],
+      "fingerprint": "sha256:da1b18d20a4cac094860fe61319e5dd061f7be4374880857f64b9ddae90cada8"
+    },
+    {
+      "name": "reversed",
+      "files": [
+        {
+          "uri": "skill://acme/check/reference.md",
+          "digest": "sha256:3ff6c05723bb069d19953340320fa9512f0be584742703e60226ded28bb43861",
+          "size": 3
+        },
+        {
+          "uri": "skill://acme/check/SKILL.md",
+          "digest": "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+          "size": 5
+        }
+      ],
+      "fingerprint": "sha256:da1b18d20a4cac094860fe61319e5dd061f7be4374880857f64b9ddae90cada8"
+    },
+    {
+      "name": "empty",
+      "files": [],
+      "fingerprint": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "unicode",
+      "files": [
+        {
+          "uri": "skill://acme/check/SKILL.md",
+          "digest": "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+          "size": 5
+        },
+        {
+          "uri": "skill://acme/check/\u00e9\ud83d\ude00.md",
+          "digest": "sha256:3ff6c05723bb069d19953340320fa9512f0be584742703e60226ded28bb43861",
+          "size": 3
+        }
+      ],
+      "fingerprint": "sha256:b9064ce0fbdaa476bff66014eba2f8c78db9bb5abb1b9a89376af641968eaf58"
+    }
+  ],
+  "resources": [
+    {
+      "bytes": [],
+      "digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": [
+        0,
+        255,
+        128
+      ],
+      "digest": "sha256:f742b965f156c10374bc23aea96e3a8aff8facd6fc079defeaa30219ad86f211"
+    },
+    {
+      "bytes": [
+        195,
+        169,
+        240,
+        159,
+        152,
+        128
+      ],
+      "digest": "sha256:1184d1f608158eea09d297565575892231550c403aaa913008d867a97cfd5c76"
+    }
+  ],
+  "frontmatter_empty_notes_chars": 54
+}
