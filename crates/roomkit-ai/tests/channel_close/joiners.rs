@@ -55,6 +55,7 @@ struct Calls {
     kit: WeakRoomKit,
     joined: Arc<Barrier>,
     first_joined: Arc<Notify>,
+    first_wait_dropped: Arc<Notify>,
     held: Arc<Notify>,
     closed: Arc<Notify>,
     trace: Trace,
@@ -95,6 +96,7 @@ impl Calls {
         self.joined.wait().await;
         if name == "first" && self.abandon_first_wait {
             drop(close);
+            self.first_wait_dropped.notify_one();
             self.closed.notified().await;
         } else {
             close.await.unwrap();
@@ -124,6 +126,7 @@ async fn joiners(streaming: bool, from_child: bool, abandon_first_wait: bool) {
         kit: kit.downgrade(),
         joined: Arc::new(Barrier::new(3)),
         first_joined: Arc::default(),
+        first_wait_dropped: Arc::default(),
         held: Arc::default(),
         closed: Arc::default(),
         trace: Arc::default(),
@@ -155,6 +158,9 @@ async fn joiners(streaming: bool, from_child: bool, abandon_first_wait: bool) {
     let turn = tokio::spawn(turn(agent));
     calls.joined.wait().await;
     calls.held.notified().await;
+    if abandon_first_wait {
+        calls.first_wait_dropped.notified().await;
+    }
     release.notify_one();
     turn.await.unwrap();
     kit.close().await.unwrap();
