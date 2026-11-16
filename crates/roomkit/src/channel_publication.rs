@@ -15,8 +15,6 @@ type Publish =
 #[derive(Clone, Default)]
 pub struct ChannelPublication {
     publisher: Arc<Mutex<Option<Publish>>>,
-    /// The last publication outside a turn, which the next one follows.
-    last: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 impl std::fmt::Debug for ChannelPublication {
@@ -36,10 +34,6 @@ impl ChannelPublication {
     }
 
     /// Publishes a known idle session's notification without borrowing a turn.
-    #[expect(
-        clippy::unused_async,
-        reason = "the adapters await it, as they awaited the publication it hands over"
-    )]
     pub async fn publish_outside(&self, event: EphemeralEvent) {
         // Only a turn's trace owner may publish its answer's text.
         if event.r#type == crate::realtime::EphemeralEventType::TextDelta {
@@ -50,20 +44,9 @@ impl ChannelPublication {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
-        let Some(publish) = publisher else {
-            return;
-        };
-        // Handed over in order and not waited for: marking it reads the
-        // store (RFC §8.4, §17.2), which the session's reader does not wait
-        // for, as it waited for no read before.
-        let mut last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
-        let previous = last.take();
-        *last = Some(tokio::spawn(async move {
-            if let Some(previous) = previous {
-                drop(previous.await);
-            }
+        if let Some(publish) = publisher {
             publish(event).await;
-        }));
+        }
     }
 
     pub(crate) fn wire<S: ConversationStore>(&self, kit: &RoomKit<S>) {
@@ -76,16 +59,20 @@ impl ChannelPublication {
                 };
                 let room = event.room_id.clone();
                 if event.room_created_at.is_none() {
-                    // Of the room that holds the id now: a subscription of a
-                    // room gone, created again under its id, does not read it
-                    // (RFC §8.4, §17.2).
-                    event.room_created_at = kit
-                        .store()
-                        .get_room(&room)
-                        .await
-                        .ok()
-                        .flatten()
-                        .map(|held| held.created_at);
+                    // Of the room this kit's last turn or channel call of the
+                    // id ran in, else of the room that holds the id now: a
+                    // subscription of another room of the id does not read
+                    // it (RFC §8.4, §17.2).
+                    event.room_created_at = match kit.inner.turns.room_mark(&room) {
+                        Some(mark) => Some(mark),
+                        None => kit
+                            .store()
+                            .get_room(&room)
+                            .await
+                            .ok()
+                            .flatten()
+                            .map(|held| held.created_at),
+                    };
                 }
                 kit.inner.realtime.publish_to_room(&room, event).await;
             })
@@ -224,6 +211,107 @@ mod tests {
             tokio::task::yield_now().await;
         }
         assert!(acme_read.try_recv().is_err());
+        for kit in &kits {
+            kit.close().await.unwrap();
+        }
+    }
+
+    // Python: tests/test_room_org_scoping.py::TestScopedEphemerals::test_a_room_gone_s_channel_publication_reaches_none_of_the_room_created_again.
+    // A channel's publication outside a turn, made after its channel call in
+    // acme's room while another process deleted the room and created it
+    // again for globex, is acme's room's: globex's subscription does not
+    // read it (RFC §8.4, §17.2).
+    #[tokio::test]
+    async fn a_room_gone_s_channel_publication_reaches_none_of_the_room_created_again() {
+        use crate::model::{ChannelId, ChannelType};
+        use crate::store::InMemoryStore;
+        use crate::testing::{RecordingTransport, RecordingTransportOptions};
+        use crate::{
+            AttachChannelOptions, ChannelCallOptions, CreateRoomOptions, SubscribeRoomOptions,
+        };
+        let store = Arc::new(InMemoryStore::new());
+        let realtime: Arc<dyn RealtimeBackend> = Arc::new(InMemoryRealtime::default());
+        let kits: Vec<RoomKit> = (0..2)
+            .map(|_| {
+                RoomKit::new(RoomKitOptions {
+                    store: Arc::clone(&store),
+                    realtime: Some(Arc::clone(&realtime)),
+                    ..Default::default()
+                })
+            })
+            .collect();
+        let (acme, globex) = (&kits[0], &kits[1]);
+        let (room, agent) = (
+            RoomId::new("shared-id").unwrap(),
+            ChannelId::new("agent").unwrap(),
+        );
+        let scoped = |organization: &str| CreateRoomOptions {
+            room_id: Some(room.clone()),
+            organization_id: Some(organization.to_owned()),
+            ..CreateRoomOptions::default()
+        };
+        acme.register_channel(RecordingTransport::new(
+            agent.clone(),
+            ChannelType::AI,
+            RecordingTransportOptions::default(),
+        ))
+        .unwrap();
+        acme.create_room(scoped("acme")).await.unwrap();
+        acme.attach_channel(&room, &agent, AttachChannelOptions::default())
+            .await
+            .unwrap();
+        // The call leaves acme's room as the room of the kit's last call.
+        drop(
+            acme.channel_call(&agent, &room, "nope", ChannelCallOptions::default())
+                .await,
+        );
+        store.delete_room(&room).await.unwrap();
+        globex.create_room(scoped("globex")).await.unwrap();
+        let (read, mut globex_read) = tokio::sync::mpsc::unbounded_channel();
+        let options = SubscribeRoomOptions {
+            organization_id: Some("globex".to_owned()),
+        };
+        globex
+            .subscribe_room(
+                &room,
+                move |event: EphemeralEvent| {
+                    let read = read.clone();
+                    async move {
+                        read.send(event.user_id).unwrap();
+                    }
+                },
+                options,
+            )
+            .await
+            .unwrap();
+        let (reached, mut reaching) = tokio::sync::mpsc::unbounded_channel();
+        realtime
+            .subscribe_to_room(
+                &room,
+                Arc::new(move |_| {
+                    let reached = reached.clone();
+                    Box::pin(async move {
+                        reached.send(()).unwrap();
+                    })
+                }),
+            )
+            .await;
+        let publication = ChannelPublication::default();
+        publication.wire(acme);
+        publication
+            .publish(EphemeralEvent::new(
+                room.clone(),
+                EphemeralEventType::TypingStart,
+                "acme-agent",
+            ))
+            .await;
+        tokio::time::timeout(std::time::Duration::from_secs(5), reaching.recv())
+            .await
+            .unwrap();
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        assert!(globex_read.try_recv().is_err());
         for kit in &kits {
             kit.close().await.unwrap();
         }

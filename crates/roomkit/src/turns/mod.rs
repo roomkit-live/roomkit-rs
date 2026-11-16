@@ -257,6 +257,12 @@ impl Turns {
         self.closed.load(Ordering::Acquire)
     }
 
+    /// The creation mark of the room the owner's last turn or channel call
+    /// of `room_id` ran in, `None` when it holds none of the id.
+    pub(crate) fn room_mark(&self, room_id: &RoomId) -> Option<roomkit_core::model::Timestamp> {
+        lock(&self.records).room_mark(room_id)
+    }
+
     pub(crate) fn timeouts(&self) -> TurnTimeouts {
         *self.timeouts.read().unwrap_or_else(PoisonError::into_inner)
     }
