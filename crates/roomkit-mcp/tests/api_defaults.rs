@@ -4,10 +4,10 @@
 //! in scope has.
 
 use roomkit_mcp::AsToolHandlerOptions;
-use roomkit_mcp::{CallToolOptions, ReadResourceOptions, RequestOptions};
 use roomkit_mcp::FromCommandOptions;
 #[cfg(feature = "http")]
 use roomkit_mcp::FromUrlOptions;
+use roomkit_mcp::{CallToolOptions, ReadResourceOptions, RequestOptions};
 use std::time::Duration;
 
 #[test]
@@ -59,11 +59,13 @@ fn from_url_options_defaults_as_python() {
     assert!(defaults.tool_filter.is_none());
 }
 
-
 #[test]
 fn host_options_defaults_as_python() {
     // roomkit.tools.MCPToolProvider.request(timeout) = 30.0
     assert_eq!(RequestOptions::default().timeout, Duration::from_secs(30));
     // roomkit.tools.MCPToolProvider.read_resource(timeout) = 30.0
-    assert_eq!(ReadResourceOptions::default().timeout, Duration::from_secs(30));
+    assert_eq!(
+        ReadResourceOptions::default().timeout,
+        Duration::from_secs(30)
+    );
 }
