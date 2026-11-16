@@ -74,6 +74,7 @@ pub(crate) const PROMPT: &[&str] = &[
     "gate",
     "updates",
     "after_updates_gate",
+    "before_reply_gate",
     "permission",
     "permission_steps",
     "stop_reason",
@@ -411,6 +412,13 @@ impl Agent {
             run.gates.hold(gate).await;
         }
     }
+
+    async fn before_reply(&self, prompt: &Value) {
+        if let (Some(gate), Some(run)) = (prompt["before_reply_gate"].as_str(), self.run.upgrade())
+        {
+            run.gates.hold(gate).await;
+        }
+    }
 }
 
 impl Agent {
@@ -442,6 +450,7 @@ impl Agent {
                 .await;
             send_updates(writer, session, &step["updates"]).await;
         }
+        self.before_reply(prompt).await;
         if let Some(error) = prompt.get("error") {
             return Err(error.clone());
         }

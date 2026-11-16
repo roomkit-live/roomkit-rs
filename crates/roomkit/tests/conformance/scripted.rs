@@ -183,6 +183,9 @@ pub(crate) async fn perform(
     {
         run.run_action(action.clone(), scope.clone()).await;
     }
+    if let Some(gate) = reaction.get("after_do_gate").and_then(Value::as_str) {
+        run.gates.hold(gate).await;
+    }
     if let Some(later) = reaction.get("after_turn").and_then(Value::as_array) {
         run.leave_after_turn(later.clone(), scope.clone());
     }

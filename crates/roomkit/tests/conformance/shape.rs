@@ -324,6 +324,7 @@ const REACTION: &[&str] = &[
     "when",
     "repeat",
     "gate",
+    "after_do_gate",
     "delay_ms",
     "do",
     "fail",
@@ -1035,6 +1036,11 @@ fn reaction_with_return(reaction: &Value, path: &str, found: &mut Vec<String>, p
         invalid_return(reaction, invalid, path, found, permitted);
     }
     members(reaction, REACTION, path, found);
+    if let Some(gate) = reaction.get("after_do_gate")
+        && !gate.is_string()
+    {
+        found.push(format!("{path}.after_do_gate: expected a gate name"));
+    }
     optional(&reaction["when"], WHEN, &format!("{path}.when"), found);
     optional(
         &reaction["refuse"],

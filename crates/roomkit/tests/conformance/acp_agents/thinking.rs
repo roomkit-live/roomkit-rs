@@ -21,12 +21,14 @@ pub(crate) fn validate(acp: &Value, path: &str, found: &mut Vec<String>) {
         .flatten()
         .enumerate()
     {
-        if let Some(gate) = prompt.get("after_updates_gate")
-            && !gate.is_string()
-        {
-            found.push(format!(
-                "{path}.agent.prompts[{index}].after_updates_gate: expected a gate name"
-            ));
+        for name in ["after_updates_gate", "before_reply_gate"] {
+            if let Some(gate) = prompt.get(name)
+                && !gate.is_string()
+            {
+                found.push(format!(
+                    "{path}.agent.prompts[{index}].{name}: expected a gate name"
+                ));
+            }
         }
     }
 }

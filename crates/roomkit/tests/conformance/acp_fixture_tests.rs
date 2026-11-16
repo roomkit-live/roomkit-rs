@@ -2,6 +2,31 @@
 
 use serde_json::json;
 
+// Python: tests/conformance/test_acp_observer_timing.py::test_timing_controls_reject_non_string_gate_names
+#[test]
+fn test_timing_controls_reject_non_string_gate_names() {
+    for value in [json!(null), json!(true), json!(1), json!([]), json!({})] {
+        for (control, setup) in [
+            (
+                "before_reply_gate",
+                json!({"channels":[{"id":"agent","type":"ai",
+                "acp":{"cwd":"/srv/project","agent":{"prompts":[{"before_reply_gate":value}]}}}]}),
+            ),
+            (
+                "after_do_gate",
+                json!({"hooks":[{"name":"tools","trigger":"on_tool_call",
+                "reactions":[{"after_do_gate":value}]}]}),
+            ),
+        ] {
+            assert!(
+                crate::shape::unknown_members(&json!({"setup":setup}))
+                    .iter()
+                    .any(|error| error.contains(control))
+            );
+        }
+    }
+}
+
 // Python: tests/conformance/test_acp_context_fixture.py::test_callback_exhaustion_is_not_a_successful_fail_open_turn
 #[tokio::test]
 async fn test_callback_exhaustion_is_not_a_successful_fail_open_turn() {
