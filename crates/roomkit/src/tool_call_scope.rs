@@ -6,13 +6,14 @@
 
 use std::any::Any;
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 /// The call a handler runs within, as its channel's crate scopes it.
 type Call = Arc<dyn Any + Send + Sync>;
 
 tokio::task_local! {
     static TOOL_CALL: Call;
+    static CLOSING_CALLERS: Arc<CallerScopes>;
 }
 
 /// The tool call the current task runs within, as its channel scoped it;
@@ -20,6 +21,54 @@ tokio::task_local! {
 #[doc(hidden)]
 pub fn current_tool_call_scope() -> Option<Arc<dyn Any + Send + Sync>> {
     TOOL_CALL.try_with(Arc::clone).ok()
+}
+
+/// The current tool scope and the callers whose shutdown this task runs.
+/// Internal channel teardown reads their identities without installing any
+/// caller's tool, actor or turn context on the shutdown task (RFC §12.10.4).
+#[doc(hidden)]
+pub fn current_tool_call_scopes() -> Vec<Arc<dyn Any + Send + Sync>> {
+    let mut scopes: Vec<_> = current_tool_call_scope().into_iter().collect();
+    if let Ok(callers) = CLOSING_CALLERS.try_with(|callers| callers.snapshot()) {
+        scopes.extend(callers);
+    }
+    scopes
+}
+
+/// Every caller of the kit's one shutdown, including callers joining later.
+#[derive(Default)]
+pub(crate) struct CallerScopes(Mutex<Vec<Call>>);
+
+impl std::fmt::Debug for CallerScopes {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CallerScopes")
+            .field("count", &self.snapshot().len())
+            .finish()
+    }
+}
+
+impl CallerScopes {
+    pub(crate) fn join(&self) {
+        let current = current_tool_call_scopes();
+        let mut scopes = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        for scope in current {
+            if !scopes.iter().any(|held| Arc::ptr_eq(held, &scope)) {
+                scopes.push(scope);
+            }
+        }
+    }
+
+    fn snapshot(&self) -> Vec<Call> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    pub(crate) fn scope<F: Future>(self: Arc<Self>, work: F) -> impl Future<Output = F::Output> {
+        CLOSING_CALLERS.scope(self, work)
+    }
 }
 
 /// Runs `work` within the tool call `call`. For `roomkit_ai`'s handlers.
@@ -40,10 +89,17 @@ where
     F: Future + Send + 'static,
 {
     let call = current_tool_call_scope();
+    let callers = CLOSING_CALLERS.try_with(Arc::clone).ok();
     async move {
-        match call {
-            Some(call) => TOOL_CALL.scope(call, future).await,
-            None => future.await,
+        let work = async move {
+            match call {
+                Some(call) => TOOL_CALL.scope(call, future).await,
+                None => future.await,
+            }
+        };
+        match callers {
+            Some(callers) => callers.scope(work).await,
+            None => work.await,
         }
     }
 }

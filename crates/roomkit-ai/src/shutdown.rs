@@ -15,6 +15,11 @@ pub(crate) struct ClosingContext {
 }
 
 impl ClosingContext {
+    pub(crate) fn extend(&mut self, other: &Self) {
+        extend_unique(&mut self.turns, &other.turns);
+        extend_unique(&mut self.calls, &other.calls);
+    }
+
     pub(crate) fn in_turn(mut self, turn: Arc<Turn>) -> Self {
         self.turns.push(turn);
         self
@@ -23,6 +28,14 @@ impl ClosingContext {
     fn in_call(mut self, call: Arc<Call>) -> Self {
         self.calls.push(call);
         self
+    }
+}
+
+fn extend_unique<T>(held: &mut Vec<Arc<T>>, others: &[Arc<T>]) {
+    for other in others {
+        if !held.iter().any(|own| Arc::ptr_eq(own, other)) {
+            held.push(Arc::clone(other));
+        }
     }
 }
 

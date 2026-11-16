@@ -271,9 +271,13 @@ pub(crate) async fn within_call<T>(
 
 /// Lifecycle context carried by the same snapshot as tool calls and hooks.
 pub(crate) fn closing_context() -> ClosingContext {
-    current()
-        .map(|scope| scope.closing.clone())
-        .unwrap_or_default()
+    let mut closing = ClosingContext::default();
+    for scope in roomkit::current_tool_call_scopes() {
+        if let Ok(scope) = scope.downcast::<Scope>() {
+            closing.extend(&scope.closing);
+        }
+    }
+    closing
 }
 
 pub(crate) async fn within_closing_context<F: Future>(

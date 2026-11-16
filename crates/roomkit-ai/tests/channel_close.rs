@@ -8,6 +8,8 @@ mod arguments;
 mod before_calls;
 #[path = "channel_close/gates.rs"]
 mod gates;
+#[path = "channel_close/joiners.rs"]
+mod joiners;
 #[path = "channel_close/kit.rs"]
 mod kit;
 #[path = "channel_close/provider.rs"]

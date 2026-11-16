@@ -18,6 +18,7 @@ use tokio::sync::watch;
 
 use crate::error::RoomKitError;
 use crate::tasks::{Marks, Tasks, Unit};
+use crate::tool_call_scope::CallerScopes;
 
 /// Where the kit's shutdown is: not started, or started in its unit, its
 /// end told by a watch.
@@ -34,6 +35,8 @@ struct Started {
     /// shutdown that never ended, its task dropped with its runtime or
     /// panicked.
     ended: watch::Receiver<Option<Ended>>,
+    /// Tool identities of every caller, read again by channel teardown.
+    callers: Arc<CallerScopes>,
 }
 
 /// How the kit's shutdown ended: the channels whose close failed, each
@@ -56,6 +59,7 @@ pub(super) enum Joined {
 pub(super) struct Starting {
     pub(super) marks: Marks,
     pub(super) ended: watch::Sender<Option<Ended>>,
+    pub(super) callers: Arc<CallerScopes>,
 }
 
 impl Shutdown {
@@ -70,18 +74,23 @@ impl Shutdown {
                 return Joined::Own;
             }
             tasks.spare(&marks);
+            started.callers.join();
             return Joined::Waits(started.ended.clone());
         }
         tasks.spare(&marks);
         let unit = Unit::new();
         let (ended, told) = watch::channel(None);
+        let callers = Arc::new(CallerScopes::default());
+        callers.join();
         *started = Some(Started {
             unit,
             ended: told.clone(),
+            callers: Arc::clone(&callers),
         });
         start(Starting {
             marks: Marks::default().with(unit),
             ended,
+            callers,
         });
         Joined::Waits(told)
     }

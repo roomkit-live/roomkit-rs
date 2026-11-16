@@ -113,13 +113,17 @@ impl<S: ConversationStore> RoomKit<S> {
             self.inner.tasks.close();
             self.inner.turns.cut_all();
             self.inner.verification.cancel_timers();
-            let Starting { marks, ended } = starting;
+            let Starting {
+                marks,
+                ended,
+                callers,
+            } = starting;
             let kit = self.clone();
             let context = ExecutionContext::current();
-            tokio::spawn(marks.scoped(async move {
+            tokio::spawn(callers.scope(marks.scoped(async move {
                 let failures = kit.shut_down(context).await;
                 ended.send_replace(Some(failures));
-            }));
+            })));
         });
         match joined {
             Joined::Own => Ok(()),
