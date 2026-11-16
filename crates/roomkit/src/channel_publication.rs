@@ -36,6 +36,10 @@ impl ChannelPublication {
     }
 
     /// Publishes a known idle session's notification without borrowing a turn.
+    #[expect(
+        clippy::unused_async,
+        reason = "the adapters await it, as they awaited the publication it hands over"
+    )]
     pub async fn publish_outside(&self, event: EphemeralEvent) {
         // Only a turn's trace owner may publish its answer's text.
         if event.r#type == crate::realtime::EphemeralEventType::TextDelta {
