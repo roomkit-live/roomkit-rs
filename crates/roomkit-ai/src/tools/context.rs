@@ -10,6 +10,7 @@ use roomkit::model::{Metadata, Room, RoomId};
 
 use super::{AiTool, ToolCallContext};
 use crate::AiError;
+use crate::shutdown::ClosingContext;
 use catalogue::Catalogue;
 
 /// Python's `tool_turn_context` keyword arguments. All optional fields
@@ -161,6 +162,7 @@ struct Scope {
     turn: ToolTurnContextOptions,
     room_metadata: Option<Arc<Metadata>>,
     catalogue: Catalogue,
+    closing: ClosingContext,
 }
 
 impl Scope {
@@ -176,6 +178,7 @@ impl Scope {
             turn,
             room_metadata,
             catalogue: Catalogue::default(),
+            closing: closing_context(),
         }
     }
 
@@ -201,6 +204,7 @@ pub(crate) fn continue_ai_turn<F: Future>(work: F) -> impl Future<Output = F::Ou
             turn: parent.turn.clone(),
             room_metadata: parent.room_metadata.clone(),
             catalogue: parent.catalogue.for_loop(),
+            closing: parent.closing.clone(),
         })
     });
     let work = Box::pin(work);
@@ -248,6 +252,7 @@ pub(crate) async fn within_call<T>(
             },
             room_metadata: parent.room_metadata.clone(),
             catalogue: parent.catalogue.clone(),
+            closing: parent.closing.clone(),
         },
         None => Scope {
             turn: ToolTurnContextOptions {
@@ -258,7 +263,32 @@ pub(crate) async fn within_call<T>(
             },
             room_metadata,
             catalogue: Catalogue::default(),
+            closing: closing_context(),
         },
     };
+    roomkit::within_tool_call_scope(Arc::new(scope), work).await
+}
+
+/// Lifecycle context carried by the same snapshot as tool calls and hooks.
+pub(crate) fn closing_context() -> ClosingContext {
+    current()
+        .map(|scope| scope.closing.clone())
+        .unwrap_or_default()
+}
+
+pub(crate) async fn within_closing_context<F: Future>(
+    closing: ClosingContext,
+    work: F,
+) -> F::Output {
+    let mut scope = match current() {
+        Some(parent) => Scope {
+            turn: parent.turn.clone(),
+            room_metadata: parent.room_metadata.clone(),
+            catalogue: parent.catalogue.clone(),
+            closing: parent.closing.clone(),
+        },
+        None => Scope::new(ToolTurnContextOptions::default()),
+    };
+    scope.closing = closing;
     roomkit::within_tool_call_scope(Arc::new(scope), work).await
 }

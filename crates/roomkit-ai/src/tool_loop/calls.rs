@@ -13,6 +13,7 @@ use super::generation::{Called, Partial};
 use super::{Loop, ToolEnd};
 use crate::rows::end_row;
 use crate::skills::ACTIVATE_SKILL;
+use crate::steering::Steering;
 use crate::texts;
 use crate::tool_eviction::kept_whole;
 use crate::tool_search::TOOL_SEARCH_INFRA_TOOL_NAMES;
@@ -36,16 +37,77 @@ enum Gated {
 }
 
 impl Loop {
+    /// Calls announced before close but not started have the same cancelled
+    /// report as interrupted calls; ordinary steering retains its own hint.
+    pub(super) fn unstarted_calls(&self, calls: &[Called], steering: &Steering) -> Vec<ToolEnd> {
+        let closing = steering.lifetime().is_closing();
+        calls
+            .iter()
+            .enumerate()
+            .map(|(position, called)| {
+                if closing {
+                    self.closed_call(
+                        called,
+                        super::place_under_its_id(calls, position),
+                        called.call.clone(),
+                        Duration::ZERO,
+                    )
+                } else {
+                    self.unrun(called.call.clone())
+                }
+            })
+            .collect()
+    }
+
     /// Serves `called`, the `nth` of its round's calls under its id: its
     /// gate, then its tool, then the kit's hooks on a served result; tells
     /// the kit its end and reports it once to the kit's observers (RFC
     /// §9.3: every call fires `ON_TOOL_CALL` once), and ends it as the model
     /// reads it.
-    pub(super) async fn serve(&self, called: &Called, nth: usize) -> ToolEnd {
+    pub(super) async fn serve(&self, called: &Called, nth: usize, steering: &Steering) -> ToolEnd {
+        let started = Instant::now();
+        let mut ran = called.call.clone();
+        match steering
+            .lifetime()
+            .call(self.serve_call(called, nth, &mut ran))
+            .await
+        {
+            Some(end) => end,
+            None => self.closed_call(called, nth, ran, started.elapsed()),
+        }
+    }
+
+    pub(super) fn closed_call(
+        &self,
+        called: &Called,
+        nth: usize,
+        ran: ToolCall,
+        duration: Duration,
+    ) -> ToolEnd {
+        let tool = serde_json::to_string(&called.call.name).unwrap_or_default();
+        let text = format!(
+            "{{\"error\": \"Tool call cancelled\", \"tool\": {tool}, \"hint\": \"The channel closed before its result.\"}}"
+        );
+        let report = ended(ran.clone(), ToolCallOutcome::Cancelled, text.clone())
+            .with_error_detail("cancelled".to_owned());
+        let end = ToolEnd {
+            call: ran,
+            outcome: ToolCallOutcome::Cancelled,
+            result: ToolResult::Text(text),
+            duration,
+            structured_content: None,
+            references: Vec::new(),
+        };
+        self.tell(called, nth, &report, &end);
+        end
+    }
+
+    async fn serve_call(&self, called: &Called, nth: usize, ran: &mut ToolCall) -> ToolEnd {
         let started = Instant::now();
         let mut span = None;
         let (ended, asked, invalid_arguments) = match self.gate(called).await {
             Gated::Runs { call, asked } => {
+                ran.clone_from(&call);
                 span = self
                     .turn_span
                     .as_ref()
@@ -58,6 +120,7 @@ impl Loop {
             Gated::Refused(refused) => (self.refused_again(called, refused), None, false),
             Gated::InvalidArguments(refused) => (self.refused_again(called, refused), None, true),
         };
+        ran.clone_from(&ended.call);
         let (ended, parts) = self.shaped(ended);
         // A skill's activation the hooks left as it served it is read whole.
         let own = kept_whole(&ended.call.name).then(|| ended.result.clone());

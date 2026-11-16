@@ -318,7 +318,16 @@ impl Loop {
                 let (room_id, channel_id) = (&self.context.room_id, &self.context.channel_id);
                 let name = self.provider.dyn_type_name();
                 self.turn_span = self.telemetry.start_turn(room_id, channel_id, name);
-                self.rounds(conversation, out).await;
+                let turn_id = self.turn.as_ref().map(|turn| turn.turn_id().to_owned());
+                let steering = self
+                    .loops
+                    .start(Some(self.context.room_id.clone()), turn_id);
+                let current = crate::tools::closing_context().in_turn(steering.lifetime());
+                crate::tools::within_closing_context(
+                    current,
+                    self.rounds(conversation, out, steering),
+                )
+                .await;
             })
         })
     }
@@ -332,11 +341,8 @@ impl Loop {
         mut self,
         mut messages: Vec<Message>,
         out: Yielder<Result<TurnItem, ProviderError>>,
+        steering: Steering,
     ) {
-        let turn_id = self.turn.as_ref().map(|turn| turn.turn_id().to_owned());
-        let steering = self
-            .loops
-            .start(Some(self.context.room_id.clone()), turn_id);
         let mut system_prompt = self.system_prompt.clone();
         let mut spent = Spent::starting();
         let mut had_tool_round = false;
@@ -774,17 +780,12 @@ impl Loop {
         let mut running = Running::start(events, made);
         let started = Instant::now();
         let ends = if unrun {
-            generation
-                .calls
-                .iter()
-                .map(|called| self.unrun(called.call.clone()))
-                .collect()
+            self.unstarted_calls(&generation.calls, steering)
         } else {
             let calls = &generation.calls;
-            let serving = calls
-                .iter()
-                .enumerate()
-                .map(|(position, called)| self.serve(called, place_under_its_id(calls, position)));
+            let serving = calls.iter().enumerate().map(|(position, called)| {
+                self.serve(called, place_under_its_id(calls, position), steering)
+            });
             join_all(serving.collect()).await
         };
         if running.published() {

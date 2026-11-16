@@ -88,6 +88,7 @@ pub use author_images::ImageResolver;
 mod handoff;
 mod rows;
 mod server_instructions;
+mod shutdown;
 mod skills;
 mod steering;
 mod stream;

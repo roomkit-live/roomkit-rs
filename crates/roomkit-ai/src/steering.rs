@@ -20,6 +20,7 @@ use roomkit::model::{InjectMessage, RoomId, SteeringDirective};
 use roomkit_core::rules::transcript::{Message, Role, without_mark_copies};
 
 use crate::error::AiError;
+use crate::shutdown::Turn;
 
 /// What [`AiChannel::steer`](crate::AiChannel::steer) takes beside the
 /// directive: Python's `steer(directive, *, loop_id=None, room_id=None,
@@ -55,6 +56,7 @@ struct Running {
     /// Set by a `Cancel` as it is queued: the fast path a generation reads
     /// at each of its events.
     cancelled: AtomicBool,
+    lifetime: Arc<Turn>,
 }
 
 /// A loop's directives not read yet, and whether it reads any more.
@@ -89,6 +91,33 @@ impl Running {
 }
 
 impl Loops {
+    /// Python's `_end_running_turns`: cancel calls and await only turns that
+    /// do not contain the closer, with one shared five-second bound.
+    pub(crate) async fn end_running_turns(&self) {
+        let current = crate::tools::closing_context();
+        let waiting: Vec<_> = lock(&self.running)
+            .iter()
+            .filter_map(|running| {
+                running.cancelled.store(true, Ordering::Release);
+                running
+                    .lifetime
+                    .cut(&current)
+                    .then(|| Arc::clone(&running.lifetime))
+            })
+            .collect();
+        if waiting.is_empty() {
+            return;
+        }
+        let ended = crate::stream::join_all(waiting.iter().map(|turn| turn.wait()).collect());
+        if tokio::time::timeout(std::time::Duration::from_secs(5), ended)
+            .await
+            .is_err()
+        {
+            let pending = waiting.iter().filter(|turn| !turn.has_ended()).count();
+            tracing::warn!(target: "roomkit::ai", pending, "channel closed with turns still running");
+        }
+    }
+
     /// How many loops are running: registered, their handle not dropped.
     pub(crate) fn running(&self) -> usize {
         lock(&self.running).len()
@@ -108,6 +137,7 @@ impl Loops {
             turn_id,
             queue: Mutex::new(Queue::default()),
             cancelled: AtomicBool::new(false),
+            lifetime: Arc::default(),
         });
         lock(&self.running).push(Arc::clone(&running));
         Steering {
@@ -183,6 +213,10 @@ pub(crate) struct Steering {
 }
 
 impl Steering {
+    pub(crate) fn lifetime(&self) -> Arc<Turn> {
+        Arc::clone(&self.running.lifetime)
+    }
+
     /// Whether a `Cancel` reached the loop.
     pub(crate) fn cancelled(&self) -> bool {
         self.running.cancelled.load(Ordering::Acquire)
@@ -199,7 +233,7 @@ impl Steering {
         system_prompt: &mut Option<String>,
     ) -> bool {
         let queued = std::mem::take(&mut lock(&self.running.queue).directives);
-        apply(queued, messages, system_prompt)
+        apply(queued, messages, system_prompt) || self.cancelled()
     }
 
     /// The stop once the model has answered (RFC §21.3 "The answer is a
@@ -224,7 +258,7 @@ impl Steering {
                     .directives
                     .iter()
                     .any(|directive| matches!(directive, SteeringDirective::Cancel(_)));
-            if !again {
+            if !again || self.cancelled() {
                 queue.closed = true;
                 return false;
             }
@@ -247,6 +281,7 @@ impl Drop for Steering {
     fn drop(&mut self) {
         self.close();
         lock(&self.loops.running).retain(|loop_| !Arc::ptr_eq(loop_, &self.running));
+        self.running.lifetime.end();
     }
 }
 

@@ -2008,11 +2008,14 @@ impl<P: AiProvider> Channel for AiChannel<P> {
         self.toolbox.own_names().cloned().collect()
     }
 
-    /// Closes the channel's provider ([`AiProvider::close`]) or its router
+    /// Cuts the running turns' calls and waits up to five seconds for their
+    /// loops, sparing the caller's own loop and call (RFC §9.3). Then closes
+    /// the channel's provider ([`AiProvider::close`]) or its router
     /// ([`AiRouter::close`]), then its memory, as Python's `close()`, and
     /// settles the requests its person's tools still have open: what serves
     /// its other tools is the host's to close.
     async fn close(&self) {
+        self.loops.end_running_turns().await;
         if let Some(provider) = &self.provider {
             provider.close().await;
         }

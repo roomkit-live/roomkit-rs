@@ -47,8 +47,8 @@ pub use self::context::{
     tool_turn_context,
 };
 pub(crate) use self::context::{
-    continue_ai_turn, current_tool_room_metadata, record_tool_declaration, resolve_tool_catalogue,
-    within_ai_turn,
+    closing_context, continue_ai_turn, current_tool_room_metadata, record_tool_declaration,
+    resolve_tool_catalogue, within_ai_turn, within_closing_context,
 };
 pub use self::external::{
     BeforeToolDecision, ExternalToolFuture, ExternalToolHandler, ExternalToolHandlerState,

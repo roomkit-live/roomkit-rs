@@ -10,6 +10,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - A delivery status naming a recipient on a channel not registered finds no room through a binding naming no participant (and not `group`), so never the one room bound to the channel delivering to another number; a binding naming the recipient as its participant still takes it (RFC §10.4, RMK-1420).
 
+- Closing an AI channel cancels its active tool calls before releasing resources, preserves a handler that closes its own channel, and prevents another model round (RFC §9.3, RMK-1709).
+
 - A handler of a framework event a turn's work emits (`RoomKit::on`), during the turn or after it, keeps the turn's response depth for as long as it runs, as an ASYNC hook's body does: an `ai_response` handler that posts at each answer ends at `max_chain_depth` instead of looping at depth 0, a slower ASYNC `ON_AI_RESPONSE` hook beside it or not (RFC §8.3, RMK-1699).
 
 - Export `parse_tool_names`, `serves_exactly`, `missing_required_tools` and `safe_join_filename`; tool names now trim Python's full whitespace set (RFC §24.2–24.6, RMK-1709).
