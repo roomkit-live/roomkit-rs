@@ -272,5 +272,10 @@ with default features disabled, approved in HITL 19458017.
 The direct helpers retain stat permission failures, as Python 3.12 does, instead
 of treating inaccessible directories or targets as absent. Python 3.14's pathlib
 masks some stat errors; the Rust form keeps the explicit filesystem error agreed
-in HITL 45d6fce8. Both runtimes refuse symlink loops; Rust reports a path error as
-Python 3.12 does, while newer pathlib can fail at the later file-existence check.
+in HITL 45d6fce8. For `Skill.read_reference` and `Skill.resolve_script`, both
+runtimes refuse symlink loops; Rust reports a path error as Python 3.12 does,
+while newer pathlib can fail at the later file-existence check.
+
+The standalone `safe_join_filename` does not check file existence: Python 3.13+
+can return an unresolved cyclic path successfully. Rust retains Python 3.12's
+explicit `SkillPathError` for that case (HITL ef1a3d62).

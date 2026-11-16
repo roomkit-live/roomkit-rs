@@ -219,6 +219,20 @@ fn test_safe_join_can_resolve_a_file_that_does_not_exist() {
     );
 }
 
+// Python: tests/skills/test_standalone_helpers.py::test_safe_join_filename_cycle_matches_the_python_runtime
+// Rust retains Python 3.12's path error; Python 3.13+ can return an unresolved cycle.
+#[cfg(unix)]
+#[test]
+fn test_safe_join_filename_cycle_matches_python_312() {
+    use std::os::unix::fs::symlink;
+    let tree = TempDir::new();
+    let directory = tree.dir("references");
+    symlink("second", directory.join("first")).unwrap();
+    symlink("first", directory.join("second")).unwrap();
+    let error = safe_join_filename(&directory, "first", None).unwrap_err();
+    assert!(error.to_string().contains("cannot be resolved"));
+}
+
 // Python: tests/skills/test_standalone_helpers.py::test_safe_join_filename_refuses_a_directory_escape_and_a_dangling_child
 #[cfg(unix)]
 #[test]

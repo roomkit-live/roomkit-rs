@@ -33,6 +33,8 @@ pub(super) fn contained_directory(directory: &Path, kind: &str) -> Result<PathBu
 ///
 /// Returns `SkillPathError` for an invalid name, escaped directory/target or
 /// path that cannot be resolved. This does not read or execute the target.
+/// Cyclic symlinks are refused as in Python 3.12; Python 3.13+ can instead
+/// return an unresolved cyclic path from this standalone helper.
 pub fn safe_join_filename(
     directory: &Path,
     filename: &str,
