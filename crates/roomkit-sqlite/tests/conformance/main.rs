@@ -75,6 +75,8 @@ mod skills;
 mod store_calls;
 #[path = "../../../roomkit/tests/conformance/strategy_calls.rs"]
 mod strategy_calls;
+#[path = "../../../roomkit/tests/conformance/subscription_calls.rs"]
+mod subscription_calls;
 #[path = "../support/mod.rs"]
 mod support;
 #[path = "../../../roomkit/tests/conformance/task_calls.rs"]
