@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Apply the waking participant's role policy throughout text AI and Agent turns, including tool catalogues, search, MCP aliases and skill scripts (RFC §21.1).
+
 - Add role-based ToolPolicy resolution and filters; replace policy struct literals with validated ToolPolicyOptions construction (RFC §21.1).
 
 - Add the transport-independent McpSkillServer protocol and its connected MCP provider adapter (RFC §24.7).

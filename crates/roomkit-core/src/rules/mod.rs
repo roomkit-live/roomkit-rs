@@ -57,6 +57,8 @@ pub(crate) mod permissions;
 pub mod publications;
 pub(crate) mod records;
 pub mod regeneration;
+#[doc(hidden)]
+pub mod roles;
 pub mod routing;
 pub(crate) mod threads;
 pub mod timers;

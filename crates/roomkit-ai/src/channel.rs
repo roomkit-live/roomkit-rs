@@ -1130,6 +1130,7 @@ impl<P: AiProvider> AiChannel<P> {
         (configured, skills): (Option<&AiChannelTurnConfig>, Option<&SkillTools>),
         context: &RoomContext,
         (stands_alone, searching): (bool, bool),
+        policy: &ToolPolicy,
     ) -> Option<String> {
         // An empty one lifts the channel's prompt for the room (RFC
         // Appendix A.9), the turn then sending none.
@@ -1152,7 +1153,7 @@ impl<P: AiProvider> AiChannel<P> {
                     agent: &self.channel_id,
                     history: self.tool_memory_rows(context),
                     stands_alone,
-                    scripts_allowed: self.policy.is_allowed("run_skill_script"),
+                    scripts_allowed: policy.is_allowed("run_skill_script"),
                 };
                 skills.system_prompt(prompt.as_deref(), turn)
             }
@@ -1712,6 +1713,7 @@ impl<P: AiProvider> AiChannel<P> {
         binding: ChannelBinding,
         context: RoomContext,
         record: TurnRecord,
+        role: Option<&str>,
     ) -> Result<Option<PreparedAnswer>, ChannelError> {
         let turn = current_turn_host();
         // The tools the room's owner serves this turn join the agent's own
@@ -1730,11 +1732,13 @@ impl<P: AiProvider> AiChannel<P> {
         let window = (&context, &*started.provider);
         let (toolbox, search) =
             self.turn_search(toolbox, window, (stands_alone, turn.is_some()))?;
+        let policy = self.turn_policy(role)?;
         let system_prompt = self.turn_system_prompt(
             &binding,
             (configured, skills.as_deref()),
             &context,
             (stands_alone, search.active()),
+            &policy,
         );
         let tools = self.tool_context((&event, &context), turn.clone(), stands_alone);
         let mut looped = Loop {
@@ -1742,7 +1746,7 @@ impl<P: AiProvider> AiChannel<P> {
             provider: started.provider,
             route_request: started.asked,
             toolbox,
-            policy: self.policy.clone(),
+            policy,
             skill_gates: crate::tool_loop::SkillGates::new(skills),
             bounds: self.bounds.clone(),
             budget: started.budget,
@@ -1810,19 +1814,7 @@ impl<P: AiProvider> AiChannel<P> {
         // Python's AIContext validates them.
         settings.validated()?;
         looped.place_turn_input(&messages, input.filter(|_| memory.in_place));
-        // What the turn's generation hooks leave is its context; a block
-        // runs no generation (RFC §6.4).
-        if !looped.before_generation(&event, &messages).await {
-            return Ok(None);
-        }
-        let items = record.clone().scope_stream(looped.run(messages));
-        Ok(Some(PreparedAnswer {
-            items,
-            record,
-            turn,
-            source: self.source(),
-            event,
-        }))
+        Ok(Box::pin(self.finish_preparation(looped, event, messages)).await)
     }
 }
 
