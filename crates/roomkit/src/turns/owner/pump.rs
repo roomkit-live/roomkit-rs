@@ -14,6 +14,7 @@ use tokio::task::AbortHandle;
 use tokio::time::Instant;
 
 use super::{Facts, Main, OwnerState, verbs};
+use crate::context::ExecutionContext;
 use crate::turn::TurnKit;
 use crate::turns::codec::decode_end;
 use crate::turns::context::TurnContext;
@@ -45,6 +46,38 @@ const TURN_FRAMEWORK_EVENTS: [&str; 6] = [
     "before_ai_generation",
     "hook_timeout",
 ];
+
+/// Emits `event_type`, which the turn of `facts` emitted on its executor
+/// naming `room_id`, `channel_id` and `event_id`, as [`Pump::publish`]
+/// does: on `kit`'s bus, its handlers at least as deep as the turn's
+/// response, as those of an event a turn of the kit's own executor emits
+/// (RFC §8.3).
+fn publish_for_turn(
+    kit: &dyn TurnKit,
+    facts: &Facts,
+    event_type: String,
+    (room_id, channel_id, event_id): (Option<&str>, Option<&str>, Option<String>),
+    data: Metadata,
+) {
+    if !emitted_by_its_turn(facts, &event_type, room_id, channel_id) {
+        tracing::warn!(
+            target: "roomkit::turns",
+            room_id = %facts.room_id,
+            channel_id = %facts.channel_id,
+            %event_type,
+            "a turn emitted a framework event outside its room or kind: dropped"
+        );
+        return;
+    }
+    let ids = (
+        Some(facts.room_id.clone()),
+        Some(facts.channel_id.clone()),
+        event_id.and_then(|id| EventId::new(id).ok()),
+    );
+    ExecutionContext::current()
+        .at_least(facts.response_depth)
+        .sync_scope(|| kit.emit(event_type, ids, data));
+}
 
 /// Whether a turn of `facts` may emit `event_type` naming `room_id` and
 /// `channel_id`: one of [`TURN_FRAMEWORK_EVENTS`], about its own room and
@@ -332,23 +365,14 @@ impl Pump {
         event_id: Option<String>,
         data: Metadata,
     ) {
-        let facts = &self.state.facts;
-        if !emitted_by_its_turn(facts, &event_type, room_id, channel_id) {
-            tracing::warn!(
-                target: "roomkit::turns",
-                room_id = %facts.room_id,
-                channel_id = %facts.channel_id,
-                %event_type,
-                "a turn emitted a framework event outside its room or kind: dropped"
-            );
-            return;
-        }
-        let ids = (
-            Some(facts.room_id.clone()),
-            Some(facts.channel_id.clone()),
-            event_id.and_then(|id| EventId::new(id).ok()),
+        let named = (room_id, channel_id, event_id);
+        publish_for_turn(
+            self.kit.as_ref(),
+            &self.state.facts,
+            event_type,
+            named,
+            data,
         );
-        self.kit.emit(event_type, ids, data);
     }
 
     /// The executor fell silent, or never said it took the turn within the
@@ -509,6 +533,40 @@ mod tests {
     use roomkit_core::model::{ChannelId, RoomId};
 
     use super::*;
+
+    /// RFC §8.3, as Python's owner publishes a turn's frames: a handler of
+    /// a framework event another process's executor emitted for a turn runs
+    /// at least as deep as the turn's response.
+    #[tokio::test]
+    async fn a_foreign_turn_s_event_handlers_run_at_its_depth() {
+        let kit = crate::RoomKit::new(crate::RoomKitOptions::default());
+        let (seen, mut depths) = mpsc::unbounded_channel();
+        kit.on("tool_call", move |_event| {
+            let seen = seen.clone();
+            async move {
+                seen.send(ExecutionContext::current().turn_depth()).unwrap();
+            }
+        })
+        .unwrap();
+        let facts = Facts {
+            room_id: RoomId::new("r1").unwrap(),
+            room_metadata: Arc::default(),
+            channel_id: ChannelId::new("ai").unwrap(),
+            response_depth: 3,
+            organization_id: None,
+        };
+        let turn_kit: Arc<dyn TurnKit> = Arc::new(Arc::downgrade(&kit.inner));
+        let named = (Some("r1"), None, None);
+        publish_for_turn(
+            turn_kit.as_ref(),
+            &facts,
+            "tool_call".to_owned(),
+            named,
+            Metadata::new(),
+        );
+        assert_eq!(depths.recv().await, Some(Some(3)));
+        kit.close().await.unwrap();
+    }
 
     /// RFC §10.6.3, as Python's `publish_frame`: a turn's executor reports
     /// its own room's and channel's events of the types a turn emits; a

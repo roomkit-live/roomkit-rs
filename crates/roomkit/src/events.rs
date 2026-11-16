@@ -20,6 +20,7 @@ use serde_json::{Value, json};
 use tokio::sync::watch;
 
 use crate::channel::BoxFuture;
+use crate::context::ExecutionContext;
 use crate::start_order::StartOrder;
 use crate::tasks::{Kind, Tasks};
 use crate::unwind::{message, unwinding};
@@ -223,6 +224,22 @@ impl Handlers {
     /// them (no runtime, or the kit shut down). A handler that panics is
     /// logged, and the next one runs.
     pub(crate) fn emit(&self, tasks: &Arc<Tasks>, event: FrameworkEvent) -> Option<Handled> {
+        self.emit_at(tasks, event, None)
+    }
+
+    /// Runs the handlers of `event` as [`emit`](Self::emit) does, each at
+    /// least `floor` deep for as long as it runs, when it has one: the
+    /// depth of the work that emitted the event (a turn's response, for an
+    /// event the turn emitted while it ran), which its handlers keep as the
+    /// body of an ASYNC hook keeps its trigger's, the turn over or not,
+    /// while a task one starts has it no more once that handler has
+    /// returned (RFC §8.3).
+    pub(crate) fn emit_at(
+        &self,
+        tasks: &Arc<Tasks>,
+        event: FrameworkEvent,
+        floor: Option<u32>,
+    ) -> Option<Handled> {
         tracing::debug!(target: "roomkit::events", r#type = %event.r#type, "framework event");
         let handlers: Vec<Handler> = self
             .registered
@@ -246,7 +263,19 @@ impl Handlers {
         let (ended, end) = watch::channel(false);
         let running = async move {
             for handler in handlers {
-                if let Err(panic) = unwinding(handler(event.clone())).await {
+                // The handler's whole call runs within its floor, the code
+                // before its future too, as Python awaits the coroutine.
+                let handling: BoxFuture<'static, ()> = match floor {
+                    Some(floor) => {
+                        let event = event.clone();
+                        Box::pin(
+                            ExecutionContext::default()
+                                .observing(floor, async move { handler(event).await }),
+                        )
+                    }
+                    None => handler(event.clone()),
+                };
+                if let Err(panic) = unwinding(handling).await {
                     tracing::error!(
                         target: "roomkit::events",
                         r#type = %event.r#type,

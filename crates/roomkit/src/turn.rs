@@ -584,14 +584,18 @@ impl TurnHost {
     }
 
     /// Emits the framework event `event_type` with `data`, about the
-    /// turn's room and agent.
+    /// turn's room and agent: its handlers keep the turn's response depth
+    /// while each runs, whether the turn's work emits it during the turn or
+    /// after it (RFC §8.3).
     fn emit(&self, event_type: &str, data: Metadata) {
         let ids = (
             Some(self.shared.room_id.clone()),
             Some(self.shared.channel_id.clone()),
             None,
         );
-        self.shared.kit.emit(event_type.to_owned(), ids, data);
+        ExecutionContext::current()
+            .at_least(self.shared.response_depth)
+            .sync_scope(|| self.shared.kit.emit(event_type.to_owned(), ids, data));
     }
 
     /// Emits the `hook_timeout` framework event of the tool hook `spec` when
@@ -1676,7 +1680,10 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
             timestamp: inner.environment().now(),
             data,
         };
-        drop(inner.events.emit(&inner.tasks, event));
+        // Its handlers run at least as deep as the work that emitted it was:
+        // the turn's response for an event the turn's work emits (RFC §8.3).
+        let floor = ExecutionContext::current().turn_depth();
+        drop(inner.events.emit_at(&inner.tasks, event, floor));
     }
 }
 

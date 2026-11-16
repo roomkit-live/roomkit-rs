@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A handler of a framework event a turn's work emits (`RoomKit::on`), during the turn or after it, keeps the turn's response depth for as long as it runs, as an ASYNC hook's body does: an `ai_response` handler that posts at each answer ends at `max_chain_depth` instead of looping at depth 0, a slower ASYNC `ON_AI_RESPONSE` hook beside it or not (RFC §8.3, RMK-1699).
+
 - Export `parse_tool_names`, `serves_exactly`, `missing_required_tools` and `safe_join_filename`; tool names now trim Python's full whitespace set (RFC §24.2–24.6, RMK-1709).
 
 - Add direct `Skill` file helpers with contained, normalized paths, unbounded UTF-8 reference reads and distinct path/filesystem/encoding errors (RFC §24.6, RMK-1709).

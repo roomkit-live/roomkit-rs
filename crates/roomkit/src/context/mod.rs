@@ -452,6 +452,11 @@ impl ExecutionContext {
         crate::telemetry::within_current_span(CONTEXT.scope(self, future))
     }
 
+    /// Runs `f` within this context, synchronously.
+    pub(crate) fn sync_scope<R>(self, f: impl FnOnce() -> R) -> R {
+        CONTEXT.sync_scope(self, f)
+    }
+
     /// A live lease on `room_id`'s lock, which a call of this context runs
     /// under and still runs.
     pub(crate) fn lease(&self, room_id: &RoomId) -> Option<Lease> {
