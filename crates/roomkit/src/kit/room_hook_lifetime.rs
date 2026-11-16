@@ -67,13 +67,15 @@ impl RoomHookLifetime {
         release(&mut lock(&self.state), room_id, name);
     }
 
-    /// The names waiting for the room created under `room_id`.
-    fn waiting(&self, room_id: &RoomId) -> BTreeSet<String> {
-        lock(&self.state)
-            .waiting
-            .get(room_id)
-            .cloned()
-            .unwrap_or_default()
+    /// The names waiting for the room created under `room_id`, `None`
+    /// when a registration for the id is under way: the room's creation
+    /// has those to settle whatever the room holds.
+    fn waiting(&self, room_id: &RoomId) -> Option<BTreeSet<String>> {
+        let state = lock(&self.state);
+        if state.registering.contains_key(room_id) {
+            return None;
+        }
+        Some(state.waiting.get(room_id).cloned().unwrap_or_default())
     }
 
     /// The store has just created a room under `room_id`: the registrations
@@ -170,12 +172,16 @@ impl<S: ConversationStore> RoomKit<S> {
             .map_err(|error| self.read_failed(error))
     }
 
-    /// Whether `room_id` holds hooks or enabled names an earlier room of
-    /// the id left: those [`forget_room_hooks`](Self::forget_room_hooks)
-    /// forgets once the store created a room under the id.
-    pub(super) fn holds_earlier_room_hooks(&self, room_id: &RoomId) -> bool {
-        let keep = self.inner.room_hook_lifetime.waiting(room_id);
-        self.config().hooks.holds_room_hooks_beyond(room_id, &keep)
+    /// Whether a room created under `room_id` has room hooks to settle
+    /// before it is announced, in
+    /// [`forget_room_hooks`](Self::forget_room_hooks): hooks or enabled
+    /// names an earlier room of the id left, names waiting for it, or a
+    /// registration under way. Python settles them at every creation.
+    pub(super) fn has_room_hooks_to_settle(&self, room_id: &RoomId) -> bool {
+        let Some(keep) = self.inner.room_hook_lifetime.waiting(room_id) else {
+            return true;
+        };
+        !keep.is_empty() || self.config().hooks.holds_room_hooks_beyond(room_id, &keep)
     }
 
     /// The store has just created a room under `room_id`: forgets the room

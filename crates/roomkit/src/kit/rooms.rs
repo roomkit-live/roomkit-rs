@@ -61,11 +61,12 @@ impl<S: ConversationStore> RoomKit<S> {
             .clone()
             .unwrap_or_else(|| self.inner.default_orchestration.clone());
         let forgets = options.room_id.as_ref().is_some_and(|room_id| {
-            self.holds_strategy_record(room_id) || self.holds_earlier_room_hooks(room_id)
+            self.holds_strategy_record(room_id) || self.has_room_hooks_to_settle(room_id)
         });
         if orchestration.is_none() && !forgets {
             let room = self.create_room_record(options, true).await?;
-            // The hooks that waited for the room are its own from now on.
+            // A registration that began once the id was checked counts the
+            // room as holding it.
             self.inner.room_hook_lifetime.room_created(&room.id, |_| {});
             return Ok(room);
         }

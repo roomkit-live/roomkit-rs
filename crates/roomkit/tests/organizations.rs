@@ -9,23 +9,26 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use tokio::sync::Notify;
+
 use pretty_assertions::assert_eq;
 use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
-    Access, ChannelId, ChannelType, EventSource, InboundMessage, Metadata, RoomEvent, RoomId,
-    RoomStatus, RoomTimers, TextContent, Timestamp, Visibility,
+    Access, ChannelId, ChannelType, EventSource, InboundMessage, Metadata, RoomContext, RoomEvent,
+    RoomId, RoomStatus, RoomTimers, TextContent, Timestamp, Visibility,
 };
 use roomkit::testing::{
     RecordingTransport, RecordingTransportOptions, SequentialEnvironment, kit_with_environment,
 };
 use roomkit::{
-    ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions, CheckRoomTimersOptions,
-    CloseRoomOptions, CommitEventOptions, ConversationStore, CreateRoomOptions, DeleteEventOptions,
-    DetachChannelOptions, GetBindingOptions, GetRoomOptions, GetTimelineOptions, HookOptions,
-    HookTrigger, ListBindingsOptions, ListMembersOptions, MuteOptions, PauseRoomOptions,
-    PostOptions, ProcessInboundOptions, ReopenRoomOptions, ResumeRoomOptions, RoomKit,
-    RoomKitError, RoomKitOptions, SendEventOptions, SetAccessOptions, SetVisibilityOptions,
-    UnmuteOptions, UpdateBindingMetadataOptions, UpdateEventOptions,
+    AddRoomHookOptions, ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions,
+    CheckRoomTimersOptions, CloseRoomOptions, CommitEventOptions, ConversationStore,
+    CreateRoomOptions, DeleteEventOptions, DetachChannelOptions, GetBindingOptions, GetRoomOptions,
+    GetTimelineOptions, HookExecution, HookOptions, HookTrigger, ListBindingsOptions,
+    ListMembersOptions, MuteOptions, PauseRoomOptions, PostOptions, ProcessInboundOptions,
+    ReopenRoomOptions, ResumeRoomOptions, RoomKit, RoomKitError, RoomKitOptions, SendEventOptions,
+    SetAccessOptions, SetVisibilityOptions, UnmuteOptions, UpdateBindingMetadataOptions,
+    UpdateEventOptions,
 };
 
 const START_MILLIS: i64 = 1_792_677_780_000;
@@ -545,4 +548,69 @@ async fn a_call_naming_no_organization_reaches_an_organization_s_room() {
         as_stored(&kit).await,
         (RoomStatus::Paused, 2, vec![("sms".to_owned(), false)])
     );
+}
+
+/// A hook added for a room id no room holds is the room's from its write
+/// on, before its creation is announced: a creation cut during its
+/// `ON_ROOM_CREATED` hooks still ends the hook with its room, so it does
+/// not run in the room another organization creates again under its id
+/// (RFC §9.1, §17.2, RMK-963).
+#[tokio::test]
+async fn a_creation_cut_during_its_announcement_still_ends_the_waiting_hooks_with_its_room() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    let room = RoomId::new("r1").unwrap();
+    let options = AddRoomHookOptions {
+        name: "h".to_owned(),
+        ..AddRoomHookOptions::default()
+    };
+    let noop = |_event: RoomEvent, _context: RoomContext| async {};
+    kit.add_room_hook(
+        &room,
+        HookTrigger::AfterBroadcast,
+        HookExecution::Async,
+        noop,
+        options,
+    )
+    .await
+    .unwrap();
+    let (announced, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    let (told, held) = (Arc::clone(&announced), Arc::clone(&release));
+    let slow = move |_event: RoomEvent, _context: RoomContext| {
+        let (told, held) = (Arc::clone(&told), Arc::clone(&held));
+        async move {
+            told.notify_one();
+            held.notified().await;
+        }
+    };
+    let options = HookOptions {
+        execution: HookExecution::Async,
+        name: "slow".to_owned(),
+        ..HookOptions::default()
+    };
+    kit.hook(HookTrigger::OnRoomCreated, slow, options).unwrap();
+    let acme = CreateRoomOptions {
+        room_id: Some(room.clone()),
+        organization_id: Some("acme".to_owned()),
+        ..CreateRoomOptions::default()
+    };
+    tokio::select! {
+        created = kit.create_room(acme) => panic!("the creation waits for its hooks: {created:?}"),
+        () = announced.notified() => {}
+    }
+    assert!(kit.hook_engine().remove_global_hook("slow"));
+    release.notify_one();
+
+    kit.store().delete_room(&room).await.unwrap();
+    let globex = CreateRoomOptions {
+        room_id: Some(room.clone()),
+        organization_id: Some("globex".to_owned()),
+        ..CreateRoomOptions::default()
+    };
+    kit.create_room(globex).await.unwrap();
+
+    assert_eq!(
+        kit.hook_engine().room_hook_names(&room),
+        Vec::<String>::new()
+    );
+    kit.close().await.unwrap();
 }
