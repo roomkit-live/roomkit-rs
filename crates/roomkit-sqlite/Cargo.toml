@@ -20,7 +20,6 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-# Shared public MCP host scenarios over JSON and SSE.
 agent-client-protocol-schema.workspace = true
 # The conformance runner's paced model, which the suite includes from
 # roomkit.
@@ -37,6 +36,7 @@ roomkit-acp.workspace = true
 roomkit-openai.workspace = true
 roomkit-anthropic.workspace = true
 # The conformance runner's `mcp_servers` (roomkit's runner, shared).
+# Shared public MCP host scenarios over JSON and SSE.
 roomkit-mcp = { workspace = true, features = ["http"] }
 axum.workspace = true
 tokio = { workspace = true, features = ["net", "io-util"] }

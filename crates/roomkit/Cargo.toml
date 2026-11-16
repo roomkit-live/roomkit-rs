@@ -41,7 +41,6 @@ opentelemetry_sdk = { workspace = true, optional = true }
 opentelemetry = ["dep:opentelemetry", "dep:opentelemetry_sdk"]
 
 [dev-dependencies]
-# Shared public MCP host scenarios over JSON and SSE.
 agent-client-protocol-schema.workspace = true
 pretty_assertions.workspace = true
 # The conformance runner's scripted agent (roomkit-specs conformance/README.md,
@@ -57,6 +56,7 @@ roomkit-openai.workspace = true
 roomkit-anthropic.workspace = true
 # The conformance runner's `mcp_servers`: roomkit-mcp's provider over
 # streamable HTTP, to a server the runner serves in process.
+# Shared public MCP host scenarios over JSON and SSE.
 roomkit-mcp = { workspace = true, features = ["http"] }
 axum.workspace = true
 sha2.workspace = true
