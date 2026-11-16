@@ -156,6 +156,10 @@ impl State {
         if observed != expected {
             self.problems
                 .push(format!("MCP request {observed} differs from {expected}"));
+            return Some(json!({
+                "jsonrpc":"2.0","id":message["id"],
+                "error":{"code":-32603,"message":"fixture request mismatch"}
+            }));
         }
         if reply["hold"] == true {
             return None;
@@ -323,5 +327,24 @@ mod tests {
             }));
             assert_eq!(state.problems.is_empty(), discovery);
         }
+    }
+
+    // Python: test_mcp_host_fixture.py::test_a_wrong_held_request_is_refused_instead_of_hanging
+    #[test]
+    fn a_wrong_held_request_is_refused_instead_of_hanging() {
+        let mut state = state("vendor/read");
+        state.spec = json!({"replies":[{"method":"vendor/read","hold":true}]});
+        let reply = state.reply(&json!({
+            "jsonrpc":"2.0","id":2,"method":"vendor/next","params":{}
+        }));
+        assert_eq!(
+            reply,
+            Some(json!({
+                "jsonrpc":"2.0","id":2,
+                "error":{"code":-32603,"message":"fixture request mismatch"}
+            }))
+        );
+        assert_eq!(state.problems.len(), 1);
+        assert!(state.problems[0].contains("vendor/next"));
     }
 }
