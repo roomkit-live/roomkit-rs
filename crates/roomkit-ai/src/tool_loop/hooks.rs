@@ -65,6 +65,10 @@ impl Loop {
             self.declared().into_iter().map(|tool| tool.name).collect(),
             &self.adopted.withdrawn,
         );
+        let policy = self.policy.clone();
+        crate::tools::resolve_tool_policy(Arc::new(move |alias| {
+            crate::tools::alias_admitted(&policy, alias)
+        }));
     }
 
     /// Fires `BEFORE_AI_GENERATION` on the turn answering `trigger`, whose

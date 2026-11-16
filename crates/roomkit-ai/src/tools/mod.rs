@@ -20,7 +20,7 @@ mod external_rows;
 mod handler;
 pub(crate) mod owner;
 mod policy;
-pub(crate) use policy::glob_matches;
+pub(crate) use policy::{alias_admitted, glob_matches};
 pub(crate) mod repair;
 mod result;
 mod row_bound;
@@ -41,6 +41,8 @@ use serde_json::Value;
 
 #[doc(hidden)]
 pub use self::builder::Tools;
+#[doc(hidden)]
+pub use self::context::turn_admits_alias;
 pub use self::context::{
     ToolTurnContextOptions, current_tool_actor_id, current_tool_allowed_names, current_tool_call,
     current_tool_chain_depth, current_tool_requester, current_tool_room, current_tool_room_id,
@@ -48,7 +50,7 @@ pub use self::context::{
 };
 pub(crate) use self::context::{
     closing_context, continue_ai_turn, current_tool_room_metadata, record_tool_declaration,
-    resolve_tool_catalogue, within_ai_turn, within_closing_context,
+    resolve_tool_catalogue, resolve_tool_policy, within_ai_turn, within_closing_context,
 };
 pub use self::external::{
     BeforeToolDecision, ExternalToolFuture, ExternalToolHandler, ExternalToolHandlerState,

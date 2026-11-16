@@ -10,13 +10,36 @@ struct Resolved {
     withdrawn: BTreeSet<String>,
 }
 
+/// What a turn's tool policy says of the server an MCP alias names (RFC
+/// §21.2).
+pub(crate) type Admits = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
 #[derive(Clone, Default)]
 pub(super) struct Catalogue {
     resolved: Arc<Mutex<Option<Resolved>>>,
     declared: Arc<Mutex<HashSet<String>>>,
+    alias_admits: Arc<Mutex<Option<Admits>>>,
 }
 
 impl Catalogue {
+    pub(super) fn judge_aliases(&self, alias_admits: Admits) {
+        *self
+            .alias_admits
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(alias_admits);
+    }
+
+    /// Whether the turn's policy lets a bare name run on the server `alias`
+    /// names; true under no policy.
+    pub(super) fn admits_alias(&self, alias: &str) -> bool {
+        let admits = self
+            .alias_admits
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        admits.is_none_or(|admits| admits(alias))
+    }
+
     pub(super) fn resolve(&self, names: HashSet<String>, withdrawn: &BTreeSet<String>) {
         *self.resolved.lock().unwrap_or_else(PoisonError::into_inner) = Some(Resolved {
             names,
@@ -57,6 +80,12 @@ impl Catalogue {
                     .clone(),
             )),
             declared: Arc::clone(&self.declared),
+            alias_admits: Arc::new(Mutex::new(
+                self.alias_admits
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .clone(),
+            )),
         }
     }
 }

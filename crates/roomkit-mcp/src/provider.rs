@@ -11,7 +11,9 @@ use std::time::Duration;
 
 use rmcp::model::CallToolResult;
 use roomkit::model::Metadata;
-use roomkit_ai::{AiTool, ToolError, ToolHandler, ToolResult, alias_server, served_tool_name};
+use roomkit_ai::{
+    AiTool, ToolError, ToolHandler, ToolResult, alias_server, served_tool_name, turn_admits_alias,
+};
 use roomkit_core::rules::python_repr;
 use tokio::sync::RwLock;
 
@@ -371,7 +373,12 @@ impl McpToolProvider {
     /// a label serves only the aliases naming it, and declines one naming
     /// another server ([`ToolError::UnservedToolCall`]), for the next
     /// handler of a channel's chain; one without serves an alias whatever
-    /// server it names. With `gate_discovery`, it declines a tool its
+    /// server it names. A labelled provider declines a bare name when the
+    /// turn's tool policy names its server to keep it out (a deny pattern
+    /// covering its alias `mcp__<label>__<tool>`, or allow patterns naming
+    /// aliases of which none covers it), so a bare name runs on the first
+    /// server of the chain the policy does not keep out (RFC §21.2).
+    /// With `gate_discovery`, it declines a tool its
     /// connection did not list. A result that says `isError` is a failed
     /// call ([`ToolError::Failed`]) whose words the model reads.
     ///
@@ -483,6 +490,14 @@ impl McpToolProvider {
         if options.gate_discovery && !self.listed(lookup) {
             return Err(ToolError::unserved(format!(
                 "tool {} is not served here",
+                python_repr(name)
+            )));
+        }
+        if let (None, Some(label)) = (alias_server(name), &self.inner.label)
+            && !turn_admits_alias(&format!("mcp__{label}__{lookup}"))
+        {
+            return Err(ToolError::unserved(format!(
+                "tool {} is refused on this server",
                 python_repr(name)
             )));
         }

@@ -230,6 +230,25 @@ pub(crate) fn resolve_tool_catalogue(names: HashSet<String>, withdrawn: &BTreeSe
     }
 }
 
+/// Sets what the turn's tool policy says of the server a bare name would
+/// run on, for the handlers its calls run (RFC §21.2).
+pub(crate) fn resolve_tool_policy(alias_admits: catalogue::Admits) {
+    if let Some(scope) = current() {
+        scope.catalogue.judge_aliases(alias_admits);
+    }
+}
+
+/// Whether the tool policy of the call now running lets a tool called by
+/// its bare name run on the server its MCP `alias` names (RFC §21.2):
+/// false only when the policy names that server to keep it out; true
+/// outside a call and under no policy. The MCP handler of a labelled
+/// server reads it: Python's `turn_admits_alias`.
+#[doc(hidden)]
+#[must_use]
+pub fn turn_admits_alias(alias: &str) -> bool {
+    current().is_none_or(|scope| scope.catalogue.admits_alias(alias))
+}
+
 pub(crate) fn record_tool_declaration(name: &str) {
     if let Some(scope) = current() {
         scope.catalogue.record(name);

@@ -67,6 +67,24 @@ pub(crate) fn call_admitted(policy: &ToolPolicy, name: &str) -> bool {
     policy.is_allowed(name) && policy.is_allowed(served_tool_name(name))
 }
 
+/// Whether `policy` lets a tool called by its bare name run on the server
+/// its MCP `alias` (`mcp__<server>__<tool>`) names (RFC §21.2): only a
+/// policy that names a server keeps one out, by a deny pattern covering the
+/// alias or by allow patterns naming aliases (one starts with `mcp__`) of
+/// which none covers it. An allow list of bare names alone keeps none out:
+/// Python's `alias_admitted`.
+pub(crate) fn alias_admitted(policy: &ToolPolicy, alias: &str) -> bool {
+    let covers = |pattern: &String| glob_matches(pattern, alias);
+    if policy.deny.iter().any(covers) {
+        return false;
+    }
+    !policy
+        .allow
+        .iter()
+        .any(|pattern| pattern.starts_with("mcp__"))
+        || policy.allow.iter().any(covers)
+}
+
 /// Whether `pattern`, where `*` matches any characters and `?` one, matches
 /// the whole of `name`.
 pub(crate) fn glob_matches(pattern: &str, name: &str) -> bool {

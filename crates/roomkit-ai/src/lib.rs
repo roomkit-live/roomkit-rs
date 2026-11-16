@@ -155,5 +155,7 @@ pub use self::tools::{
     current_tool_requester, current_tool_room, current_tool_room_id, tool_turn_context,
 };
 #[doc(hidden)]
-pub use self::tools::{ToolContext, Tools, alias_server, arguments, served_tool_name};
+pub use self::tools::{
+    ToolContext, Tools, alias_server, arguments, served_tool_name, turn_admits_alias,
+};
 pub use self::turn_config::AiChannelTurnConfig;
