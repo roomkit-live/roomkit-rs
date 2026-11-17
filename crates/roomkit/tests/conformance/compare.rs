@@ -44,10 +44,26 @@ pub(crate) fn compare(run: &Run, scenario: &Value, observed: &Observed) -> Vec<S
     comparison.side_effects();
     comparison.models();
     comparison.script_executors(&run.skills);
+    comparison.sandbox_executors(&run.sandboxes);
     comparison.found
 }
 
 impl Comparison<'_> {
+    fn sandbox_executors(&mut self, sandboxes: &crate::sandbox::Sandboxes) {
+        let snapshots = sandboxes.snapshots();
+        for (channel, expected) in self.expect["sandbox_executors"]
+            .as_object()
+            .into_iter()
+            .flatten()
+        {
+            self.check(
+                expected,
+                snapshots.get(channel),
+                &format!("sandbox_executors.{channel}"),
+            );
+        }
+    }
+
     fn script_executors(&mut self, skills: &crate::skills::SkillDirectories) {
         let snapshots = skills.script_snapshots();
         for (channel, expected) in self.expect["script_executors"]

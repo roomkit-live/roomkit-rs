@@ -71,6 +71,8 @@ mod room_queries;
 mod routing_calls;
 #[path = "../../../roomkit/tests/conformance/run.rs"]
 mod run;
+#[path = "../../../roomkit/tests/conformance/sandbox.rs"]
+mod sandbox;
 #[path = "../../../roomkit/tests/conformance/scenarios.rs"]
 mod scenarios;
 #[path = "../../../roomkit/tests/conformance/scripted.rs"]

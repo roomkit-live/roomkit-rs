@@ -51,6 +51,7 @@ mod room_calls;
 mod room_queries;
 mod routing_calls;
 mod run;
+mod sandbox;
 mod scenarios;
 mod scripted;
 mod served_call_tests;

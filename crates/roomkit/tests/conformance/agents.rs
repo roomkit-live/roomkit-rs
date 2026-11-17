@@ -405,6 +405,7 @@ pub(crate) fn scripted_agent_with_skills(
     bounds(spec, &mut options)?;
     agent_settings(spec, &mut options)?;
     run.skills.script_executor(spec, &mut options)?;
+    run.sandboxes.install(spec, &mut options)?;
     tool_search_settings(spec, &mut options)?;
     if let Some(by_room) = spec.get("config_provider") {
         options.config_provider = Some(config_provider(by_room, run)?);

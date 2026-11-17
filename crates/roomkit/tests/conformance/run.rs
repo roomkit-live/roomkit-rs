@@ -168,6 +168,7 @@ pub(crate) struct Run {
     pub(crate) auditors: crate::audits::Auditors,
     /// The directories of the scripted agents' skills.
     pub(crate) skills: crate::skills::SkillDirectories,
+    pub(crate) sandboxes: crate::sandbox::Sandboxes,
     /// The scripted agents' MCP servers (README, "Scripted agents").
     pub(crate) mcp: crate::mcp_servers::McpServers,
 }
@@ -248,6 +249,7 @@ impl Run {
             delegate_handlers: Mutex::default(),
             auditors: crate::audits::Auditors::default(),
             skills: crate::skills::SkillDirectories::default(),
+            sandboxes: crate::sandbox::Sandboxes::default(),
             mcp: crate::mcp_servers::McpServers::default(),
         }
     }

@@ -125,6 +125,7 @@ const CHANNEL: &[&str] = &[
     "config_provider",
     "skills",
     "script_executor",
+    "sandbox",
     "skills_requires_match",
     "skills_in_prompt",
     "thinking_budget",
@@ -416,6 +417,7 @@ const EXPECT: &[&str] = &[
     "continuations",
     "external_handlers",
     "script_executors",
+    "sandbox_executors",
     "acp_wire",
     "acp_permissions",
     "acp_handlers",
@@ -754,7 +756,7 @@ fn items(value: &Value) -> impl Iterator<Item = (usize, &Value)> {
 }
 
 /// The members of `value`, an object, that `known` does not list.
-fn members(value: &Value, known: &[&str], path: &str, found: &mut Vec<String>) {
+pub(crate) fn members(value: &Value, known: &[&str], path: &str, found: &mut Vec<String>) {
     let Some(object) = value.as_object() else {
         found.push(format!("{path}: not an object"));
         return;
@@ -980,6 +982,9 @@ fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
         }
     }
     skills(&channel["skills"], &format!("{path}.skills"), found);
+    if let Some(sandbox) = channel.get("sandbox") {
+        crate::sandbox::shape(sandbox, &format!("{path}.sandbox"), found);
+    }
     if let Some(executor) = channel.get("script_executor") {
         script_executor(executor, &format!("{path}.script_executor"), found);
     }
