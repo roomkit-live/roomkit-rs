@@ -36,8 +36,8 @@ use crate::{
     timeline, verifications,
 };
 
-/// How long an operation waits for a connection: Python's `_acquire_timeout`.
-const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
+/// The budget for acquisition and, separately, for release: Python's `_acquire_timeout`.
+pub(crate) const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How long a close gives the connections in use: Python's `_close_timeout`.
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
@@ -334,11 +334,8 @@ impl ConversationStore for PostgresStore {
             let cancel = self.cancel_capability()?;
             let runtime = tokio::runtime::Handle::try_current().map_err(StoreError::unavailable)?;
             let (client, _) = self.checkout().await?;
-            let bound =
-                crate::connection::Bound::new(Arc::clone(&self.shared), client, cancel, runtime);
-            let result = bound.run(work).await;
-            bound.finish().await?;
-            result
+            crate::connection::Bound::run(Arc::clone(&self.shared), client, cancel, runtime, work)
+                .await
         })
     }
 

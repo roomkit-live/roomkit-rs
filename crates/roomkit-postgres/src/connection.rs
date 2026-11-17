@@ -1,10 +1,13 @@
 //! A task's current store connection and the cancellation barrier before reuse.
 
+mod release;
+
 use std::sync::Arc;
 
 use deadpool_postgres::Object;
 use roomkit::StoreError;
-use tokio::sync::{Mutex, OwnedMutexGuard};
+use tokio::sync::{Mutex, OwnedMutexGuard, oneshot};
+use tokio::time::Instant;
 
 use crate::PostgresCancelQuery;
 use crate::lent::Lent;
@@ -24,6 +27,7 @@ pub(crate) struct Bound {
 }
 
 struct State {
+    releasing: oneshot::Receiver<Instant>,
     client: Option<Object>,
     failure: Option<StoreError>,
     failed: bool,
@@ -44,26 +48,29 @@ impl State {
 }
 
 impl Bound {
-    pub(crate) fn new(
+    pub(crate) async fn run<T, E: From<StoreError>>(
         owner: Arc<Shared>,
         client: Object,
         cancel: PostgresCancelQuery,
         runtime: tokio::runtime::Handle,
-    ) -> Arc<Self> {
-        Arc::new(Self {
+        work: impl Future<Output = Result<T, E>>,
+    ) -> Result<T, E> {
+        let (scope, releasing) = release::Owner::for_checkout();
+        let bound = Arc::new(Self {
             owner,
             state: Arc::new(Mutex::new(State {
+                releasing,
                 client: Some(client),
                 failure: None,
                 failed: false,
             })),
             cancel,
             runtime,
-        })
-    }
-
-    pub(crate) async fn run<W: Future>(self: &Arc<Self>, work: W) -> W::Output {
-        BOUND.scope(Arc::clone(self), work).await
+        });
+        let result = BOUND.scope(Arc::clone(&bound), work).await;
+        drop(scope);
+        bound.finish().await?;
+        result
     }
 
     /// Taking the lock joins any cancellation left by the preceding operation.
@@ -120,7 +127,7 @@ impl Lease {
         let mut closing = Closing(Some(client));
         runtime.spawn(async move {
             let client = closing.0.as_ref().unwrap_or_else(|| unreachable!());
-            let result = async {
+            let cleanup = async {
                 (self.cancel)(client.cancel_token()).await?;
                 // EOF on the cancel socket precedes this Sync/ReadyForQuery.
                 // Neither barrier by itself allows safe reuse of the connection.
@@ -128,9 +135,8 @@ impl Lease {
                     .check_connection()
                     .await
                     .map_err(StoreError::unavailable)
-            }
-            .await;
-            match result {
+            };
+            match release::drain(cleanup, &mut self.state.releasing).await {
                 Ok(()) => self.state.client = closing.0.take(),
                 Err(error) => {
                     self.state.failed = true;

@@ -40,6 +40,16 @@ fn count(counter: &Arc<Checkouts>) -> Hook {
     })
 }
 
+pub(super) async fn backend_pid(pool: &Pool) -> i32 {
+    pool.get()
+        .await
+        .unwrap()
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .unwrap()
+        .get(0)
+}
+
 pub(super) fn cancel() -> PostgresCancelQuery {
     Arc::new(|token| {
         Box::pin(async move {

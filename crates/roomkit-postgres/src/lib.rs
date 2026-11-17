@@ -26,7 +26,9 @@
 //! leaves any pending cancellation owned by its cleanup task; its connection
 //! cannot return to the pool before cleanup finishes. Cleanup uses the runtime
 //! that entered the block even when the future is dropped on another thread;
-//! that runtime must remain alive for the cleanup to complete.
+//! that runtime must remain alive for the cleanup to complete. Once the owning
+//! block exits or is dropped, pending cleanup has five seconds. Expiration
+//! discards the connection and returns a timeout to an awaiting caller.
 //!
 //! An externally supplied standard pool must provide
 //! [`PostgresStoreOptions::cancel_query`], including when framework reads enter

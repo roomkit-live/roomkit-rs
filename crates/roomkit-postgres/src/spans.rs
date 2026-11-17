@@ -186,6 +186,9 @@ fn class_of(error: &StoreError) -> &'static str {
 /// The class Python's driver or store raises for `cause`: asyncpg's, by the state
 /// the server reports, which holds no value of a row.
 fn failure_class(cause: &(dyn Error + 'static)) -> &'static str {
+    if cause.is::<tokio::time::error::Elapsed>() {
+        return "TimeoutError";
+    }
     if let Some(no_connection) = cause.downcast_ref::<NoConnection>() {
         return match no_connection {
             NoConnection::NotInitialized => "RuntimeError",
