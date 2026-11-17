@@ -9,14 +9,19 @@
 
 use std::sync::Arc;
 
-use roomkit::model::{ChannelId, ChannelType, EventContent, InboundMessage, RoomId, TextContent};
+use roomkit::model::{
+    ChannelId, ChannelType, EventContent, InboundMessage, Metadata, RoomId, TextContent,
+};
 use roomkit::orchestration::{LoopOptions, StrategyAgent};
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, CreateRoomOptions, GetTimelineOptions, Loop, Orchestration,
     ProcessInboundOptions, RoomKit, RoomKitOptions,
 };
-use roomkit_ai::{Agent, AgentOptions, MockAiProvider, MockAiProviderOptions};
+use roomkit_ai::{
+    Agent, AgentOptions, AiResponse, AiToolCall, MockAiProvider, MockAiProviderOptions,
+};
+use serde_json::json;
 
 fn id(name: &str) -> ChannelId {
     ChannelId::new(name).unwrap()
@@ -26,6 +31,38 @@ fn id(name: &str) -> ChannelId {
 fn agent(name: &str, role: &str, responses: &[&str]) -> Agent<MockAiProvider> {
     let provider = MockAiProvider::new(MockAiProviderOptions {
         responses: responses.iter().map(|&text| text.to_owned()).collect(),
+        ..MockAiProviderOptions::default()
+    });
+    let options = AgentOptions {
+        role: Some(role.to_owned()),
+        ..AgentOptions::default()
+    };
+    Agent::new(id(name), provider, options).unwrap()
+}
+
+/// A reviewer giving `reviews` in turn, each through a `submit_review`
+/// call then a closing line: `APPROVED` approves, any other text refuses
+/// with that text as its feedback.
+fn reviewer(name: &str, role: &str, reviews: &[&str]) -> Agent<MockAiProvider> {
+    let answers = reviews.iter().flat_map(|&review| {
+        let approved = review == "APPROVED";
+        let mut call = AiToolCall::new("review", "submit_review");
+        call.arguments = Metadata::from_iter([
+            ("approved".to_owned(), json!(approved)),
+            (
+                "feedback".to_owned(),
+                json!(if approved { "" } else { review }),
+            ),
+        ]);
+        let calling = AiResponse {
+            finish_reason: Some("tool_calls".to_owned()),
+            tool_calls: vec![call],
+            ..AiResponse::new("")
+        };
+        [calling, AiResponse::new("Reviewed.")]
+    });
+    let provider = MockAiProvider::new(MockAiProviderOptions {
+        ai_responses: Some(answers.collect()),
         ..MockAiProviderOptions::default()
     });
     let options = AgentOptions {
@@ -83,7 +120,7 @@ async fn messages(kit: &RoomKit) -> Vec<(String, String)> {
 #[tokio::test]
 async fn a_loop_of_live_agents_revises_until_its_reviewer_approves() {
     let writer = agent("writer", "Writer", &["Draft one.", "Draft two."]);
-    let editor = agent("editor", "Editor", &["Needs work.", "APPROVED"]);
+    let editor = reviewer("editor", "Editor", &["Needs work.", "APPROVED"]);
     let options = LoopOptions {
         reviewer: Some(StrategyAgent::channel(editor)),
         ..LoopOptions::default()

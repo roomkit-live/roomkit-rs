@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **BREAKING: a loop reviewer approves only through its `submit_review` verdict**, as Python's (RFC §19.7.4, RMK-597). A review approved when its text held `APPROVED`, so `Not approved: the intro is missing.` or `DISAPPROVED` ended the loop approved and delivered the rejected work. The reviewer's task now forces `submit_review` (`approved`, `feedback`), reminders included, as `submit_verdict` is forced; a review without an approving verdict approves nothing, its words its feedback, and its task's result is the verdict's JSON payload.
+
 - **BREAKING: a tool call's arguments and its result reach a room's realtime subscribers only for a channel that publishes them**, as Python's (RFC §8.4, RMK-970): `TOOL_CALL_START` carries each call's id, tool and intent, `TOOL_CALL_END` each call's id, tool, status and intent and the round's `duration_ms`; `AiChannelOptions::publish_tool_call_text` adds the arguments and the 500-character result preview.
 
 - **BREAKING: `ON_AI_THINKING` fires once per reasoning block, as the block closes, with the block's text**, as Python's (RFC §8.4, §9.2, RMK-817); it fired as the block opened, `ThinkingEvent::thinking` always empty; a host that used it to learn that the model began to reason reads the `THINKING_START` ephemeral instead.

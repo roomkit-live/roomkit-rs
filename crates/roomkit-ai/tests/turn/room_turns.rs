@@ -12,8 +12,8 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventContent, EventDirection, EventSource, InboundMessage, RoomContext, RoomEvent, TextContent,
-    ToolCall,
+    EventContent, EventDirection, EventSource, InboundMessage, Metadata, RoomContext, RoomEvent,
+    TextContent, ToolCall,
 };
 use roomkit::orchestration::{LoopOptions, StrategyAgent};
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
@@ -24,7 +24,8 @@ use roomkit::{
 };
 use roomkit_ai::{
     Agent, AgentOptions, AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, AiTool,
-    MockAiProvider, MockAiProviderOptions, ProviderError, ToolContext, ToolResult, Tools,
+    AiToolCall, MockAiProvider, MockAiProviderOptions, ProviderError, ToolContext, ToolResult,
+    Tools,
 };
 use tokio::sync::watch;
 
@@ -588,7 +589,23 @@ async fn a_strategy_that_takes_the_agent_s_turns_orders_them_itself() {
         },
     )
     .unwrap();
-    let reviewing = answering("APPROVED");
+    // The reviewer approves through its verdict, then closes its turn.
+    let mut verdict = AiToolCall::new("review", "submit_review");
+    verdict.arguments = Metadata::from_iter([
+        ("approved".to_owned(), serde_json::json!(true)),
+        ("feedback".to_owned(), serde_json::json!("")),
+    ]);
+    let reviewing = MockAiProvider::new(MockAiProviderOptions {
+        ai_responses: Some(vec![
+            AiResponse {
+                finish_reason: Some("tool_calls".to_owned()),
+                tool_calls: vec![verdict],
+                ..AiResponse::new("")
+            },
+            AiResponse::new("Reviewed."),
+        ]),
+        ..MockAiProviderOptions::default()
+    });
     let reviewer = Agent::new(
         channel("rev"),
         reviewing.clone(),
@@ -634,7 +651,8 @@ async fn a_strategy_that_takes_the_agent_s_turns_orders_them_itself() {
     );
     // The loop's answer, which no stream carries, once its reviewer read it.
     assert_eq!(said(&kit, "prod").await, ["draft"]);
-    assert_eq!(reviewing.calls().len(), 1);
+    // Its verdict's call, then its closing turn.
+    assert_eq!(reviewing.calls().len(), 2);
     kit.close().await.unwrap();
 }
 

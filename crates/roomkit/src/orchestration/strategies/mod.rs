@@ -6,6 +6,7 @@
 pub mod discussion;
 mod loop_review;
 mod loop_run;
+mod loop_verdict;
 pub(super) mod pipeline;
 pub(super) mod review_loop;
 pub mod supervisor;
