@@ -31,6 +31,8 @@ mod positive;
 mod response_metadata;
 
 #[doc(hidden)]
+pub use delivery::truthy_python_str;
+#[doc(hidden)]
 pub use positive::python_float;
 mod post;
 mod room;

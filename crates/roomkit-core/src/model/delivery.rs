@@ -70,12 +70,12 @@ impl DeliveryResult {
         let code = error
             .attributes
             .get("code")
-            .and_then(python_str)
+            .and_then(truthy_python_str)
             .unwrap_or_else(|| error.error_type.clone());
         let retryable = error
             .attributes
             .get("retryable")
-            .is_none_or(|retryable| python_str(retryable).is_some());
+            .is_none_or(|retryable| truthy_python_str(retryable).is_some());
         Self {
             error: Some(DeliveryError {
                 retryable,
@@ -137,7 +137,7 @@ impl DeliveryError {
         let code = result
             .metadata
             .get("code")
-            .and_then(python_str)
+            .and_then(truthy_python_str)
             .or_else(|| error.clone())
             .unwrap_or_else(|| "ProviderDeliveryFailed".to_owned());
         let retryable = match result.metadata.get("retryable") {
@@ -153,9 +153,9 @@ impl DeliveryError {
 }
 
 /// `value` as Python's `str()` writes it, when Python reads it true: a
-/// string as it is, any other value as [`python_repr`] writes it; `None`
+/// string as it is, any other value in its Python representation; `None`
 /// for null, `false`, `0`, an empty string, list or object.
-fn python_str(value: &Value) -> Option<String> {
+pub fn truthy_python_str(value: &Value) -> Option<String> {
     let truthy = match value {
         Value::Null | Value::Bool(false) => false,
         Value::Bool(true) => true,
