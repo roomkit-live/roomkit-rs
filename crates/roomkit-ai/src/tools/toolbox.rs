@@ -48,7 +48,7 @@ pub(crate) struct Toolbox {
     /// The toolset of the skill tools, once the agent was given a registry.
     skills: Option<usize>,
     /// The host sandbox's toolset; its commands keep ordinary policy and search.
-    sandbox: Option<usize>,
+    sandbox: Option<(usize, Arc<crate::sandbox::tools::SandboxTools>)>,
     /// The names a registry given keeps for them, a tool under one refused as
     /// any tool under a name served.
     skill_names: HashSet<String>,

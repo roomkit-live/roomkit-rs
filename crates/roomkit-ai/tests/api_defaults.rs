@@ -27,6 +27,19 @@ fn a_turn_has_no_tool_timeout_overrides_by_default() {
 }
 
 #[test]
+fn sandbox_result_defaults_as_python() {
+    let result = roomkit_ai::SandboxResult::new(7);
+    // roomkit.SandboxResult.__init__(output) = ''
+    assert_eq!(result.output, "");
+    // roomkit.SandboxResult.__init__(error) = ''
+    assert_eq!(result.error, "");
+    // roomkit.SandboxResult.__init__(metadata) = <factory>
+    assert!(result.metadata.is_empty());
+    assert_eq!(result.exit_code, 7);
+    assert!(!result.success());
+}
+
+#[test]
 fn script_result_defaults_as_python() {
     let result = roomkit_ai::ScriptResult::new(7);
     // roomkit.skills.ScriptResult.__init__(stdout) = ''

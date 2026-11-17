@@ -5,7 +5,7 @@
 //!   only while the stream is polled, and each item it hands over waits
 //!   until the reader took it, so the producer never runs ahead of its
 //!   reader (RFC §10.6.4: the reader sets the pace).
-//! - [`join_all`] runs futures concurrently in the current task: what they
+//! - [`try_join_all`] runs futures concurrently in the current task: what they
 //!   read of the task (the turn's host, the call's execution context)
 //!   stays theirs, as no task is spawned.
 
@@ -124,13 +124,27 @@ pub(crate) async fn next<S: Stream + Unpin + ?Sized>(stream: &mut S) -> Option<S
     poll_fn(|context| Pin::new(&mut *stream).poll_next(context)).await
 }
 
-/// A future of [`join_all`], and its output once it is ready.
-type Running<F> = (Pin<Box<F>>, Option<<F as Future>::Output>);
+/// Infallible futures share the same inline concurrent polling as tool calls.
+pub(crate) async fn join_all<F: Future>(futures: Vec<F>) -> Vec<F::Output> {
+    let work = futures
+        .into_iter()
+        .map(|future| async move { Ok::<_, std::convert::Infallible>(future.await) })
+        .collect();
+    match try_join_all(work).await {
+        Ok(output) => output,
+        Err(never) => match never {},
+    }
+}
+
+/// A fallible future and its successful output once it is ready.
+type Running<F, T> = (Pin<Box<F>>, Option<T>);
 
 /// The outputs of `futures`, in their order, run concurrently in the
 /// current task.
-pub(crate) async fn join_all<F: Future>(futures: Vec<F>) -> Vec<F::Output> {
-    let mut running: Vec<Running<F>> = futures
+pub(crate) async fn try_join_all<T, E, F: Future<Output = Result<T, E>>>(
+    futures: Vec<F>,
+) -> Result<Vec<T>, E> {
+    let mut running: Vec<Running<F, T>> = futures
         .into_iter()
         .map(|future| (Box::pin(future), None))
         .collect();
@@ -139,18 +153,23 @@ pub(crate) async fn join_all<F: Future>(futures: Vec<F>) -> Vec<F::Output> {
         for (future, output) in &mut running {
             if output.is_none() {
                 match future.as_mut().poll(context) {
-                    Poll::Ready(ready) => *output = Some(ready),
+                    Poll::Ready(Ok(ready)) => *output = Some(ready),
+                    Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
                     Poll::Pending => done = false,
                 }
             }
         }
-        if done { Poll::Ready(()) } else { Poll::Pending }
+        if done {
+            Poll::Ready(Ok(()))
+        } else {
+            Poll::Pending
+        }
     })
-    .await;
-    running
+    .await?;
+    Ok(running
         .into_iter()
         .filter_map(|(_, output)| output)
-        .collect()
+        .collect())
 }
 
 #[cfg(test)]

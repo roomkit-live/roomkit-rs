@@ -52,6 +52,7 @@ roomkit = ["roomkit"]
 roomkit_ai = ["roomkit.providers.ai", "roomkit", "roomkit.tools", "roomkit.skills", "roomkit.skills.mcp"]
 "roomkit_ai::memory" = ["roomkit.memory", "roomkit"]
 "roomkit_ai::knowledge" = ["roomkit.knowledge"]
+"roomkit_ai::sandbox" = ["roomkit.sandbox"]
 roomkit_openai = ["roomkit.providers.openai"]
 roomkit_anthropic = ["roomkit.providers.anthropic"]
 "roomkit_openai::deepseek" = ["roomkit.providers.deepseek"]
@@ -269,7 +270,18 @@ approved = "2026-11-16"
 reason = "Rust has no default call arguments: None preserves Python's omitted params and Some borrows the host mapping (HITL 70a4bdc7, RMK-1709)"
 
 [[exception]]
+rust = "roomkit_ai::sandbox::SANDBOX_TOOL_SCHEMAS"
+approved = "2026-11-17"
+reason = "Python's constant SANDBOX_TOOL_SCHEMAS is a cloneable LazyLock<Vec<Metadata>>: no Rust const builds its strings and JSON, following the existing tool-schema constants (approved 2026-11-17)"
+
+[[exception]]
 rust = "roomkit_ai::SandboxExecutor::execute"
+params = ["arguments"]
+approved = "2026-11-17"
+reason = "Rust has no default call arguments: None preserves Python's omitted arguments and Some borrows the host mapping, following ScriptExecutor (approved 2026-11-17)"
+
+[[exception]]
+rust = "roomkit_ai::sandbox::SandboxExecutor::execute"
 params = ["arguments"]
 approved = "2026-11-17"
 reason = "Rust has no default call arguments: None preserves Python's omitted arguments and Some borrows the host mapping, following ScriptExecutor (approved 2026-11-17)"

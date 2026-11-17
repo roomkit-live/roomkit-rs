@@ -184,9 +184,11 @@ const PROVIDER_ERROR: &str = "roomkit.providers.ai.base:ProviderError";
 /// The class a response schema's failure is raised as, Python's.
 const RESPONSE_SCHEMA_ERROR: &str = "roomkit.providers.ai.response_schema:ResponseSchemaError";
 
-/// The Python class `error` is raised as: `ResponseSchemaError` for a
-/// response schema's failure, `ProviderError` otherwise.
-fn class_of(error: &ProviderError) -> &'static str {
+/// A host catalogue retains its class; provider and response-schema failures keep theirs.
+fn class_of(error: &ProviderError) -> &str {
+    if let Some(class) = crate::sandbox::tools::stream_error_class(error) {
+        return class;
+    }
     if ResponseSchemaError::of(error).is_some() {
         RESPONSE_SCHEMA_ERROR
     } else {
@@ -199,12 +201,15 @@ fn class_of(error: &ProviderError) -> &'static str {
 /// `ProviderError` instance's, which its record keeps (RMK-1239).
 fn raised(error: ProviderError) -> ChannelError {
     let attributes = attributes_of(&error);
-    Box::new(ClassedError::new(class_of(&error), error).with_attributes(attributes))
+    Box::new(ClassedError::new(class_of(&error).to_owned(), error).with_attributes(attributes))
 }
 
 /// A provider's failure's attributes, as Python's `error_record` reads a
 /// `ProviderError`'s.
 fn attributes_of(error: &ProviderError) -> Metadata {
+    if crate::sandbox::tools::stream_error_class(error).is_some() {
+        return Metadata::new();
+    }
     let mut attributes = Metadata::new();
     attributes.insert("retryable".to_owned(), Value::from(error.retryable));
     attributes.insert("provider".to_owned(), Value::from(error.provider.clone()));

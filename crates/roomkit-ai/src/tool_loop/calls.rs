@@ -1,6 +1,8 @@
 //! One call of a round: its gate, its tool, its hooks (RFC §9.3, §21.1,
 //! §21.6).
 
+mod round;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,22 +13,25 @@ use tokio::time::Instant;
 
 use super::generation::{Called, Partial};
 use super::{Loop, ToolEnd};
+use crate::provider::ProviderError;
 use crate::rows::end_row;
 use crate::skills::ACTIVATE_SKILL;
 use crate::steering::Steering;
-use crate::texts;
 use crate::tool_eviction::kept_whole;
 use crate::tool_search::TOOL_SEARCH_INFRA_TOOL_NAMES;
 use crate::tools::{
     ToolCallContext, ToolContext, ToolError, ToolResult, ToolStructuredContent, read_tool_result,
     repair, schema,
 };
+use crate::{AiError, texts};
 
 /// The kind a call past its bound reads as (RFC §21.6).
 const TIMED_OUT: &str = "ToolTimeoutError";
 
 /// What a call's gate decided.
 enum Gated {
+    /// A host catalogue failed before the call could be gated.
+    CatalogueFailed(AiError),
     /// It runs, as `call`; `asked` are the model's arguments, repaired,
     /// before any hook rewrote them.
     Runs { call: ToolCall, asked: Metadata },
@@ -75,19 +80,24 @@ impl Loop {
     /// the kit its end and reports it once to the kit's observers (RFC
     /// §9.3: every call fires `ON_TOOL_CALL` once), and ends it as the model
     /// reads it.
-    pub(super) async fn serve(&self, called: &Called, nth: usize, steering: &Steering) -> ToolEnd {
+    pub(super) async fn serve(
+        &self,
+        called: &Called,
+        nth: usize,
+        steering: &Steering,
+        ran: &mut ToolCall,
+    ) -> Result<ToolEnd, ProviderError> {
         let started = Instant::now();
-        let mut ran = called.call.clone();
         match steering
             .lifetime()
             .call(Box::pin(crate::tools::within_reporting(
                 Arc::clone(&called.report),
-                self.serve_call(called, nth, &mut ran),
+                self.serve_call(called, nth, ran),
             )))
             .await
         {
             Some(end) => end,
-            None => self.closed_call(called, nth, ran, started.elapsed()),
+            None => Ok(self.closed_call(called, nth, ran.clone(), started.elapsed())),
         }
     }
 
@@ -117,10 +127,18 @@ impl Loop {
         end
     }
 
-    async fn serve_call(&self, called: &Called, nth: usize, ran: &mut ToolCall) -> ToolEnd {
+    async fn serve_call(
+        &self,
+        called: &Called,
+        nth: usize,
+        ran: &mut ToolCall,
+    ) -> Result<ToolEnd, ProviderError> {
         let started = Instant::now();
         let mut span = None;
         let (ended, asked, invalid_arguments) = match self.gate(called).await {
+            Gated::CatalogueFailed(error) => {
+                return Err(crate::sandbox::tools::stream_error(error));
+            }
             Gated::Runs { call, asked } => {
                 ran.clone_from(&call);
                 span = self
@@ -185,7 +203,7 @@ impl Loop {
             structured_content: reported.structured_content.clone(),
         };
         self.tell(called, nth, &reported, &end);
-        end
+        Ok(end)
     }
 
     /// Tells the kit how `called`, the `nth` of its round's calls under its
@@ -374,6 +392,9 @@ impl Loop {
         if self.adopted.withdrawn.contains(&model_call.name) {
             return refuse(texts::not_available(&model_call.name));
         }
+        if let Err(error) = self.toolbox.live_sandbox(&model_call.name) {
+            return Gated::CatalogueFailed(error);
+        }
         let Some((tool, _)) = self.toolbox.find(&model_call.name) else {
             // While a catalogue is hidden, a name no tool carries may be a
             // tool the model misspelled: it can search (RFC §21.1).
@@ -513,7 +534,12 @@ impl Loop {
         handed.intent = None;
         let answer = async {
             self.check_served_execution(&call.name).await?;
-            toolset.call(handed, context).await
+            let serving = self
+                .toolbox
+                .serving_now(&call.name)
+                .map_err(crate::sandbox::tools::call_error)?
+                .ok_or_else(|| ToolError::UnservedToolCall(call.name.clone()))?;
+            serving.call(handed, context).await
         };
         // A person's answer is bounded by its handler's timeout alone, unless
         // the tool has its own bound.

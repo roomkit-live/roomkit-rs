@@ -21,8 +21,7 @@ impl SandboxTools {
             return Ok(None);
         };
         let sandbox = Arc::new(Self(executor));
-        let tools: Arc<dyn DynToolset> = Arc::<Self>::clone(&sandbox);
-        toolbox.add_sandbox(tools, sandbox.names()?)?;
+        toolbox.add_sandbox(Arc::clone(&sandbox), sandbox.names()?)?;
         Ok(Some(sandbox))
     }
 
@@ -113,7 +112,8 @@ impl DynToolset for SandboxTools {
 pub(crate) fn channel_error(error: AiError) -> roomkit::ChannelError {
     let class = if let AiError::SandboxDefinition {
         error: ToolError::Raised { kind, .. },
-    } = &error {
+    } = &error
+    {
         Some(kind.clone())
     } else {
         None
@@ -122,4 +122,40 @@ pub(crate) fn channel_error(error: AiError) -> roomkit::ChannelError {
         Some(class) => Box::new(roomkit::ClassedError::new(class, error)),
         None => Box::new(error),
     }
+}
+
+/// A catalogue consulted inside dispatch is an ordinary execution failure.
+pub(crate) fn call_error(error: AiError) -> ToolError {
+    if let AiError::SandboxDefinition { error } = error {
+        error
+    } else {
+        ToolError::raised_as("ValueError", error.to_string())
+    }
+}
+
+/// A catalogue exception crossing the stream keeps its host class.
+pub(crate) fn stream_error_class(error: &crate::ProviderError) -> Option<&str> {
+    use std::error::Error;
+    let source = error.source()?.downcast_ref::<AiError>()?;
+    if let AiError::SandboxDefinition {
+        error: ToolError::Raised { kind, .. },
+    } = source
+    {
+        Some(kind.as_str())
+    } else {
+        None
+    }
+}
+
+/// The loop carries a pre-gate host error without converting it to a tool result.
+pub(crate) fn stream_error(error: AiError) -> crate::ProviderError {
+    let message = if let AiError::SandboxDefinition {
+        error: ToolError::Raised { message, .. },
+    } = &error
+    {
+        message.clone()
+    } else {
+        error.to_string()
+    };
+    crate::ProviderError::from(message).with_source(error)
 }

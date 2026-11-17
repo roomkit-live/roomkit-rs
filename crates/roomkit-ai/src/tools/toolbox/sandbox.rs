@@ -6,19 +6,22 @@ use super::{AiError, AiTool, DynToolset, Toolbox};
 impl Toolbox {
     pub(crate) fn add_sandbox(
         &mut self,
-        tools: Arc<dyn DynToolset>,
+        tools: Arc<crate::sandbox::tools::SandboxTools>,
         declared: Vec<AiTool>,
     ) -> Result<(), AiError> {
         let position = self.toolsets.len();
-        self.insert(tools, declared, false)?;
-        self.sandbox = Some(position);
+        let toolset: Arc<dyn DynToolset> =
+            Arc::<crate::sandbox::tools::SandboxTools>::clone(&tools);
+        self.insert(toolset, declared, false)?;
+        self.sandbox = Some((position, tools));
         Ok(())
     }
 
     pub(crate) fn with_sandbox(&self, declared: Vec<AiTool>) -> Self {
-        let Some(position) = self.sandbox else {
+        let Some((position, _)) = &self.sandbox else {
             return self.clone();
         };
+        let position = *position;
         let mut turn = self.clone();
         let mut before = 0;
         let mut host = 0;
@@ -43,6 +46,32 @@ impl Toolbox {
         turn
     }
 
+    /// Catalogue reads are fallible even when a call eventually belongs to the host.
+    pub(crate) fn live_sandbox(&self, name: &str) -> Result<bool, AiError> {
+        let Some((_, sandbox)) = &self.sandbox else {
+            return Ok(false);
+        };
+        Ok(sandbox.names()?.iter().any(|tool| tool.name == name))
+    }
+
+    /// A declaration remains in this turn's context after its sandbox stops serving it.
+    pub(crate) fn serving_now(&self, name: &str) -> Result<Option<Arc<dyn DynToolset>>, AiError> {
+        let original = || self.find(name).map(|(_, tools)| tools);
+        if self.reserved.contains(name) || self.injected.contains(name) {
+            return Ok(original());
+        }
+        if self.live_sandbox(name)? {
+            return Ok(self
+                .sandbox
+                .as_ref()
+                .and_then(|(at, _)| self.toolsets.get(*at).cloned()));
+        }
+        if self.is_sandbox(name) {
+            return Ok(self.handler.and_then(|at| self.toolsets.get(at).cloned()));
+        }
+        Ok(original())
+    }
+
     /// Python exempts Bash's default bound whenever a sandbox is attached,
     /// even if that exact name belongs to the host rather than its catalogue.
     pub(crate) fn sandbox_waits(&self, name: &str) -> bool {
@@ -51,12 +80,13 @@ impl Toolbox {
 
     pub(crate) fn is_sandbox(&self, name: &str) -> bool {
         self.sandbox
-            .is_some_and(|at| self.served.get(name) == Some(&at))
+            .as_ref()
+            .is_some_and(|(at, _)| self.served.get(name) == Some(at))
     }
 
     pub(crate) fn sandbox_allowed(&self, policy: &super::ToolPolicy) -> bool {
         self.tools
             .iter()
-            .any(|(tool, at)| Some(*at) == self.sandbox && self.permits(policy, &tool.name))
+            .any(|(tool, _)| self.is_sandbox(&tool.name) && self.permits(policy, &tool.name))
     }
 }

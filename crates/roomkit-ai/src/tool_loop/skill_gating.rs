@@ -67,12 +67,16 @@ impl Loop {
     }
 
     pub(super) async fn check_served_execution(&self, name: &str) -> Result<(), ToolError> {
+        let sandbox = self
+            .toolbox
+            .live_sandbox(name)
+            .map_err(crate::sandbox::tools::call_error)?;
         let Some(skills) = &self.skill_gates.skills else {
             return Ok(());
         };
         let active = self.skill_activated();
         let refusal = skills
-            .execution_refusal(name, &self.context, &active, self.toolbox.is_sandbox(name))
+            .execution_refusal(name, &self.context, &active, sandbox)
             .await
             .map_err(|error| ToolError::raised(&error))?;
         if let Some(refusal) = refusal {

@@ -62,9 +62,12 @@ ACP crates.
 
 `AiChannelOptions::sandbox` accepts a shared `SandboxExecutor`. The host chooses
 its execution environment; RoomKit provides no process runner and promises no
-isolation. The channel re-reads the declared catalogue each turn, serves only
-its exact prefixed names, and applies ordinary policy, schema checks and Tool
-Search. Active served skills require their host's execution approval before a
+isolation. The channel re-reads the declared catalogue each turn and at call
+boundaries.
+A removed command can reach the host handler; a catalogue failure at a call
+gate ends the turn and cuts its pending sibling calls. Exact prefixed names
+retain ordinary policy, schema checks and Tool Search. Active served skills
+require their host's execution approval before a
 sandbox command runs. Only `sandbox_bash` carries its own default bound; an
 explicit timeout for that name still wins. Channel close ends running calls
 before closing the sandbox, including one with an empty catalogue. Providers

@@ -83,7 +83,7 @@ use crate::provider::{
     ProviderErrorOptions, ResponseSchemaError, ai_messages, ai_messages_with,
 };
 use crate::steering::{Loops, Steering};
-use crate::stream::{Items, Yielder, items, join_all};
+use crate::stream::{Items, Yielder, items};
 use crate::tool_eviction::ToolEviction;
 use crate::tool_search::TurnSearch;
 use crate::tool_usage::{ToolUsageMemory, TurnMedia, carries_turn_images};
@@ -461,12 +461,13 @@ impl Loop {
             self.said
                 .extend(generation.said().map(|said| (messages.len(), said)));
             let usage = generation.done.usage.clone();
-            let (read, ran) = self.run_calls(generation, (&steering, round), &out).await;
-            self.keep_round_results(messages.len(), &ran.replayed_results());
-            messages.extend(read);
-            // A round counts once its calls ran (Python's `_run_announced_calls`).
-            self.count_calls(&mut spent, ran.calls.len());
-            tool_rounds += u32::from(!ran.calls.is_empty());
+            let writing = (&mut messages, &mut spent, &mut tool_rounds);
+            let Some(ran) = self
+                .run_tool_round(generation, (&steering, round), &out, writing)
+                .await
+            else {
+                return;
+            };
             let read = ((&mut messages, &usage), (&steering, &mut system_prompt));
             if let Some(reason) = self.after_calls(round, ran, read).await {
                 let ending = (&limits, &steering, &out);
@@ -778,6 +779,29 @@ impl Loop {
         }
     }
 
+    /// Applies a completed call round, or raises a failed gate before any next round.
+    async fn run_tool_round(
+        &mut self,
+        generation: Generation,
+        (steering, round): (&Steering, u32),
+        out: &Yielder<Result<TurnItem, ProviderError>>,
+        (messages, spent, tool_rounds): (&mut Vec<Message>, &mut Spent, &mut u32),
+    ) -> Option<Ran> {
+        let (read, ran) = match self.run_calls(generation, (steering, round), out).await {
+            Ok(ran) => ran,
+            Err(error) => {
+                out.give(Err(error)).await;
+                return None;
+            }
+        };
+        self.keep_round_results(messages.len(), &ran.replayed_results());
+        messages.extend(read);
+        // A round counts once its calls ran (Python's `_run_announced_calls`).
+        self.count_calls(spent, ran.calls.len());
+        *tool_rounds += u32::from(!ran.calls.is_empty());
+        Some(ran)
+    }
+
     /// The model and the provider of the turn's latest generation: the
     /// provider the turn is on (RFC §6.4).
     fn served_by(&self) -> (&str, &str) {
@@ -809,7 +833,7 @@ impl Loop {
         generation: Generation,
         (steering, round): (&Steering, u32),
         out: &Yielder<Result<TurnItem, ProviderError>>,
-    ) -> (Vec<Message>, Ran) {
+    ) -> Result<(Vec<Message>, Ran), ProviderError> {
         for called in &generation.calls {
             out.give(Ok(TurnItem::ToolStart(called.call.clone()))).await;
         }
@@ -826,11 +850,7 @@ impl Loop {
         let ends = if unrun {
             self.unstarted_calls(&generation.calls)
         } else {
-            let calls = &generation.calls;
-            let serving = calls.iter().enumerate().map(|(position, called)| {
-                self.serve(called, place_under_its_id(calls, position), steering)
-            });
-            join_all(serving.collect()).await
+            self.serve_round(&generation.calls, steering).await?
         };
         if running.published() {
             let ended = ends.iter().map(|end| Ended {
@@ -872,7 +892,7 @@ impl Loop {
         }
         running.handed();
         self.search.next_round();
-        (read, ran)
+        Ok((read, ran))
     }
 }
 

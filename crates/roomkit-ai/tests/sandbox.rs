@@ -4,8 +4,14 @@
 mod boundaries;
 #[path = "sandbox/contracts.rs"]
 mod contracts;
+#[path = "sandbox/dispatch.rs"]
+mod dispatch;
+#[path = "sandbox/kit_dispatch.rs"]
+mod kit_dispatch;
 #[path = "sandbox/lifetime.rs"]
 mod lifetime;
+#[path = "sandbox/reserved_dispatch.rs"]
+mod reserved_dispatch;
 #[path = "sandbox/search.rs"]
 mod search;
 #[path = "sandbox/support.rs"]

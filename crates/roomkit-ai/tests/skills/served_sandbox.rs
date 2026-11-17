@@ -124,7 +124,13 @@ async fn only_approval_or_no_active_served_skill_reaches_the_sandbox() {
                 assert_eq!(request.name, "docs:guide");
                 assert_eq!(request.label, "docs");
                 assert_eq!(request.uri, "skill://guide/SKILL.md");
-                assert!(request.fingerprint.is_some());
+                assert_eq!(request.room_id.as_deref(), Some("r"));
+                assert!(
+                    request
+                        .fingerprint
+                        .as_ref()
+                        .is_some_and(|value| value.starts_with("sha256:"))
+                );
             }
         }
     }
