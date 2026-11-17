@@ -6,7 +6,10 @@ use roomkit::model::{ChannelBinding, ChannelOutput, EventSource, RoomContext, Ro
 use roomkit::{ChannelError, Scoped, TurnHost, TurnRecord};
 use roomkit_core::rules::transcript::Message;
 
-use super::{AiChannel, AiProvider, turn_actor};
+use super::{
+    AiChannel, AiProvider, KitMedia, SentImages, turn_actor, with_attached_media,
+    with_discussion_turn, with_ending_texts,
+};
 use crate::tool_loop::{Loop, TurnItems};
 use crate::tools::toolbox::Toolbox;
 use crate::tools::{ToolTurnContextOptions, within_ai_turn};
@@ -67,6 +70,7 @@ impl<P: AiProvider> AiChannel<P> {
         event: RoomEvent,
         binding: ChannelBinding,
         context: RoomContext,
+        notes: Vec<String>,
     ) -> Result<ChannelOutput, ChannelError> {
         let role = roomkit_core::rules::roles::participant_role(&event, &context.participants);
         let options = ToolTurnContextOptions {
@@ -80,13 +84,112 @@ impl<P: AiProvider> AiChannel<P> {
             .clone()
             .scope(within_ai_turn(
                 options,
-                self.answer(event, binding, context, record, role),
+                self.answer(event, binding, context, record, role, notes),
             ))
             .await?;
         match prepared {
             Some(answer) => answer.consume().await,
             None => Ok(ChannelOutput::empty()),
         }
+    }
+
+    pub(super) async fn answer(
+        &self,
+        event: RoomEvent,
+        binding: ChannelBinding,
+        context: RoomContext,
+        record: TurnRecord,
+        role: Option<&str>,
+        notes: Vec<String>,
+    ) -> Result<Option<PreparedAnswer>, ChannelError> {
+        let (looped, messages) = Box::pin(self.prepare_turn(
+            event.clone(),
+            binding,
+            context,
+            record,
+            (role, notes, false),
+        ))
+        .await?;
+        Ok(Box::pin(self.finish_preparation(looped, event, messages)).await)
+    }
+
+    pub(super) async fn thinking_context(
+        &self,
+        event: RoomEvent,
+        binding: ChannelBinding,
+        context: RoomContext,
+    ) -> Result<Option<crate::SharedAiContext>, ChannelError> {
+        let role = roomkit_core::rules::roles::participant_role(&event, &context.participants);
+        let options = ToolTurnContextOptions {
+            room: Some(Arc::new(context.room.clone())),
+            actor_id: turn_actor(&event, &context.participants),
+            chain_depth: roomkit_core::rules::chain_depth::response_depth(&event),
+            ..ToolTurnContextOptions::default()
+        };
+        let record = TurnRecord::default();
+        record
+            .clone()
+            .scope(within_ai_turn(options, async {
+                let (looped, messages) = Box::pin(self.prepare_turn(
+                    event.clone(),
+                    binding,
+                    context,
+                    record,
+                    (role, Vec::new(), true),
+                ))
+                .await?;
+                Ok(looped
+                    .generation_context(&event, &messages, crate::GenerationPurpose::Thought)
+                    .await
+                    .map(|(_, context)| context))
+            }))
+            .await
+    }
+
+    /// Read memory, attribution and attachments before placing this turn's input.
+    pub(super) async fn read_turn(
+        &self,
+        looped: &mut Loop,
+        (event, context, settings): (&RoomEvent, &RoomContext, &super::TurnSettings),
+        (stands_alone, vision, thinking): (bool, bool, bool),
+        notes: Vec<String>,
+    ) -> Result<Vec<Message>, ChannelError> {
+        let footprint = self.measure_turn(looped, context, stands_alone, &notes);
+        // The event as the model reads it, the media the application keeps
+        // beside its content among its parts, as its history (RFC §6.4).
+        let kit = KitMedia::of(looped.turn.as_ref());
+        let read = with_attached_media(event, kit.attached.as_ref());
+        let recalled = self
+            .recalled(
+                &read,
+                context,
+                (stands_alone, footprint),
+                kit.attached.as_ref(),
+            )
+            .await
+            .map_err(rows::provider_failure)?;
+        let images = (self.author_images((&read, &recalled.history), &kit, vision)).await;
+        looped.sent_images = Some(SentImages {
+            refused: Arc::clone(&self.media.refused),
+            room: context.room.id.clone(),
+            keys: images.sent(),
+        });
+        let memory = with_discussion_turn(event, recalled.memory, notes);
+        let conversation = self.conversation(
+            (&read, &recalled.history),
+            &memory,
+            &images,
+            (vision, thinking),
+        );
+        // Who a task this turn delegates names as having asked (RFC §19.7).
+        looped.context.requester = conversation.requester;
+        looped.remembered = with_ending_texts(recalled.messages, conversation.ends_on);
+        let (messages, input) = (conversation.messages, conversation.input);
+        // The context takes the settings once the conversation is read, as
+        // Python's AIContext validates them.
+        settings.validated()?;
+        looped.place_turn_input(&messages, input.filter(|_| memory.in_place));
+        Ok(messages)
     }
 
     /// Own the policy for this prepared turn; another turn never changes it.

@@ -32,6 +32,22 @@ Hosts supply credentials and decide which providers, tools, transports and store
 to expose. The framework does not read an application's secret files implicitly.
 Closing the kit and adapters is part of the host's resource lifecycle.
 
+## Speaking and thinking
+
+AI channels and agents can ask a `SpeakPolicy` before ingesting an ordinary
+message. A silent decision still feeds memory and can schedule a `Thinker` for
+that room. The worker retains its previous thought, coalesces waiting inputs to
+the latest one, and reports completions through the turn's tracked hooks. A
+thought completed within `think_wait` can ask the policy again; a later thought
+does not start a response by itself. Instructions and discussion strategy turns
+keep their existing admission path. Closing the channel cancels its room workers;
+the host continues to own the supplied policy, thinker and provider.
+
+Classifier mappings and mock inputs use local shared handles to preserve Python's
+observable order and aliases. `AiGenerationEvent::ai_context` is a
+`SharedAiContext`: hooks use `snapshot()` to read a value and `update()` to edit the
+context retained by a thinker. Provider requests still receive an owned snapshot.
+
 ## External tool handlers
 
 `AiChannelOptions::external_tool_handler` and

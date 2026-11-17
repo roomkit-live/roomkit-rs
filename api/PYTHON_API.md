@@ -13,6 +13,40 @@ the mapping and its tests. The check does not generate or update this document.
 
 | Rust name | Python name | Members or parameters |
 | --- | --- | --- |
+| `roomkit_ai::Answers` | Python speaking/classifier contract | `new`, `insert`, `get`, `remove`, `len`, `is_empty`, `snapshot`, `iter` |
+| `roomkit_ai::ClassifierError` | Python speaking/classifier contract | `new`, `message`, `with_source` |
+| `roomkit_ai::MockClassifier` | Python speaking/classifier contract | `calls` |
+| `roomkit_ai::classifiers::Answers` | Python speaking/classifier contract | `new`, `insert`, `get`, `remove`, `len`, `is_empty`, `snapshot`, `iter` |
+| `roomkit_ai::classifiers::ClassifierError` | Python speaking/classifier contract | `new`, `message`, `with_source` |
+| `roomkit_ai::classifiers::MockClassifier` | Python speaking/classifier contract | `calls` |
+| `roomkit_ai::MockSpeakPolicy` | Python speaking/classifier contract | `turns` |
+| `roomkit_ai::MockThinker` | Python speaking/classifier contract | `calls` |
+| `roomkit_ai::speaking::MockSpeakPolicy` | Python speaking/classifier contract | `turns` |
+| `roomkit_ai::speaking::MockThinker` | Python speaking/classifier contract | `calls` |
+| `roomkit_ai::ClassifierSpeakPolicyOptions` | Python speaking/classifier contract | `overrides` |
+| `roomkit_ai::SharedAiContext` | Python speaking/classifier contract | Local shared object handle: new transfers ownership, Clone shares, snapshot copies, update edits synchronously, same_object compares identity (approved speaking forms). |
+| `roomkit_ai::classifiers::SharedState` | Python speaking/classifier contract | Local shared object handle: new transfers ownership, Clone shares, snapshot copies, update edits synchronously, same_object compares identity (approved speaking forms). |
+| `roomkit_ai::speaking::SharedRoomEvent` | Python speaking/classifier contract | Local shared object handle: new transfers ownership, Clone shares, snapshot copies, update edits synchronously, same_object compares identity (approved speaking forms). |
+| `roomkit_ai::classifiers::ChoiceOptions` | Python speaking/classifier contract | Ordered mutable mapping handle with atomic insert/remove, owned reads and explicit snapshots; Clone preserves aliases (approved speaking and mock script forms). |
+| `roomkit_ai::classifiers::Probabilities` | Python speaking/classifier contract | Ordered mutable mapping handle with atomic insert/remove, owned reads and explicit snapshots; Clone preserves aliases (approved speaking and mock script forms). |
+| `roomkit_ai::classifiers::Questions` | Python speaking/classifier contract | Ordered mutable mapping handle with atomic insert/remove, owned reads and explicit snapshots; Clone preserves aliases (approved speaking and mock script forms). |
+| `roomkit_ai::classifiers::Script` | Python speaking/classifier contract | Ordered mutable mapping handle with atomic insert/remove, owned reads and explicit snapshots; Clone preserves aliases (approved speaking and mock script forms). |
+| `roomkit_ai::speaking::Judgments` | Python speaking/classifier contract | Ordered mutable mapping handle with atomic insert/remove, owned reads and explicit snapshots; Clone preserves aliases (approved speaking forms). |
+| `roomkit_ai::speaking::Speakers` | Python speaking/classifier contract | Ordered mutable mapping handle with atomic insert/remove, owned reads and explicit snapshots; Clone preserves aliases (approved speaking forms). |
+| `roomkit_ai::classifiers::MockClassifierOptions` | Python speaking/classifier contract | Module re-export of the keyword options also checked at roomkit_ai root; identical fields and defaults, not a separate constructor. |
+| `roomkit_ai::speaking::ClassifierSpeakPolicyOptions` | Python speaking/classifier contract | Module re-export of the keyword options also checked at roomkit_ai root; identical fields and defaults, not a separate constructor. |
+| `roomkit_ai::speaking::LlmThinkerOptions` | Python speaking/classifier contract | Module re-export of the keyword options also checked at roomkit_ai root; identical fields and defaults, not a separate constructor. |
+| `roomkit_ai::speaking::MockSpeakPolicyOptions` | Python speaking/classifier contract | Module re-export of the keyword options also checked at roomkit_ai root; identical fields and defaults, not a separate constructor. |
+| `roomkit_ai::speaking::MockThinkerOptions` | Python speaking/classifier contract | Module re-export of the keyword options also checked at roomkit_ai root; identical fields and defaults, not a separate constructor. |
+| `roomkit_ai::speaking::SpeakDecisionOptions` | Python speaking/classifier contract | Module re-export of the keyword options also checked at roomkit_ai root; identical fields and defaults, not a separate constructor. |
+| `roomkit_ai::classifiers::ScriptedAnswer` | Python speaking/classifier contract | Typed answer, number or text in a live mock script, interpreted only when its question is asked (approved mock script form). |
+| `roomkit_ai::speaking::ClassifierSpeakOverrides` | Python speaking/classifier contract | Three optional callbacks are the explicit composition of Python state/questions/decision overrides, all absent by default (approved speaking forms). |
+| `roomkit_ai::classifiers::ClassifierFuture` | Python speaking/classifier contract | Named borrowed fallible future or synchronous callback type for the approved classifier/speaking protocols; no extra operation. |
+| `roomkit_ai::speaking::SpeakingFuture` | Python speaking/classifier contract | Named borrowed fallible future or synchronous callback type for the approved classifier/speaking protocols; no extra operation. |
+| `roomkit_ai::speaking::SpeakDecisionRule` | Python speaking/classifier contract | Named borrowed fallible future or synchronous callback type for the approved classifier/speaking protocols; no extra operation. |
+| `roomkit_ai::speaking::SpeakQuestionsRule` | Python speaking/classifier contract | Named borrowed fallible future or synchronous callback type for the approved classifier/speaking protocols; no extra operation. |
+| `roomkit_ai::speaking::SpeakStateRule` | Python speaking/classifier contract | Named borrowed fallible future or synchronous callback type for the approved classifier/speaking protocols; no extra operation. |
+| `roomkit_ai::speaking::SpeakMode` | `SpeakDecision.mode` | Literal `speak`, `offer`, `silent`; no implicit mode. |
 | `roomkit::TurnHost::room_context` | `roomkit.TurnHost.room_context` | `Result<Metadata, RoomKitError>` reads fresh owned JSON, including history despite a zero channel window; failures keep the existing kit mapping and store causes. |
 | `roomkit::turns::ExecutorInfo`, `roomkit::turns::ExecutorInfoOptions` | `roomkit.turns.ExecutorInfo` | Required string id plus Python defaults; owned optional `BTreeSet<String>` declarations, `Timestamp` heartbeat and cloned snapshots (HITL eb3c6f0b). |
 | `roomkit::turns::ExecutorInfo::covers` | `roomkit.turns.ExecutorInfo.covers` | `room_hooks: &[String]` and `organization_id: Option<&str>` use `[]` and `None` for Python's defaults; `Result<bool, RoomKitError>` preserves gated invalid-prefix errors (HITL eb3c6f0b). |
@@ -493,3 +527,60 @@ This Rust error form was approved on 2026-11-17.
 `"turn_skipped"`. It can be constructed and read as public queue-change data.
 Detecting an offline remote executor and skipping its queued discussion turn
 remain unsupported; adding this value does not enable those runtime behaviors.
+
+
+## Speaking and thinking
+
+The speaking forms were approved on 2026-11-17. `SpeakPolicy`, `Thinker` and
+`Classifier` return borrowed boxed futures with `ChannelError`; optional `close`
+returns success by default. `SpeakPolicy::forget_room` is synchronous and
+fallible. `ClassifierError` retains its diagnostic and optional original cause.
+The channel cancels its own running thoughts on close, without closing the
+policy, thinker, classifier or model supplied by the application.
+
+`Questions`, `Answers`, `ChoiceOptions`, `Probabilities`, `Judgments`, `Speakers`
+and `Script` keep insertion order and share their mapping when cloned.
+`insert` replaces an existing value in place; `remove` preserves other entries'
+order. `get` clones a value, retaining any nested handles; `snapshot` and `iter`
+read an owned outer list without retaining a lock. Each default is independent.
+`ScriptedAnswer` holds a typed answer, number or text. `MockClassifierOptions`
+uses an owned list of script handles: editing a retained script is observable,
+reordering an external list is not, and the last script repeats.
+
+`SharedState`, `SharedRoomEvent` and `SharedAiContext` preserve the complete
+objects retained by mocks. `Clone` shares the cell, `snapshot()` requests a copy,
+`same_object` tests identity, and `update` runs a short synchronous edit. An edit
+must not access that same handle or its clones recursively. No lock is kept
+while calling a hook, classifier, thinker or other asynchronous user operation.
+The models themselves and provider signatures stay unchanged.
+
+`AiGenerationEvent.ai_context` is `SharedAiContext`. Its constructor accepts an
+owned `AiContext` by conversion. A hook writes with
+`event.ai_context.update(|context| context.system_prompt = Some("New".into()))`.
+Retaining `event.ai_context.clone()` retains the same object; replacing the
+handle selects a different object. A thinker receives that selected handle.
+The ordinary provider still receives its owned turn context.
+
+`ClassifierSpeakOverrides` supplies optional `state`, `questions`, `decision`
+callbacks. Each receives the actual policy and a borrowed standard operation;
+calling that operation represents `super()` without recursively dispatching to
+the override. No standard work is forced before the callback. Direct method
+calls, error boundaries and per-room listening state remain the same.
+
+Carrier durations are `f64`, without sign or integer validation, and carrier
+room/channel ids are strings that may be empty. `SpeakDecision::new` validates
+that only silence is final. `AnswerOnly::new` accepts an iterable of names, not
+one string. Channel `speak_timeout` uses `Duration` (default two seconds, zero
+refused); `think_wait` uses `Duration` (default 1500 ms, zero allowed).
+
+`LlmThinkerOptions.timeout` is `Option<f64>` seconds, default `Some(10.0)`:
+`None` and positive infinity are unbounded, and a nonpositive value expires
+before calling the provider. NaN has the reference zero-wait scheduling bound:
+an immediate result can succeed, while a pending call expires. Large finite
+values which exceed the runtime clock's range do not panic. `max_tokens` uses
+the existing provider context's `Option<u32>`, default `Some(600)`; negative
+integers and values above `u32::MAX` accepted by Python are outside this
+explicitly approved Rust constructor domain. Instructions default to the
+reference prompt when absent or empty, and `reasoning_effort` defaults to None.
+`CutReply` is a text carrier; this does not implement audio interruption,
+realtime admission, remote/offline turn scheduling or vendor classifiers.

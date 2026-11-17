@@ -124,6 +124,12 @@ impl Loops {
         lock(&self.running).len()
     }
 
+    pub(crate) fn answering_in(&self, room: &RoomId) -> bool {
+        lock(&self.running)
+            .iter()
+            .any(|running| running.room_id.as_ref() == Some(room))
+    }
+
     /// A loop starting now in `room_id` for the turn `turn_id`: reachable
     /// until it reads its queue for the last time, registered until the
     /// handle drops.

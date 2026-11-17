@@ -87,7 +87,7 @@ async fn an_executor_cut_before_its_first_poll_builds_no_turn_work() {
     let (turn, ()) = kit
         .inner
         .turns
-        .submit(&turn_kit, &binding, event, context, |_| ())
+        .submit(&turn_kit, &binding, event, context, false, |_| ())
         .unwrap();
     // submit is synchronous. On this current-thread runtime neither the
     // executor nor the owner pump got a first poll before this cut.
@@ -173,7 +173,14 @@ async fn a_local_executor_closed_before_its_first_poll_builds_no_turn_work() {
     let (mut turn, ()) = kit
         .inner
         .turns
-        .submit(&turn_kit, &binding, event.clone(), context.clone(), |_| ())
+        .submit(
+            &turn_kit,
+            &binding,
+            event.clone(),
+            context.clone(),
+            false,
+            |_| (),
+        )
         .unwrap();
     tokio::time::timeout(Duration::from_secs(1), kit.turn_executor().close())
         .await
@@ -190,7 +197,7 @@ async fn a_local_executor_closed_before_its_first_poll_builds_no_turn_work() {
     let refusal = kit
         .inner
         .turns
-        .submit(&turn_kit, &binding, event, context, |_| ())
+        .submit(&turn_kit, &binding, event, context, false, |_| ())
         .unwrap_err();
     assert_eq!(
         refusal.attributes.get("reason"),

@@ -113,17 +113,39 @@ impl Loop {
         trigger: &RoomEvent,
         messages: &[Message],
     ) -> bool {
-        let Some(turn) = self.turn.clone() else {
+        if self.turn.is_none() {
             return true;
+        }
+        let Some((built, context)) = self
+            .generation_context(trigger, messages, crate::GenerationPurpose::Answer)
+            .await
+        else {
+            return false;
         };
+        let conversation = self.shown(messages).len();
+        self.adopt(&built, context.snapshot(), conversation);
+        true
+    }
+
+    /// The exact handle left by the generation hook; a thinker keeps its alias.
+    pub(crate) async fn generation_context(
+        &self,
+        trigger: &RoomEvent,
+        messages: &[Message],
+        purpose: crate::GenerationPurpose,
+    ) -> Option<(AiContext, crate::SharedAiContext)> {
         let built = AiContext {
             tools: self.hook_tools(),
             ..self.round_context(messages, self.system_prompt.clone())
+        };
+        let Some(turn) = self.turn.clone() else {
+            return Some((built.clone(), crate::SharedAiContext::new(built)));
         };
         let event = AiGenerationEvent {
             room_id: Some(self.context.room_id.clone()),
             provider_name: Some(self.provider.dyn_name().to_owned()),
             trigger: Some(trigger.clone()),
+            purpose,
             ..AiGenerationEvent::new(built.clone(), self.context.channel_id.clone())
         };
         let chain = turn.run_turn_hooks(event).await;
@@ -139,12 +161,9 @@ impl Loop {
         );
         turn.emit_turn_event("before_ai_generation", data);
         if blocked_by.is_some() {
-            return false;
+            return None;
         }
-        // Counted as the provider reads them: a round's results are one message.
-        let conversation = self.shown(messages).len();
-        self.adopt(&built, chain.payload.ai_context.snapshot(), conversation);
-        true
+        Some((built, chain.payload.ai_context))
     }
 
     /// Makes `left`, what the hooks left of the context `built` of a

@@ -66,7 +66,7 @@ impl Channel for Nested {
             let answer = kit
                 .inner
                 .turns
-                .run(&turn_kit, &binding, event, context, |_| ())
+                .run(&turn_kit, &binding, event, context, false, |_| ())
                 .await;
             assert!(answer.is_ok());
         } else {

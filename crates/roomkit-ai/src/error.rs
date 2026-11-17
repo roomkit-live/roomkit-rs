@@ -5,6 +5,12 @@
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum AiError {
+    /// The policy's bound must be strictly positive.
+    #[error("speak_timeout must be positive")]
+    SpeakTimeout,
+    /// A thinker only runs on events a speaking policy leaves silent.
+    #[error("a thinker needs a speak_policy: it thinks on the events the agent listens to")]
+    ThinkerNeedsPolicy,
     /// The host's sandbox catalogue failed while the channel read its definitions.
     #[error("{error}")]
     SandboxDefinition {

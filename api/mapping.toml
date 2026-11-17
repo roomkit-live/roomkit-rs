@@ -29,7 +29,7 @@
 
 [rules]
 # Rust's casing of an acronym in a type's name (rust-lang RFC 430).
-acronyms = { Ai = "AI", OpenAi = "OpenAI", Mcp = "MCP", Acp = "ACP", Sqlite = "SQLite", Jsonl = "JSONL" }
+acronyms = { Ai = "AI", OpenAi = "OpenAI", Mcp = "MCP", Acp = "ACP", Sqlite = "SQLite", Jsonl = "JSONL", Llm = "LLM" }
 # What a `Duration` drops from a Python name (decision 3).
 duration_suffix = "_seconds"
 # The error variants a Python builtin exception stands for (convention 5),
@@ -49,10 +49,12 @@ roomkit = ["roomkit"]
 "roomkit::testing" = ["roomkit.testing"]
 "roomkit::tools" = ["roomkit.tools"]
 "roomkit::turns" = ["roomkit.turns", "roomkit"]
-roomkit_ai = ["roomkit.providers.ai", "roomkit", "roomkit.tools", "roomkit.skills", "roomkit.skills.mcp"]
+roomkit_ai = ["roomkit.providers.ai", "roomkit", "roomkit.tools", "roomkit.skills", "roomkit.skills.mcp", "roomkit.speaking", "roomkit.classifiers"]
 "roomkit_ai::memory" = ["roomkit.memory", "roomkit"]
 "roomkit_ai::knowledge" = ["roomkit.knowledge"]
 "roomkit_ai::sandbox" = ["roomkit.sandbox"]
+"roomkit_ai::speaking" = ["roomkit.speaking", "roomkit"]
+"roomkit_ai::classifiers" = ["roomkit.classifiers", "roomkit"]
 roomkit_openai = ["roomkit.providers.openai"]
 roomkit_anthropic = ["roomkit.providers.anthropic"]
 "roomkit_openai::deepseek" = ["roomkit.providers.deepseek"]
@@ -136,6 +138,7 @@ roomkit_postgres = ["roomkit.store", "roomkit.knowledge"]
 # values, read from the Python source (the snapshot holds none), each a
 # variant's snake_case name.
 [rules.literals]
+"roomkit_ai::speaking::SpeakMode" = { field = "roomkit.SpeakDecision.__init__(mode)", values = ["speak", "offer", "silent"] }
 "roomkit_ai::RoleOverrideMode" = { field = "roomkit.RoleOverride.__init__(mode)", values = ["restrict", "replace"] }
 "roomkit::model::HookAction" = { field = "roomkit.HookResult.__init__(action)", values = ["allow", "block", "modify"] }
 "roomkit::model::DeliveryResultStatus" = { field = "roomkit.DeliveryResult.__init__(status)", values = ["sent", "queued", "failed"] }
@@ -745,18 +748,6 @@ scope = "tier1b"
 reason = "not in 0.x: protocol traces (tier 1b, RMK-1544)"
 
 [[missing]]
-python = "roomkit.ChannelDeclaration.__init__"
-params = ["thinks_while_listening"]
-scope = "text"
-reason = "not in 0.x: the thinker"
-
-[[missing]]
-python = "roomkit.Agent"
-members = ["thinks_while_listening"]
-scope = "text"
-reason = "not in 0.x: the thinker"
-
-[[missing]]
 python = "roomkit.Agent"
 members = ["is_config_only"]
 scope = "media"
@@ -879,12 +870,6 @@ members = [
 ]
 scope = "media"
 reason = "not in 0.x: the hook triggers of voice, video, realtime, recording, vision and conferences"
-
-[[missing]]
-python = "roomkit.HookTrigger"
-members = ["ON_SPEAK_DECISION", "ON_THOUGHT"]
-scope = "text"
-reason = "not in 0.x: the hook triggers of speaking turns and the thinker"
 
 [[missing]]
 python = "roomkit.HookTrigger"
@@ -1170,21 +1155,6 @@ members = ["connect", "close"]
 approved = "2026-11-01"
 reason = "Python's `async with` (`__aenter__`, `__aexit__`): Rust has no async context manager (architecture: MCP)"
 
-[[missing]]
-python = "roomkit.AIChannel.__init__"
-params = [
-    "speak_policy", "speak_timeout", "thinker",
-    "think_wait",
-]
-scope = "text"
-reason = "not in 0.x: speaking turns and the thinker"
-
-[[missing]]
-python = "roomkit.AIChannel"
-members = ["thinks_while_listening"]
-scope = "text"
-reason = "not in 0.x: the thinker"
-
 [[exception]]
 rust = "roomkit_ai::ToolStructuredContent"
 approved = "2026-11-14"
@@ -1421,3 +1391,181 @@ rust = "roomkit_mcp::McpToolProvider::new"
 params = ["url"]
 approved = "2026-11-17"
 reason = "Rust has no default call arguments: None preserves Python's omitted URL and Some borrows its endpoint (HITL e4ef09db)"
+
+# Shared speaking inputs and explicit subclass composition, approved 2026-11-17.
+
+[[exception]]
+rust = "roomkit_ai::Answers"
+approved = "2026-11-17"
+reason = "Ordered shared mapping operations for Python dict inheritance; typed reads retain their own Python members (approved speaking forms; architecture: Speaking and thinking)."
+members = ["new", "insert", "get", "remove", "len", "is_empty", "snapshot", "iter"]
+
+[[exception]]
+rust = "roomkit_ai::ClassifierError"
+approved = "2026-11-17"
+reason = "Construction, diagnostic and retained cause represent Python exception construction and chaining (approved speaking forms; architecture: Speaking and thinking)."
+members = ["new", "message", "with_source"]
+
+[[exception]]
+rust = "roomkit_ai::MockClassifier"
+approved = "2026-11-17"
+reason = "Python instance attribute calls is read through a method; states remain aliased and only the outer question mapping is copied (approved speaking forms)."
+members = ["calls"]
+
+[[exception]]
+rust = "roomkit_ai::classifiers::Answers"
+approved = "2026-11-17"
+reason = "Ordered shared mapping operations for Python dict inheritance; typed reads retain their own Python members (approved speaking forms; architecture: Speaking and thinking)."
+members = ["new", "insert", "get", "remove", "len", "is_empty", "snapshot", "iter"]
+
+[[exception]]
+rust = "roomkit_ai::classifiers::ClassifierError"
+approved = "2026-11-17"
+reason = "Construction, diagnostic and retained cause represent Python exception construction and chaining (approved speaking forms; architecture: Speaking and thinking)."
+members = ["new", "message", "with_source"]
+
+[[exception]]
+rust = "roomkit_ai::classifiers::MockClassifier"
+approved = "2026-11-17"
+reason = "Python instance attribute calls is read through a method; states remain aliased and only the outer question mapping is copied (approved speaking forms)."
+members = ["calls"]
+
+[[exception]]
+rust = "roomkit_ai::MockSpeakPolicy"
+approved = "2026-11-17"
+reason = "Python instance attribute turns is read through a method retaining its shared inputs (approved speaking forms)."
+members = ["turns"]
+
+[[exception]]
+rust = "roomkit_ai::MockThinker"
+approved = "2026-11-17"
+reason = "Python instance attribute calls is read through a method retaining its shared context (approved speaking forms)."
+members = ["calls"]
+
+[[exception]]
+rust = "roomkit_ai::speaking::MockSpeakPolicy"
+approved = "2026-11-17"
+reason = "Python instance attribute turns is read through a method retaining its shared inputs (approved speaking forms)."
+members = ["turns"]
+
+[[exception]]
+rust = "roomkit_ai::speaking::MockThinker"
+approved = "2026-11-17"
+reason = "Python instance attribute calls is read through a method retaining its shared context (approved speaking forms)."
+members = ["calls"]
+
+[[exception]]
+rust = "roomkit_ai::ClassifierSpeakPolicyOptions"
+approved = "2026-11-17"
+reason = "Optional state/questions/decision callbacks compose the three Python subclass overrides, each receiving a borrowed standard operation (approved speaking forms)."
+members = ["overrides"]
+
+[[exception]]
+rust = "roomkit_ai::SharedAiContext"
+approved = "2026-11-17"
+reason = "Local shared object handle: new transfers ownership, Clone shares, snapshot copies, update edits synchronously, same_object compares identity (approved speaking forms)."
+
+[[exception]]
+rust = "roomkit_ai::classifiers::SharedState"
+approved = "2026-11-17"
+reason = "Local shared object handle: new transfers ownership, Clone shares, snapshot copies, update edits synchronously, same_object compares identity (approved speaking forms)."
+
+[[exception]]
+rust = "roomkit_ai::speaking::SharedRoomEvent"
+approved = "2026-11-17"
+reason = "Local shared object handle: new transfers ownership, Clone shares, snapshot copies, update edits synchronously, same_object compares identity (approved speaking forms)."
+
+[[exception]]
+rust = "roomkit_ai::classifiers::ChoiceOptions"
+approved = "2026-11-17"
+reason = "Ordered mutable mapping handle with atomic insert/remove, owned reads and explicit snapshots; Clone preserves aliases (approved speaking and mock script forms)."
+
+[[exception]]
+rust = "roomkit_ai::classifiers::Probabilities"
+approved = "2026-11-17"
+reason = "Ordered mutable mapping handle with atomic insert/remove, owned reads and explicit snapshots; Clone preserves aliases (approved speaking and mock script forms)."
+
+[[exception]]
+rust = "roomkit_ai::classifiers::Questions"
+approved = "2026-11-17"
+reason = "Ordered mutable mapping handle with atomic insert/remove, owned reads and explicit snapshots; Clone preserves aliases (approved speaking and mock script forms)."
+
+[[exception]]
+rust = "roomkit_ai::classifiers::Script"
+approved = "2026-11-17"
+reason = "Ordered mutable mapping handle with atomic insert/remove, owned reads and explicit snapshots; Clone preserves aliases (approved speaking and mock script forms)."
+
+[[exception]]
+rust = "roomkit_ai::speaking::Judgments"
+approved = "2026-11-17"
+reason = "Ordered mutable mapping handle with atomic insert/remove, owned reads and explicit snapshots; Clone preserves aliases (approved speaking forms)."
+
+[[exception]]
+rust = "roomkit_ai::speaking::Speakers"
+approved = "2026-11-17"
+reason = "Ordered mutable mapping handle with atomic insert/remove, owned reads and explicit snapshots; Clone preserves aliases (approved speaking forms)."
+
+[[exception]]
+rust = "roomkit_ai::classifiers::MockClassifierOptions"
+approved = "2026-11-17"
+reason = "Module re-export of the keyword options also checked at roomkit_ai root; identical fields and defaults, not a separate constructor."
+
+[[exception]]
+rust = "roomkit_ai::speaking::ClassifierSpeakPolicyOptions"
+approved = "2026-11-17"
+reason = "Module re-export of the keyword options also checked at roomkit_ai root; identical fields and defaults, not a separate constructor."
+
+[[exception]]
+rust = "roomkit_ai::speaking::LlmThinkerOptions"
+approved = "2026-11-17"
+reason = "Module re-export of the keyword options also checked at roomkit_ai root; identical fields and defaults, not a separate constructor."
+
+[[exception]]
+rust = "roomkit_ai::speaking::MockSpeakPolicyOptions"
+approved = "2026-11-17"
+reason = "Module re-export of the keyword options also checked at roomkit_ai root; identical fields and defaults, not a separate constructor."
+
+[[exception]]
+rust = "roomkit_ai::speaking::MockThinkerOptions"
+approved = "2026-11-17"
+reason = "Module re-export of the keyword options also checked at roomkit_ai root; identical fields and defaults, not a separate constructor."
+
+[[exception]]
+rust = "roomkit_ai::speaking::SpeakDecisionOptions"
+approved = "2026-11-17"
+reason = "Module re-export of the keyword options also checked at roomkit_ai root; identical fields and defaults, not a separate constructor."
+
+[[exception]]
+rust = "roomkit_ai::classifiers::ScriptedAnswer"
+approved = "2026-11-17"
+reason = "Typed answer, number or text in a live mock script, interpreted only when its question is asked (approved mock script form)."
+
+[[exception]]
+rust = "roomkit_ai::speaking::ClassifierSpeakOverrides"
+approved = "2026-11-17"
+reason = "Three optional callbacks are the explicit composition of Python state/questions/decision overrides, all absent by default (approved speaking forms)."
+
+[[exception]]
+rust = "roomkit_ai::classifiers::ClassifierFuture"
+approved = "2026-11-17"
+reason = "Named borrowed fallible future or synchronous callback type for the approved classifier/speaking protocols; no extra operation."
+
+[[exception]]
+rust = "roomkit_ai::speaking::SpeakingFuture"
+approved = "2026-11-17"
+reason = "Named borrowed fallible future or synchronous callback type for the approved classifier/speaking protocols; no extra operation."
+
+[[exception]]
+rust = "roomkit_ai::speaking::SpeakDecisionRule"
+approved = "2026-11-17"
+reason = "Named borrowed fallible future or synchronous callback type for the approved classifier/speaking protocols; no extra operation."
+
+[[exception]]
+rust = "roomkit_ai::speaking::SpeakQuestionsRule"
+approved = "2026-11-17"
+reason = "Named borrowed fallible future or synchronous callback type for the approved classifier/speaking protocols; no extra operation."
+
+[[exception]]
+rust = "roomkit_ai::speaking::SpeakStateRule"
+approved = "2026-11-17"
+reason = "Named borrowed fallible future or synchronous callback type for the approved classifier/speaking protocols; no extra operation."

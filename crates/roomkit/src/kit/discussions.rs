@@ -710,6 +710,13 @@ impl<S: ConversationStore> RoomKit<S> {
             }
         }
         for agent in &config.agents {
+            if self
+                .inner
+                .channel(agent)
+                .is_some_and(|channel| channel.declaration().thinks_while_listening)
+            {
+                return Err(refused(format!("{agent} thinks while it listens")));
+            }
             // A strategy's runner already takes this agent's turns here.
             if self.inner.turn_runners.get(room_id, agent).is_some() {
                 return Err(refused(format!("another strategy runs {agent}'s turns")));

@@ -222,6 +222,14 @@ fn agent_options_defaults_as_python() {
 #[test]
 fn ai_channel_options_defaults_as_python() {
     let defaults = AiChannelOptions::default();
+    // roomkit.AIChannel.__init__(speak_policy) = None
+    assert!(defaults.speak_policy.is_none());
+    // roomkit.AIChannel.__init__(speak_timeout) = 2.0
+    assert_eq!(defaults.speak_timeout, Duration::from_secs(2));
+    // roomkit.AIChannel.__init__(thinker) = None
+    assert!(defaults.thinker.is_none());
+    // roomkit.AIChannel.__init__(think_wait) = 1.5
+    assert_eq!(defaults.think_wait, Duration::from_millis(1500));
     // roomkit.AIChannel.__init__(tool_search) = None
     assert_eq!(defaults.tool_search, None);
     // roomkit.AIChannel.__init__(tool_search_pinned) = None
@@ -649,4 +657,148 @@ fn served_skill_defaults_as_python() {
     assert_eq!(skill.read_total, 0);
     // roomkit.MCPSkill.__init__(retirements) = 0
     assert_eq!(skill.retirements, 0);
+}
+
+#[test]
+fn speaking_carriers_default_as_python() {
+    let decision = roomkit_ai::SpeakDecisionOptions::default();
+    // roomkit.SpeakDecision.__init__(reason) = ''
+    assert_eq!(decision.reason, "");
+    // roomkit.SpeakDecision.__init__(judgments) = <factory>
+    assert!(decision.judgments.is_empty());
+    // roomkit.SpeakDecision.__init__(notes) = ()
+    assert_eq!(decision.notes, Vec::<String>::new());
+    // roomkit.SpeakDecision.__init__(final) = False
+    assert!(!decision.r#final);
+    let thought = roomkit_ai::Thought::default();
+    // roomkit.Thought.__init__(text) = ''
+    assert_eq!(thought.text, "");
+    // roomkit.Thought.__init__(want_to_say) = ()
+    assert_eq!(thought.want_to_say, Vec::<String>::new());
+    // roomkit.Thought.__init__(urgent) = False
+    assert!(!thought.urgent);
+}
+
+#[test]
+fn speaking_mock_options_default_as_python() {
+    let policy = roomkit_ai::MockSpeakPolicyOptions::default();
+    // roomkit.MockSpeakPolicy.__init__(decisions) = None
+    assert_eq!(policy.decisions, Vec::<roomkit_ai::SpeakDecision>::new());
+    // roomkit.MockSpeakPolicy.__init__(delay) = 0.0
+    assert!(policy.delay.abs() < f64::EPSILON);
+    // roomkit.MockSpeakPolicy.__init__(error) = None
+    assert!(policy.error.is_none());
+    let thinker = roomkit_ai::MockThinkerOptions::default();
+    // roomkit.MockThinker.__init__(thoughts) = None
+    assert_eq!(thinker.thoughts, Vec::<roomkit_ai::Thought>::new());
+    // roomkit.MockThinker.__init__(delay) = 0.0
+    assert!(thinker.delay.abs() < f64::EPSILON);
+    // roomkit.MockThinker.__init__(error) = None
+    assert!(thinker.error.is_none());
+    let classifier = roomkit_ai::classifiers::MockClassifierOptions::default();
+    // roomkit.MockClassifier.__init__(answers) = None
+    assert_eq!(classifier.answers.len(), 0);
+    // roomkit.MockClassifier.__init__(error) = None
+    assert!(classifier.error.is_none());
+}
+
+#[test]
+fn classifier_speaking_options_default_as_python() {
+    let options = roomkit_ai::ClassifierSpeakPolicyOptions::default();
+    // roomkit.ClassifierSpeakPolicy.__init__(agent_role) = ''
+    assert_eq!(options.agent_role, "");
+    // roomkit.ClassifierSpeakPolicy.__init__(questions) = None
+    assert!(options.questions.is_none());
+    // roomkit.ClassifierSpeakPolicy.__init__(languages) = None
+    assert!(options.languages.is_none());
+    // roomkit.ClassifierSpeakPolicy.__init__(history) = 6
+    assert_eq!(options.history, 6);
+    // roomkit.ClassifierSpeakPolicy.__init__(proactivity) = 0.5
+    assert!((options.proactivity - 0.5).abs() < f64::EPSILON);
+    let compose = roomkit_ai::speaking::ComposeOptions::default();
+    // roomkit.speaking.compose(alone) = False
+    assert!(!compose.alone);
+    // roomkit.speaking.compose(proactivity) = 0.5
+    assert!((compose.proactivity - 0.5).abs() < f64::EPSILON);
+    // roomkit.speaking.compose(urgent) = False
+    assert!(!compose.urgent);
+    // roomkit.speaking.addressed(alone) = False
+    assert!(!roomkit_ai::speaking::AddressedOptions::default().alone);
+}
+
+#[test]
+fn llm_thinker_options_default_as_python() {
+    let options = roomkit_ai::LlmThinkerOptions::default();
+    // roomkit.LLMThinker.__init__(instructions) = None
+    assert!(options.instructions.is_none());
+    // roomkit.LLMThinker.__init__(max_tokens) = 600
+    assert_eq!(options.max_tokens, Some(600));
+    // roomkit.LLMThinker.__init__(reasoning_effort) = None
+    assert!(options.reasoning_effort.is_none());
+    // roomkit.LLMThinker.__init__(timeout) = 10.0
+    assert!(
+        options
+            .timeout
+            .is_some_and(|value| (value - 10.0).abs() < f64::EPSILON)
+    );
+}
+
+#[test]
+fn classifier_answer_and_question_defaults_as_python() {
+    let question = roomkit_ai::classifiers::YesNoQuestion::new("Is it so?");
+    // roomkit.YesNoQuestion.__init__(yes) = None
+    assert!(question.yes.is_none());
+    // roomkit.YesNoQuestion.__init__(no) = None
+    assert!(question.no.is_none());
+    // roomkit.ChoiceAnswer.__init__(probabilities) = <factory>
+    assert!(
+        roomkit_ai::classifiers::ChoiceAnswer::new("first")
+            .probabilities
+            .is_empty()
+    );
+    // roomkit.ScoreAnswer.__init__(probabilities) = ()
+    assert_eq!(
+        roomkit_ai::classifiers::ScoreAnswer::new(0.0).probabilities,
+        Vec::<f64>::new()
+    );
+}
+
+#[test]
+fn speaking_turn_and_report_fields_default_as_python() {
+    use roomkit_ai::speaking::SpeakMode;
+    use roomkit_ai::{SpeakDecisionEvent, SpeakTurn, Thought, ThoughtEvent};
+    let room = roomkit::model::RoomId::new("room").unwrap();
+    let source = roomkit::model::EventSource::new(
+        roomkit::model::ChannelId::new("sms").unwrap(),
+        roomkit::model::ChannelType::SMS,
+    );
+    let event =
+        roomkit::model::RoomEvent::new(room, source, roomkit::model::TextContent::new("Hello"));
+    let turn = SpeakTurn::new(event.clone());
+    // roomkit.SpeakTurn.__init__(recent) = ()
+    assert_eq!(turn.recent.len(), 0);
+    // roomkit.SpeakTurn.__init__(people) = ()
+    assert_eq!(turn.people, Vec::<String>::new());
+    // roomkit.SpeakTurn.__init__(channel_id) = ''
+    assert_eq!(turn.channel_id, "");
+    // roomkit.SpeakTurn.__init__(speakers) = <factory>
+    assert!(turn.speakers.is_empty());
+    // roomkit.SpeakTurn.__init__(thought) = None
+    assert!(turn.thought.is_none());
+    // roomkit.SpeakTurn.__init__(cut) = None
+    assert!(turn.cut.is_none());
+    let report = SpeakDecisionEvent::new("", "", event, SpeakMode::Speak.into());
+    // roomkit.SpeakDecisionEvent.__init__(duration_ms) = 0
+    assert!(report.duration_ms.abs() < f64::EPSILON);
+    // roomkit.SpeakDecisionEvent.__init__(asked_again) = False
+    assert!(!report.asked_again);
+    // roomkit.SpeakDecisionEvent.__init__(thought) = None
+    assert!(report.thought.is_none());
+    // roomkit.SpeakDecisionEvent.__init__(late) = False
+    assert!(!report.late);
+    let thought = ThoughtEvent::new("", "", Thought::default());
+    // roomkit.ThoughtEvent.__init__(previous) = <factory>
+    assert_eq!(thought.previous, Thought::default());
+    // roomkit.ThoughtEvent.__init__(duration_ms) = None
+    assert!(thought.duration_ms.is_none());
 }

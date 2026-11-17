@@ -54,6 +54,48 @@ pub(crate) fn skeletons(text: &str) -> BTreeSet<String> {
     [skeleton(&bare), skeleton(&bare.to_lowercase())].into()
 }
 
+/// Whether a whole label reads as the ASCII word `word`, using the same
+/// character alternatives as the runtime's marks. Between letters only
+/// invisible, combining and line-break characters are skipped; punctuation
+/// is allowed around the word, not inside it. Python's `_lookalike.reads_as`.
+#[doc(hidden)]
+pub fn reads_as(text: &str, word: &str) -> bool {
+    let mut positions: Vec<_> = std::iter::once(true)
+        .chain(std::iter::repeat_n(false, word.len()))
+        .collect();
+    for character in text.chars() {
+        let mut next = vec![false; positions.len()];
+        for (position, matched) in positions.iter().enumerate() {
+            if !matched {
+                continue;
+            }
+            let outer = position == 0 || position == word.len();
+            if ((outer && !unicode::is_alnum(character))
+                || (!outer && unicode::is_joint(character)))
+                && let Some(matched) = next.get_mut(position)
+            {
+                *matched = true;
+            }
+            if character == '\u{345}' {
+                continue;
+            }
+            if let Some(forms) = unicode::phrase_reads(character) {
+                for form in forms.split(' ') {
+                    if word
+                        .get(position..)
+                        .is_some_and(|tail| tail.starts_with(form))
+                        && let Some(matched) = next.get_mut(position + form.len())
+                    {
+                        *matched = true;
+                    }
+                }
+            }
+        }
+        positions = next;
+    }
+    positions.last().copied().unwrap_or(false)
+}
+
 /// The skeleton of `text`, its read characters' letters and digits.
 fn skeleton(text: &str) -> String {
     let mut kept: Vec<char> = Vec::with_capacity(text.len());

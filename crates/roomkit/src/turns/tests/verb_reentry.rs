@@ -153,7 +153,7 @@ impl Relay {
         let event = RoomEvent::new(room_id(), source, TextContent::new("go"));
         let context = RoomContext::new(room);
         let (mut turn, ()) = turns
-            .submit(&kit, &binding, event, context, |_| ())
+            .submit(&kit, &binding, event, context, false, |_| ())
             .unwrap();
         let bound = Duration::from_secs(5);
         let served = tokio::time::timeout(bound, self.served.notified()).await;

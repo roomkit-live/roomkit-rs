@@ -152,6 +152,7 @@ impl Executor {
             response_depth(&request.event),
         );
         let host = host
+            .with_strategy_turn(request.strategy_turn)
             .with_publication_scope(&request.event)
             .with_room_hooks(request.room_hooks.clone());
         host.reads_trace_from(Arc::clone(&self.turn.traced));

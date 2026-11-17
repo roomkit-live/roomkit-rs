@@ -232,3 +232,9 @@ fn hook_carriers_keep_defaults_and_unrestricted_numeric_durations() {
         );
     }
 }
+
+// Python: tests/test_speak_policy.py::test_a_decision_refuses_an_unknown_mode
+#[test]
+fn the_typed_mode_refuses_unknown_serialized_values() {
+    assert!(serde_json::from_str::<SpeakMode>("\"whisper\"").is_err());
+}

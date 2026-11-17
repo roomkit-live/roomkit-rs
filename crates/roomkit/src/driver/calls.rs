@@ -588,27 +588,7 @@ pub(super) async fn channel<S: ConversationStore>(
             binding,
             event,
             context,
-        } => {
-            let Some(channel) = inner.channel(&binding.channel_id) else {
-                return unregistered_channel(&binding.channel_id);
-            };
-            if binding.category != ChannelCategory::Intelligence {
-                return channel_output(channel.on_event(event, binding, *context).await);
-            }
-            let window = inner.config().recent_events_limit(&context.bindings);
-            if let Some(runner) = inner
-                .turn_runners
-                .get(&context.room.id, &binding.channel_id)
-            {
-                let asked = (binding, event, *context);
-                return strategy_turn(inner, shared, effect, &*runner, asked, window).await;
-            }
-            if serializes(&*channel, &binding) {
-                let asked = (&*channel, binding);
-                return ask_in_line(inner, shared, effect, asked, event, *context, window).await;
-            }
-            take_turn(inner, shared, effect, binding, event, *context, window).await
-        }
+        } => on_event(inner, shared, effect, binding, event, *context).await,
         ChannelRequest::Deliver {
             binding,
             event,
@@ -648,6 +628,44 @@ pub(super) async fn channel<S: ConversationStore>(
             Box::pin(read_stream(inner, shared, (effect, turn), read)).await
         }
     }
+}
+
+async fn on_event<S: ConversationStore>(
+    inner: &Arc<Inner<S>>,
+    shared: &RunShared,
+    effect: EffectId,
+    binding: ChannelBinding,
+    event: RoomEvent,
+    context: RoomContext,
+) -> Outcome {
+    let Some(channel) = inner.channel(&binding.channel_id) else {
+        return unregistered_channel(&binding.channel_id);
+    };
+    if binding.category != ChannelCategory::Intelligence {
+        return channel_output(channel.on_event(event, binding, context).await);
+    }
+    let window = inner.config().recent_events_limit(&context.bindings);
+    if let Some(runner) = inner
+        .turn_runners
+        .get(&context.room.id, &binding.channel_id)
+    {
+        let asked = (binding, event, context);
+        return strategy_turn(inner, shared, effect, &*runner, asked, window).await;
+    }
+    if serializes(&*channel, &binding) {
+        let asked = (&*channel, binding);
+        return ask_in_line(inner, shared, effect, asked, event, context, window).await;
+    }
+    take_turn(
+        inner,
+        shared,
+        effect,
+        binding,
+        event,
+        (context, false),
+        window,
+    )
+    .await
 }
 
 /// Reads the stream the turn of `turn` answered with, for the read
@@ -693,12 +711,21 @@ async fn take_turn<S: ConversationStore>(
     effect: EffectId,
     binding: ChannelBinding,
     event: RoomEvent,
-    context: RoomContext,
+    (context, strategy_turn): (RoomContext, bool),
     window: usize,
 ) -> Outcome {
     let context = crate::history::turn_context(&*inner.store, &binding, &event, context, window);
     let context = context.await;
-    run_turn(inner, shared, effect, binding, event, context).await
+    run_turn(
+        inner,
+        shared,
+        effect,
+        binding,
+        event,
+        context,
+        strategy_turn,
+    )
+    .await
 }
 
 /// The channel's own turn on an event standing in for the one asked, for
@@ -720,7 +747,7 @@ async fn answer_in_place<S: ConversationStore>(
     } = answering;
     let context = crate::history::turn_context(&*inner.store, &binding, &asked, context, window);
     let context = context.await;
-    run_turn(inner, shared, effect, binding, event, context).await
+    run_turn(inner, shared, effect, binding, event, context, true).await
 }
 
 /// The turn of `binding`'s channel on `event` in `context`, its history
@@ -732,10 +759,14 @@ async fn run_turn<S: ConversationStore>(
     binding: ChannelBinding,
     event: RoomEvent,
     context: RoomContext,
+    strategy_turn: bool,
 ) -> Outcome {
     let kit: Arc<dyn TurnKit> = Arc::new(Arc::downgrade(inner));
     let cut = |turn| shared.turn_submitted(effect, turn);
-    let answered = inner.turns.run(&kit, &binding, event, context, cut).await;
+    let answered = inner
+        .turns
+        .run(&kit, &binding, event, context, strategy_turn, cut)
+        .await;
     let outcome = match answered {
         Ok(Answer::Output(output)) => checked_output(output),
         // Muting silences the voice, a streaming one included: its stream is
@@ -783,7 +814,16 @@ async fn strategy_turn<S: ConversationStore>(
         Taken::Answered(answer) => strategy_output(answer.await),
         Taken::Own(own) => {
             let (event, binding, context) = *own;
-            take_turn(inner, shared, effect, binding, event, context, window).await
+            take_turn(
+                inner,
+                shared,
+                effect,
+                binding,
+                event,
+                (context, true),
+                window,
+            )
+            .await
         }
         Taken::Passes(passes) => first_pass(inner, shared, effect, passes, window).await,
         Taken::Later(work) => match work.await {
@@ -814,7 +854,10 @@ async fn first_pass<S: ConversationStore>(
     let context = context.await;
     let kit: Arc<dyn TurnKit> = Arc::new(Arc::downgrade(inner));
     let cut = |turn| shared.turn_submitted(effect, turn);
-    let answered = inner.turns.run(&kit, &binding, event, context, cut).await;
+    let answered = inner
+        .turns
+        .run(&kit, &binding, event, context, true, cut)
+        .await;
     let output = match answered {
         Ok(Answer::Streamed(output, turn)) => {
             shared.keep_stream(

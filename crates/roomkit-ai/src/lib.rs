@@ -118,6 +118,7 @@ mod turn_settings;
 
 pub use self::agent::{Agent, AgentOptions, BuildIdentityBlockOptions};
 pub use self::channel::{AiChannel, AiChannelOptions};
+#[doc(inline)]
 pub use self::classifiers::{
     Answers, ChoiceAnswer, ChoiceQuestion, Classifier, ClassifierError, MockClassifier,
     MockClassifierOptions, ScoreAnswer, ScoreQuestion, YesNoAnswer, YesNoQuestion,
@@ -168,11 +169,12 @@ pub use self::skills::{
     missing_required_tools, parse_entry, parse_tool_names, safe_join_filename, serves_exactly,
     verify_frontmatter, verify_skill_resource,
 };
+#[doc(inline)]
 pub use self::speaking::{
     AlwaysSpeak, AnswerOnly, ClassifierSpeakPolicy, ClassifierSpeakPolicyOptions, CutReply,
-    MockSpeakPolicy, MockSpeakPolicyOptions, MockThinker, MockThinkerOptions, SpeakDecision,
-    SpeakDecisionEvent, SpeakDecisionOptions, SpeakPolicy, SpeakTurn, Thinker, Thought,
-    ThoughtEvent,
+    LlmThinker, LlmThinkerOptions, MockSpeakPolicy, MockSpeakPolicyOptions, MockThinker,
+    MockThinkerOptions, SpeakDecision, SpeakDecisionEvent, SpeakDecisionOptions, SpeakPolicy,
+    SpeakTurn, Thinker, Thought, ThoughtEvent,
 };
 pub use self::steering::SteerOptions;
 pub use self::tool_search::{TOOL_FIND_TOOLS, TOOL_LIST_TOOLS, TOOL_SEARCH_INFRA_TOOL_NAMES};

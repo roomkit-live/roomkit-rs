@@ -41,7 +41,6 @@ use crate::memory::{
 use crate::planning::TaskPlanner;
 use crate::provider::{AiContentPart, AiMessage, AiProvider, DynAiProvider, check_portable_schema};
 use crate::router::{AiRouter, RouteRequest, Routed};
-use crate::rows;
 use crate::sandbox::{SANDBOX_PREAMBLE, SandboxExecutor, tools::SandboxTools};
 use crate::server_instructions::ServerInstructions;
 use crate::skills::tools::{SkillTools, SkillTurn};
@@ -69,9 +68,11 @@ use crate::turn_config::{AiChannelTurnConfig, TurnConfigFuture, TurnConfigs, bas
 use crate::turn_settings::{ReasoningLevels, TurnSettings, VALUE_ERROR};
 
 mod context;
+mod mind;
+mod speaking;
 mod targets;
 mod tasks_note;
-use self::context::PreparedAnswer;
+mod thinking;
 
 /// The metadata word of an instruction that stands alone (RFC §10.1.1
 /// rule 7), as the pipeline writes it.
@@ -109,6 +110,14 @@ pub struct AiChannelOptions {
     /// Serve `plan_tasks` and carry each room's plan in later turn input notes
     /// (RFC §6.4, §9.2). Python's `enable_planning`, false by default.
     pub enable_planning: bool,
+    /// Admission policy, consulted before memory ingestion. None always answers.
+    pub speak_policy: Option<Arc<dyn crate::SpeakPolicy>>,
+    /// Maximum policy wait, positive, two seconds by default.
+    pub speak_timeout: Duration,
+    /// Thinks on silent events, one call at a time per room; needs a policy.
+    pub thinker: Option<Arc<dyn crate::Thinker>>,
+    /// How long a silent event waits for its thought, 1500 ms by default.
+    pub think_wait: Duration,
     /// How long, in milliseconds, a model's reasoning deltas batch into one
     /// `THINKING_DELTA` publish; 0 publishes each. Python's
     /// `thinking_coalesce_ms`, 80 by default.
@@ -343,6 +352,10 @@ impl Default for AiChannelOptions {
             thinking_budget: None,
             enable_thinking: None,
             enable_planning: false,
+            speak_policy: None,
+            speak_timeout: Duration::from_secs(2),
+            thinker: None,
+            think_wait: Duration::from_millis(1500),
             thinking_coalesce_ms: 80.0,
             thinking_coalesce_chars: 256,
             text_coalesce_ms: 80.0,
@@ -470,6 +483,7 @@ pub struct AiChannel<P> {
     /// The host's handler, which the setter replaces.
     tool_handler: Arc<RwLock<Option<ToolHandler>>>,
     policy: ToolPolicy,
+    speech: Arc<speaking::Speech>,
     bounds: Bounds,
     continuation: Option<ContinuationPolicy>,
     external_tool_handler: Option<Arc<dyn ExternalToolHandler>>,
@@ -604,6 +618,7 @@ impl<P> Clone for AiChannel<P> {
             extra_tools: self.extra_tools.clone(),
             tool_handler: Arc::clone(&self.tool_handler),
             policy: self.policy.clone(),
+            speech: Arc::clone(&self.speech),
             bounds: self.bounds.clone(),
             continuation: self.continuation.clone(),
             external_tool_handler: self.external_tool_handler.clone(),
@@ -730,12 +745,13 @@ impl<P: AiProvider> AiChannel<P> {
     fn built(
         channel_id: ChannelId,
         serving: Serving<P>,
-        options: AiChannelOptions,
+        mut options: AiChannelOptions,
     ) -> Result<Self, AiError> {
         // Python's ToolPolicy, RetryPolicy and AITool refuse as they are
         // built, before its constructor runs.
-        let policy = options.tool_policy.unwrap_or_default();
+        let policy = options.tool_policy.take().unwrap_or_default();
         refuse_bracketed(&policy)?;
+        let speech = speaking::Speech::new(&options)?;
         let (provider, router) = serving.split();
         let resilience = Resilience::checked(options.retry_policy, router)?;
         refuse_tool_names(&options.tools)?;
@@ -755,18 +771,16 @@ impl<P: AiProvider> AiChannel<P> {
             ),
             options.tool_search_miss_hint,
         )?;
-        let skilled = (
-            options.skills,
-            options.skills_in_prompt,
-            options.script_executor.clone(),
-        );
-        let setup = (&channel_id, &search, options.evict_threshold_tokens);
         let mut surface = tool_surface(
-            setup,
+            (&channel_id, &search, options.evict_threshold_tokens),
             options.tool_handler,
             options.tools,
             options.human_input_handler,
-            skilled,
+            (
+                options.skills,
+                options.skills_in_prompt,
+                options.script_executor.clone(),
+            ),
             options.enable_planning,
         )?;
         let sandbox = SandboxTools::install(&mut surface.toolbox, options.sandbox)?;
@@ -778,6 +792,7 @@ impl<P: AiProvider> AiChannel<P> {
             extra_tools: surface.extra_tools,
             tool_handler: surface.tool_handler,
             policy,
+            speech: Arc::new(speech),
             bounds: loop_bounds(
                 (
                     options.max_tool_rounds,
@@ -842,6 +857,11 @@ impl<P: AiProvider> AiChannel<P> {
     pub(crate) fn with_identity(mut self, identity: Option<IdentityPrompt>) -> Self {
         self.identity = identity;
         self
+    }
+
+    /// Whether the channel thinks on events its policy leaves silent.
+    pub fn thinks_while_listening(&self) -> bool {
+        self.speech.thinker.is_some()
     }
 
     /// The provider the channel was given: Python's `provider`; `None` for
@@ -1761,21 +1781,31 @@ impl<P: AiProvider> AiChannel<P> {
         (read, history): (&RoomEvent, &RoomContext),
         memory: &TurnMemory,
         images: &AuthorImages,
-        vision: bool,
+        (vision, thinking): (bool, bool),
     ) -> TurnConversation {
         let reader = TurnReader {
             images,
             vision,
             describer: self.media.describer.as_ref(),
         };
-        conversation_with_input(
-            &self.channel_id,
-            read,
-            history,
-            usize::MAX,
-            memory,
-            |said| reader.read(said),
-        )
+        if thinking {
+            roomkit_core::rules::transcript::conversation_for_thought(
+                &self.channel_id,
+                read,
+                history,
+                memory,
+                |said| reader.read(said),
+            )
+        } else {
+            conversation_with_input(
+                &self.channel_id,
+                read,
+                history,
+                usize::MAX,
+                memory,
+                |said| reader.read(said),
+            )
+        }
     }
 
     /// Measure the turn before memory reads the room, using the notes
@@ -1809,14 +1839,14 @@ impl<P: AiProvider> AiChannel<P> {
 
     /// The turn's work within its `record`: its settings, its memory, its
     /// generation hooks, then its loop, as a stream within the kit.
-    async fn answer(
+    async fn prepare_turn(
         &self,
         event: RoomEvent,
         binding: ChannelBinding,
         context: RoomContext,
         record: TurnRecord,
-        role: Option<&str>,
-    ) -> Result<Option<PreparedAnswer>, ChannelError> {
+        (role, added_notes, thinking): (Option<&str>, Vec<String>, bool),
+    ) -> Result<(Loop, Vec<roomkit_core::rules::transcript::Message>), ChannelError> {
         let turn = current_turn_host();
         // The tools the room's owner serves this turn join the agent's own
         // (RFC §10.6.5), before the turn's own, none of which is declared
@@ -1893,38 +1923,17 @@ impl<P: AiProvider> AiChannel<P> {
         looped.resolve_tool_catalogue();
         // Measured as the first round sends it, before the memory reads the
         // room (RFC §20).
-        let notes = self.own_notes(&event, &context, looped.turn.as_ref()).await;
-        let footprint = self.measure_turn(&looped, &context, stands_alone, &notes);
-        // The event as the model reads it, the media the application keeps
-        // beside its content among its parts, as its history (RFC §6.4).
-        let kit = KitMedia::of(looped.turn.as_ref());
-        let read = with_attached_media(&event, kit.attached.as_ref());
-        let recalled = self
-            .recalled(
-                &read,
-                &context,
-                (stands_alone, footprint),
-                kit.attached.as_ref(),
+        let mut notes = self.own_notes(&event, &context, looped.turn.as_ref()).await;
+        notes.extend(added_notes);
+        let messages = self
+            .read_turn(
+                &mut looped,
+                (&event, &context, &settings),
+                (stands_alone, vision, thinking),
+                notes,
             )
-            .await
-            .map_err(rows::provider_failure)?;
-        let images = (self.author_images((&read, &recalled.history), &kit, vision)).await;
-        looped.sent_images = Some(SentImages {
-            refused: Arc::clone(&self.media.refused),
-            room: context.room.id.clone(),
-            keys: images.sent(),
-        });
-        let memory = with_discussion_turn(&event, recalled.memory, notes);
-        let conversation = self.conversation((&read, &recalled.history), &memory, &images, vision);
-        // Who a task this turn delegates names as having asked (RFC §19.7).
-        looped.context.requester = conversation.requester;
-        looped.remembered = with_ending_texts(recalled.messages, conversation.ends_on);
-        let (messages, input) = (conversation.messages, conversation.input);
-        // The context takes the settings once the conversation is read, as
-        // Python's AIContext validates them.
-        settings.validated()?;
-        looped.place_turn_input(&messages, input.filter(|_| memory.in_place));
-        Ok(Box::pin(self.finish_preparation(looped, event, messages)).await)
+            .await?;
+        Ok((looped, messages))
     }
 }
 
@@ -2043,13 +2052,17 @@ impl<P: AiProvider> Channel for AiChannel<P> {
     /// A room the channel joins starts from nothing it kept for an earlier
     /// room of the same id (RFC §6.4, §10.6.3): Python's
     /// `on_room_attached`, its `_forget_room`.
-    fn on_room_attached(
+    async fn on_room_attached(
         &self,
         room_id: RoomId,
         _binding: ChannelBinding,
-    ) -> impl Future<Output = Result<(), ChannelError>> + Send {
+    ) -> Result<(), ChannelError> {
+        self.forget_thought(&room_id).await;
+        if let Some(policy) = &self.speech.policy {
+            policy.forget_room(room_id.as_str())?;
+        }
         self.forget_room(&room_id);
-        future::ready(Ok(()))
+        Ok(())
     }
 
     /// What the channel keeps for the room goes with the binding (RFC
@@ -2057,12 +2070,13 @@ impl<P: AiProvider> Channel for AiChannel<P> {
     /// its tools returned there, which it replays no more, and the skills
     /// active there, and its stored tool results. Python's `on_room_detached`,
     /// its `_forget_room`.
-    fn on_room_detached(
-        &self,
-        room_id: RoomId,
-    ) -> impl Future<Output = Result<(), ChannelError>> + Send {
+    async fn on_room_detached(&self, room_id: RoomId) -> Result<(), ChannelError> {
+        self.forget_thought(&room_id).await;
+        if let Some(policy) = &self.speech.policy {
+            policy.forget_room(room_id.as_str())?;
+        }
         self.forget_room(&room_id);
-        future::ready(Ok(()))
+        Ok(())
     }
 
     /// A committed event of `room_id` for the memory, a discussion's (RFC
@@ -2089,15 +2103,7 @@ impl<P: AiProvider> Channel for AiChannel<P> {
         binding: ChannelBinding,
         context: RoomContext,
     ) -> Result<ChannelOutput, ChannelError> {
-        // A discussion handed the event to memory when it committed (RFC
-        // §19.7.5 rule 3): its turn does not hand it again.
-        if !roomkit::discussion_turn(&event) {
-            self.ingest(&event, &context).await;
-        }
-        if !self.answers(&event) {
-            return Ok(ChannelOutput::default());
-        }
-        self.answer_in_context(event, binding, context).await
+        Box::pin(self.admitted(event, binding, context)).await
     }
 
     /// Whether its turns in a room run one after the other
@@ -2135,6 +2141,7 @@ impl<P: AiProvider> Channel for AiChannel<P> {
             recent_events_window: self.recent_events_window(),
             serializes_room_turns: Channel::serializes_room_turns(self),
             steers_room_turns: Channel::steers_room_turns(self),
+            thinks_while_listening: self.thinks_while_listening(),
             identity: None,
         }
     }
@@ -2157,6 +2164,7 @@ impl<P: AiProvider> Channel for AiChannel<P> {
     /// tools is the host's to close.
     async fn close(&self) {
         self.loops.end_running_turns().await;
+        self.close_minds().await;
         self.memory.close().await;
         if let Some((human, registration)) = &self.human_input {
             let registration = registration.load(Ordering::Acquire);

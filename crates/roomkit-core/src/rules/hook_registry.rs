@@ -173,6 +173,10 @@ pub enum HookTrigger {
     /// A room plan was stored (RFC §9.2): observed `PlanUpdatedEvent` on its
     /// turn executor, without a channel-type filter.
     OnPlanUpdated,
+    /// A speak policy decided on an event; its SYNC hooks may replace or block it.
+    OnSpeakDecision,
+    /// The agent's thought changed while listening or speaking, observed.
+    OnThought,
     /// A room's speak queue changed (RFC §19.7.5): its payload is a
     /// `SpeakQueueEvent`, observed.
     OnSpeakQueue,
@@ -181,6 +185,21 @@ pub enum HookTrigger {
     /// observed.
     OnDispatchDecision,
 }
+
+/// The triggers fired on the turn executor, independent of the room owner's
+/// executor (RFC §10.6.6). Python's `TURN_TRIGGERS`.
+pub const TURN_TRIGGERS: [HookTrigger; 10] = [
+    HookTrigger::BeforeAiGeneration,
+    HookTrigger::OnAiThinking,
+    HookTrigger::OnAiResponse,
+    HookTrigger::BeforeToolUse,
+    HookTrigger::AfterToolRound,
+    HookTrigger::OnToolCall,
+    HookTrigger::OnUserInputRequired,
+    HookTrigger::OnSpeakDecision,
+    HookTrigger::OnThought,
+    HookTrigger::OnPlanUpdated,
+];
 
 impl HookTrigger {
     /// How the framework runs the trigger (RFC §9.2): its SYNC hooks as a
@@ -197,6 +216,7 @@ impl HookTrigger {
             | Self::OnUserInputRequired
             | Self::AfterToolRound
             | Self::BeforeAiGeneration
+            | Self::OnSpeakDecision
             | Self::OnVerificationRequired => HookExecution::Sync,
             Self::AfterBroadcast
             | Self::OnEventUpdated
@@ -230,6 +250,7 @@ impl HookTrigger {
             | Self::OnVerificationEnded
             | Self::OnAiResponse
             | Self::OnPlanUpdated
+            | Self::OnThought
             | Self::OnAiThinking
             | Self::OnSpeakQueue
             | Self::OnDispatchDecision => HookExecution::Async,
@@ -280,7 +301,9 @@ impl HookTrigger {
             | Self::BeforeAiGeneration
             | Self::OnAiResponse
             | Self::OnPlanUpdated
+            | Self::OnThought
             | Self::OnAiThinking
+            | Self::OnSpeakDecision
             | Self::OnSpeakQueue
             | Self::OnDispatchDecision
             | Self::OnVerificationRequired => false,
@@ -314,7 +337,9 @@ impl HookTrigger {
             | Self::BeforeAiGeneration
             | Self::OnAiResponse
             | Self::OnPlanUpdated
-            | Self::OnAiThinking => true,
+            | Self::OnThought
+            | Self::OnAiThinking
+            | Self::OnSpeakDecision => true,
             Self::OnSpeakQueue
             | Self::OnDispatchDecision
             | Self::BeforeBroadcast

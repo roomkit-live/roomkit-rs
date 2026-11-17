@@ -120,6 +120,7 @@ async fn a_status_posted_before_its_turn_is_waited_on_is_as_deep_as_the_turn() {
         &binding.unwrap().unwrap(),
         event,
         RoomContext::new(room),
+        false,
         |_| (),
     );
     let (mut turn, ()) = submitted.unwrap();

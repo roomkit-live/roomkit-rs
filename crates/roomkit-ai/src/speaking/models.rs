@@ -211,3 +211,11 @@ impl ThoughtEvent {
         }
     }
 }
+
+impl roomkit::TurnPayload for SpeakDecisionEvent {
+    const TRIGGER: roomkit::HookTrigger = roomkit::HookTrigger::OnSpeakDecision;
+}
+
+impl roomkit::TurnPayload for ThoughtEvent {
+    const TRIGGER: roomkit::HookTrigger = roomkit::HookTrigger::OnThought;
+}

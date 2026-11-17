@@ -213,7 +213,7 @@ impl Queued {
             span,
             inner
                 .turns
-                .run(&kit, &binding, event, context, move |turn| {
+                .run(&kit, &binding, event, context, false, move |turn| {
                     delivery.map(|delivery| delivery.follows(&turn))
                 }),
         );

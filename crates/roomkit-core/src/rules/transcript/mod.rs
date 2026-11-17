@@ -370,6 +370,29 @@ pub fn conversation_with_input(
     memory: &TurnMemory,
     read: impl Fn(&RoomEvent) -> TurnContent,
 ) -> TurnConversation {
+    conversation_read(channel_id, event, context, (history, false), memory, read)
+}
+
+/// The same conversation, with every speaker named for a listening thinker.
+#[doc(hidden)]
+pub fn conversation_for_thought(
+    channel_id: &ChannelId,
+    event: &RoomEvent,
+    context: &RoomContext,
+    memory: &TurnMemory,
+    read: impl Fn(&RoomEvent) -> TurnContent,
+) -> TurnConversation {
+    conversation_read(channel_id, event, context, (usize::MAX, true), memory, read)
+}
+
+fn conversation_read(
+    channel_id: &ChannelId,
+    event: &RoomEvent,
+    context: &RoomContext,
+    (history, force_names): (usize, bool),
+    memory: &TurnMemory,
+    read: impl Fn(&RoomEvent) -> TurnContent,
+) -> TurnConversation {
     let mut authors = Authors::new(context);
     let mut turns = past_turns(channel_id, event, context, history, &mut authors, &read);
     let input = Turn::input(event, &mut authors, &read);
@@ -421,7 +444,7 @@ pub fn conversation_with_input(
         people_as_read(context, channel_id, read.iter().copied())
     };
     let spoken: Vec<String> = read.iter().map(|speaker| speaker.label.clone()).collect();
-    let labelled = labels_turns(sources, people.len());
+    let labelled = force_names || labels_turns(sources, people.len());
     let requester = labelled.then(|| asker(&turns)).flatten();
     let (turns, ends_on) = cleaned(turns, labelled, &memory.ends_on);
     let notes = Notes {
@@ -1144,4 +1167,14 @@ pub fn committed_label(event: &RoomEvent) -> String {
 /// left. Python's `_text.identifier`.
 pub fn identifier(value: &str, fallback: &str) -> String {
     speakers::identifier(value, fallback)
+}
+
+/// A speak policy's labels and people, from exactly the events it may read.
+#[doc(hidden)]
+pub fn speaking_people(
+    context: &RoomContext,
+    channel_id: &ChannelId,
+    events: &[&RoomEvent],
+) -> (Vec<Option<String>>, Vec<String>) {
+    speakers::speaking_people(context, channel_id, events)
 }

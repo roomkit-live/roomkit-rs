@@ -441,3 +441,40 @@ mod tests {
         assert_eq!(identifier("--", "channel"), "channel");
     }
 }
+
+/// The policy's labels and roster use the same ranked speakers as its context.
+pub(super) fn speaking_people(
+    context: &RoomContext,
+    channel_id: &ChannelId,
+    events: &[&RoomEvent],
+) -> (Vec<Option<String>>, Vec<String>) {
+    let mut authors = Authors::new(context);
+    let mut said: Vec<_> = events
+        .iter()
+        .map(|event| speaker(event, &mut authors))
+        .collect();
+    tell_apart(said.iter_mut().flatten());
+    let participants = people_as_read(context, channel_id, said.iter().flatten());
+    let mut voices = Vec::new();
+    for (event, said) in events.iter().zip(&said) {
+        if event.source.channel_id == *channel_id || event.source.channel_type == ChannelType::AI {
+            continue;
+        }
+        if let Some(said) = said.as_ref().filter(|said| said.named)
+            && !voices.contains(&said.label)
+        {
+            voices.push(said.label.clone());
+        }
+    }
+    let people = if voices.len() > participants.len() {
+        voices
+    } else {
+        participants
+    };
+    (
+        said.into_iter()
+            .map(|said| said.map(|said| said.label))
+            .collect(),
+        people,
+    )
+}

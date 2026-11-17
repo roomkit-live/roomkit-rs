@@ -120,6 +120,7 @@ pub(crate) struct CarriedRequest {
 
 /// A turn's request, as the owner submits it.
 pub(super) struct Request<'a> {
+    pub(super) strategy_turn: bool,
     pub(super) room_hooks: &'a [String],
     pub(super) turn_id: &'a str,
     pub(super) binding: &'a ChannelBinding,
@@ -179,7 +180,7 @@ impl Request<'_> {
                 history_start_index: self.context.history_start_index,
                 author_register: self.context.author_register.as_ref(),
             },
-            strategy_turn: false,
+            strategy_turn: self.strategy_turn,
             notes: discussion_notes(self.event),
             in_place: discussion_turn(self.event),
             owner_tools: self.owner_tools,

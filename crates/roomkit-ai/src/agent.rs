@@ -208,6 +208,11 @@ impl<P: AiProvider> Agent<P> {
         IdentityPrompt::of(&self.identity).block(language.as_deref())
     }
 
+    /// Whether the underlying AI channel thinks on listened-to events.
+    pub fn thinks_while_listening(&self) -> bool {
+        self.channel.thinks_while_listening()
+    }
+
     /// The provider its turns answer with: Python's `provider`; `None` for
     /// an agent a router serves.
     pub fn provider(&self) -> Option<&P> {

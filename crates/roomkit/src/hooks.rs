@@ -468,6 +468,8 @@ impl HookPayload for RoomEvent {
                     | HookTrigger::OnAiResponse
                     | HookTrigger::OnAiThinking
                     | HookTrigger::OnPlanUpdated
+                    | HookTrigger::OnSpeakDecision
+                    | HookTrigger::OnThought
                     | HookTrigger::OnSpeakQueue
             )
     }

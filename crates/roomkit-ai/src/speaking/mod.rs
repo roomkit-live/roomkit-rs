@@ -3,9 +3,12 @@
 mod answer_only;
 mod classifier;
 mod compose;
+mod llm;
 mod mock;
 mod models;
 mod policy;
+mod thinker_input;
+mod thinker_words;
 mod thought;
 
 use roomkit::model::RoomEvent;
@@ -16,6 +19,7 @@ pub use classifier::{
     SpeakDecisionRule, SpeakQuestionsRule, SpeakStateRule,
 };
 pub use compose::{AddressedOptions, ComposeOptions, addressed, compose, judgments_of};
+pub use llm::{LlmThinker, LlmThinkerOptions};
 pub use mock::{MockSpeakPolicy, MockSpeakPolicyOptions, MockThinker, MockThinkerOptions};
 pub use models::{
     CutReply, Judgments, SpeakDecision, SpeakDecisionEvent, SpeakDecisionOptions, SpeakMode,
@@ -23,6 +27,7 @@ pub use models::{
 };
 pub use policy::{AlwaysSpeak, SpeakPolicy, SpeakingFuture, Thinker};
 pub use thought::Thought;
+pub(crate) use thought::thought_note;
 
 crate::shared::shared_input!(
     /// An event retained by a speaking turn or decision observer. Clones keep

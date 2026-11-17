@@ -177,7 +177,7 @@ async fn second_pass<S: ConversationStore>(
     let submitted = move |turn| delivery.map(|delivery| delivery.follows(&turn));
     match inner
         .turns
-        .run(&kit, &binding, event, context, submitted)
+        .run(&kit, &binding, event, context, true, submitted)
         .await
     {
         // Mute closes the answer unread unless read-only takes precedence (RFC §7.5).

@@ -20,6 +20,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Expose `RESPONSE_SEGMENT_SEPARATOR`, the paragraph break between the segments of a text response.
 
+- Add text speaking policies, classifier models and mocks, and room thinkers with decision/thought hooks; `AiGenerationEvent::ai_context` now uses `SharedAiContext` to preserve hook/thinker aliases (`snapshot()` to read, `update()` to mutate).
+
 - Add `add_turn_note`, `split_turn_notes` and `TURN_NOTES_HEADER` for hooks that append to or read the notes on a text turn.
 
 - Owner-served tools receive the full call context, return their structured copy, and merge independent response-record changes before every outcome, including concurrent calls (RFC §10.6.5).

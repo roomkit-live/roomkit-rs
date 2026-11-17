@@ -6,8 +6,9 @@
 //!
 //! A hook on these triggers registers on the kit as any hook does
 //! ([`roomkit::RoomKit::hook`]); the channel's turn fires it on the turn's
-//! executor. A hook gets an owned payload: what Python's hook edits in place
-//! a Rust hook hands back in `HookResult::modify(event)`.
+//! executor. A hook gets an owned payload and replaces it through
+//! `HookResult::modify(event)`. Its generation context is a shared handle:
+//! `update()` preserves edits for consumers retaining the same context.
 //!
 //! ```
 //! use roomkit::model::hook::ModifyOptions;

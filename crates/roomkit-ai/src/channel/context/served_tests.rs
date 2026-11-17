@@ -43,11 +43,17 @@ async fn provider_owned_tool_calls_still_end_with_a_marker() {
         let context = RoomContext::new(Room::new(binding.room_id.clone()));
         // `answer` is the preparation used by public on_event. Read its items
         // directly because the standalone public call buffers them as rows.
-        let mut prepared =
-            Box::pin(agent.answer(event, binding, context, TurnRecord::default(), None))
-                .await
-                .unwrap()
-                .unwrap();
+        let mut prepared = Box::pin(agent.answer(
+            event,
+            binding,
+            context,
+            TurnRecord::default(),
+            None,
+            Vec::new(),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
         let mut ends = Vec::new();
         let mut last_was_end = false;
         while let Some(item) = crate::stream::next(&mut prepared.items).await {

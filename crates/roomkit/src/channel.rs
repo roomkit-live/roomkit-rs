@@ -39,6 +39,10 @@ pub type ChannelError = Box<dyn Error + Send + Sync>;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Clone, Debug, PartialEq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent public declaration fields mirror Python"
+)]
 pub struct ChannelDeclaration {
     /// The channel's id.
     pub channel_id: ChannelId,
@@ -64,6 +68,8 @@ pub struct ChannelDeclaration {
     /// (RFC §6.4, §21.3): `false` by default. It implies
     /// `serializes_room_turns`.
     pub steers_room_turns: bool,
+    /// Whether a thinker runs on listened-to events; false by default.
+    pub thinks_while_listening: bool,
     /// Who the agent is, for an agent that says so (Python's `Agent`):
     /// `None` by default.
     pub identity: Option<AgentIdentity>,
@@ -124,6 +130,7 @@ impl ChannelDeclaration {
             recent_events_window: 50,
             serializes_room_turns: false,
             steers_room_turns: false,
+            thinks_while_listening: false,
             identity: None,
         }
     }
@@ -415,6 +422,7 @@ pub trait Channel: Send + Sync + 'static {
             recent_events_window: self.recent_events_window(),
             serializes_room_turns: self.serializes_room_turns(),
             steers_room_turns: self.steers_room_turns(),
+            thinks_while_listening: false,
             identity: None,
         }
     }

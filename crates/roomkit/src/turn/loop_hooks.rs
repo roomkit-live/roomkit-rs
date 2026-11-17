@@ -26,6 +26,8 @@ pub struct TurnChain<P> {
     /// The hook that ended the chain, by its name, and its reason, when
     /// one did: a block, or a hook that failed closed.
     pub blocked: Option<(String, Option<String>)>,
+    /// The block came from a hook failure, not its explicit decision.
+    pub failed_closed: bool,
 }
 
 impl TurnHost {
@@ -50,6 +52,13 @@ impl TurnHost {
             self.observe_turn_with(&hooks, &chain.payload, None);
         }
         chain
+    }
+
+    /// Runs only the SYNC decision chain. The caller reports the final standing
+    /// decision separately, including a silence left by a block.
+    #[doc(hidden)]
+    pub async fn decide_turn<P: TurnPayload>(&self, payload: P) -> TurnChain<P> {
+        self.turn_chain(&self.turn_hooks::<P>(), payload).await
     }
 
     /// Starts the kit's hooks on the trigger of `payload`, an observed one,
@@ -88,6 +97,7 @@ impl TurnHost {
         let mut chain = TurnChain {
             payload,
             blocked: None,
+            failed_closed: false,
         };
         for (spec, handler) in hooks
             .iter()
@@ -131,6 +141,7 @@ impl TurnHost {
             };
             tracing::warn!(target: "roomkit::hooks", hook = %spec.name, trigger = ?spec.trigger, %failure, "a turn's hook gave no usable result");
             if spec.fail_closed || spec.trigger.fails_closed() {
+                chain.failed_closed = true;
                 chain.blocked = Some((spec.name.clone(), Some(failure)));
                 return chain;
             }

@@ -105,12 +105,26 @@ pub(crate) async fn without_turn_host<F: Future>(work: F) -> F::Output {
 /// that sends it.
 #[derive(Clone)]
 pub struct TurnHost {
+    strategy_turn: bool,
     answer_unscoped: bool,
     shared: Arc<Shared>,
     room_hooks: Arc<[String]>,
     /// The room snapshot built when this external tool report fires.
     tool_report_context: Option<Arc<RoomContext>>,
     report_claim: Option<ReportClaim>,
+}
+
+impl TurnHost {
+    pub(crate) fn with_strategy_turn(mut self, strategy_turn: bool) -> Self {
+        self.strategy_turn = strategy_turn;
+        self
+    }
+
+    /// Whether the room strategy asked for this generation (RFC §10.6.1).
+    #[doc(hidden)]
+    pub fn is_strategy_turn(&self) -> bool {
+        self.strategy_turn
+    }
 }
 
 struct Shared {
@@ -1840,6 +1854,7 @@ pub(crate) fn host(
     response_depth: u32,
 ) -> TurnHost {
     TurnHost {
+        strategy_turn: false,
         answer_unscoped: true,
         tool_report_context: None,
         report_claim: None,

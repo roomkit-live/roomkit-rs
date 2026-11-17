@@ -290,26 +290,37 @@ impl MemoryProvider for Handed {
     }
 }
 
+// Python: tests/test_discussion_memory_handoff.py::test_a_silent_discussion_turn_does_not_hand_the_message_again
 // Python: channels/ai.py, `_respond`: a discussion handed the event to memory
 // when it committed (RFC §19.7.5 rule 3).
 #[tokio::test]
 async fn a_turn_does_not_hand_its_event_to_the_memory_again() {
-    let handed = Handed::default();
-    let options = AiChannelOptions {
-        memory: Some(Arc::new(handed.clone())),
-        ..AiChannelOptions::default()
-    };
-    let channel = AiChannel::new(agent_id(), provider(), options).unwrap();
-    let (asked, context) = asked_after_another();
-    let mark = issue_mark(Vec::new());
+    for silent in [false, true] {
+        let handed = Handed::default();
+        let options = AiChannelOptions {
+            memory: Some(Arc::new(handed.clone())),
+            speak_policy: silent.then(|| -> Arc<dyn roomkit_ai::SpeakPolicy> {
+                Arc::new(roomkit_ai::MockSpeakPolicy::new(
+                    roomkit_ai::MockSpeakPolicyOptions {
+                        decisions: vec![roomkit_ai::speaking::SpeakMode::Silent.into()],
+                        ..roomkit_ai::MockSpeakPolicyOptions::default()
+                    },
+                ))
+            }),
+            ..AiChannelOptions::default()
+        };
+        let channel = AiChannel::new(agent_id(), provider(), options).unwrap();
+        let (asked, context) = asked_after_another();
+        let mark = issue_mark(Vec::new());
 
-    channel
-        .on_event(marked(&asked, mark.clone()), binding(), context.clone())
-        .await
-        .unwrap();
-    assert_eq!(handed.0.lock().unwrap().len(), 0);
-    retire_mark(&mark);
+        channel
+            .on_event(marked(&asked, mark.clone()), binding(), context.clone())
+            .await
+            .unwrap();
+        assert_eq!(handed.0.lock().unwrap().len(), 0);
+        retire_mark(&mark);
 
-    channel.on_event(asked, binding(), context).await.unwrap();
-    assert_eq!(handed.0.lock().unwrap().len(), 1);
+        channel.on_event(asked, binding(), context).await.unwrap();
+        assert_eq!(handed.0.lock().unwrap().len(), 1);
+    }
 }

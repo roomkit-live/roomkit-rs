@@ -293,6 +293,7 @@ impl Turns {
         binding: &ChannelBinding,
         event: RoomEvent,
         context: RoomContext,
+        strategy_turn: bool,
         submitted: impl FnOnce(Canceller) -> G,
     ) -> Result<Answer, TurnFailure> {
         // The turn's tasks run in a unit of their own, within the call's
@@ -301,7 +302,7 @@ impl Turns {
         let unit = Unit::new();
         let (mut turn, _following) = Marks::current()
             .with(unit)
-            .sync_scope(|| self.submit(kit, binding, event, context, submitted))?;
+            .sync_scope(|| self.submit(kit, binding, event, context, strategy_turn, submitted))?;
         let (output, streams) = turn.output(self.cutting()).await?;
         Ok(if streams {
             Answer::Streamed(Box::new(output), turn)
@@ -318,6 +319,7 @@ impl Turns {
         binding: &ChannelBinding,
         event: RoomEvent,
         mut context: RoomContext,
+        strategy_turn: bool,
         submitted: impl FnOnce(Canceller) -> G,
     ) -> Result<(OwnerTurn, G), ErrorRecord> {
         if self.closed.load(Ordering::Acquire) || *self.cut.borrow() {
@@ -346,6 +348,7 @@ impl Turns {
         let owner_tools = kit.owner_tools(&binding.channel_id, &event.room_id);
         let trace = current_trace();
         let request = Request {
+            strategy_turn,
             room_hooks: &room_hooks,
             turn_id: &turn_id,
             binding,

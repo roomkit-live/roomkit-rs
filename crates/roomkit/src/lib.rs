@@ -146,7 +146,7 @@ pub use roomkit_core::rules::addresses::{
     Addressing, ChannelAddressing, ChannelAddressingOptions, CountryCode, InvalidCountryCode,
     NormalizeOptions, addressing_of,
 };
-pub use roomkit_core::rules::hook_registry::{HookExecution, HookTrigger};
+pub use roomkit_core::rules::hook_registry::{HookExecution, HookTrigger, TURN_TRIGGERS};
 pub use roomkit_core::rules::{received_events, visibility_allows, visible_events};
 // Outside the public API: the Python implementation keeps it private, and the
 // agent's crate reads it across crates (RFC §6.4).

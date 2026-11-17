@@ -53,7 +53,7 @@ pub mod instructions;
 pub mod lifecycle;
 mod lookalike;
 #[doc(hidden)]
-pub use lookalike::person_name;
+pub use lookalike::{person_name, reads_as};
 pub mod organizations;
 pub(crate) mod permissions;
 pub mod publications;
