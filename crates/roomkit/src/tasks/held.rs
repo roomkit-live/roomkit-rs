@@ -23,6 +23,9 @@ use tokio::task::JoinHandle;
 use super::{Kind, Marks, TaskCut, Tasks, Unit};
 use crate::channel::BoxFuture;
 use crate::stream::{CALLER_CANCELLED, KIT_CLOSED};
+use crate::turns::context::TurnScope;
+
+mod owner_drain;
 
 #[cfg(test)]
 mod tests;
@@ -37,6 +40,8 @@ pub(crate) struct HeldTasks {
 /// runs, and what tells its end.
 struct Held {
     tasks: Arc<Tasks>,
+    /// The immediate caller's turn; only the inline registry drains by it.
+    caller_turn: Option<Arc<str>>,
     /// The work, until a cancel takes it to wait for its end.
     work: Option<JoinHandle<()>>,
     /// What cuts the work.
@@ -140,6 +145,7 @@ impl HeldTasks {
             task_id.to_owned(),
             Held {
                 tasks: Arc::clone(tasks),
+                caller_turn: TurnScope::current().innermost(),
                 work: None,
                 cut,
                 end_cancelled: Some(end_cancelled),

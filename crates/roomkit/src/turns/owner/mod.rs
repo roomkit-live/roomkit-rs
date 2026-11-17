@@ -105,8 +105,8 @@ pub(super) struct OwnerState {
     /// The items the reader granted, in all: an executor that sends more
     /// fails its turn.
     pub(super) granted: AtomicU64,
-    /// The reason the owner cancelled the turn, once it did.
-    pub(super) cancel: watch::Sender<Option<String>>,
+    /// The original cancellation deadline, never renewed by another caller.
+    pub(super) cancel: watch::Sender<Option<tokio::time::Instant>>,
     /// Claims the control before invoking its transport tap, which may
     /// reenter cancellation while another worker is cutting the same turn.
     cancel_claimed: AtomicBool,
@@ -118,16 +118,16 @@ pub(super) struct OwnerState {
     /// steering: the owner waits for its end without the cancel bound, and
     /// its reader reads it to its end as after a close (RFC §10.6.8).
     pub(super) steer_cut: AtomicBool,
-    /// Set once the turn is over for the owner without its executor's end:
-    /// its cancel bound passed, its link failed or its executor fell silent.
-    /// What the executor cleans up is then not known to be done (RFC
+    /// Set once the turn is over with cleanup not known to be done: its
+    /// executor's end is missing, or an inline completion outlasted the
+    /// original cancellation bound. What remains is not known done (RFC
     /// §10.6.8), Python's `end_owed`; a turn the kit's close abandons owes
     /// nothing.
     pub(super) end_owed: OwedEnd,
 }
 
-/// Whether a turn is over for its owner without its executor's end, what
-/// the executor cleans up not known to be done (RFC §10.6.8): readable
+/// Whether a turn is over with its executor or owner cleanup not known to
+/// be done (RFC §10.6.8): readable
 /// once the turn is gone, holding nothing else of it.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct OwedEnd(Arc<AtomicBool>);
@@ -238,6 +238,8 @@ pub(super) fn cancel(state: &OwnerState, reason: &str) {
     let control = Control::Cancel {
         reason: reason.to_owned(),
     };
+    state.cancel.send_replace(Some(
+        tokio::time::Instant::now() + state.turn.timeouts.cancel,
+    ));
     drop(state.turn.controls.put(&control));
-    state.cancel.send_replace(Some(reason.to_owned()));
 }

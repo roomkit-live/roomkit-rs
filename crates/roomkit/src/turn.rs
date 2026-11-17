@@ -1338,7 +1338,16 @@ pub(crate) trait TurnKit: Send + Sync {
     /// Runs `task` in the background, tracked, in the unit of the kit's
     /// work the current code runs in, the turn's: what aborts it; `None`
     /// once the kit is shut down.
-    fn spawn_tracked(&self, task: BoxFuture<'static, ()>) -> Option<AbortHandle>;
+    fn spawn_tracked(&self, task: BoxFuture<'static, ()>) -> Option<AbortHandle> {
+        self.spawn_joined(task).map(|task| task.abort_handle())
+    }
+
+    /// Keeps the tracked task's end for an owner that must join its calls.
+    fn spawn_joined(&self, task: BoxFuture<'static, ()>) -> Option<tokio::task::JoinHandle<()>>;
+
+    /// End the inline delegations this owner's turn created, including
+    /// their completion, while sparing a close's own calling work.
+    fn end_inline_calls<'a>(&'a self, turn_id: &'a str) -> BoxFuture<'a, ()>;
 
     /// Runs `task`, an observer hook's body bounded by its timeout, in the
     /// background, tracked as an observer, which the kit's close lets
@@ -1554,13 +1563,18 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
         )
     }
 
-    fn spawn_tracked(&self, task: BoxFuture<'static, ()>) -> Option<AbortHandle> {
+    fn spawn_joined(&self, task: BoxFuture<'static, ()>) -> Option<tokio::task::JoinHandle<()>> {
         let task = crate::turns::context::TurnScope::current().scope(task);
         let inner = self.upgrade()?;
-        inner
-            .tasks
-            .spawn_joined(Kind::Turn, task)
-            .map(|task| task.abort_handle())
+        inner.tasks.spawn_joined(Kind::Turn, task)
+    }
+
+    fn end_inline_calls<'a>(&'a self, turn_id: &'a str) -> BoxFuture<'a, ()> {
+        Box::pin(async move {
+            if let Some(inner) = self.upgrade() {
+                inner.inline_tasks.cancel_in_turn(turn_id).await;
+            }
+        })
     }
 
     fn spawn_observer(&self, task: BoxFuture<'static, ()>) -> bool {

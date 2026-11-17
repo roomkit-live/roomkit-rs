@@ -500,6 +500,11 @@ impl Tasks {
         self.state().spares_any(marks)
     }
 
+    /// A tracked run ended or a closing caller's units became spared.
+    pub(crate) fn changes(&self) -> tokio::sync::futures::Notified<'_> {
+        self.changed.notified()
+    }
+
     /// Spares the units `marks` name, and the task the current code runs
     /// in, from the kit's close (RFC §12.10.4): its waits pass over their
     /// tasks from now on, those under way woken to read so, and it cuts

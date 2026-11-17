@@ -3,6 +3,8 @@
 //! the others for the turn's reader, beats every interval, and watches the
 //! executor (RFC §10.6.3, §10.6.8).
 
+mod drain;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -10,7 +12,7 @@ use std::sync::atomic::Ordering;
 use roomkit_core::model::{EventId, Metadata};
 use serde_json::Value;
 use tokio::sync::mpsc;
-use tokio::task::AbortHandle;
+use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 use super::{Facts, Main, OwnerState, verbs};
@@ -101,7 +103,9 @@ pub(super) struct Pump {
     kit: Arc<dyn TurnKit>,
     turns: Arc<Turns>,
     /// The verbs running for the turn, by their call.
-    calls: HashMap<String, AbortHandle>,
+    calls: HashMap<String, JoinHandle<()>>,
+    /// Withdrawn calls still unwinding; their inline work remains the turn's.
+    withdrawn: Vec<JoinHandle<()>>,
     accepted: bool,
     /// The items received, deltas counted: never more than granted.
     received: u64,
@@ -122,6 +126,7 @@ impl Pump {
             kit,
             turns,
             calls: HashMap::new(),
+            withdrawn: Vec::new(),
             accepted: false,
             received: 0,
         }
@@ -133,10 +138,7 @@ impl Pump {
         let timeouts = self.state.turn.timeouts;
         let mut beat = Beat::new(&timeouts, false);
         let mut cancelled = self.state.cancel.subscribe();
-        let mut deadline = cancelled
-            .borrow_and_update()
-            .is_some()
-            .then(|| Instant::now() + timeouts.cancel);
+        let mut deadline = *cancelled.borrow_and_update();
         let ending = loop {
             tokio::select! {
                 biased;
@@ -155,7 +157,7 @@ impl Pump {
                     // A steering cut waits for the end as after a close
                     // (RFC §10.6.8).
                     if !self.state.steer_cut.load(Ordering::Acquire) {
-                        deadline = Some(Instant::now() + timeouts.cancel);
+                        deadline = *cancelled.borrow_and_update();
                     }
                 }
                 () = until(deadline) => break Ending::GaveUp,
@@ -171,6 +173,11 @@ impl Pump {
                     drop(self.state.turn.controls.put(&Control::Heartbeat));
                 }
             }
+        };
+        let ending = if matches!(ending, Ending::Ended) {
+            self.end_calls().await
+        } else {
+            ending
         };
         self.finish(ending);
     }
@@ -201,10 +208,7 @@ impl Pump {
                 lock(&self.state.told_ends).insert(start, decode_end(end));
             }
             Frame::Error { error } => self.hand(Main::Error(error)),
-            Frame::End => {
-                self.hand(Main::End);
-                return Some(Ending::Ended);
-            }
+            Frame::End => return Some(Ending::Ended),
             Frame::HostCall {
                 call_id,
                 verb,
@@ -220,6 +224,8 @@ impl Pump {
             Frame::CallCancel { call_id } => {
                 if let Some(call) = self.calls.remove(&call_id) {
                     call.abort();
+                    self.withdrawn.retain(|call| !call.is_finished());
+                    self.withdrawn.push(call);
                 }
             }
             Frame::FrameworkEvent {
@@ -304,7 +310,7 @@ impl Pump {
             let answered = waiting.scope(served).await;
             answer(&state, answering, answered);
         };
-        if let Some(running) = self.kit.spawn_tracked(Box::pin(task)) {
+        if let Some(running) = self.kit.spawn_joined(Box::pin(task)) {
             self.calls.retain(|_, call| !call.is_finished());
             self.calls.insert(call_id, running);
         } else {
@@ -344,7 +350,7 @@ impl Pump {
             let answered = waiting.at_least(floor).scope(served).await;
             answer_tool(&state, answering, answered);
         };
-        if let Some(running) = self.kit.spawn_tracked(Box::pin(task)) {
+        if let Some(running) = self.kit.spawn_joined(Box::pin(task)) {
             self.calls.retain(|_, call| !call.is_finished());
             self.calls.insert(call_id, running);
         } else {
@@ -416,7 +422,7 @@ impl Pump {
             self.state.end_owed.owe();
         }
         match ending {
-            Ending::Ended => {}
+            Ending::Ended => self.hand(Main::End),
             Ending::GaveUp => {
                 tracing::warn!(
                     target: "roomkit::turns",

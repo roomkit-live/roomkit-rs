@@ -22,6 +22,11 @@ impl TurnScope {
         self.0.iter().any(|turn| &**turn == id)
     }
 
+    /// The immediate turn whose owner call is running, not an ancestor.
+    pub(crate) fn innermost(&self) -> Option<Arc<str>> {
+        self.0.last().cloned()
+    }
+
     fn with(&self, id: Arc<str>) -> Self {
         if self.contains(&id) {
             return self.clone();

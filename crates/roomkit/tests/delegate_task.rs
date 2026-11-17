@@ -32,6 +32,11 @@ use roomkit_ai::{
 use serde_json::json;
 use tokio::sync::Notify;
 
+#[path = "delegate_task/cancellation.rs"]
+mod cancellation;
+#[path = "support/delegate_completion_store.rs"]
+mod completion_store;
+
 fn id(name: &str) -> ChannelId {
     ChannelId::new(name).unwrap()
 }
@@ -367,6 +372,14 @@ fn kit_delegating_in_turn(
     options: DelegateHandlerOptions,
 ) -> (RoomKit, MockAiProvider) {
     let kit = RoomKit::new(RoomKitOptions::default());
+    kit_delegating_with_store(kit, digger, options)
+}
+
+fn kit_delegating_with_store<S: ConversationStore>(
+    kit: RoomKit<S>,
+    digger: impl roomkit::Channel + 'static,
+    options: DelegateHandlerOptions<S>,
+) -> (RoomKit<S>, MockAiProvider) {
     let mut call = AiToolCall::new("c", "delegate_task");
     call.arguments = Metadata::from_iter([
         ("agent".to_owned(), json!("digger")),
@@ -396,7 +409,7 @@ fn kit_delegating_in_turn(
     (kit, model)
 }
 
-async fn conversation(kit: &RoomKit) -> RoomId {
+async fn conversation<S: ConversationStore>(kit: &RoomKit<S>) -> RoomId {
     kit.create_room(CreateRoomOptions {
         room_id: Some(room()),
         ..CreateRoomOptions::default()
