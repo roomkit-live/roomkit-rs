@@ -11,17 +11,24 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use roomkit::InMemoryStore;
-use roomkit::model::{ChannelId, ChannelType, Metadata, RoomId};
+use roomkit::model::{ChannelId, ChannelType, Metadata, RoomId, TaskStatus};
+use roomkit::store::{ConversationStore, FindRoomsOptions};
 use roomkit::tasks::{
     CompletedTaskCache, DelegateHandler, DelegateHandlerOptions, DelegatedTask, InMemoryTaskRunner,
-    PutOptions, SubmitOptions, TaskRunner,
+    PutOptions, SubmitOptions, TaskRunner, WaitOptions,
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
-use roomkit::{AttachChannelOptions, CreateRoomOptions, RoomKit, RoomKitError, RoomKitOptions};
+use roomkit::{
+    AttachChannelOptions, CancelTaskOptions, CreateRoomOptions, DelegateOptions, RoomKit,
+    RoomKitError, RoomKitOptions,
+};
 use roomkit_ai::tasks::{
     DELEGATE_TOOL, SetupDelegationOptions, build_delegate_tool, setup_delegation,
 };
-use roomkit_ai::{Agent, AgentOptions, MockAiProvider, MockAiProviderOptions};
+use roomkit_ai::{
+    Agent, AgentOptions, AiContentPart, AiContext, AiMessageContent, AiResponse, AiToolCall,
+    MockAiProvider, MockAiProviderOptions, ToolResult,
+};
 use serde_json::json;
 use tokio::sync::Notify;
 
@@ -351,4 +358,225 @@ async fn a_closed_kit_refuses_a_call_naming_no_agent_as_closed() {
         matches!(&refused, Err(RoomKitError::KitClosed)),
         "{refused:?}"
     );
+}
+
+/// A kit whose researcher delegates "Dig." to the digger, then says
+/// "Dug.": the researcher's model is kept to read what it was asked.
+fn kit_delegating_in_turn(
+    digger: impl roomkit::Channel + 'static,
+    options: DelegateHandlerOptions,
+) -> (RoomKit, MockAiProvider) {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    let mut call = AiToolCall::new("c", "delegate_task");
+    call.arguments = Metadata::from_iter([
+        ("agent".to_owned(), json!("digger")),
+        ("task".to_owned(), json!("Dig.")),
+    ]);
+    let model = MockAiProvider::new(MockAiProviderOptions {
+        ai_responses: Some(vec![
+            AiResponse {
+                finish_reason: Some("tool_calls".to_owned()),
+                tool_calls: vec![call],
+                ..AiResponse::new("")
+            },
+            AiResponse::new("Dug."),
+        ]),
+        ..MockAiProviderOptions::default()
+    });
+    let researcher = Agent::new(id("researcher"), model.clone(), AgentOptions::default()).unwrap();
+    kit.register_channel(researcher).unwrap();
+    kit.register_channel(digger).unwrap();
+    let handler = DelegateHandler::new(&kit, options);
+    setup_delegation(
+        id("researcher"),
+        &handler,
+        SetupDelegationOptions::default(),
+    )
+    .unwrap();
+    (kit, model)
+}
+
+async fn conversation(kit: &RoomKit) -> RoomId {
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room()),
+        ..CreateRoomOptions::default()
+    })
+    .await
+    .unwrap();
+    room()
+}
+
+/// What the tool answered the call `context` hands its model, as JSON.
+fn told(context: &AiContext) -> serde_json::Value {
+    let answers: Vec<&ToolResult> = context
+        .messages
+        .iter()
+        .filter_map(|message| match &message.content {
+            AiMessageContent::Parts(parts) => Some(parts),
+            AiMessageContent::Text(_) => None,
+        })
+        .flatten()
+        .filter_map(|part| match part {
+            AiContentPart::ToolResult(result) => Some(&result.result),
+            _ => None,
+        })
+        .collect();
+    let [ToolResult::Text(text)] = answers.as_slice() else {
+        panic!("one text answer expected: {answers:?}");
+    };
+    serde_json::from_str(text).unwrap()
+}
+
+// Python: tests/tasks/test_delegate.py::TestWaitInTaskRooms::test_the_call_answers_with_its_task_s_result_on_the_option
+#[tokio::test]
+async fn a_call_from_a_task_s_room_answers_with_its_task_s_result_on_the_option() {
+    let bounded = std::num::NonZeroUsize::new(5).unwrap();
+    for (waits, limit, status, result) in [
+        (true, None, "completed", json!("Found it.")),
+        (
+            true,
+            Some(bounded),
+            "completed",
+            json!("Found\n[...truncated]"),
+        ),
+        (false, None, "delegated", serde_json::Value::Null),
+    ] {
+        let mut options = DelegateHandlerOptions {
+            wait_in_task_rooms: waits,
+            ..DelegateHandlerOptions::default()
+        };
+        if let Some(limit) = limit {
+            options.max_result_chars = limit;
+        }
+        let (kit, model) = kit_delegating_in_turn(agent_answering("digger", "Found it."), options);
+        let room = conversation(&kit).await;
+
+        let task = kit
+            .delegate(
+                &room,
+                &id("researcher"),
+                "Look it up.",
+                DelegateOptions::default(),
+            )
+            .await
+            .unwrap();
+        let ended = task.wait(WaitOptions::default()).await.unwrap();
+
+        let answer = told(&model.calls()[1]);
+        assert_eq!(answer["status"], json!(status), "{answer}");
+        assert_eq!(answer.get("result").cloned().unwrap_or_default(), result);
+        assert_eq!(ended.output.as_deref(), Some("Dug."));
+        kit.close().await.unwrap();
+    }
+}
+
+// Python: tests/tasks/test_delegate.py::TestWaitInTaskRooms::test_a_call_from_the_conversation_s_room_starts_a_background_task
+#[tokio::test]
+async fn a_call_from_the_conversation_s_room_starts_a_background_task() {
+    let options = DelegateHandlerOptions {
+        wait_in_task_rooms: true,
+        ..DelegateHandlerOptions::default()
+    };
+    let kit = RoomKit::new(RoomKitOptions::default());
+    kit.register_channel(agent_answering("digger", "Found it."))
+        .unwrap();
+    let handler = DelegateHandler::new(&kit, options);
+    let room = conversation(&kit).await;
+
+    let answer = handler
+        .handle(&room, &id("researcher"), &call_on("digger", "Dig."))
+        .await
+        .unwrap();
+
+    assert_eq!(answer["status"], json!("delegated"));
+    assert!(!answer.contains_key("result"), "{answer:?}");
+    kit.close().await.unwrap();
+}
+
+// Python: tests/tasks/test_delegate.py::TestWaitInTaskRooms::test_cancelling_the_worker_s_task_cancels_the_task_it_waits_for
+#[tokio::test]
+async fn cancelling_the_worker_s_task_cancels_the_task_it_waits_for() {
+    let digging = Arc::new(Notify::new());
+    let reached = Arc::clone(&digging);
+    let tools = roomkit_ai::Tools::new().tool(
+        roomkit_ai::AiTool::new("lookup", "Looks up").unwrap(),
+        move |_call, _context| {
+            let reached = Arc::clone(&reached);
+            async move {
+                reached.notify_one();
+                std::future::pending::<()>().await;
+                Ok(ToolResult::Text("found".to_owned()))
+            }
+        },
+    );
+    let model = roomkit_ai::testing::ScriptedProvider::new([
+        roomkit_ai::testing::ScriptedRound::calling("", [("l", "lookup", "{}")]),
+        roomkit_ai::testing::ScriptedRound::answering("Found it."),
+    ]);
+    let digger = roomkit_ai::AiChannel::new(
+        id("digger"),
+        model,
+        roomkit_ai::AiChannelOptions {
+            tools: tools.into(),
+            ..roomkit_ai::AiChannelOptions::default()
+        },
+    )
+    .unwrap();
+    let options = DelegateHandlerOptions {
+        wait_in_task_rooms: true,
+        ..DelegateHandlerOptions::default()
+    };
+    let (kit, researcher) = kit_delegating_in_turn(digger, options);
+    let room = conversation(&kit).await;
+
+    let task = kit
+        .delegate(
+            &room,
+            &id("researcher"),
+            "Look it up.",
+            DelegateOptions::default(),
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), digging.notified())
+        .await
+        .unwrap();
+    assert!(
+        kit.cancel_task(&task.id, CancelTaskOptions::default())
+            .await
+    );
+    let ended = task.wait(WaitOptions::default()).await.unwrap();
+
+    let dug = kit
+        .store()
+        .find_rooms(FindRoomsOptions {
+            metadata_filter: Some(Metadata::from_iter([(
+                "task_agent_id".to_owned(),
+                json!("digger"),
+            )])),
+            limit: 10,
+            ..FindRoomsOptions::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(ended.status, TaskStatus::Cancelled);
+    assert_eq!(dug.len(), 1);
+    assert_eq!(dug[0].metadata["task_status"], json!("cancelled"));
+    assert_eq!(researcher.calls().len(), 1);
+    kit.close().await.unwrap();
+}
+
+fn agent_answering(name: &str, answer: &str) -> Agent<MockAiProvider> {
+    let model = MockAiProvider::new(MockAiProviderOptions {
+        responses: vec![answer.to_owned()],
+        ..MockAiProviderOptions::default()
+    });
+    Agent::new(id(name), model, AgentOptions::default()).unwrap()
+}
+
+fn call_on(agent: &str, task: &str) -> Metadata {
+    Metadata::from_iter([
+        ("agent".to_owned(), json!(agent)),
+        ("task".to_owned(), json!(task)),
+    ])
 }

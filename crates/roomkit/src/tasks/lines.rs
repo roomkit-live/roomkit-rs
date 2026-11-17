@@ -107,7 +107,8 @@ fn of_a_task(entry: &StatusEntry) -> bool {
     names_its_task && entry.status != StatusLevel::Pending
 }
 
-fn truthy(value: &Value) -> bool {
+/// Python's truthiness of a JSON value.
+pub(crate) fn truthy(value: &Value) -> bool {
     match value {
         Value::Null => false,
         Value::Bool(flag) => *flag,

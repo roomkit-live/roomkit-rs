@@ -23,8 +23,10 @@ use tokio::sync::{Mutex as TaskMutex, OwnedMutexGuard};
 
 use super::brief::{context_block, previous_tasks_block, task_brief};
 use super::cache::{CompletedTaskCache, Kept};
-use super::handback::MAX_RESULT_CHARS;
+use super::delegated::task_work;
+use super::handback::{MAX_RESULT_CHARS, bounded_to};
 use super::json::dumps_object;
+use super::lines::truthy;
 use super::{DelegatedTask, Kind, WaitOptions};
 use crate::error::RoomKitError;
 use crate::kit::{DelegateOptions, GetRoomOptions, RoomKit, WeakRoomKit};
@@ -54,7 +56,7 @@ const PREVIOUS_TASKS: usize = 3;
 /// What [`DelegateHandler::new`] takes beside the kit: Python's
 /// `DelegateHandler(kit, *, notify=None, default_share_channels=None,
 /// delivery_strategy=None, cache=None, serialize_per_room=False,
-/// max_conversation=0, max_result_chars=4000)`.
+/// max_conversation=0, max_result_chars=4000, wait_in_task_rooms=False)`.
 pub struct DelegateHandlerOptions<S = InMemoryStore> {
     /// Python `notify=None`: the channel told of a task's end; the agent
     /// that called when `None`.
@@ -85,6 +87,12 @@ pub struct DelegateHandlerOptions<S = InMemoryStore> {
     /// says so (RFC §23.3 step 8). Python refuses a value below 1; here the
     /// type cannot hold one.
     pub max_result_chars: NonZeroUsize,
+    /// Python `wait_in_task_rooms=False`: whether a call made from a task's
+    /// room, by a worker delegating in turn, runs its task inline: the call
+    /// answers once the task ended, with its result, and cancelling the
+    /// worker's task cancels it too. At `false`: it starts a background
+    /// task, as from any room.
+    pub wait_in_task_rooms: bool,
 }
 
 impl<S> Default for DelegateHandlerOptions<S> {
@@ -97,6 +105,7 @@ impl<S> Default for DelegateHandlerOptions<S> {
             serialize_per_room: false,
             max_conversation: 0,
             max_result_chars: MAX_RESULT_CHARS,
+            wait_in_task_rooms: false,
         }
     }
 }
@@ -111,6 +120,7 @@ impl<S> Clone for DelegateHandlerOptions<S> {
             serialize_per_room: self.serialize_per_room,
             max_conversation: self.max_conversation,
             max_result_chars: self.max_result_chars,
+            wait_in_task_rooms: self.wait_in_task_rooms,
         }
     }
 }
@@ -124,6 +134,7 @@ impl<S> std::fmt::Debug for DelegateHandlerOptions<S> {
             .field("cache", &self.cache)
             .field("serialize_per_room", &self.serialize_per_room)
             .field("max_conversation", &self.max_conversation)
+            .field("wait_in_task_rooms", &self.wait_in_task_rooms)
             .finish_non_exhaustive()
     }
 }
@@ -144,6 +155,7 @@ struct Inner<S> {
     serialize_per_room: bool,
     max_conversation: u64,
     max_result_chars: NonZeroUsize,
+    wait_in_task_rooms: bool,
     room_turns: Arc<RoomTurns>,
 }
 
@@ -248,6 +260,7 @@ impl<S: ConversationStore> DelegateHandler<S> {
             serialize_per_room,
             max_conversation,
             max_result_chars,
+            wait_in_task_rooms,
         } = options;
         if let Some(strategy) = delivery_strategy {
             *kit.inner
@@ -264,6 +277,7 @@ impl<S: ConversationStore> DelegateHandler<S> {
                 serialize_per_room,
                 max_conversation,
                 max_result_chars,
+                wait_in_task_rooms,
                 room_turns: Arc::default(),
             }),
         }
@@ -378,12 +392,14 @@ impl<S: ConversationStore> DelegateHandler<S> {
         if !recent.is_empty() {
             context.insert("previous_tasks".to_owned(), json!(recent));
         }
+        let wait = self.waits_in(kit, room_id).await?;
         let task = kit
             .delegate(
                 room_id,
                 &call.agent,
                 call.task.clone(),
                 DelegateOptions {
+                    wait,
                     context: Some(context),
                     share_channels: Some(call.share_channels.clone()),
                     notify: Some(notified),
@@ -399,6 +415,11 @@ impl<S: ConversationStore> DelegateHandler<S> {
             ("child_room_id".to_owned(), json!(task.child_room_id)),
             ("agent_id".to_owned(), json!(call.agent)),
         ]);
+        let answer = if wait {
+            ended_answer(receipt.clone(), &task, self.inner.max_result_chars)
+        } else {
+            receipt.clone()
+        };
         if let Some(cache) = &self.inner.cache {
             let watching = remember_when_completed(
                 cache.clone(),
@@ -410,7 +431,18 @@ impl<S: ConversationStore> DelegateHandler<S> {
             // The kit's close cuts it, the task ending with the kit.
             kit.inner.tasks.spawn_alone(Kind::Observer, watching);
         }
-        Ok(receipt)
+        Ok(answer)
+    }
+
+    /// Whether a call made from `room_id` runs its task inline: with
+    /// `wait_in_task_rooms`, when the room is a task's child room, its
+    /// metadata naming its task. Python's `_waits_in`.
+    async fn waits_in(&self, kit: &RoomKit<S>, room_id: &RoomId) -> Result<bool, RoomKitError> {
+        if !self.inner.wait_in_task_rooms {
+            return Ok(false);
+        }
+        let room = kit.store().get_room(room_id).await?;
+        Ok(room.is_some_and(|room| room.metadata.get("task_id").is_some_and(truthy)))
     }
 
     fn kit(&self) -> Result<RoomKit<S>, RoomKitError> {
@@ -647,6 +679,20 @@ async fn remember_when_completed(
         context: Some(&call.passed),
     };
     cache.keep(&named, receipt, Some(&caller), call.count == 0);
+}
+
+/// What a call whose task ran inline answers: its `receipt`, its `status`
+/// how the task ended and its `result` the task's work, bounded as a
+/// relayed result is (RFC §23.3 step 8). Python's `_call_answer`.
+fn ended_answer(mut receipt: Metadata, task: &DelegatedTask, limit: NonZeroUsize) -> Metadata {
+    let ended = task.result();
+    let status = ended
+        .as_ref()
+        .map_or(TaskStatus::Failed, |ended| ended.status);
+    let work = ended.as_ref().map_or("", task_work);
+    receipt.insert("status".to_owned(), json!(status));
+    receipt.insert("result".to_owned(), json!(bounded_to(work, limit)));
+    receipt
 }
 
 /// Whether one of `share_channels` is bound in the room as an intelligence

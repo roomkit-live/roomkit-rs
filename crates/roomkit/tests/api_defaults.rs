@@ -1675,6 +1675,8 @@ fn delegate_handler_options_defaults_as_python() {
     assert_eq!(defaults.max_conversation, 0);
     // roomkit.tasks.DelegateHandler.__init__(max_result_chars) = 4000
     assert_eq!(defaults.max_result_chars.get(), 4_000);
+    // roomkit.tasks.DelegateHandler.__init__(wait_in_task_rooms) = False
+    assert!(!defaults.wait_in_task_rooms);
 }
 
 #[test]
