@@ -15,7 +15,7 @@ use roomkit_mcp::{
 use serde_json::{Value, json};
 
 use crate::calls::Unreadable;
-pub(crate) use shape::validate;
+pub(crate) use shape::{arguments, validate};
 
 pub(crate) async fn session(spec: &Value) -> Result<Value, Unreadable> {
     let mut problems = Vec::new();

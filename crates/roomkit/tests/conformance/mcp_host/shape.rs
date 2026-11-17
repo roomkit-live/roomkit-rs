@@ -1,6 +1,25 @@
 //! Strict fixture controls; server-owned JSON stays opaque.
 use serde_json::Value;
 
+/// The controls of an MCP session, validated by this module.
+pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
+    if call == "mcp_session" {
+        return Some(&[
+            "peer",
+            "operations",
+            "discover",
+            "tool_filter",
+            "constructor",
+            "transport",
+            "headers",
+            "headers_after_construction",
+            "label",
+            "connect_timeout_ms",
+        ]);
+    }
+    None
+}
+
 fn object(value: &Value, fields: &[&str], path: &str, found: &mut Vec<String>) -> bool {
     let Some(map) = value.as_object() else {
         found.push(format!("{path}: expected an object"));
@@ -211,8 +230,32 @@ fn construction(spec: &Value, path: &str, found: &mut Vec<String>) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    #[test]
+    fn mcp_constructor_controls_reach_the_session_validator() {
+        let call = json!({"call":"mcp_session","peer":{"replies":[]},
+            "operations":[{"method":"connect"}],"discover":false,"tool_filter":["echo"],
+            "constructor":"direct","transport":"sse","headers":{"X-Test":"one"},
+            "headers_after_construction":{"X-Test":"two"},"label":"server","connect_timeout_ms":50});
+        assert_eq!(
+            crate::shape::unknown_members(&json!({"steps":[call.clone()]})),
+            Vec::<String>::new()
+        );
+        let mut misspelled = call.clone();
+        misspelled["header"] = json!({});
+        assert_eq!(
+            crate::shape::unknown_members(&json!({"steps":[misspelled]})),
+            ["steps[0]: header"]
+        );
+        let mut unknown_call = call;
+        unknown_call["call"] = json!("mcp_sesion");
+        assert!(
+            crate::shape::unknown_members(&json!({"steps":[unknown_call]}))
+                .iter()
+                .any(|message| message.contains("no call"))
+        );
+    }
 
     // Python: tests/conformance/test_mcp_host_fixture.py::test_malformed_host_controls_are_refused
     #[test]
@@ -257,8 +300,8 @@ mod tests {
             spec.as_object_mut()
                 .unwrap()
                 .extend(update.as_object().unwrap().clone());
-            let mut found = vec![];
-            validate(&spec, "mcp_session", &mut found);
+            spec["call"] = json!("mcp_session");
+            let found = crate::shape::unknown_members(&json!({"steps":[spec]}));
             assert!(!found.is_empty(), "{update}");
         }
     }

@@ -457,20 +457,6 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
 }
 
 fn base_arguments(call: &str) -> Option<&'static [&'static str]> {
-    if call == "mcp_session" {
-        return Some(&[
-            "peer",
-            "operations",
-            "discover",
-            "tool_filter",
-            "constructor",
-            "transport",
-            "headers",
-            "headers_after_construction",
-            "label",
-            "connect_timeout_ms",
-        ]);
-    }
     Some(match call {
         "close"
         | "kit_executor.close"
@@ -542,7 +528,8 @@ fn base_arguments(call: &str) -> Option<&'static [&'static str]> {
         "steer" => &["channel_id", "directive", "room_id"],
         "acp.cancel" => &["channel_id", "room_id"],
         other => {
-            return binding_arguments(other)
+            return crate::mcp_host::arguments(other)
+                .or_else(|| binding_arguments(other))
                 .or_else(|| crate::room_queries::arguments(other))
                 .or_else(|| crate::extra_tools::arguments(other))
                 .or_else(|| crate::host_verbs::arguments(other))
