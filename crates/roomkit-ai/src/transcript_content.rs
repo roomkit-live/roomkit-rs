@@ -86,7 +86,7 @@ impl TurnReader<'_> {
         if matches!(part, EventContent::Media(_)) {
             return self.images.parts(id, index, part);
         }
-        content_text(part)
+        Some(read_as_text(part))
             .filter(|text| !text.is_empty())
             .map(Part::Text)
             .into_iter()
@@ -111,7 +111,7 @@ impl TurnReader<'_> {
             return texts_of(&self.images.parts(id, 0, &event.content));
         }
         let EventContent::Composite(composite) = &event.content else {
-            return content_text(&event.content).unwrap_or_default();
+            return read_as_text(&event.content);
         };
         composite
             .parts()
@@ -121,12 +121,34 @@ impl TurnReader<'_> {
                 if matches!(part, EventContent::Media(_)) {
                     texts_of(&self.images.parts(id, index, part))
                 } else {
-                    content_text(part).unwrap_or_default()
+                    read_as_text(part)
                 }
             })
             .filter(|text| !text.is_empty())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+}
+
+/// What a model reads of a content that is no image: its text, a media by
+/// its label, a location and a template by their text form (RFC §6.6). The
+/// event a turn answers reaches the AI channel transcoded to that text; the
+/// history reads the stored event, so it reads it the same (§6.4). Python's
+/// `_read_as_text`.
+fn read_as_text(content: &EventContent) -> String {
+    match content {
+        EventContent::Location(_) | EventContent::Template(_) => text_of(content),
+        EventContent::Text(_)
+        | EventContent::Rich(_)
+        | EventContent::Media(_)
+        | EventContent::Audio(_)
+        | EventContent::Video(_)
+        | EventContent::Composite(_)
+        | EventContent::System(_)
+        | EventContent::Edit(_)
+        | EventContent::Delete(_)
+        | EventContent::ToolCall(_)
+        | _ => content_text(content).unwrap_or_default(),
     }
 }
 

@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **A shared location and a template read in a model's later history as its turn read them**, as Python's (RFC §6.4, §6.6, RMK-1743). The turn a location started read it as `[Location: Head office (45.5, -73.6)]`, then the turns after dropped it from their history, a template and a composite's location part alike: the history reads the stored event, which no text reader took. They now read by their text form, as the turn did.
+
 - Expose `InboundResult::report_cascade` with a borrowed `CascadeReport` data view. Reports copy source values and preserve the shared caller record, duplicate availability and first error. Concurrent reports keep each channel's contribution. Deferred record merges also retain non-object `turns` values and count every reported key write, as in Python.
 
 - Cancelling a worker joins its inline delegation within the existing deadline; owner handlers that close their kit, directly or through a hook, finish without preserving unrelated handlers (RFC §10.6.8, §23.4).
