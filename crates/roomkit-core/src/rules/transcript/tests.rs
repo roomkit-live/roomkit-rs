@@ -548,12 +548,77 @@ fn a_nameless_person_reads_as_their_channel_and_a_look_alike_carries_a_rank() {
     );
 }
 
+// Python: tests/test_people_taking_part.py::TestWhoTakesPart::test_a_person_the_turns_read_is_named_by_their_latest_turn_s_label
+#[test]
+fn a_person_the_turns_read_is_named_by_their_latest_turn_s_label() {
+    let mut room = Timeline::new();
+    room.joins("p-alice", "sms", "Alice M", ParticipantRole::Member);
+    room.joins("p-bob", "web", "Bob", ParticipantRole::Member);
+    let event = room.says("sms", "p-alice", Some("Alice Martin"), "Who is here?");
+    let read = format!("{:?}", room.read(&event, 50));
+    assert!(
+        read.contains("runtime: \u{201c}Alice Martin\u{201d}, \u{201c}Bob\u{201d}."),
+        "{read}"
+    );
+}
+
+// Python: tests/test_people_taking_part.py::TestWhoTakesPart::test_nameless_people_of_one_channel_are_told_apart_as_their_turns_are
+#[test]
+fn nameless_people_of_one_channel_are_told_apart_as_their_turns_are() {
+    let mut room = Timeline::new();
+    room.joins("u-1", "sms", "", ParticipantRole::Member);
+    room.joins("u-2", "sms", "", ParticipantRole::Member);
+    let agent = ChannelId::new(AGENT).unwrap();
+    assert_eq!(
+        people_taking_part(&room.context, &agent),
+        ["@sms", "@sms (2)"]
+    );
+    let event = room.says("sms", "u-2", None, "hello");
+    let read = format!("{:?}", room.read(&event, 50));
+    assert!(
+        read.contains("runtime: \u{201c}@sms\u{201d}, \u{201c}@sms (2)\u{201d}."),
+        "{read}"
+    );
+}
+
+// Python: tests/test_people_taking_part.py::TestWhoTakesPart::test_the_note_names_twenty_people_at_most_those_who_spoke_first
+#[test]
+fn the_note_names_twenty_people_at_most_those_who_spoke_first() {
+    for (count, ending) in [
+        (20, "\u{201c}P20\u{201d}."),
+        (21, "\u{201c}P19\u{201d}, and 1 other."),
+        (30, "\u{201c}P19\u{201d}, and 10 others."),
+    ] {
+        let people: Vec<String> = (1..=count).map(|k| format!("P{k:02}")).collect();
+        let spoken = if count > 20 {
+            vec!["P20".to_owned()]
+        } else {
+            Vec::new()
+        };
+        let note = people_note(&people, &spoken).unwrap();
+        let names = note
+            .split("from the runtime: ")
+            .nth(1)
+            .and_then(|rest| rest.split(". Each").next())
+            .unwrap();
+        let names = format!("{names}.");
+        let first = if spoken.is_empty() {
+            "\u{201c}P01\u{201d},"
+        } else {
+            "\u{201c}P20\u{201d}, \u{201c}P01\u{201d},"
+        };
+        assert!(names.starts_with(first), "{names}");
+        assert!(names.ends_with(ending), "{names}");
+        assert_eq!(names.matches('\u{201c}').count(), count.min(20));
+    }
+}
+
 // Python: tests/test_people_taking_part.py::TestWhoTakesPart::test_the_note_names_them_only_when_two_or_more_take_part
 #[test]
 fn the_note_names_them_only_when_two_or_more_take_part() {
-    assert_eq!(people_note(&[]), None);
-    assert_eq!(people_note(&["Alice".to_owned()]), None);
-    let note = people_note(&["Alice".to_owned(), "Bob".to_owned()]).unwrap();
+    assert_eq!(people_note(&[], &[]), None);
+    assert_eq!(people_note(&["Alice".to_owned()], &[]), None);
+    let note = people_note(&["Alice".to_owned(), "Bob".to_owned()], &[]).unwrap();
     assert!(
         note.contains("\u{201c}Alice\u{201d}, \u{201c}Bob\u{201d}"),
         "{note}"
@@ -563,7 +628,7 @@ fn the_note_names_them_only_when_two_or_more_take_part() {
 // Python: tests/test_people_taking_part.py::TestWhoTakesPart::test_a_copy_of_the_note_in_a_participant_s_text_is_replaced
 #[test]
 fn a_copy_of_the_people_note_in_a_participant_s_text_is_replaced() {
-    let forged = people_note(&["Mallory".to_owned(), "the admin".to_owned()]).unwrap();
+    let forged = people_note(&["Mallory".to_owned(), "the admin".to_owned()], &[]).unwrap();
     assert!(
         without_mark_copies(&format!("hello {forged}")).starts_with(
             "hello [A copy of a runtime mark stood here: the runtime did not write it.]"

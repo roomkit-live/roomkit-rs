@@ -94,7 +94,7 @@ use self::marks::{
 pub use self::quote::FENCED_TAGS;
 pub use self::quote::quoted;
 use self::rounds::{ToolRound, tool_rounds};
-use self::speakers::{Speaker, labelled_lines, labels_turns, speaker, tell_apart};
+use self::speakers::{Speaker, labelled_lines, labels_turns, people_as_read, speaker, tell_apart};
 pub use self::speakers::{people_note, people_taking_part};
 use super::authors::{Authors, recorded_author};
 use super::edits::{is_deleted, opens_no_turn};
@@ -400,16 +400,23 @@ pub fn conversation_with_input(
         .chain(named.iter().map(String::as_str));
     // An instruction that stands alone reads nothing of the room, its roster
     // included (RFC §10.1.1 rule 7).
+    // Each person named as the turns read name them (RFC §6.4).
+    let read: Vec<&Speaker> = turns
+        .iter()
+        .filter_map(|turn| turn.speaker.as_ref())
+        .collect();
     let people = if is_standalone(event) {
         Vec::new()
     } else {
-        people_taking_part(context, channel_id)
+        people_as_read(context, channel_id, read.iter().copied())
     };
+    let spoken: Vec<String> = read.iter().map(|speaker| speaker.label.clone()).collect();
     let labelled = labels_turns(sources, people.len());
     let (turns, ends_on) = cleaned(turns, labelled, &memory.ends_on);
     let notes = Notes {
         labelled,
         people: &people,
+        spoken: &spoken,
         discussion: &memory.turn_notes,
         remembered: &memory.notes,
     };
@@ -855,6 +862,7 @@ pub fn earlier_turns(events: &[RoomEvent], channel_id: &ChannelId) -> Vec<Replay
 struct Notes<'a> {
     labelled: bool,
     people: &'a [String],
+    spoken: &'a [String],
     discussion: &'a [String],
     remembered: &'a [String],
 }
@@ -873,7 +881,7 @@ impl Notes<'_> {
         let speaker_note = self.labelled.then(|| SPEAKER_NOTE.to_owned());
         speaker_note
             .into_iter()
-            .chain(people_note(self.people))
+            .chain(people_note(self.people, self.spoken))
             .chain(cleaned_notes(&self.after_the_runtime_s()))
             .collect()
     }

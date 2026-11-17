@@ -728,13 +728,19 @@ impl<'a> Authors<'a> {
         if name.is_empty() {
             return None;
         }
-        let source = digest(
-            self.salt,
-            &["participant".to_owned(), person.id.to_string()],
-        );
+        let source = self.person_source(person);
         let names = name_keys(self.salt, &name);
         let rank = self.register().rank(&source, &names);
         Some(Author { name, rank })
+    }
+
+    /// Who `person`'s turns come from (`source`), whichever channel
+    /// reached them.
+    pub(crate) fn person_source(&self, person: &Participant) -> String {
+        digest(
+            self.salt,
+            &["participant".to_owned(), person.id.to_string()],
+        )
     }
 
     /// The copy of the room's register the turns that hold no record are

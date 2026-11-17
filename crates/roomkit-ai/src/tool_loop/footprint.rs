@@ -43,7 +43,7 @@ impl Loop {
         let tools: usize = declared.iter().map(estimate_tool_tokens).sum();
         let room: Vec<String> = [SPEAKER_ATTRIBUTION_NOTE.to_owned()]
             .into_iter()
-            .chain(people_note(people))
+            .chain(people_note(people, &[]))
             .chain([CUT_NOTE.to_owned()])
             .chain(cleaned_notes(discussion))
             .collect();

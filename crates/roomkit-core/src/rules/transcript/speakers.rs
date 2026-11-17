@@ -31,6 +31,11 @@ const IDENTIFIER_LIMIT: usize = 64;
 /// name's 64, its rank and `(a participant)`. Python's `_PERSON_LIMIT`.
 const PERSON_LIMIT: usize = 96;
 
+/// People the people note names at most ([`people_note`]): past them it
+/// counts the others, so a large group does not put every name in every
+/// turn. Python's `PEOPLE_NOTE_LIMIT`.
+const PEOPLE_NOTE_LIMIT: usize = 20;
+
 /// Every double quote mark but `"` itself, which a JSON string escapes:
 /// made a single quote in a labelled line, so that none reads as the
 /// string's end (RFC §6.4). Python's `_text._QUOTE_LOOKALIKES`, Unicode's
@@ -185,9 +190,34 @@ pub(super) fn identifier(value: &str, fallback: &str) -> String {
 /// one for an agent the room does not bind. Python's `people_taking_part`,
 /// ranked against its own copy of the room's register.
 pub fn people_taking_part(context: &RoomContext, channel_id: &ChannelId) -> Vec<String> {
+    people_as_read(context, channel_id, [])
+}
+
+/// [`people_taking_part`], each named as the turns the reader reads name
+/// them (RFC §6.4): a person among `speakers` (those turns' speakers, in
+/// the conversation's order) by the label of their latest turn, a name
+/// their transport stamped included; a silent one by the room's record of
+/// them, their name and its rank, or, without a name, their channel ranked
+/// after the labels the turns gave it (`@sms1 (2)`), so that two people
+/// with no name never read as one. Python's `people_taking_part` with its
+/// `speakers`.
+pub(super) fn people_as_read<'s>(
+    context: &RoomContext,
+    channel_id: &ChannelId,
+    speakers: impl IntoIterator<Item = &'s Speaker>,
+) -> Vec<String> {
     let Some(reader) = context.get_binding(channel_id) else {
         return Vec::new();
     };
+    let mut latest: BTreeMap<&str, &Speaker> = BTreeMap::new();
+    for speaker in speakers {
+        latest.insert(speaker.source.as_str(), speaker);
+    }
+    let mut taken: BTreeSet<String> = latest
+        .values()
+        .filter(|speaker| !speaker.named)
+        .map(|speaker| speaker.label.clone())
+        .collect();
     let mut authors = Authors::new(context);
     let people: Vec<&Participant> = authors
         .persons()
@@ -202,31 +232,62 @@ pub fn people_taking_part(context: &RoomContext, channel_id: &ChannelId) -> Vec<
         .collect();
     people
         .into_iter()
-        .map(|person| match authors.person(person) {
-            Some(Author { name, rank: 1 }) => name,
-            Some(Author { name, rank }) => format!("{name} ({rank})"),
-            None => addressed_label(&person.channel_id, &authors),
+        .map(|person| {
+            if let Some(speaker) = latest.get(authors.person_source(person).as_str()) {
+                return speaker.label.clone();
+            }
+            match authors.person(person) {
+                Some(Author { name, rank: 1 }) => name,
+                Some(Author { name, rank }) => format!("{name} ({rank})"),
+                None => next_free(&addressed_label(&person.channel_id, &authors), &mut taken),
+            }
         })
         .collect()
+}
+
+/// `label`, or with the first rank past those `taken` (`@sms1 (2)`),
+/// which it then takes.
+fn next_free(label: &str, taken: &mut BTreeSet<String>) -> String {
+    let mut ranked = label.to_owned();
+    let mut rank = 1;
+    while taken.contains(&ranked) {
+        rank += 1;
+        ranked = format!("{label} ({rank})");
+    }
+    taken.insert(ranked.clone());
+    ranked
 }
 
 /// The note that names who takes part ([`people_taking_part`]) when two
 /// people or more do, those who have not spoken yet included, so that the
 /// agent knows who is there before each has spoken (RFC §6.4); `None`
 /// otherwise. Each name is quoted: a participant may choose theirs, and it
-/// must not read as the runtime's words. Python's `people_note`.
-pub fn people_note(people: &[String]) -> Option<String> {
+/// must not read as the runtime's words. It names [`PEOPLE_NOTE_LIMIT`]
+/// people at most: those whose turns the reader reads (`spoken`, their
+/// labels) first, then the silent ones, each in the order they joined, and
+/// counts the others. Python's `people_note`.
+pub fn people_note(people: &[String], spoken: &[String]) -> Option<String> {
     if people.len() < 2 {
         return None;
     }
-    let names: Vec<String> = people
+    let said = |person: &&String| spoken.contains(person);
+    let ordered = people
         .iter()
+        .filter(said)
+        .chain(people.iter().filter(|person| !said(person)));
+    let names: Vec<String> = ordered
+        .take(PEOPLE_NOTE_LIMIT)
         .map(|person| quoted(person, PERSON_LIMIT))
         .collect();
+    let others = people.len() - names.len();
+    let mut listed = names.join(", ");
+    if others > 0 {
+        let plural = if others > 1 { "s" } else { "" };
+        listed = format!("{listed}, and {others} other{plural}");
+    }
     Some(format!(
-        "{PEOPLE_NOTE_OPENING}, from the runtime: {}. Each is present whether or not they have \
-         spoken yet.]",
-        names.join(", ")
+        "{PEOPLE_NOTE_OPENING}, from the runtime: {listed}. Each is present whether or not they \
+         have spoken yet.]"
     ))
 }
 
