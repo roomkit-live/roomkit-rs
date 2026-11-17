@@ -76,6 +76,7 @@ mod author_images;
 mod channel;
 pub mod classifiers;
 mod continuation;
+mod decimal_digits;
 mod error;
 mod human_input;
 pub mod knowledge;
@@ -118,8 +119,8 @@ mod turn_settings;
 pub use self::agent::{Agent, AgentOptions, BuildIdentityBlockOptions};
 pub use self::channel::{AiChannel, AiChannelOptions};
 pub use self::classifiers::{
-    Answers, ChoiceAnswer, ChoiceQuestion, Classifier, ClassifierError, ScoreAnswer, ScoreQuestion,
-    YesNoAnswer, YesNoQuestion,
+    Answers, ChoiceAnswer, ChoiceQuestion, Classifier, ClassifierError, MockClassifier,
+    MockClassifierOptions, ScoreAnswer, ScoreQuestion, YesNoAnswer, YesNoQuestion,
 };
 pub use self::continuation::ContinuationPolicy;
 pub use self::error::AiError;
@@ -168,9 +169,10 @@ pub use self::skills::{
     verify_frontmatter, verify_skill_resource,
 };
 pub use self::speaking::{
-    AlwaysSpeak, AnswerOnly, CutReply, MockSpeakPolicy, MockSpeakPolicyOptions, MockThinker,
-    MockThinkerOptions, SpeakDecision, SpeakDecisionEvent, SpeakDecisionOptions, SpeakPolicy,
-    SpeakTurn, Thinker, Thought, ThoughtEvent,
+    AlwaysSpeak, AnswerOnly, ClassifierSpeakPolicy, ClassifierSpeakPolicyOptions, CutReply,
+    MockSpeakPolicy, MockSpeakPolicyOptions, MockThinker, MockThinkerOptions, SpeakDecision,
+    SpeakDecisionEvent, SpeakDecisionOptions, SpeakPolicy, SpeakTurn, Thinker, Thought,
+    ThoughtEvent,
 };
 pub use self::steering::SteerOptions;
 pub use self::tool_search::{TOOL_FIND_TOOLS, TOOL_LIST_TOOLS, TOOL_SEARCH_INFRA_TOOL_NAMES};

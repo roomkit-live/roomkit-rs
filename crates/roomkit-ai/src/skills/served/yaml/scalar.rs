@@ -1,9 +1,9 @@
 //! Python `SafeLoader` scalar resolution before JSON normalization.
 
 use super::Node;
+use crate::decimal_digits as decimal;
 use base64::Engine;
 use std::fmt::Write as _;
-mod decimal;
 mod timestamp;
 use base64::engine::{GeneralPurpose, GeneralPurposeConfig};
 use saphyr_parser::{ScalarStyle, Tag};

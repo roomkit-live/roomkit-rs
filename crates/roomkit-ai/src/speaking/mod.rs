@@ -1,7 +1,8 @@
 //! What an agent thinks while listening, and when it takes the turn.
 
 mod answer_only;
-
+mod classifier;
+mod compose;
 mod mock;
 mod models;
 mod policy;
@@ -10,6 +11,11 @@ mod thought;
 use roomkit::model::RoomEvent;
 
 pub use answer_only::AnswerOnly;
+pub use classifier::{
+    ClassifierSpeakOverrides, ClassifierSpeakPolicy, ClassifierSpeakPolicyOptions,
+    SpeakDecisionRule, SpeakQuestionsRule, SpeakStateRule,
+};
+pub use compose::{AddressedOptions, ComposeOptions, addressed, compose, judgments_of};
 pub use mock::{MockSpeakPolicy, MockSpeakPolicyOptions, MockThinker, MockThinkerOptions};
 pub use models::{
     CutReply, Judgments, SpeakDecision, SpeakDecisionEvent, SpeakDecisionOptions, SpeakMode,

@@ -2,6 +2,7 @@
 
 mod answers;
 pub(crate) mod error;
+mod mock;
 mod questions;
 
 use std::future::Future;
@@ -14,6 +15,7 @@ pub use answers::{
     Answer, Answers, ChoiceAnswer, Probabilities, ScoreAnswer, YesNoAnswer, check_answers,
 };
 pub use error::ClassifierError;
+pub use mock::{MockClassifier, MockClassifierOptions, Script, ScriptedAnswer};
 pub use questions::{
     ChoiceOptions, ChoiceQuestion, Question, Questions, ScoreQuestion, YesNoQuestion,
 };
