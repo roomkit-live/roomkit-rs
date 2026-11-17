@@ -249,6 +249,12 @@ reason = "Python's **options, which go to RoomKit.delegate's keywords that are d
 # The architecture table's exceptions, approved with the plan on 2026-10-27.
 
 [[exception]]
+rust = "roomkit::tools::named_blocks"
+params = ["tags"]
+approved = "2026-11-17"
+reason = "Rust has no default call arguments: None selects Python's FENCED_TAGS, Some borrows the caller's tag slice, including an empty slice (approved 2026-11-17)"
+
+[[exception]]
 rust = "roomkit_mcp::McpToolProvider::request"
 params = ["params"]
 approved = "2026-11-16"
