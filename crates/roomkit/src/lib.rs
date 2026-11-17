@@ -296,10 +296,32 @@ pub use self::turns::TurnTimeouts;
 
 /// Python's `roomkit.tools` helpers this crate has.
 pub mod tools {
+    /// The default block tags read by [`named_blocks`] (RFC §6.4).
+    #[doc(inline)]
+    pub use roomkit_core::rules::transcript::FENCED_TAGS;
+
     /// `text` fenced as untrusted under `tag` (RFC §6.4), Python's
     /// `roomkit.tools.fence(tag, text)`: what a tool hands the model that
     /// came from outside it.
     pub use roomkit_core::rules::transcript::fence;
+
+    /// Replace each selected block with its tag in brackets, including a block
+    /// cut off before its end: Python's `roomkit.tools.named_blocks` (RFC §6.4).
+    ///
+    /// `None` uses [`FENCED_TAGS`]. An empty slice leaves the text unchanged.
+    /// Tags are applied in the supplied order; each replacement keeps the
+    /// spelling of its selected tag.
+    ///
+    /// ```
+    /// use roomkit::tools::named_blocks;
+    ///
+    /// assert_eq!(named_blocks("a <tool_result>x</tool_result> b", None), "a [tool_result] b");
+    /// assert_eq!(named_blocks("<custom>x</custom>", Some(&["custom"])), "[custom]");
+    /// assert_eq!(named_blocks("<custom>x</custom>", Some(&[])), "<custom>x</custom>");
+    /// ```
+    pub fn named_blocks(text: &str, tags: Option<&[&str]>) -> String {
+        roomkit_core::rules::transcript::named_blocks(text, tags.unwrap_or(FENCED_TAGS))
+    }
 }
 
 /// The README's code, compiled and run as doctests, so that the first room

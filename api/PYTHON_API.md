@@ -14,6 +14,7 @@ the mapping and its tests. The check does not generate or update this document.
 | Rust name | Python name | Members or parameters |
 | --- | --- | --- |
 | `roomkit_ai::extract_tools` | `roomkit.tools.extract_tools` | `Vec<ToolEntry>` represents the mixed input list; `Result<(Vec<AiTool>, Option<ToolHandler>), AiError>` represents the definitions, optional handler and schema errors. Raw dictionaries use the added `ToolEntry::Schema(Metadata)` variant (approved 2026-11-17). |
+| `roomkit::tools::named_blocks` | `roomkit.tools.named_blocks` | `tags: Option<&[&str]>`: `None` uses the public `FENCED_TAGS`; `Some(&[])` preserves the text; supplied tags keep their order (approved 2026-11-17). |
 | `roomkit_ai::RoleOverrideMode` | `roomkit.RoleOverride.mode` | `Restrict` / `Replace` represent the Python literal values (approved 2026-11-16, RMK-1709). |
 | `roomkit_ai::RoleOverrideOptions`, `roomkit_ai::ToolPolicyOptions` | `roomkit.RoleOverride`, `roomkit.ToolPolicy` | Constructor keywords with the same defaults, passed to fallible `new`; role maps own their overrides (approved 2026-11-16, RMK-1709). |
 | `roomkit_ai::ToolPolicy::resolve` | `roomkit.ToolPolicy.resolve` | `role: Option<&str>`, default `None`; `Result<Cow<'_, Self>, AiError>` borrows for absent/empty/unknown roles and owns a resolved policy otherwise (approved 2026-11-16, RMK-1709). |
