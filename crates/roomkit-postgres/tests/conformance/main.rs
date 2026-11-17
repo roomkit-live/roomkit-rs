@@ -75,6 +75,8 @@ mod scenarios;
 mod scripted;
 #[path = "../../../roomkit/tests/conformance/shape.rs"]
 mod shape;
+#[path = "../../../roomkit/tests/conformance/skill_registry.rs"]
+mod skill_registry;
 #[path = "../../../roomkit/tests/conformance/skills.rs"]
 mod skills;
 #[path = "../../../roomkit/tests/conformance/store_calls.rs"]

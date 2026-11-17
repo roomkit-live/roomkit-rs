@@ -33,7 +33,7 @@ impl McpSkillServer for Server {
             let resources = if self.dynamic {
                 json!("dynamic")
             } else {
-                json!([{"uri":URI,"size":BODY.len(),"digest":format!("sha256:{}",Sha256::digest(BODY.as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect::<String>())}])
+                json!([{"uri":URI,"size":BODY.len(),"digest":format!("sha256:{}",hex(&Sha256::digest(BODY.as_bytes())))}])
             };
             Ok(json!({"skills":[{"uri":URI,"frontmatter":{"name":"guide","description":"Read the guide"},"resources":resources}]}).as_object().unwrap().clone())
         })
@@ -124,24 +124,19 @@ async fn approval_is_shared_between_turns_but_bound_to_room_and_exact_origin() {
 
 #[tokio::test]
 async fn dynamic_entries_are_approved_every_time() {
-    for (dynamic, room) in [(true, "one")] {
-        let requests = Arc::new(Mutex::new(Vec::new()));
-        let tools = SkillTools::new(registry(dynamic, &requests).await, true, None);
-        for _ in 0..2 {
-            assert!(
-                tools
-                    .execution_refusal("host_run", &context(room), &active())
-                    .await
-                    .unwrap()
-                    .is_none()
-            );
-        }
-        assert_eq!(lock(&requests).len(), 2);
-        assert_eq!(
-            lock(&requests).first().unwrap().fingerprint.is_none(),
-            dynamic
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let tools = SkillTools::new(registry(true, &requests).await, true, None);
+    for _ in 0..2 {
+        assert!(
+            tools
+                .execution_refusal("host_run", &context("one"), &active())
+                .await
+                .unwrap()
+                .is_none()
         );
     }
+    assert_eq!(lock(&requests).len(), 2);
+    assert!(lock(&requests).first().unwrap().fingerprint.is_none());
 }
 
 #[tokio::test]
@@ -165,7 +160,7 @@ async fn a_standalone_turn_borrows_no_room_activation_and_unknown_names_do_not_e
             .unwrap()
             .is_none()
     );
-    assert!(lock(&requests).is_empty());
+    assert_eq!(lock(&requests).len(), 0);
     // A served name retained by a conversation after losing its loaded body
     // cannot be approved by accidentally skipping the unavailable skill.
     let missing = HashSet::from(["docs:unloaded".to_owned()]);
@@ -195,7 +190,10 @@ async fn retirement_is_immediate_and_pending_activations_belong_to_one_turn() {
             .record_activation(&call, ToolCallOutcome::Served, &context("one"))
             .is_none()
     );
-    assert!(second.active_names(&RoomId::new("one").unwrap()).is_empty());
+    assert_eq!(
+        second.active_names(&RoomId::new("one").unwrap()),
+        Vec::<String>::new()
+    );
     assert_eq!(
         first.record_activation(&call, ToolCallOutcome::Served, &context("one")),
         Some(NAME.to_owned())
@@ -208,8 +206,11 @@ async fn retirement_is_immediate_and_pending_activations_belong_to_one_turn() {
             .unwrap()
             .is_none()
     );
-    assert!(lock(&requests).is_empty());
-    assert!(second.active_names(&RoomId::new("one").unwrap()).is_empty());
+    assert_eq!(lock(&requests).len(), 0);
+    assert_eq!(
+        second.active_names(&RoomId::new("one").unwrap()),
+        Vec::<String>::new()
+    );
 }
 
 #[test]
@@ -235,4 +236,12 @@ fn least_recent_approvals_are_forgotten_and_the_origin_is_held() {
     assert_eq!(Arc::strong_count(&origin), 3);
     gate.forget("one");
     assert_eq!(Arc::strong_count(&origin), 1);
+}
+
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes.iter().fold(String::new(), |mut text, byte| {
+        let _infallible = write!(text, "{byte:02x}");
+        text
+    })
 }

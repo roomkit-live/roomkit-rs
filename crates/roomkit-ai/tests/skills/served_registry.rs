@@ -23,7 +23,7 @@ fn lock<T>(value: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 fn entry() -> Value {
     let resource = |uri: &str, content: &str| {
         json!({"uri":uri,"size":content.len(),
-        "digest":format!("sha256:{}",Sha256::digest(content.as_bytes()).iter().map(|byte|format!("{byte:02x}")).collect::<String>())})
+        "digest":format!("sha256:{}",hex(&Sha256::digest(content.as_bytes())))})
     };
     json!({"uri":URI,"frontmatter":{"name":"guide","description":"Read the guide"},
         "resources":[resource(URI,BODY),resource("skill://guide/notes.txt","Notes")]})
@@ -74,11 +74,13 @@ impl McpSkillServer for Server {
     ) -> McpSkillServerFuture<'a, Metadata> {
         Box::pin(async move {
             lock(&self.requests).push(method.to_owned());
-            if let Some((wait_for, gate)) = &self.waiting {
-                if wait_for == method {
-                    gate.started.notify_one();
-                    gate.release.notified().await;
-                }
+            if let Some((_, gate)) = self
+                .waiting
+                .as_ref()
+                .filter(|(wait_for, _)| wait_for == method)
+            {
+                gate.started.notify_one();
+                gate.release.notified().await;
             }
             let value = match method {
                 "skills/list" => json!({"skills":*lock(&self.listing)}),
@@ -121,7 +123,11 @@ async fn owned_reads_do_not_alias_the_registry_but_copies_share_verified_files()
     let server = Arc::new(Server::new());
     let registry = SkillRegistry::default();
     registry
-        .add_mcp_server(server.clone(), "docs", AddMcpServerOptions::default())
+        .add_mcp_server(
+            Arc::<Server>::clone(&server),
+            "docs",
+            AddMcpServerOptions::default(),
+        )
         .await
         .unwrap();
     let LoadedSkill::Served(mut first) = registry.load_skill(NAME).await.unwrap().unwrap() else {
@@ -164,7 +170,11 @@ async fn following_a_shared_refusal_never_returns_a_cached_body_past_the_manifes
     let server = Arc::new(Server::new());
     let registry = SkillRegistry::default();
     registry
-        .add_mcp_server(server.clone(), "docs", AddMcpServerOptions::default())
+        .add_mcp_server(
+            Arc::<Server>::clone(&server),
+            "docs",
+            AddMcpServerOptions::default(),
+        )
         .await
         .unwrap();
     registry.load_skill(NAME).await.unwrap();
@@ -176,7 +186,11 @@ async fn following_a_shared_refusal_never_returns_a_cached_body_past_the_manifes
     dynamic["resources"] = json!("dynamic");
     *lock(&server.listing) = vec![dynamic];
     registry
-        .add_mcp_server(server.clone(), "docs", AddMcpServerOptions::default())
+        .add_mcp_server(
+            Arc::<Server>::clone(&server),
+            "docs",
+            AddMcpServerOptions::default(),
+        )
         .await
         .unwrap();
     let reads = lock(&server.requests).clone();
@@ -200,7 +214,7 @@ async fn a_registry_can_change_during_network_io_and_current_state_is_checked_on
     for operation in ["skills/list", "skills/get"] {
         let gate = Arc::new(Gate::default());
         let mut server = Server::new();
-        server.waiting = Some((operation.to_owned(), gate.clone()));
+        server.waiting = Some((operation.to_owned(), Arc::<Gate>::clone(&gate)));
         if operation == "skills/get" {
             lock(&server.listing).clear();
             lock(&server.current)["resources"] = json!("dynamic");
@@ -209,13 +223,17 @@ async fn a_registry_can_change_during_network_io_and_current_state_is_checked_on
         let registry = Arc::new(SkillRegistry::default());
         if operation == "skills/get" {
             registry
-                .add_mcp_server(server.clone(), "docs", AddMcpServerOptions::default())
+                .add_mcp_server(
+                    Arc::<Server>::clone(&server),
+                    "docs",
+                    AddMcpServerOptions::default(),
+                )
                 .await
                 .unwrap();
         }
         let pending = {
-            let registry = registry.clone();
-            let server = server.clone();
+            let registry = Arc::clone(&registry);
+            let server = Arc::<Server>::clone(&server);
             tokio::spawn(async move {
                 if operation == "skills/list" {
                     registry
@@ -249,7 +267,11 @@ async fn rejected_relisting_preserves_origin_identity_options_and_cached_content
     let registry = SkillRegistry::default();
     let changed = Arc::new(Server::new());
     registry
-        .add_mcp_server(changed.clone(), "docs", AddMcpServerOptions::default())
+        .add_mcp_server(
+            Arc::<Server>::clone(&changed),
+            "docs",
+            AddMcpServerOptions::default(),
+        )
         .await
         .unwrap();
     let loaded = registry.load_skill(NAME).await.unwrap();
@@ -285,7 +307,10 @@ async fn concurrent_dynamic_reads_charge_the_live_shared_byte_budget() {
     let first = Arc::new(Gate::default());
     let second = Arc::new(Gate::default());
     let size = 8 * 1024 * 1024;
-    for (name, gate) in [("first.txt", first.clone()), ("second.txt", second.clone())] {
+    for (name, gate) in [
+        ("first.txt", Arc::<Gate>::clone(&first)),
+        ("second.txt", Arc::<Gate>::clone(&second)),
+    ] {
         lock(&server.files).insert(format!("skill://guide/{name}"), "x".repeat(size));
         lock(&server.read_gates).insert(format!("skill://guide/{name}"), gate);
     }
@@ -303,11 +328,11 @@ async fn concurrent_dynamic_reads_charge_the_live_shared_byte_budget() {
         .unwrap();
     registry.load_skill(NAME).await.unwrap();
     let read_a = {
-        let registry = registry.clone();
+        let registry = Arc::clone(&registry);
         tokio::spawn(async move { registry.read_file(NAME, "first.txt").await })
     };
     let read_b = {
-        let registry = registry.clone();
+        let registry = Arc::clone(&registry);
         tokio::spawn(async move { registry.read_file(NAME, "second.txt").await })
     };
     tokio::time::timeout(std::time::Duration::from_secs(1), async {
@@ -331,7 +356,11 @@ async fn sanitized_load_and_changed_file_errors_keep_the_transport_cause() {
     let server = Arc::new(Server::new());
     let registry = SkillRegistry::default();
     registry
-        .add_mcp_server(server.clone(), "docs", AddMcpServerOptions::default())
+        .add_mcp_server(
+            Arc::<Server>::clone(&server),
+            "docs",
+            AddMcpServerOptions::default(),
+        )
         .await
         .unwrap();
     lock(&server.read_errors).insert(URI.to_owned(), std::io::ErrorKind::PermissionDenied);
@@ -354,15 +383,23 @@ async fn sanitized_load_and_changed_file_errors_keep_the_transport_cause() {
 }
 fn assert_transport_cause(error: &SkillError) {
     let mut cause: &dyn std::error::Error = error;
-    let mut chain = Vec::new();
     loop {
-        chain.push(format!("{cause:?}"));
         if let Some(error) = cause.downcast_ref::<std::io::Error>() {
             assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
             return;
         }
-        cause = cause
-            .source()
-            .unwrap_or_else(|| panic!("transport cause remains in the chain: {chain:?}"));
+        assert!(
+            cause.source().is_some(),
+            "transport cause remains in the chain: {cause:?}"
+        );
+        cause = cause.source().unwrap();
     }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes.iter().fold(String::new(), |mut text, byte| {
+        let _infallible = write!(text, "{byte:02x}");
+        text
+    })
 }

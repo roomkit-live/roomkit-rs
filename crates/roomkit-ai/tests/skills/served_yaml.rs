@@ -33,9 +33,9 @@ fn served_frontmatter_matches_the_shared_positive_and_negative_corpus() {
     assert_eq!(tested, 16);
 }
 
-/// Python `read_frontmatter_yaml`, the same bounded SafeLoader used by
+/// Python `read_frontmatter_yaml`, the same bounded `SafeLoader` used by
 /// `verify_frontmatter`, frozen before the Rust comparison. Finite values only:
-/// a non-finite number cannot be admitted as a JSON SkillEntry value.
+/// a non-finite number cannot be admitted as a JSON `SkillEntry` value.
 #[test]
 fn served_yaml_scalar_and_key_normalization_matches_python() {
     let cases: Vec<Value> = serde_json::from_str(include_str!("served_yaml_cases.json")).unwrap();

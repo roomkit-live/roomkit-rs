@@ -620,7 +620,7 @@ fn served_skill_defaults_as_python() {
     // roomkit.SkillRegistry.add_mcp_server(approve_execution) = None
     assert!(server.approve_execution.is_none());
     // roomkit.SkillRegistry.add_mcp_server(execution_tools) = ()
-    assert!(server.execution_tools.is_empty());
+    assert_eq!(server.execution_tools, Vec::<String>::new());
     let skill = roomkit_ai::McpSkillOptions::default();
     // roomkit.MCPSkill.__init__(origin) = ''
     assert_eq!(skill.origin, "");
