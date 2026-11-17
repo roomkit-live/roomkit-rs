@@ -16,10 +16,16 @@ struct Publication {
     entered: Notify,
     release: Notify,
     plans: Mutex<Vec<EphemeralEvent>>,
+    fail: bool,
+    failed: AtomicBool,
 }
 
 impl RealtimeBackend for Publication {
-    fn publish<'a>(&'a self, channel: &'a str, event: EphemeralEvent) -> RealtimeFuture<'a, ()> {
+    fn publish<'a>(
+        &'a self,
+        channel: &'a str,
+        event: EphemeralEvent,
+    ) -> RealtimeFuture<'a, Result<(), roomkit::ChannelError>> {
         Box::pin(async move {
             if event.r#type == EphemeralEventType::Custom
                 && event.data.get("type") == Some(&json!("plan_updated"))
@@ -27,8 +33,12 @@ impl RealtimeBackend for Publication {
                 self.plans.lock().unwrap().push(event.clone());
                 self.entered.notify_one();
                 self.release.notified().await;
+                if self.fail {
+                    self.failed.store(true, Ordering::SeqCst);
+                    return Err(std::io::Error::other("plan publisher failed").into());
+                }
             }
-            self.inner.publish(channel, event).await;
+            self.inner.publish(channel, event).await
         })
     }
     fn subscribe<'a>(
@@ -102,7 +112,9 @@ async fn a_failing_observer_ignores_channel_type_filters_and_keeps_the_plan() {
 #[tokio::test]
 async fn a_plan_hook_runs_before_a_retained_physical_publication_finishes() {
     for streaming in [false, true] {
-        publication_boundary(streaming).await;
+        for fail in [false, true] {
+            publication_boundary(streaming, fail).await;
+        }
     }
 }
 
@@ -110,10 +122,17 @@ async fn a_plan_hook_runs_before_a_retained_physical_publication_finishes() {
     clippy::panic,
     reason = "test helper rejects a malformed publication trace"
 )]
-async fn publication_boundary(streaming: bool) {
-    let backend = Arc::new(Publication::default());
+async fn publication_boundary(streaming: bool, fail: bool) {
+    let backend = Arc::new(Publication {
+        fail,
+        ..Publication::default()
+    });
     let provider = model(
-        vec![plan(tasks("Follow up")), AiResponse::new("Done.")],
+        vec![
+            plan(tasks("Follow up")),
+            AiResponse::new("Done."),
+            AiResponse::new("Done."),
+        ],
         streaming,
     );
     let kit = setup(
@@ -154,6 +173,7 @@ async fn publication_boundary(streaming: bool) {
         task_values(&observed.first().unwrap().tasks),
         tasks("Follow up")
     );
+    assert!(!backend.failed.load(Ordering::SeqCst));
     let published = backend.plans.lock().unwrap().clone();
     let [event] = published.as_slice() else {
         panic!("one publication required")
@@ -168,6 +188,16 @@ async fn publication_boundary(streaming: bool) {
     backend.release.notify_one();
     tokio::time::timeout(BOUND, turn).await.unwrap().unwrap();
     assert_eq!(provider.calls().len(), 2);
+    tokio::time::timeout(BOUND, roomkit::testing::idle(&kit))
+        .await
+        .unwrap();
+    assert_eq!(backend.failed.load(Ordering::SeqCst), fail);
+    say(&kit, "r", "Continue.").await;
+    assert_eq!(provider.calls().len(), 3);
+    let current = input(provider.calls().last().unwrap());
+    assert!(current.contains("## Current Task Plan"));
+    assert!(current.contains("- [ ] “Follow up” (pending)"));
+    assert_eq!(backend.plans.lock().unwrap().len(), 1);
     kit.close().await.unwrap();
     assert_eq!(seen.lock().unwrap().len(), 1);
 }
