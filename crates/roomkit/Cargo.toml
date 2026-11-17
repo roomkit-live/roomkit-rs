@@ -29,6 +29,9 @@ getrandom.workspace = true
 # /etc/localtime, read from the system's zoneinfo.
 jiff = { workspace = true, features = ["std", "tz-system", "tzdb-zoneinfo"] }
 scrypt.workspace = true
+# The digest that sets apart two workers' tool names (RFC §19.7.3), as
+# Python's hashlib; already the core's.
+sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
@@ -59,7 +62,6 @@ roomkit-anthropic.workspace = true
 # Shared public MCP host scenarios over JSON and SSE.
 roomkit-mcp = { workspace = true, features = ["http"] }
 axum.workspace = true
-sha2.workspace = true
 # The turn backend's liveness, tested on tokio's paused clock.
 tokio = { workspace = true, features = ["test-util", "net", "io-util"] }
 # The in-memory exporter the `opentelemetry` feature's tests read.

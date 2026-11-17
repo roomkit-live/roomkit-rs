@@ -14,6 +14,7 @@ use roomkit_core::rules::transcript::HANDBACK_OPENING;
 use serde_json::{Value, json};
 
 use super::Team;
+use super::tool_names::worker_tool_names;
 use crate::context::ExecutionContext;
 use crate::error::RoomKitError;
 use crate::kit::{DelegateOptions, RoomKit};
@@ -61,9 +62,10 @@ impl PerWorker {
     }
 }
 
-/// The `delegate_to_<id>` declaration of one worker (Python's
-/// `_worker_tool`).
-fn definition(worker: &HeldAgent) -> Value {
+/// The `delegate_to_<id>` declaration of one worker, under `name`: its
+/// id's tool name ([`worker_tool_names`]). The description names the id
+/// (Python's `_worker_tool`).
+fn definition(worker: &HeldAgent, name: &str) -> Value {
     let id = worker.channel_id.as_str();
     let description = worker
         .description
@@ -71,7 +73,7 @@ fn definition(worker: &HeldAgent) -> Value {
         .filter(|description| !description.is_empty())
         .unwrap_or_else(|| format!("Worker agent {id}"));
     json!({
-        "name": format!("delegate_to_{id}"),
+        "name": name,
         "description": format!("Delegate a task to {id}. {description}"),
         "parameters": {
             "type": "object",
@@ -89,14 +91,18 @@ fn definition(worker: &HeldAgent) -> Value {
 /// One `delegate_to_<id>` entry per worker of the install `server` serves,
 /// each a strategy's tool, its call waiting by design (RFC §21.6).
 pub(super) fn entries<S: ConversationStore>(server: &Arc<PerWorker>) -> Vec<OwnerToolEntry<S>> {
-    server
-        .team
-        .workers
+    let workers = &server.team.workers;
+    let ids: Vec<&str> = workers
         .iter()
-        .map(|worker| {
+        .map(|worker| worker.channel_id.as_str())
+        .collect();
+    workers
+        .iter()
+        .zip(worker_tool_names(&ids))
+        .map(|(worker, name)| {
             let (server, worker_id) = (Arc::clone(server), worker.channel_id.clone());
             OwnerToolEntry {
-                definition: definition(worker),
+                definition: definition(worker, &name),
                 serve: Arc::new(move |kit, call| {
                     let (server, worker_id) = (Arc::clone(&server), worker_id.clone());
                     Box::pin(async move { serve(&kit, &server, &worker_id, call).await })

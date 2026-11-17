@@ -11,6 +11,7 @@ mod results;
 pub(crate) mod strategy;
 mod supervised;
 mod team;
+mod tool_names;
 
 use std::fmt;
 use std::str::FromStr;
