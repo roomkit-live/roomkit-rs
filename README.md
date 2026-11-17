@@ -23,6 +23,11 @@ conformance scenarios and the [API mapping](api/PYTHON_API.md) track behavior an
 language-specific differences; support for one feature does not imply every
 Python provider or media integration is available in Rust.
 
+MCP result validation against a tool's `outputSchema` and the raw
+`MCPToolProvider.call_tool_result` API are deferred beyond the first public
+release (RMK-1732). Existing Rust MCP calls do not validate structured results
+against the server's declared output schema.
+
 ## Try it locally
 
 Install [Rust through rustup](https://rustup.rs/), then:
