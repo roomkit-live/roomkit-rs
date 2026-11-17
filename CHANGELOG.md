@@ -6,7 +6,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-- **A code reply made with `defer_delivery` returns `verification_code` as soon as it is known for one**, with no handle, as Python's (RFC §11.7.4, §11.7.6, RMK-913): it waited for the agents' answer to the released message. The attempt, the release and the answer go on as the kit's own work, which its close gives its grace, a failure of theirs logged; without `defer_delivery` the reply still returns once the answer is in, whatever `process_timeout` or its caller.
+- **A code reply made with `defer_delivery` returns `verification_code` as soon as it is known for one**, with no handle, as Python's (RFC §11.7.4, §11.7.6, RMK-913): it waited for the agents' answer to the released message. The attempt, the release and the answer go on as the kit's own work, a failure of theirs logged; without `defer_delivery` the reply still returns once the answer is in, whatever `process_timeout` or its caller.
 
 - Add `RoomKit::input_request` to read owned snapshots of open human-input requests within their owning organization.
 
