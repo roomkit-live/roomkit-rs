@@ -23,6 +23,14 @@ use crate::listing::ToolFilter;
 use crate::results;
 use crate::server::{McpServer, check_label};
 
+/// Python checks the label before any transport-specific option (RFC §21.2).
+fn check_provider_label(label: Option<&str>) -> Result<(), McpError> {
+    if let Some(label) = label {
+        check_label(label)?;
+    }
+    Ok(())
+}
+
 /// What [`McpToolProvider::from_command`] takes beside the command:
 /// Python's `args=(), *, env=None, cwd=None, tool_filter=None, label=None,
 /// connect_timeout=60.0`.
@@ -212,6 +220,7 @@ impl McpToolProvider {
         command: impl Into<OsString>,
         options: FromCommandOptions,
     ) -> Result<Self, McpError> {
+        check_provider_label(options.label.as_deref())?;
         let FromCommandOptions {
             args,
             env,
@@ -231,7 +240,12 @@ impl McpToolProvider {
             built = built.current_dir(cwd);
         }
         built.check()?;
-        Self::over(Target::Command(built), tool_filter, label, discover)
+        Ok(Self::over(
+            Target::Command(built),
+            tool_filter,
+            label,
+            discover,
+        ))
     }
 
     /// The server at `url`, over Streamable HTTP: Python's
@@ -249,6 +263,7 @@ impl McpToolProvider {
     /// transport's own.
     #[cfg(feature = "http")]
     pub fn from_url(url: &str, options: FromUrlOptions) -> Result<Self, McpError> {
+        check_provider_label(options.label.as_deref())?;
         let FromUrlOptions {
             tool_filter,
             headers,
@@ -260,7 +275,7 @@ impl McpToolProvider {
         for (name, value) in &headers {
             http = http.header(name, value)?;
         }
-        Self::over(Target::Url(http), tool_filter, label, discover)
+        Ok(Self::over(Target::Url(http), tool_filter, label, discover))
     }
 
     fn over(
@@ -268,11 +283,8 @@ impl McpToolProvider {
         tool_filter: Option<ToolFilter>,
         label: Option<String>,
         discover: bool,
-    ) -> Result<Self, McpError> {
-        if let Some(label) = &label {
-            check_label(label)?;
-        }
-        Ok(Self {
+    ) -> Self {
+        Self {
             inner: Arc::new(Inner {
                 target,
                 tool_filter,
@@ -280,7 +292,7 @@ impl McpToolProvider {
                 server: RwLock::new(None),
                 discover,
             }),
-        })
+        }
     }
 
     /// Connects the server: starts it, shakes hands and lists its tools,
