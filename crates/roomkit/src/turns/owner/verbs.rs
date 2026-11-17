@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use roomkit_core::model::{DirectEvent, Metadata, RoomId, Timestamp};
+use roomkit_core::model::{DirectEvent, Metadata, Room, RoomId, Timestamp};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -68,14 +68,8 @@ pub(super) async fn serve(
     arguments: serde_json::Map<String, Value>,
     context: &CallContext,
 ) -> Result<Value, Box<WireError>> {
-    if !context.room_id.is_empty() && context.room_id != facts.room_id.as_str() {
-        return Err(refusal(
-            PERMISSION_ERROR,
-            format!(
-                "A call of the turn in room {} named room {}",
-                facts.room_id, context.room_id
-            ),
-        ));
+    if let Some(declared) = kit.declared_verb(verb) {
+        return super::call_context::invoke(declared.verb, arguments).await;
     }
     let scope = Scope {
         room_id: &facts.room_id,
@@ -155,7 +149,7 @@ async fn run_verb(
         }
         _ => Err(refusal(
             VALUE_ERROR,
-            format!("No verb {} is served by the room owner", repr(verb)),
+            format!("No verb {} on a turn's host", repr(verb)),
         )),
     }
 }
@@ -339,7 +333,10 @@ pub(crate) async fn answer_room_call(
                 ));
             }
         }
-        if !BETWEEN_TURNS.contains(&verb.as_str()) {
+        let declared = kit
+            .declared_verb(&verb)
+            .filter(|declared| declared.between_turns);
+        if !BETWEEN_TURNS.contains(&verb.as_str()) && declared.is_none() {
             return Err(refusal(
                 VALUE_ERROR,
                 format!(
@@ -348,12 +345,21 @@ pub(crate) async fn answer_room_call(
                 ),
             ));
         }
-        let organization_id = room_organization(kit, &room_id, room_created_at).await?;
+        let room = room_after_turn(kit, &room_id, room_created_at).await?;
+        if let Some(declared) = declared {
+            return super::call_context::between_turns(
+                declared.verb,
+                room,
+                channel_id.clone(),
+                arguments,
+            )
+            .await;
+        }
         // Work its turn began, which starts fresh once the turn is over
         // (RFC §8.3): no depth of the turn floors what it does.
         let scope = Scope {
             room_id: &room_id,
-            organization_id: organization_id.as_deref(),
+            organization_id: room.organization_id.as_deref(),
             floor: None,
         };
         run_verb(kit, &scope, &verb, arguments).await
@@ -373,19 +379,17 @@ pub(crate) async fn answer_room_call(
     }
 }
 
-/// The organization of `room_id`, which a verb after its turn acts in:
+/// The current room, which a verb after its turn acts in:
 /// a room the store does not hold refuses it, as Python's owner refuses it,
 /// and so does a room created again under its id since the turn's, of
 /// creation mark `room_created_at` (RFC §17.2).
-async fn room_organization(
+async fn room_after_turn(
     kit: &Arc<dyn TurnKit>,
     room_id: &RoomId,
     room_created_at: Option<Timestamp>,
-) -> Result<Option<String>, Box<WireError>> {
+) -> Result<Room, Box<WireError>> {
     match kit.room(room_id.clone()).await {
-        Ok(Some(room)) if room_created_at.is_none_or(|mark| mark == room.created_at) => {
-            Ok(room.organization_id)
-        }
+        Ok(Some(room)) if room_created_at.is_none_or(|mark| mark == room.created_at) => Ok(room),
         Ok(_) => Err(refusal(
             VALUE_ERROR,
             format!("No room {}", repr(room_id.as_str())),

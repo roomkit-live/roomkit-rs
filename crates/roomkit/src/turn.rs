@@ -41,6 +41,7 @@ use crate::turns::wire::{
 use crate::turns::{HostLink, TurnError, send_event_arguments};
 use crate::{DelegateOptions, RoomKit, SendEventOptions, UpdateRoomMetadataOptions};
 
+mod declared;
 mod external_handler;
 mod external_tools;
 mod inputs;
@@ -56,7 +57,7 @@ pub(crate) use self::inputs::InputNotification;
 pub use self::loop_hooks::TurnChain;
 
 tokio::task_local! {
-    static TURN: TurnHost;
+    static TURN: Option<TurnHost>;
 }
 
 /// The turn of an intelligence channel the current task runs within, while
@@ -82,7 +83,12 @@ pub fn current_turn_host() -> Option<TurnHost> {
 
 /// The turn's host the current task runs within, reachable or not.
 pub(crate) fn turn_in_scope() -> Option<TurnHost> {
-    TURN.try_with(Clone::clone).ok()
+    TURN.try_with(Clone::clone).ok().flatten()
+}
+
+/// Owner callbacks never read the executor host of their caller.
+pub(crate) async fn without_turn_host<F: Future>(work: F) -> F::Output {
+    TURN.scope(None, work).await
 }
 
 /// The turn's host (RFC §10.6.5 `TurnHost`): the turn's room and agent,
@@ -894,7 +900,7 @@ impl TurnHost {
             let task = execution
                 .clone()
                 .at_least(floor)
-                .scope(TURN.scope(self.clone(), bounded));
+                .scope(TURN.scope(Some(self.clone()), bounded));
             if !self.shared.kit.spawn_observer(Box::pin(task)) {
                 tracing::debug!(target: "roomkit::hooks", "the kit is shut down: a tool call's observer is not run");
             }
@@ -931,7 +937,7 @@ impl TurnHost {
     /// Runs `future` as this turn's work: [`current_turn_host`] gives this host
     /// while it runs.
     pub(crate) async fn scope<F: Future>(self, future: F) -> F::Output {
-        TURN.scope(self, future).await
+        TURN.scope(Some(self), future).await
     }
 
     /// The hooks on `trigger` for this agent's calls, the kit's and its
@@ -1265,6 +1271,7 @@ pub(crate) struct OwnerCall {
 }
 
 pub(crate) trait TurnKit: Send + Sync {
+    fn declared_verb(&self, name: &str) -> Option<crate::turns::declared::Declaration>;
     fn external_tool_context(&self, room_id: RoomId) -> BoxFuture<'static, Option<RoomContext>>;
 
     fn room_hook_names(&self, room: &RoomId) -> Vec<String>;
@@ -1442,6 +1449,9 @@ pub(crate) trait TurnKit: Send + Sync {
 }
 
 impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
+    fn declared_verb(&self, name: &str) -> Option<crate::turns::declared::Declaration> {
+        self.upgrade()?.declared_verbs.get(name)
+    }
     fn external_tool_context(&self, room_id: RoomId) -> BoxFuture<'static, Option<RoomContext>> {
         external_tools::current_context(Weak::clone(self), room_id)
     }
@@ -1839,7 +1849,7 @@ where
     let turn = turn_in_scope();
     async move {
         match turn {
-            Some(turn) => TURN.scope(turn, future).await,
+            Some(turn) => TURN.scope(Some(turn), future).await,
             None => future.await,
         }
     }

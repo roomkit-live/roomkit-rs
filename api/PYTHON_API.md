@@ -13,6 +13,9 @@ the mapping and its tests. The check does not generate or update this document.
 
 | Rust name | Python name | Members or parameters |
 | --- | --- | --- |
+| `roomkit::turns::DeclaredVerb` | `roomkit.turns.DeclaredVerb` | Cloneable `new(callback)`/`call` wrapper over owned `Metadata` arguments and `Result<Value, ChannelError>`. Direct invocation preserves errors; a host call rebuilds known kit errors and preserves other recorded classes/messages through `RemoteTurn` (HITL 50d017c9). |
+| `roomkit::RoomKit::declare_host_verb`, `roomkit::turns::DeclareHostVerbOptions` | `roomkit.RoomKit.declare_host_verb` | `between_turns: false` by default; synchronous registration refuses closing kits, empty names, built-ins and duplicates. |
+| `roomkit::TurnHost::call` | `roomkit.TurnHost.call` | `arguments: Option<Metadata>` uses an empty object for `None`; results cross as `serde_json::Value` and failures use the existing kit error mapping (HITL 50d017c9). |
 | `roomkit_ai::ContinuationPolicy` | `roomkit.ContinuationPolicy` | Shared `Arc<dyn Fn(&str) -> Result<Option<String>, ProviderError> + Send + Sync>`; cloned channels share the callback, returned instructions are owned, and errors preserve their source without provider retry. |
 | `roomkit_ai::extract_tools` | `roomkit.tools.extract_tools` | `Vec<ToolEntry>` represents the mixed input list; `Result<(Vec<AiTool>, Option<ToolHandler>), AiError>` represents the definitions, optional handler and schema errors. Raw dictionaries use the added `ToolEntry::Schema(Metadata)` variant (approved 2026-11-17). |
 | `roomkit::tools::named_blocks` | `roomkit.tools.named_blocks` | `tags: Option<&[&str]>`: `None` uses the public `FENCED_TAGS`; `Some(&[])` preserves the text; supplied tags keep their order (approved 2026-11-17). |

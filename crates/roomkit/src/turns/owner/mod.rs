@@ -15,6 +15,7 @@
 //! This module holds what both share; `reader` is the reader's side,
 //! `pump` the pump.
 
+mod call_context;
 mod input_request;
 mod pump;
 mod reader;
@@ -48,6 +49,7 @@ use crate::turns::context::TurnContext;
 #[derive(Clone, Debug)]
 pub(crate) struct Facts {
     pub(crate) room_id: RoomId,
+    pub(crate) room: Arc<Room>,
     /// The room as the turn read it, for tools that name its agents.
     pub(crate) room_metadata: Arc<Metadata>,
     pub(crate) channel_id: ChannelId,
@@ -64,6 +66,7 @@ impl Facts {
     pub(crate) fn of(binding: &ChannelBinding, event: &RoomEvent, room: &Room) -> Self {
         Self {
             room_id: event.room_id.clone(),
+            room: Arc::new(room.clone()),
             room_metadata: Arc::new(room.metadata.clone()),
             channel_id: binding.channel_id.clone(),
             channel_type: binding.channel_type.clone(),

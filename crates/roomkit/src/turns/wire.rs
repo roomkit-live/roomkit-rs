@@ -286,6 +286,15 @@ pub(crate) struct CallContext {
     pub(crate) actor_id: Option<String>,
     pub(crate) allowed_names: Option<Vec<String>>,
     pub(crate) requester: Option<String>,
+    pub(crate) response_metadata: Option<Metadata>,
+}
+
+/// Changes measured against the record carried by one owner-served call.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct RecordChanges {
+    pub(crate) written: Metadata,
+    pub(crate) removed: Vec<String>,
 }
 
 /// A frame, executor to owner (RFC §10.6.3), carrying the turn by its
@@ -410,6 +419,8 @@ pub(crate) enum Control {
         result: Value,
         #[serde(default)]
         error: Option<WireError>,
+        #[serde(default)]
+        record_changes: Option<RecordChanges>,
     },
     /// A steering directive for the turn's loop (RFC §21.3), answered by
     /// `steer_result`.

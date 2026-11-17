@@ -202,9 +202,9 @@ impl InputNotification {
             let bounded = crate::turn_record::within_current_turn_record(bounded);
             let bounded = crate::tool_call_scope::within_current_tool_call(bounded);
             let task: BoxFuture<'static, ()> = match &self.turn {
-                Some(turn) => {
-                    Box::pin(ExecutionContext::current().scope(TURN.scope(turn.clone(), bounded)))
-                }
+                Some(turn) => Box::pin(
+                    ExecutionContext::current().scope(TURN.scope(Some(turn.clone()), bounded)),
+                ),
                 None => Box::pin(ExecutionContext::current().scope(bounded)),
             };
             if !self.kit.spawn_observer(task) {

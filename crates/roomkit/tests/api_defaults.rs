@@ -1773,3 +1773,10 @@ fn input_requests_are_not_scoped_to_an_organization_by_default() {
             .is_none()
     );
 }
+
+#[test]
+fn declared_host_verbs_need_their_turn_by_default() {
+    let defaults = roomkit::turns::DeclareHostVerbOptions::default();
+    // roomkit.RoomKit.declare_host_verb(between_turns) = False
+    assert!(!defaults.between_turns);
+}

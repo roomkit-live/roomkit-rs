@@ -33,7 +33,9 @@ pub use public_options::{HookOptions, RoomHookOptions, TakesOptions};
 
 mod call_state;
 mod channel_calls;
+pub(crate) mod declared;
 mod detach_state;
+pub use declared::{DeclareHostVerbOptions, DeclaredVerb};
 pub(crate) use detach_state::{DetachTicket, PendingDetaches};
 mod codec;
 pub(crate) mod context;

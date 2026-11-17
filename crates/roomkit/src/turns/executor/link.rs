@@ -6,6 +6,9 @@
 //! owner serves the turn, each a `tool_call` answered once while the turn
 //! runs.
 
+mod host_call;
+
+use self::host_call::{HostReply, call_context};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -19,10 +22,10 @@ use super::inputs::ExecutorInputs;
 use crate::error::{RoomKitError, repr};
 use crate::turn::{OwnerToolAnswer, TurnKit};
 use crate::turns::codec::{encode_end, encode_end_item, encode_start};
-use crate::turns::error::{TurnError, rebuild_kit_error};
+use crate::turns::error::TurnError;
 use crate::turns::pipe::Uncarried;
 use crate::turns::wire::{
-    CallContext, Frame, Item, OwnerMessage, OwnerTool, ToolOutcome, WireError,
+    CallContext, Frame, Item, OwnerMessage, OwnerTool, RecordChanges, ToolOutcome, WireError,
 };
 use crate::turns::{MemoryTurn, Turns, lock};
 
@@ -258,7 +261,7 @@ pub(crate) struct TurnFacts {
 /// What a call waits for: a verb's result, or the answer of a tool the
 /// owner serves.
 enum Answer {
-    Verb(oneshot::Sender<Result<Value, RoomKitError>>),
+    Verb(oneshot::Sender<Result<HostReply, RoomKitError>>),
     Tool(oneshot::Sender<OwnerToolAnswer>),
 }
 
@@ -445,15 +448,13 @@ impl HostLink {
             }
             pending.insert(call_id.clone(), Answer::Verb(answer));
         }
+        let context = call_context(floor);
+        let carried = context.response_metadata.clone();
         let frame = Frame::HostCall {
             call_id: call_id.clone(),
             verb: verb.to_owned(),
             arguments,
-            context: CallContext {
-                room_id: self.facts.room.as_str().to_owned(),
-                chain_depth: floor,
-                ..CallContext::default()
-            },
+            context,
         };
         if let Err(Uncarried(why)) = self.sender.send(&frame) {
             self.withdraw(&call_id, false);
@@ -472,12 +473,14 @@ impl HostLink {
         };
         let result = answered.await;
         withdrawn.disarm();
-        result.unwrap_or_else(|_gone| {
-            Err(
-                TurnError::new("owner_lost", "the turn ended before the verb was answered")
-                    .into_kit_error(),
-            )
-        })
+        result
+            .unwrap_or_else(|_gone| {
+                Err(
+                    TurnError::new("owner_lost", "the turn ended before the verb was answered")
+                        .into_kit_error(),
+                )
+            })?
+            .finish(carried.as_ref())
     }
 
     /// Runs `verb` as work the turn began, after it ended (RFC §10.6.3
@@ -500,17 +503,23 @@ impl HostLink {
     }
 
     /// The owner answered the verb `call_id`.
-    pub(crate) fn resolve(&self, call_id: &str, result: Value, error: Option<&WireError>) {
+    pub(crate) fn resolve(
+        &self,
+        call_id: &str,
+        result: Value,
+        error: Option<WireError>,
+        record_changes: Option<RecordChanges>,
+    ) {
         let Some(answer) = lock(&self.pending).remove(call_id) else {
             return;
         };
         match answer {
             Answer::Verb(answer) => {
-                let answered = match error {
-                    Some(error) => Err(rebuild_kit_error(error)),
-                    None => Ok(result),
-                };
-                drop(answer.send(answered));
+                drop(answer.send(Ok(HostReply {
+                    result,
+                    error,
+                    record_changes,
+                })));
             }
             Answer::Tool(answer) => drop(answer.send(OwnerToolAnswer::Failed {
                 kind: "RuntimeError".to_owned(),

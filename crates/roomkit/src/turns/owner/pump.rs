@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
-use super::{Facts, Main, OwnerState, verbs};
+use super::{Facts, Main, OwnerState, call_context};
 use crate::context::ExecutionContext;
 use crate::tasks::Unit;
 use crate::turn::TurnKit;
@@ -24,7 +24,7 @@ use crate::turns::context::TurnContext;
 use crate::turns::error::{TurnError, one};
 use crate::turns::pipe::PipeReceiver;
 use crate::turns::timeouts::Beat;
-use crate::turns::wire::{CallContext, Control, Frame, Item, WireError};
+use crate::turns::wire::{CallContext, Control, Frame, Item};
 use crate::turns::{InputTurn, Turns, lock};
 
 /// How the pump's watch of a turn ended.
@@ -317,7 +317,7 @@ impl Pump {
         let kit = Arc::clone(&self.kit);
         let answering = call_id.clone();
         let task = async move {
-            let served = verbs::serve(&kit, &state.facts, &verb, arguments, &context);
+            let served = call_context::serve(&kit, &state.facts, &verb, arguments, &context);
             let answered = waiting.scope(served).await;
             answer(&state, answering, answered);
         };
@@ -326,7 +326,11 @@ impl Pump {
             self.calls.insert(call_id, RunningCall { task, unit });
         } else {
             let refused = one("backend_closed", "the kit is shut down".to_owned());
-            answer(&self.state, call_id, Err(Box::new(refused)));
+            answer(
+                &self.state,
+                call_id,
+                call_context::HostAnswer::failed(refused),
+            );
         }
     }
 
@@ -474,11 +478,11 @@ impl Drop for Pump {
 
 /// Answers the call `call_id` with what its verb made, while the turn is
 /// the owner's; a result that cannot cross is answered as a failure.
-fn answer(state: &OwnerState, call_id: String, answered: Result<Value, Box<WireError>>) {
+fn answer(state: &OwnerState, call_id: String, answered: call_context::HostAnswer) {
     if *state.over.borrow() {
         return;
     }
-    let (result, error) = match answered {
+    let (result, error) = match answered.outcome {
         Ok(result) => (result, None),
         Err(error) => (Value::Null, Some(*error)),
     };
@@ -486,6 +490,7 @@ fn answer(state: &OwnerState, call_id: String, answered: Result<Value, Box<WireE
         call_id: call_id.clone(),
         result,
         error,
+        record_changes: answered.record_changes,
     };
     if let Err(uncarried) = state.turn.controls.put(&control) {
         let refused = one(
@@ -499,6 +504,7 @@ fn answer(state: &OwnerState, call_id: String, answered: Result<Value, Box<WireE
             call_id,
             result: Value::Null,
             error: Some(refused),
+            record_changes: None,
         }));
     }
 }
@@ -573,6 +579,7 @@ mod tests {
         .unwrap();
         let facts = Facts {
             room_id: RoomId::new("r1").unwrap(),
+            room: Arc::new(roomkit_core::model::Room::new(RoomId::new("r1").unwrap())),
             room_metadata: Arc::default(),
             channel_id: ChannelId::new("ai").unwrap(),
             channel_type: roomkit_core::model::ChannelType::AI,
@@ -600,6 +607,7 @@ mod tests {
     fn a_turn_emits_only_its_kinds_about_its_own_room_and_channel() {
         let facts = Facts {
             room_id: RoomId::new("r1").unwrap(),
+            room: Arc::new(roomkit_core::model::Room::new(RoomId::new("r1").unwrap())),
             room_metadata: Arc::default(),
             channel_id: ChannelId::new("ai").unwrap(),
             channel_type: roomkit_core::model::ChannelType::AI,

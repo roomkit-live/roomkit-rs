@@ -517,8 +517,9 @@ fn apply(
             call_id,
             result,
             error,
+            record_changes,
         } => {
-            link.resolve(&call_id, result, error.as_ref());
+            link.resolve(&call_id, result, error, record_changes);
             None
         }
         Control::Steer {

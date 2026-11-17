@@ -252,6 +252,7 @@ pub(crate) struct Inner<S> {
     pub(crate) events: Handlers,
     /// The turn backend every intelligence turn runs through (RFC §10.6).
     pub(crate) turns: Arc<Turns>,
+    pub(crate) declared_verbs: crate::turns::declared::DeclaredVerbs,
     /// The lines of the channels that take a room's turns one at a time
     /// (RFC §6.4).
     pub(crate) room_turns: Arc<crate::room_turns::RoomTurns>,
@@ -425,6 +426,7 @@ impl<S: ConversationStore> RoomKit<S> {
             config: RwLock::new(Arc::new(config)),
             channels: RwLock::new(HashMap::new()),
             channel_order: RwLock::new(Vec::new()),
+            declared_verbs: crate::turns::declared::DeclaredVerbs::default(),
             hooks: RwLock::new(HashMap::new()),
             retired_hooks: RwLock::new(Vec::new()),
             forgotten_hooks: RwLock::default(),

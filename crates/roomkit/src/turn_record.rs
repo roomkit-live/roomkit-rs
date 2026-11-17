@@ -14,7 +14,7 @@ use futures_core::Stream;
 use roomkit_core::model::ResponseMetadata;
 
 tokio::task_local! {
-    static RECORD: TurnRecord;
+    static RECORD: Option<TurnRecord>;
 }
 
 /// A turn's one record, which a hook may replace with its own. For
@@ -40,7 +40,7 @@ impl TurnRecord {
 
     /// Runs `work` within this turn.
     pub async fn scope<F: Future>(self, work: F) -> F::Output {
-        RECORD.scope(self, work).await
+        RECORD.scope(Some(self), work).await
     }
 
     /// `stream` read within this turn, each of its reads.
@@ -65,7 +65,7 @@ impl<S: Stream + Unpin> Stream for Scoped<S> {
 
     fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<S::Item>> {
         let this = self.get_mut();
-        RECORD.sync_scope(this.record.clone(), || {
+        RECORD.sync_scope(Some(this.record.clone()), || {
             Pin::new(&mut this.stream).poll_next(context)
         })
     }
@@ -75,7 +75,10 @@ impl<S: Stream + Unpin> Stream for Scoped<S> {
 /// turn. For `roomkit_ai::current_response_metadata`.
 #[doc(hidden)]
 pub fn current_turn_record() -> Option<ResponseMetadata> {
-    RECORD.try_with(TurnRecord::current).ok()
+    RECORD
+        .try_with(|record| record.as_ref().map(TurnRecord::current))
+        .ok()
+        .flatten()
 }
 
 /// `future` within the turn's record its caller runs within, if any: what
@@ -86,11 +89,17 @@ pub(crate) fn within_current_turn_record<F>(
 where
     F: Future + Send + 'static,
 {
-    let record = RECORD.try_with(Clone::clone).ok();
+    let record = RECORD.try_with(Clone::clone).ok().flatten();
     async move {
         match record {
             Some(record) => record.scope(future).await,
             None => future.await,
         }
     }
+}
+
+/// The owner callback of a call carrying no record must read none, even
+/// when a retained executor child made that call under its old record.
+pub(crate) async fn without_turn_record<F: Future>(work: F) -> F::Output {
+    RECORD.scope(None, work).await
 }

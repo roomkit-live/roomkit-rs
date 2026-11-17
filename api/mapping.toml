@@ -48,6 +48,7 @@ roomkit = ["roomkit"]
 "roomkit::model" = ["roomkit", "roomkit.models"]
 "roomkit::testing" = ["roomkit.testing"]
 "roomkit::tools" = ["roomkit.tools"]
+"roomkit::turns" = ["roomkit.turns", "roomkit"]
 roomkit_ai = ["roomkit.providers.ai", "roomkit", "roomkit.tools", "roomkit.skills", "roomkit.skills.mcp"]
 "roomkit_ai::memory" = ["roomkit.memory", "roomkit"]
 "roomkit_ai::knowledge" = ["roomkit.knowledge"]
@@ -1270,18 +1271,6 @@ rust = "roomkit_ai::CallIds"
 members = ["call"]
 approved = "2026-11-04"
 reason = "Rust has no object to call: Python's ids(server_id, name) is ids.call(server_id, name), a server's id read as text before it, none as empty (HITL 8a3d3780)"
-
-[[missing]]
-python = "roomkit.RoomKit"
-members = ["declare_host_verb"]
-scope = "text"
-reason = "not yet in Rust: a host's own verbs for its turns' host, Python's RMK-1470, whose lot ports it and takes this entry off (HITL 40019981)"
-
-[[missing]]
-python = "roomkit.TurnHost"
-members = ["call"]
-scope = "text"
-reason = "not yet in Rust: a host verb a turn calls, Python's RMK-1470, whose lot ports it and takes this entry off (HITL 40019981)"
 
 [[missing]]
 python = "roomkit.RoomKit"
