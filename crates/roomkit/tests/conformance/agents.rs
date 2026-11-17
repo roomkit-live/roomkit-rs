@@ -1247,6 +1247,7 @@ fn agent_settings(spec: &Value, options: &mut AiChannelOptions) -> Result<(), St
         options.text_coalesce_chars = usize::try_from(flush).map_err(|e| e.to_string())?;
     }
     options.publish_text_deltas = spec["publish_text_deltas"] == true;
+    options.enable_planning = spec["enable_planning"] == true;
     if let Some(budget) = spec.get("thinking_budget") {
         options.thinking_budget = Some(budget.as_i64().ok_or("thinking_budget: not a count")?);
     }

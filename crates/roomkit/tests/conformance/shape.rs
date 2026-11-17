@@ -130,6 +130,7 @@ const CHANNEL: &[&str] = &[
     "skills_in_prompt",
     "thinking_budget",
     "enable_thinking",
+    "enable_planning",
     "thinking_coalesce_ms",
     "thinking_coalesce_chars",
     "publish_thinking_text",
@@ -891,6 +892,15 @@ fn binding_update(channel: &Value, path: &str, found: &mut Vec<String>) {
     }
 }
 
+fn planning(channel: &Value, path: &str, found: &mut Vec<String>) {
+    if channel
+        .get("enable_planning")
+        .is_some_and(|value| !value.is_boolean())
+    {
+        found.push(format!("{path}.enable_planning: expected a boolean"));
+    }
+}
+
 fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
     crate::continuation::check(channel, path, found);
     crate::acp_agents::handler::validate(channel, path, found);
@@ -914,6 +924,7 @@ fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
     }
 
     members(channel, CHANNEL, path, found);
+    planning(channel, path, found);
     binding_update(channel, path, found);
     let human = &channel["human_input"];
     optional(human, HUMAN_INPUT, &format!("{path}.human_input"), found);
@@ -1690,6 +1701,35 @@ mod tests {
                     .iter()
                     .any(|problem| problem.contains("tool_policy"))
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod planning_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn planning_fixture_accepts_only_boolean_options() {
+        for value in [
+            Value::Null,
+            json!(0),
+            json!(1),
+            json!("true"),
+            json!([]),
+            json!({}),
+        ] {
+            let scenario = json!({"setup":{"channels":[{"id":"agent", "type":"ai", "enable_planning":value}]}});
+            assert!(
+                unknown_members(&scenario)
+                    .iter()
+                    .any(|message| message.contains("enable_planning: expected a boolean"))
+            );
+        }
+        for value in [false, true] {
+            let scenario = json!({"setup":{"channels":[{"id":"agent", "type":"ai", "enable_planning":value}]}});
+            assert_eq!(unknown_members(&scenario), Vec::<String>::new());
         }
     }
 }

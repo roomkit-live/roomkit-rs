@@ -25,7 +25,9 @@ use roomkit::{
     SetAgentResponsePolicyOptions, SetRoomTimersOptions, SetVisibilityOptions, UnmuteOptions,
     UnmuteOutputOptions, UpdateBindingMetadataOptions, UpdateEventOptions, WaitForIdle,
 };
-use roomkit_ai::{AiGenerationEvent, AiResponseEvent, ThinkingEvent, ToolRoundEvent};
+use roomkit_ai::{
+    AiGenerationEvent, AiResponseEvent, PlanUpdatedEvent, ThinkingEvent, ToolRoundEvent,
+};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
@@ -926,6 +928,7 @@ fn add_room_hook(
     let tool_round = turn_hook_handler::<ToolRoundEvent>(hook, run);
     let response = turn_hook_handler::<AiResponseEvent>(hook, run);
     let thinking = turn_hook_handler::<ThinkingEvent>(hook, run);
+    let plan = turn_hook_handler::<PlanUpdatedEvent>(hook, run);
     let speak_queue = turn_hook_handler::<roomkit::SpeakQueueEvent>(hook, run);
     let decision = turn_hook_handler::<roomkit::DispatchDecisionEvent>(hook, run);
     Ok(async move {
@@ -960,6 +963,10 @@ fn add_room_hook(
             }
             (None, HookTrigger::OnAiResponse) => {
                 kit.add_room_hook(&room, trigger, execution, response, options)
+                    .await
+            }
+            (None, HookTrigger::OnPlanUpdated) => {
+                kit.add_room_hook(&room, trigger, execution, plan, options)
                     .await
             }
             (None, HookTrigger::OnAiThinking) => {
@@ -1037,6 +1044,9 @@ pub(crate) fn register_hook(
         kit.hook(trigger, handler, options)
     } else if trigger == HookTrigger::OnDispatchDecision {
         let handler = turn_hook_handler::<roomkit::DispatchDecisionEvent>(hook, run);
+        kit.hook(trigger, handler, options)
+    } else if trigger == HookTrigger::OnPlanUpdated {
+        let handler = turn_hook_handler::<PlanUpdatedEvent>(hook, run);
         kit.hook(trigger, handler, options)
     } else if trigger == HookTrigger::OnAiThinking {
         let handler = turn_hook_handler::<ThinkingEvent>(hook, run);

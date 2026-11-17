@@ -12,7 +12,9 @@ use roomkit::{
     DisableRoomHookOptions, EnableRoomHookOptions, HookPayload, HookTrigger, IntoHookReturn,
     RoomKitError,
 };
-use roomkit_ai::{AiGenerationEvent, AiResponseEvent, ThinkingEvent, ToolRoundEvent};
+use roomkit_ai::{
+    AiGenerationEvent, AiResponseEvent, PlanUpdatedEvent, ThinkingEvent, ToolRoundEvent,
+};
 use serde_json::Value;
 
 use crate::calls::{Called, Unreadable, field, finish, optional};
@@ -127,6 +129,12 @@ fn register(
             name,
             hook,
             turn_hook_handler::<AiResponseEvent>(hook, run),
+        ),
+        HookTrigger::OnPlanUpdated => given(
+            run,
+            name,
+            hook,
+            turn_hook_handler::<PlanUpdatedEvent>(hook, run),
         ),
         HookTrigger::OnAiThinking => given(
             run,

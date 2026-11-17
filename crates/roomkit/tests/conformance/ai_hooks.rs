@@ -13,7 +13,8 @@ use roomkit::model::hook::AllowOptions;
 use roomkit::model::{HookAction, HookResult, RoomContext};
 use roomkit::{HookError, TurnPayload};
 use roomkit_ai::{
-    AiGenerationEvent, AiMessage, AiResponseEvent, AiRole, AiTool, ThinkingEvent, ToolRoundEvent,
+    AiGenerationEvent, AiMessage, AiResponseEvent, AiRole, AiTool, PlanUpdatedEvent, ThinkingEvent,
+    ToolRoundEvent,
 };
 use serde_json::{Map, Value, json};
 
@@ -209,6 +210,19 @@ impl Scripted for ToolRoundEvent {
             }
         }
         Ok(self)
+    }
+}
+
+impl Scripted for PlanUpdatedEvent {
+    const MEMBER: &'static str = "plan";
+
+    fn record(&self) -> Value {
+        json!({"room_id": self.room_id, "channel_id": self.channel_id,
+            "tasks": self.tasks, "timestamp": self.timestamp})
+    }
+
+    fn patched(self, _patch: &Value) -> Result<Self, String> {
+        Err("an ON_PLAN_UPDATED hook is observed: it patches nothing".to_owned())
     }
 }
 
