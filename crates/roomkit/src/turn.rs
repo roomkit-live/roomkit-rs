@@ -235,8 +235,8 @@ impl TurnHost {
     }
 
     /// The id of the turn it serves, as the turn backend names it (RFC
-    /// §10.6.8): what `RoomKit::steer` addresses a turn by. Python's
-    /// private `current_turn_id()`, which the AI channel's loop reads.
+    /// §10.6.8): what `RoomKit::steer` addresses a turn by. The id of the
+    /// current work is available through [`crate::current_turn_id`].
     #[doc(hidden)]
     pub fn turn_id(&self) -> &str {
         self.shared.link.turn_id()

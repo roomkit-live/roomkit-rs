@@ -5,6 +5,8 @@
 
 #[path = "declared_host/close.rs"]
 mod close;
+#[path = "declared_host/current_id.rs"]
+mod current_id;
 
 use std::sync::{Arc, Mutex};
 
@@ -178,14 +180,23 @@ async fn a_retained_child_does_not_lend_its_old_host_or_record_to_the_owner() {
             async move {
                 let record = current_response_metadata().unwrap();
                 record.insert("old", json!(true));
+                let turn_id = roomkit::current_turn_id().unwrap();
                 let later = roomkit::keep_context(async move {
                     waiting.notified().await;
                     let host = current_turn_host().unwrap();
+                    assert_eq!(
+                        roomkit::current_turn_id().as_deref(),
+                        Some(turn_id.as_str())
+                    );
                     assert_eq!(
                         current_response_metadata().unwrap().get("old"),
                         Some(json!(true))
                     );
                     let answer = host.call("app.later", None).await.unwrap();
+                    assert_eq!(
+                        roomkit::current_turn_id().as_deref(),
+                        Some(turn_id.as_str())
+                    );
                     assert!(current_turn_host().is_some());
                     assert_eq!(
                         current_response_metadata().unwrap().get("old"),
@@ -203,6 +214,7 @@ async fn a_retained_child_does_not_lend_its_old_host_or_record_to_the_owner() {
             DeclaredVerb::new(|_| async {
                 Ok(json!({
                     "host": current_turn_host().is_some(),
+                    "turn_id": roomkit::current_turn_id(),
                     "record": current_response_metadata().is_some(),
                     "actor": current_tool_actor_id(),
                     "id": current_tool_call().map(|call| call.tool_call_id),
@@ -230,7 +242,7 @@ async fn a_retained_child_does_not_lend_its_old_host_or_record_to_the_owner() {
             .unwrap();
         assert_eq!(
             answer,
-            json!({"host": false, "record": false, "actor": null, "id": ""})
+            json!({"host": false, "turn_id": null, "record": false, "actor": null, "id": ""})
         );
         kit.close().await.unwrap();
     }

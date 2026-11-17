@@ -33,6 +33,16 @@ pub use public_options::{HookOptions, RoomHookOptions, TakesOptions};
 mod presence;
 pub use presence::{AgentPresence, ExecutorInfo, ExecutorInfoOptions};
 
+/// The innermost turn whose work is running, including a call served by its
+/// room owner. Its ID can be passed to [`crate::RoomKit::steer`] to address
+/// that turn in its room. Outside turn work the result is `None`. Pass a spawned
+/// child future through [`crate::keep_context`] to retain this ID.
+pub fn current_turn_id() -> Option<String> {
+    context::TurnScope::current()
+        .innermost()
+        .map(|id| id.to_string())
+}
+
 mod call_state;
 mod channel_calls;
 pub(crate) mod declared;
@@ -95,7 +105,6 @@ use self::wire::{
     RoomCallResult,
 };
 use crate::channel::DynChannel;
-use crate::context::ExecutionContext;
 use crate::error::RoomKitError;
 use crate::steering::SteeringDirective;
 use crate::tasks::{Marks, Unit};
@@ -486,7 +495,7 @@ impl Turns {
         let (channel_id, room_id) = (channel_id.clone(), room_id.clone());
         let last = || owner::last_turn(&self.records(), &channel_id, &room_id);
         let answering = owner::answer_room_call(&kit, last, parsed.message);
-        let answered = ExecutionContext::default().scope(answering).await;
+        let answered = context::TurnContext::default().scope(answering).await;
         let answered: RoomCallResult = cross(&observers, Carried::RoomCallResult, &answered)?;
         match answered.error {
             Some(error) => Err(rebuild_kit_error(&error)),

@@ -265,6 +265,8 @@ pub use self::transport::{TransportChannel, TransportChannelOptions};
 pub use self::turn::TurnChain;
 pub use self::turn::{PostStatusOptions, ToolGate, TurnHost, WaitTaskOptions, current_turn_host};
 pub use self::turn_record::{Scoped, TurnRecord, current_turn_record};
+#[doc(inline)]
+pub use self::turns::current_turn_id;
 // For the AI channel's turn alone: the answer of a tool the owner serves.
 pub use self::kit::{
     ClaimRoomStrategyOptions, InstallStrategyOptions, ListenOnlyOptions,

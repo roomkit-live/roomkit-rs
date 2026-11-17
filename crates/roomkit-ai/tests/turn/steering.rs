@@ -10,7 +10,7 @@ use roomkit::model::{
     Cancel, DeleteContent, EditContent, EventContent, EventId, EventType, InjectMessage, RoomEvent,
     SteeringDirective,
 };
-use roomkit::{ConversationStore, RoomKit, RoomKitError, SteerOptions, current_turn_host};
+use roomkit::{ConversationStore, RoomKit, RoomKitError, SteerOptions, current_turn_id};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
     AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, AiRole, ProviderError,
@@ -506,8 +506,7 @@ async fn a_turn_addressed_by_the_id_its_tool_reads() {
     let turn_ids: Arc<Mutex<Vec<String>>> = Arc::default();
     let noted = Arc::clone(&turn_ids);
     *tool.on_start.lock().unwrap() = Some(Box::new(move || {
-        let turn = current_turn_host().unwrap();
-        noted.lock().unwrap().push(turn.turn_id().to_owned());
+        noted.lock().unwrap().push(current_turn_id().unwrap());
     }));
     let room = Arc::new(with_tools(model.clone(), tool.tools()).await);
     let turn = first_turn(&room);

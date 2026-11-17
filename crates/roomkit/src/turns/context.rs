@@ -73,3 +73,30 @@ impl TurnContext {
         self.execution.scope(self.turns.scope(future))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::TurnContext;
+    use crate::{current_turn_id, keep_context};
+
+    #[tokio::test]
+    async fn a_nested_turn_restores_the_parent_and_a_spawn_can_keep_it() {
+        TurnContext::current()
+            .in_turn("outer".into())
+            .scope(async {
+                TurnContext::current()
+                    .in_turn("inner".into())
+                    .scope(async {
+                        assert_eq!(current_turn_id().as_deref(), Some("inner"));
+                        let fresh = tokio::spawn(async { current_turn_id() });
+                        let retained = tokio::spawn(keep_context(async { current_turn_id() }));
+                        assert_eq!(fresh.await.ok(), Some(None));
+                        assert_eq!(retained.await.ok(), Some(Some("inner".into())));
+                    })
+                    .await;
+                assert_eq!(current_turn_id().as_deref(), Some("outer"));
+            })
+            .await;
+        assert!(current_turn_id().is_none());
+    }
+}
