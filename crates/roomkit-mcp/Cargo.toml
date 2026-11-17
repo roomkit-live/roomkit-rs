@@ -1,6 +1,6 @@
 [package]
 name = "roomkit-mcp"
-description = "MCP tools over stdio or Streamable HTTP for a RoomKit AI agent"
+description = "MCP tools over stdio, Streamable HTTP or legacy SSE for a RoomKit AI agent"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

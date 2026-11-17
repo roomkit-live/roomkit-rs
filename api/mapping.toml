@@ -1219,16 +1219,10 @@ reason = "not in 0.x: an injected HTTP transport; the provider builds its own cl
 [[missing]]
 python = "roomkit.tools.MCPToolProvider"
 members = [
-    "__init__", "call_tool_result",
+    "call_tool_result",
 ]
 scope = "text"
-reason = "the constructor taking every transport's keywords (from_command and from_url build a provider) remains unported; call_tool_result and MCP outputSchema validation are deferred beyond the first public release (RMK-1732)"
-
-[[missing]]
-python = "roomkit.tools.MCPToolProvider.from_url"
-params = ["transport"]
-scope = "text"
-reason = "not in 0.x: the legacy SSE transport"
+reason = "call_tool_result and MCP outputSchema validation are deferred beyond the first public release (RMK-1732)"
 
 [[exception]]
 rust = "roomkit_ai::MockAiProvider"
@@ -1400,3 +1394,20 @@ rust = "roomkit::turns::ExecutorInfo::covers"
 params = ["room_hooks", "organization_id"]
 approved = "2026-11-17"
 reason = "Explicit borrowed slice and optional organization retain Python defaults as [] and None; coverage errors remain fallible."
+
+[[exception]]
+rust = "roomkit_mcp::McpHeaders"
+approved = "2026-11-17"
+reason = "Python's retained headers dictionary: named cloned handle, atomic new/get/replace/insert/remove, case-sensitive keys and insertion order; get returns an owned snapshot (HITL e4ef09db)"
+
+[[exception]]
+rust = "roomkit_mcp::McpEnvironment"
+approved = "2026-11-17"
+reason = "Python's retained environment dictionary: named cloned handle with atomic new/get/replace/insert/remove and owned snapshots; connections copy the current overrides (HITL e4ef09db)"
+
+
+[[exception]]
+rust = "roomkit_mcp::McpToolProvider::new"
+params = ["url"]
+approved = "2026-11-17"
+reason = "Rust has no default call arguments: None preserves Python's omitted URL and Some borrows its endpoint (HITL e4ef09db)"

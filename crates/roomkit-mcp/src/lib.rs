@@ -1,5 +1,5 @@
 //! The tools of MCP servers for a RoomKit AI channel, over stdio or the
-//! optional `http` feature for Streamable HTTP (RFC §21.2), in the Python
+//! optional `http` feature for Streamable HTTP or legacy SSE (RFC §21.2), in the Python
 //! implementation's shape.
 //!
 //! - [`McpToolProvider`]: Python's `MCPToolProvider`, a server the host
@@ -7,8 +7,10 @@
 //!   starts a program with its arguments as a list, never through a shell,
 //!   with an environment of its own; [`from_url`](McpToolProvider::from_url)
 //!   (feature `http`) reaches a remote endpoint, with explicit headers,
-//!   JSON or SSE responses, a bounded start and its session deleted at the
-//!   close. No OAuth and no legacy HTTP+SSE transport are provided.
+//!   a bounded start, and a host-selected HTTP transport. Streamable HTTP
+//!   accepts JSON or SSE responses and deletes its session at close; legacy
+//!   SSE keeps a GET reader and sends messages to its announced POST address.
+//!   [`new`](McpToolProvider::new) accepts either transport or stdio.
 //! - A channel serves its tools through
 //!   [`get_tools`](McpToolProvider::get_tools) and
 //!   [`as_tool_handler`](McpToolProvider::as_tool_handler); its
@@ -65,6 +67,7 @@ mod error;
 mod group;
 mod host;
 mod listing;
+mod maps;
 mod process;
 mod protocol;
 mod provider;
@@ -80,10 +83,12 @@ mod tool_dicts;
 mod wire;
 
 pub use self::error::McpError;
+pub use self::maps::{McpEnvironment, McpHeaders};
 #[cfg(feature = "http")]
 pub use self::provider::FromUrlOptions;
 pub use self::provider::{
     AsToolHandlerOptions, CallToolOptions, FromCommandOptions, McpToolProvider,
+    McpToolProviderOptions,
 };
 
 pub use self::host::{ReadResourceOptions, RequestOptions};

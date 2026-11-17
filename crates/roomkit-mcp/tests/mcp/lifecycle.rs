@@ -401,13 +401,13 @@ async fn a_server_flooding_its_standard_error_is_not_blocked() {
 
 /// A command that cannot start a process is refused before anything runs,
 /// an empty one when the provider is built, as Python's raises
-/// `ValueError`.
+/// `ValueError`. An empty environment key is accepted; `tests/construction.rs`
+/// verifies that it reaches the process as in Python.
 #[tokio::test]
 async fn a_command_that_cannot_start_a_process_is_refused() {
     let refused = [
         command("").err(),
         fake("normal").env("A=B", "1").connect().await.err(),
-        fake("normal").env("", "1").connect().await.err(),
         fake("normal").env("KEY", "a\0b").connect().await.err(),
         fake("normal").arg("a\0b").connect().await.err(),
     ];

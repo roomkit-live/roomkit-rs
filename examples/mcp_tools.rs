@@ -39,7 +39,9 @@ use roomkit::model::{
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{AttachChannelOptions, CreateRoomOptions, ProcessInboundOptions};
 use roomkit_ai::{AiChannel, AiChannelOptions, ToolEntry, ToolPolicy};
-use roomkit_mcp::{AsToolHandlerOptions, FromCommandOptions, McpError, McpToolProvider};
+use roomkit_mcp::{
+    AsToolHandlerOptions, FromCommandOptions, McpError, McpToolProvider, McpToolProviderOptions,
+};
 use serde_json::Value;
 
 use shared::{Checks, FakeOpenAi, OpenAiEndpoint, Reply, mcp};
@@ -72,12 +74,14 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
 
 async fn run() -> Result<ExitCode, Box<dyn Error>> {
     let mut checks = Checks::default();
-    let options = FromCommandOptions {
+    let options = McpToolProviderOptions {
+        transport: "stdio".into(),
+        command: Some(std::env::current_exe()?.into_os_string()),
         args: vec![mcp::SERVER_FLAG.into()],
         label: Some("shop".to_owned()),
-        ..FromCommandOptions::default()
+        ..McpToolProviderOptions::default()
     };
-    let server = McpToolProvider::from_command(std::env::current_exe()?, options)?;
+    let server = McpToolProvider::new(None, options)?;
     server.connect().await?;
     // The server is this process's child, and leads a process group of its
     // own.

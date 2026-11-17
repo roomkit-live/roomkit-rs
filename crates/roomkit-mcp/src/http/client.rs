@@ -1,8 +1,9 @@
 //! Bounded HTTP I/O; the SDK owns MCP negotiation, sessions and cancellation.
+mod legacy;
 use crate::{McpError, server::MESSAGE_LIMIT};
 use reqwest::{
     Method, RequestBuilder, Response,
-    header::{HeaderName, HeaderValue},
+    header::{HeaderMap, HeaderName, HeaderValue},
 };
 use rmcp::{
     model::{ClientJsonRpcMessage, ClientRequest, ErrorData, ServerJsonRpcMessage},
@@ -51,6 +52,7 @@ impl Failure {
 #[derive(Clone)]
 pub(super) struct Client {
     lease: Arc<Lease>,
+    headers: HeaderMap,
     failure: Failure,
     pub(super) capture: crate::raw::Capture,
 }
@@ -103,6 +105,7 @@ impl Client {
                     client,
                     _finished: done,
                 }),
+                headers: HeaderMap::new(),
                 failure: failure.clone(),
                 capture,
             },
@@ -110,6 +113,11 @@ impl Client {
             failure,
         ))
     }
+    pub(super) fn with_headers(mut self, headers: HeaderMap) -> Self {
+        self.headers = headers;
+        self
+    }
+
     fn request(
         &self,
         method: Method,
@@ -118,14 +126,15 @@ impl Client {
         auth: Option<String>,
         headers: Headers,
     ) -> RequestBuilder {
-        let mut request = self
-            .lease
-            .client
-            .request(method, uri)
-            .header("accept", "application/json, text/event-stream");
+        let mut all_headers = self.headers.clone();
+        all_headers.insert(
+            "accept",
+            HeaderValue::from_static("application/json, text/event-stream"),
+        );
         for (name, value) in headers {
-            request = request.header(name, value);
+            all_headers.insert(name, value);
         }
+        let mut request = self.lease.client.request(method, uri).headers(all_headers);
         if let Some(session) = session {
             request = request.header("mcp-session-id", session);
         }

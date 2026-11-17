@@ -161,6 +161,9 @@ the mapping and its tests. The check does not generate or update this document.
 | `roomkit_acp::McpServersForRoom` | `MCPServersForRoom` | Named callback returning a future; sync suppliers use `future::ready` (HITL 5ce911d3) |
 | `roomkit_acp::AcpContextContributor` | `ACPContextContributor` | Cloneable `new(callback)`, owned context/event and `Result<Vec<String>, AcpError>`; one string becomes `vec![text]`, invalid dynamic returns are unrepresentable (HITL 52031019) |
 | — | `roomkit.ACPTransport.open` | `queue` |
+| `roomkit_mcp::McpToolProvider::new` | `MCPToolProvider(url=None)` | Explicit `Option<&str>` uses `None` for Python's omitted URL (HITL e4ef09db). |
+| `roomkit_mcp::McpHeaders` | `MCPToolProvider(headers=)` | Named shared handle with atomic updates, owned snapshots and ordered case-sensitive keys (HITL e4ef09db). |
+| `roomkit_mcp::McpEnvironment` | `MCPToolProvider(env=)` | Named shared handle with atomic updates and per-connection owned snapshots (HITL e4ef09db). |
 | `roomkit_mcp::McpToolProvider` | — | `connect`, `close` |
 | `roomkit_mcp::McpToolProvider` | `roomkit.tools.MCPToolProvider` | `request(method, params: Option<&Metadata>, RequestOptions)`, `read_resource(uri, ReadResourceOptions)`; timeout defaults to 30 s. Host snapshots are owned values returned by methods (HITL 70a4bdc7). |
 | `roomkit_mcp::McpToolProvider::read_resource` | `MCPToolProvider.read_resource` | `Metadata` keeps the SDK model's complete resource JSON, including extensions and explicit nulls; URI validation/normalization is preserved (HITL 3de23e53). |
@@ -371,6 +374,32 @@ cover this local contract; MCP-served scripts remain separate work.
 
 
 ## MCP host access
+
+`McpToolProvider::new(url: Option<&str>, McpToolProviderOptions)` mirrors
+Python's common constructor. `transport` defaults to `streamable_http`; `sse`
+selects legacy GET/POST SSE and `stdio` selects a subprocess. The stdio form
+works without the `http` feature; HTTP forms then return a configuration error.
+Label validation precedes all other validation. Construction performs no I/O;
+process options are validated when the connection starts.
+
+`McpHeaders` and `McpEnvironment` are cloned handles to Python's retained
+mappings, with atomic `insert`, `remove` and `replace`; `get` returns an owned
+snapshot. Headers preserve case-sensitive keys and insertion order. Replacing
+an existing key keeps its position; removing then reinserting it appends it.
+Nonempty headers and every supplied environment are retained, while empty
+headers are replaced at construction. Every connection copies the then-current
+values; an open connection keeps its snapshot. `FromUrlOptions.headers` and
+`FromCommandOptions.env` are now `Option` handles (default `None`): replace a
+previous map value with `Some(map.into())`. `FromUrlOptions.transport` selects
+the HTTP transport. These Rust forms are approved in HITL e4ef09db.
+
+Legacy SSE reads the POST address from the GET stream's endpoint event and
+keeps its configured raw authority check. Redirects have the SDK's separate
+same-origin and method-preservation rules. Failed POST opening and rejected
+endpoint announcements retain the caller's connection deadline, and failed
+or cancelled opening closes the GET stream and stops the POST writer before
+returning. It does not create a Streamable HTTP session or send DELETE.
+
 
 `FromCommandOptions.discover` and `FromUrlOptions.discover` default to true;
 false opens a resource-only connection with no tool listing. The host can

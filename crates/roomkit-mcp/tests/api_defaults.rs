@@ -36,7 +36,7 @@ fn from_command_options_defaults_as_python() {
     // roomkit.tools.MCPToolProvider.from_command(cwd) = None
     assert!(defaults.cwd.is_none());
     // roomkit.tools.MCPToolProvider.from_command(env) = None
-    assert!(defaults.env.is_empty());
+    assert!(defaults.env.is_none());
     // roomkit.tools.MCPToolProvider.from_command(label) = None
     assert!(defaults.label.is_none());
     // roomkit.tools.MCPToolProvider.from_command(tool_filter) = None
@@ -47,16 +47,45 @@ fn from_command_options_defaults_as_python() {
 #[test]
 fn from_url_options_defaults_as_python() {
     let defaults = FromUrlOptions::default();
+    // roomkit.tools.MCPToolProvider.from_url(transport) = 'streamable_http'
+    assert_eq!(defaults.transport, "streamable_http");
     // roomkit.tools.MCPToolProvider.from_url(discover) = True
     assert!(defaults.discover);
     // roomkit.tools.MCPToolProvider.from_url(connect_timeout) = 60.0
     assert_eq!(defaults.connect_timeout, Duration::from_secs(60));
     // roomkit.tools.MCPToolProvider.from_url(headers) = None
-    assert!(defaults.headers.is_empty());
+    assert!(defaults.headers.is_none());
     // roomkit.tools.MCPToolProvider.from_url(label) = None
     assert!(defaults.label.is_none());
     // roomkit.tools.MCPToolProvider.from_url(tool_filter) = None
     assert!(defaults.tool_filter.is_none());
+}
+
+#[test]
+fn common_constructor_options_default_as_python() {
+    let defaults = roomkit_mcp::McpToolProviderOptions::default();
+    // roomkit.tools.MCPToolProvider.__init__(url) = None
+    assert!(roomkit_mcp::McpToolProvider::new(None, defaults.clone()).is_err());
+    // roomkit.tools.MCPToolProvider.__init__(transport) = 'streamable_http'
+    assert_eq!(defaults.transport, "streamable_http");
+    // roomkit.tools.MCPToolProvider.__init__(tool_filter) = None
+    assert!(defaults.tool_filter.is_none());
+    // roomkit.tools.MCPToolProvider.__init__(headers) = None
+    assert!(defaults.headers.is_none());
+    // roomkit.tools.MCPToolProvider.__init__(command) = None
+    assert!(defaults.command.is_none());
+    // roomkit.tools.MCPToolProvider.__init__(args) = ()
+    assert_eq!(defaults.args, Vec::<std::ffi::OsString>::new());
+    // roomkit.tools.MCPToolProvider.__init__(env) = None
+    assert!(defaults.env.is_none());
+    // roomkit.tools.MCPToolProvider.__init__(cwd) = None
+    assert!(defaults.cwd.is_none());
+    // roomkit.tools.MCPToolProvider.__init__(discover) = True
+    assert!(defaults.discover);
+    // roomkit.tools.MCPToolProvider.__init__(label) = None
+    assert!(defaults.label.is_none());
+    // roomkit.tools.MCPToolProvider.__init__(connect_timeout) = None
+    assert!(defaults.connect_timeout.is_none());
 }
 
 #[test]

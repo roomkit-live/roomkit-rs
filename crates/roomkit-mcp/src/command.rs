@@ -200,8 +200,8 @@ impl McpCommand {
         }
         for (key, value) in &self.env {
             let bytes = key.as_encoded_bytes();
-            if bytes.is_empty() || bytes.contains(&b'=') || holds_nul(key) {
-                return refuse("an environment variable's name is empty or holds '=' or a NUL");
+            if bytes.contains(&b'=') || holds_nul(key) {
+                return refuse("an environment variable's name holds '=' or a NUL");
             }
             if holds_nul(value) {
                 return refuse("an environment variable's value holds a NUL");

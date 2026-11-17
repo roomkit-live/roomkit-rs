@@ -19,17 +19,17 @@ pub enum McpError {
         /// Safe category supplied by the transport, never server text.
         reason: &'static str,
     },
-    /// A host label or explicit tool selection is invalid (RFC §21.2).
+    /// A host label, transport option or explicit tool selection is invalid (RFC §21.2).
     #[error("invalid MCP tool configuration: {reason}")]
     Configuration {
         /// The violated rule; never server content or credentials.
         reason: &'static str,
     },
-    /// The host cancelled connecting. The process has been stopped and reaped.
+    /// The host cancelled connecting. Its subprocess or HTTP workers have ended.
     #[error("MCP connection cancelled")]
     Cancelled,
     /// The command cannot start a process: an empty program, or an
-    /// environment variable whose name is empty or holds `=` or a NUL, or
+    /// environment variable whose name holds `=` or a NUL, or
     /// whose value holds a NUL.
     #[error("the MCP server's command is invalid: {reason}")]
     Command {

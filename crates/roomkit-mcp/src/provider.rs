@@ -1,11 +1,16 @@
 //! Python's `roomkit.tools.MCPToolProvider`: an MCP server's tools, its
 //! connection the host opens and closes (RFC §21.2).
 
-use std::collections::BTreeMap;
+mod construction;
+mod options;
+
+#[cfg(feature = "http")]
+pub use options::FromUrlOptions;
+pub use options::{FromCommandOptions, McpToolProviderOptions};
+
 use std::ffi::OsString;
 use std::fmt;
 use std::future::Future;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -29,108 +34,6 @@ fn check_provider_label(label: Option<&str>) -> Result<(), McpError> {
         check_label(label)?;
     }
     Ok(())
-}
-
-/// What [`McpToolProvider::from_command`] takes beside the command:
-/// Python's `args=(), *, env=None, cwd=None, tool_filter=None, label=None,
-/// connect_timeout=60.0`.
-#[derive(Clone)]
-pub struct FromCommandOptions {
-    /// The command's arguments.
-    pub args: Vec<OsString>,
-    /// Variables the server's process gets beside the minimal set it
-    /// inherits.
-    pub env: BTreeMap<OsString, OsString>,
-    /// The directory the server runs in.
-    pub cwd: Option<PathBuf>,
-    /// Keeps the tools whose names it admits; every tool without.
-    #[expect(clippy::type_complexity, reason = "Python's Callable[[str], bool]")]
-    pub tool_filter: Option<Arc<dyn Fn(&str) -> bool + Send + Sync>>,
-    /// The host's name for the server, the `<server>` of an MCP alias
-    /// `mcp__<server>__<tool>`: the tool handler then serves only the
-    /// aliases naming this server. Letters, digits and `_ . -`, 64 at most,
-    /// no `__` and no final `_`.
-    pub label: Option<String>,
-    /// How long the start, the handshake and the listing may take.
-    pub connect_timeout: Duration,
-    /// List tools while connecting; false opens a resource-only connection.
-    pub discover: bool,
-}
-
-impl Default for FromCommandOptions {
-    fn default() -> Self {
-        Self {
-            args: Vec::new(),
-            env: BTreeMap::new(),
-            cwd: None,
-            tool_filter: None,
-            label: None,
-            connect_timeout: Duration::from_secs(60),
-            discover: true,
-        }
-    }
-}
-
-impl fmt::Debug for FromCommandOptions {
-    /// The names of the variables given and how many arguments, never the
-    /// arguments nor the values, which may hold secrets.
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("FromCommandOptions")
-            .field("args", &self.args.len())
-            .field("env", &self.env.keys().collect::<Vec<_>>())
-            .field("cwd", &self.cwd)
-            .field("label", &self.label)
-            .field("discover", &self.discover)
-            .field("connect_timeout", &self.connect_timeout)
-            .finish_non_exhaustive()
-    }
-}
-
-/// What [`McpToolProvider::from_url`] takes beside the URL: Python's
-/// `*, tool_filter=None, headers=None, label=None, connect_timeout=60.0`,
-/// over Streamable HTTP.
-#[cfg(feature = "http")]
-#[derive(Clone)]
-pub struct FromUrlOptions {
-    /// Keeps the tools whose names it admits; every tool without.
-    #[expect(clippy::type_complexity, reason = "Python's Callable[[str], bool]")]
-    pub tool_filter: Option<Arc<dyn Fn(&str) -> bool + Send + Sync>>,
-    /// Headers every request carries.
-    pub headers: BTreeMap<String, String>,
-    /// The host's name for the server, the `<server>` of an MCP alias
-    /// `mcp__<server>__<tool>`: the tool handler then serves only the
-    /// aliases naming this server. Letters, digits and `_ . -`, 64 at most,
-    /// no `__` and no final `_`.
-    pub label: Option<String>,
-    /// How long the handshake and the listing may take.
-    pub connect_timeout: Duration,
-    /// List tools while connecting; false opens a resource-only connection.
-    pub discover: bool,
-}
-
-#[cfg(feature = "http")]
-impl Default for FromUrlOptions {
-    fn default() -> Self {
-        Self {
-            tool_filter: None,
-            headers: BTreeMap::new(),
-            label: None,
-            connect_timeout: Duration::from_secs(60),
-            discover: true,
-        }
-    }
-}
-
-#[cfg(feature = "http")]
-impl fmt::Debug for FromUrlOptions {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("FromUrlOptions")
-            .field("headers", &self.headers.keys().collect::<Vec<_>>())
-            .field("label", &self.label)
-            .field("discover", &self.discover)
-            .field("connect_timeout", &self.connect_timeout)
-            .finish_non_exhaustive()
-    }
 }
 
 /// What [`McpToolProvider::as_tool_handler`] takes: Python's
@@ -169,13 +72,21 @@ impl Default for CallToolOptions {
 /// How a provider reaches its server.
 #[derive(Clone)]
 enum Target {
-    Command(McpCommand),
+    Command {
+        command: McpCommand,
+        environment: Option<crate::McpEnvironment>,
+    },
     #[cfg(feature = "http")]
-    Url(crate::http::McpHttp),
+    Url {
+        url: String,
+        headers: crate::McpHeaders,
+        timeout: Duration,
+        legacy: bool,
+    },
 }
 
 /// An MCP server's tools (RFC §21.2): Python's `MCPToolProvider`. Built
-/// with [`from_command`](Self::from_command) or
+/// with [`new`](Self::new), [`from_command`](Self::from_command) or
 /// [`from_url`](Self::from_url), it does nothing until the host
 /// [`connect`](Self::connect)s it, Python's `async with`, which starts the
 /// server, shakes hands and lists its tools; the host closes it
@@ -214,46 +125,36 @@ impl McpToolProvider {
     /// # Errors
     ///
     /// Returns [`McpError::Configuration`] for a label that cannot name the
-    /// server in an alias, and [`McpError::Command`] for a command that
-    /// cannot start a process, as Python's raises `ValueError`.
+    /// server in an alias, and [`McpError::Command`] for an empty command.
+    /// Other process options are checked when connecting, as in Python.
     pub fn from_command(
         command: impl Into<OsString>,
         options: FromCommandOptions,
     ) -> Result<Self, McpError> {
-        check_provider_label(options.label.as_deref())?;
-        let FromCommandOptions {
-            args,
-            env,
-            cwd,
-            tool_filter,
-            label,
-            connect_timeout,
-            discover,
-        } = options;
-        let mut built = McpCommand::new(command)
-            .args(args)
-            .connect_timeout(connect_timeout);
-        for (key, value) in env {
-            built = built.env(key, value);
-        }
-        if let Some(cwd) = cwd {
-            built = built.current_dir(cwd);
-        }
-        built.check()?;
-        Ok(Self::over(
-            Target::Command(built),
-            tool_filter,
-            label,
-            discover,
-        ))
+        Self::new(
+            None,
+            McpToolProviderOptions {
+                transport: "stdio".to_owned(),
+                command: Some(command.into()),
+                args: options.args,
+                env: options.env,
+                cwd: options.cwd,
+                tool_filter: options.tool_filter,
+                label: options.label,
+                connect_timeout: Some(options.connect_timeout),
+                discover: options.discover,
+                ..Default::default()
+            },
+        )
     }
 
-    /// The server at `url`, over Streamable HTTP: Python's
-    /// `MCPToolProvider.from_url`.
+    /// The server at `url`, over Streamable HTTP by default or legacy SSE:
+    /// Python's `MCPToolProvider.from_url`.
     ///
     /// Its handshake and tool discovery are bounded by `connect_timeout`
     /// (60 seconds), as a command's: past them, [`connect`](Self::connect)
-    /// fails, the HTTP worker drained and the negotiated session deleted.
+    /// fails after HTTP workers drain. Streamable HTTP deletes its negotiated
+    /// session; legacy SSE closes its reader and writer.
     ///
     /// # Errors
     ///
@@ -263,36 +164,39 @@ impl McpToolProvider {
     /// transport's own.
     #[cfg(feature = "http")]
     pub fn from_url(url: &str, options: FromUrlOptions) -> Result<Self, McpError> {
-        check_provider_label(options.label.as_deref())?;
-        let FromUrlOptions {
-            tool_filter,
-            headers,
-            label,
-            connect_timeout,
-            discover,
-        } = options;
-        let mut http = crate::http::McpHttp::new(url)?.connect_timeout(connect_timeout);
-        for (name, value) in &headers {
-            http = http.header(name, value)?;
-        }
-        Ok(Self::over(Target::Url(http), tool_filter, label, discover))
+        Self::new(
+            Some(url),
+            McpToolProviderOptions {
+                transport: options.transport,
+                headers: options.headers,
+                tool_filter: options.tool_filter,
+                label: options.label,
+                connect_timeout: Some(options.connect_timeout),
+                discover: options.discover,
+                ..Default::default()
+            },
+        )
     }
 
-    fn over(
-        target: Target,
-        tool_filter: Option<ToolFilter>,
-        label: Option<String>,
-        discover: bool,
-    ) -> Self {
-        Self {
+    /// Python's common constructor, selecting stdio, Streamable HTTP or legacy
+    /// SSE (RFC §21.2). Construction does no I/O and checks the label first.
+    ///
+    /// # Errors
+    /// Returns the existing configuration/command refusal for unsupported or
+    /// crossed transport options, a missing endpoint/command, or invalid HTTP
+    /// settings. HTTP transports require the `http` feature; stdio does not.
+    pub fn new(url: Option<&str>, options: McpToolProviderOptions) -> Result<Self, McpError> {
+        check_provider_label(options.label.as_deref())?;
+        let target = construction::target(url, &options)?;
+        Ok(Self {
             inner: Arc::new(Inner {
                 target,
-                tool_filter,
-                label,
+                tool_filter: options.tool_filter,
+                label: options.label,
                 server: RwLock::new(None),
-                discover,
+                discover: options.discover,
             }),
-        }
+        })
     }
 
     /// Connects the server: starts it, shakes hands and lists its tools,
@@ -310,7 +214,8 @@ impl McpToolProvider {
     /// Connects the server, as [`connect`](Self::connect), unless
     /// `cancelled` ends first: what the connection started is then cleaned
     /// up before the call returns [`McpError::Cancelled`], a command's
-    /// process stopped, an HTTP session deleted. Where Python's cancelled
+    /// process stopped, HTTP workers ended and any Streamable HTTP session
+    /// deleted. Where Python's cancelled
     /// task cleans up as it unwinds, a dropped Rust future cannot wait.
     ///
     /// # Errors
@@ -326,8 +231,12 @@ impl McpToolProvider {
             return Err(McpError::AlreadyConnected);
         }
         let server = match &self.inner.target {
-            Target::Command(command) => {
-                Box::pin(command.clone().connect_until(
+            Target::Command {
+                command,
+                environment,
+            } => {
+                let command = construction::command_at_entry(command, environment.as_ref());
+                Box::pin(command.connect_until(
                     cancelled,
                     self.inner.tool_filter.clone(),
                     self.inner.discover,
@@ -335,8 +244,14 @@ impl McpToolProvider {
                 .await?
             }
             #[cfg(feature = "http")]
-            Target::Url(http) => {
-                Box::pin(http.clone().connect_until(
+            Target::Url {
+                url,
+                headers,
+                timeout,
+                legacy,
+            } => {
+                let http = crate::http::McpHttp::configured(url, headers.get(), *timeout, *legacy)?;
+                Box::pin(http.connect_until(
                     cancelled,
                     self.inner.tool_filter.clone(),
                     self.inner.discover,
@@ -455,9 +370,15 @@ impl McpToolProvider {
     #[must_use]
     pub fn with_close_grace(self, grace: Duration) -> Self {
         self.retargeted(|target| match target {
-            Target::Command(command) => Target::Command(command.close_grace(grace)),
+            Target::Command {
+                command,
+                environment,
+            } => Target::Command {
+                command: command.close_grace(grace),
+                environment,
+            },
             #[cfg(feature = "http")]
-            other @ Target::Url(_) => other,
+            other @ Target::Url { .. } => other,
         })
     }
 
@@ -468,9 +389,25 @@ impl McpToolProvider {
     #[must_use]
     pub fn with_connect_timeout(self, bound: Duration) -> Self {
         self.retargeted(|target| match target {
-            Target::Command(command) => Target::Command(command.connect_timeout(bound)),
+            Target::Command {
+                command,
+                environment,
+            } => Target::Command {
+                command: command.connect_timeout(bound),
+                environment,
+            },
             #[cfg(feature = "http")]
-            Target::Url(http) => Target::Url(http.connect_timeout(bound)),
+            Target::Url {
+                url,
+                headers,
+                legacy,
+                ..
+            } => Target::Url {
+                url,
+                headers,
+                timeout: bound,
+                legacy,
+            },
         })
     }
 
@@ -649,7 +586,7 @@ mod tests {
     fn the_command_options_debug_shows_no_secret() {
         let options = FromCommandOptions {
             args: vec!["--token".into(), "s3cret".into()],
-            env: [("API_KEY".into(), "k3y".into())].into(),
+            env: Some(std::collections::BTreeMap::from([("API_KEY".into(), "k3y".into())]).into()),
             ..FromCommandOptions::default()
         };
         let shown = format!("{options:?}");

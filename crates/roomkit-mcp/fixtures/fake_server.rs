@@ -376,6 +376,7 @@ fn call(params: &Value) -> Option<Value> {
         }
         "huge" => text("h".repeat(5 * 1024 * 1024)),
         "structured" => structured(arguments),
+        "constructor_probe" => text(constructor_probe().to_string()),
         "slow" => return None,
         "crash" => std::process::exit(3),
         "env" => {
@@ -400,4 +401,30 @@ fn structured(arguments: &Value) -> Value {
             .unwrap_or_else(|| json!({ "status": "shipped" })),
         "isError": arguments.get("error").and_then(Value::as_bool).unwrap_or(false),
     })
+}
+
+/// Reports actual process inputs for the public constructor's ownership tests.
+fn constructor_probe() -> Value {
+    json!({
+        "args": std::env::args().skip(1).collect::<Vec<_>>(),
+        "env": std::env::var("ROOMKIT_CONSTRUCTOR_TEST").ok(),
+        "empty_env": empty_environment_value(),
+        "cwd": std::env::current_dir().ok(),
+    })
+}
+
+/// Rust's environment iterator omits an empty key; inspect the OS inputs
+/// instead, which a Python subprocess exposes through os.environ[""].
+fn empty_environment_value() -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        let bytes = std::fs::read("/proc/self/environ").ok()?;
+        bytes.split(|byte| *byte == 0).find_map(|entry| {
+            entry
+                .strip_prefix(b"=")
+                .map(|value| String::from_utf8_lossy(value).into_owned())
+        })
+    }
+    #[cfg(not(target_os = "linux"))]
+    None
 }

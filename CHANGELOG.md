@@ -18,6 +18,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Add fresh `TurnHost::room_context` reads, preserving store failure causes across the host link, and local executor presence readers and change notifications (RFC §10.6.5–§10.6.7).
 - Preserve the original failure message and known class when detached-channel state cleanup fails, instead of replacing them with a generic store error.
+- MCP mirrors the common constructor and legacy SSE lifecycle. `FromUrlOptions` adds `transport`; its `headers` and `FromCommandOptions.env` now take optional shared handles, preserving host mutations before each connection.
+
 - Validate MCP factory labels before command, endpoint and header options, matching Python's refusal order.
 
 - **A delegated agent's turn ends once its result tool's call is served**, as Python's (RFC §23.3, RMK-357). After `submit_result`, `submit_verdict` or `submit_review`, the turn asked its model once more, and re-prompted it when it said nothing: a supervised review cost three calls where one does. Nothing is asked after the served call now; a call an `ON_TOOL_CALL` hook blocks is no result and the turn goes on. A turn request's owner tool carries `ends_turn` to the executor.

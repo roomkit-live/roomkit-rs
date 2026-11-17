@@ -1,32 +1,30 @@
-//! Optional Streamable HTTP composition (RFC §21.2).
+//! Optional Streamable HTTP and legacy SSE composition (RFC §21.2).
 mod client;
+mod legacy;
+mod session;
 mod sse;
 
 use crate::error::McpError;
-use crate::listing::{self, Listed, ToolFilter};
+use crate::listing::ToolFilter;
 use crate::raw::Capture;
 use crate::server::{MESSAGE_LIMIT, McpServer};
-use reqwest::{
-    Url,
-    header::{HeaderName, HeaderValue},
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use rmcp::transport::{
+    StreamableHttpClientTransport, streamable_http_client::StreamableHttpClientTransportConfig,
 };
-use rmcp::{
-    ClientCacheConfig, ServiceExt,
-    transport::{
-        StreamableHttpClientTransport, streamable_http_client::StreamableHttpClientTransportConfig,
-    },
-};
-use std::{collections::HashMap, fmt, future::Future, time::Duration};
+use std::{fmt, future::Future, time::Duration};
 
-/// A remote MCP endpoint using Streamable HTTP (RFC §21.2).
-/// Requests accept JSON or SSE replies. Redirects and automatic replay after
-/// session expiry are disabled. HTTP and HTTPS are supported, including local
+/// A remote MCP endpoint using Streamable HTTP or legacy SSE (RFC §21.2).
+/// Streamable requests accept JSON or SSE replies, without redirects or replay
+/// after expiry. Legacy SSE follows method-preserving redirects within its
+/// origin and uses an announced POST address. HTTP(S) is supported, including local
 /// endpoints. The caller chooses its credential policy; this type never reads
 /// environment variables. Debug and errors omit the URL and header values.
 #[derive(Clone)]
 pub(crate) struct McpHttp {
-    url: Url,
-    headers: HashMap<HeaderName, HeaderValue>,
+    url: String,
+    headers: HeaderMap,
+    legacy: bool,
     /// The bound on the handshake and the discovery: 60 seconds unless
     /// `FromUrlOptions::connect_timeout` says another, as a command's.
     timeout: Option<Duration>,
@@ -34,6 +32,7 @@ pub(crate) struct McpHttp {
 
 /// How long an HTTP server's handshake and discovery may take by default, as
 /// a started server's: Python's `from_url(connect_timeout=60.0)` (RMK-1108).
+#[cfg(test)]
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
 /// `connecting`, within `bound` when there is one.
 async fn bounded<T>(
@@ -52,78 +51,37 @@ async fn bounded<T>(
 }
 
 impl McpHttp {
-    /// Configures an endpoint without connecting, its connection bounded at
-    /// 60 seconds, as a command's.
-    ///
-    /// # Errors
-    /// Refuses non-HTTP(S) URLs, user information, fragments and missing hosts.
-    pub(crate) fn new(url: &str) -> Result<Self, McpError> {
-        let url = Url::parse(url).map_err(|_| invalid("invalid endpoint URL"))?;
-        if !matches!(url.scheme(), "http" | "https")
-            || url.host_str().is_none()
-            || !url.username().is_empty()
-            || url.password().is_some()
-            || url.fragment().is_some()
-        {
-            return Err(invalid(
-                "use an HTTP(S) endpoint without URL credentials or a fragment",
-            ));
+    /// Takes a fresh retained-header snapshot at connection entry. RoomKit's
+    /// policy was validated at construction; only HTTP encoding is checked here.
+    pub(crate) fn configured(
+        url: &str,
+        headers: Vec<(String, String)>,
+        timeout: Duration,
+        legacy: bool,
+    ) -> Result<Self, McpError> {
+        let mut encoded = HeaderMap::new();
+        for (name, value) in headers {
+            let name = HeaderName::from_bytes(name.as_bytes())
+                .map_err(|_| invalid("invalid header name"))?;
+            if !value.is_ascii() {
+                return Err(invalid("invalid header value"));
+            }
+            let mut value =
+                HeaderValue::from_str(&value).map_err(|_| invalid("invalid header value"))?;
+            value.set_sensitive(true);
+            encoded.append(name, value);
         }
         Ok(Self {
-            url,
-            headers: HashMap::new(),
-            timeout: Some(CONNECT_TIMEOUT),
+            url: url.to_owned(),
+            headers: encoded,
+            legacy,
+            timeout: Some(timeout),
         })
     }
-    /// Adds a header to every request, including session cleanup. For bearer
-    /// authentication supply `authorization` and the complete `Bearer ...` value.
-    ///
-    /// # Errors
-    /// Refuses invalid names/values, more than 32 headers, values over 8192 bytes,
-    /// and headers owned by HTTP framing or MCP negotiation.
-    pub(crate) fn header(mut self, name: &str, value: &str) -> Result<Self, McpError> {
-        let name =
-            HeaderName::from_bytes(name.as_bytes()).map_err(|_| invalid("invalid header name"))?;
-        if name.as_str().starts_with("mcp-")
-            || matches!(
-                name.as_str(),
-                "accept"
-                    | "content-type"
-                    | "content-length"
-                    | "host"
-                    | "connection"
-                    | "transfer-encoding"
-                    | "last-event-id"
-                    | "upgrade"
-                    | "te"
-                    | "trailer"
-                    | "proxy-authorization"
-            )
-        {
-            return Err(invalid("header is reserved for the transport"));
-        }
-        if value.len() > 8192 {
-            return Err(invalid("header value exceeds 8192 bytes"));
-        }
-        let mut value =
-            HeaderValue::from_str(value).map_err(|_| invalid("invalid header value"))?;
-        value.set_sensitive(true);
-        self.headers.insert(name, value);
-        if self.headers.len() > 32 {
-            return Err(invalid("more than 32 custom headers"));
-        }
-        Ok(self)
-    }
-    /// The same endpoint, its handshake and catalogue discovery bounded by
-    /// `timeout`.
-    #[must_use]
-    pub(crate) const fn connect_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = Some(timeout);
-        self
-    }
+
     /// Connects and discovers tools once (RFC §21.2), until cancelled.
-    /// Failure or cancellation drains the HTTP worker and attempts to delete
-    /// any negotiated session before returning.
+    /// Failure or cancellation drains HTTP workers and attempts to delete any
+    /// negotiated Streamable HTTP session before returning.
     ///
     /// # Errors
     /// Returns a safe transport failure, a timeout, invalid configuration,
@@ -134,42 +92,27 @@ impl McpHttp {
         filter: Option<ToolFilter>,
         discover: bool,
     ) -> Result<McpServer, McpError> {
+        if self.legacy {
+            return legacy::connect(
+                self.url,
+                self.headers,
+                self.timeout,
+                cancelled,
+                filter,
+                discover,
+            )
+            .await;
+        }
         let capture = Capture::default();
         let (client, finished, failure) = client::Client::new(capture.clone())?;
+        let client = client.with_headers(self.headers);
         let config = StreamableHttpClientTransportConfig::with_uri(self.url.as_str())
-            .custom_headers(self.headers)
             .max_sse_event_size(MESSAGE_LIMIT)
             .reinit_on_expired_session(false)
             .control_request_timeout(Duration::from_secs(3));
         let transport = StreamableHttpClientTransport::with_client(client, config);
         let stop = transport.cancel_token();
-        let connecting = async {
-            let service = crate::protocol::client()
-                .serve(transport)
-                .await
-                .map_err(|_| failure.error("MCP handshake failed"))?;
-            if !service
-                .peer_info()
-                .is_some_and(|info| crate::protocol::supported(&info.protocol_version))
-            {
-                let _closed = service.cancel().await;
-                return Err(failure.error("unsupported MCP protocol version"));
-            }
-            service
-                .peer()
-                .set_response_cache_config(ClientCacheConfig::disabled())
-                .await;
-            if !discover {
-                return Ok((service, Listed::default()));
-            }
-            if let Ok(tools) = listing::tools(service.peer(), "http", filter.as_ref()).await {
-                Ok((service, tools))
-            } else {
-                let error = failure.error("MCP tool discovery failed");
-                let _closed = service.cancel().await;
-                Err(error)
-            }
-        };
+        let connecting = session::open(transport, &failure, filter.as_ref(), discover);
         let connected = tokio::select! {
             biased;
             () = cancelled => Err(McpError::Cancelled),
@@ -211,7 +154,9 @@ mod tests {
             tokio::time::sleep(Duration::from_secs(seconds)).await;
             Ok::<_, McpError>("connected")
         };
-        let endpoint = McpHttp::new("http://localhost/mcp").unwrap();
+        let endpoint =
+            McpHttp::configured("http://localhost/mcp", Vec::new(), CONNECT_TIMEOUT, false)
+                .unwrap();
         let within = bounded(endpoint.timeout, taking(59)).await;
         let past = bounded(endpoint.timeout, taking(61)).await;
         assert!(

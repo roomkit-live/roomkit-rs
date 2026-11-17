@@ -43,7 +43,10 @@ impl Fake {
 
     /// The same server, given the variable `key` set to `value`.
     pub(crate) fn env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> Self {
-        self.options.env.insert(key.into(), value.into());
+        self.options
+            .env
+            .get_or_insert_default()
+            .insert(key.into(), value.into());
         self
     }
 

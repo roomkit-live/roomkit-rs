@@ -58,15 +58,16 @@ impl Fixture {
     }
     /// The fixture's provider, its tools named after `label` when given.
     fn labelled(&self, label: Option<&str>) -> McpToolProvider {
-        let headers = [
-            ("authorization", "Bearer fixture-private-value"),
-            ("x-api-key", "fixture-key"),
-        ]
-        .into_iter()
-        .map(|(name, value)| (name.to_owned(), value.to_owned()))
-        .collect();
+        let headers = roomkit_mcp::McpHeaders::new(
+            [
+                ("authorization", "Bearer fixture-private-value"),
+                ("x-api-key", "fixture-key"),
+            ]
+            .into_iter()
+            .map(|(name, value)| (name.to_owned(), value.to_owned())),
+        );
         let options = FromUrlOptions {
-            headers,
+            headers: Some(headers),
             label: label.map(str::to_owned),
             ..FromUrlOptions::default()
         };
@@ -342,9 +343,10 @@ fn rejects_url_credentials_and_transport_owned_headers() {
     }
     for header in ["Mcp-Session-Id", "host", "content-length", "accept"] {
         let options = FromUrlOptions {
-            headers: [(header.to_owned(), "secret".to_owned())]
-                .into_iter()
-                .collect(),
+            headers: Some(roomkit_mcp::McpHeaders::new([(
+                header.to_owned(),
+                "secret".to_owned(),
+            )])),
             ..FromUrlOptions::default()
         };
         let refused = McpToolProvider::from_url("http://localhost/mcp", options);
