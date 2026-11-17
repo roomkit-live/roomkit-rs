@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use crate::orchestration::{RecentOptions, StatusBus, StatusEntry, StatusLevel};
 
 /// The action a task's entries carry.
-const TASK_ACTION: &str = "task";
+pub(crate) const TASK_ACTION: &str = "task";
 
 /// The metadata key of a strategy run's own entries.
 pub(crate) const RUN_ENTRY: &str = "task_run";

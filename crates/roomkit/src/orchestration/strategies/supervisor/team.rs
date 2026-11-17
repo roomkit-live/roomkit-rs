@@ -113,6 +113,9 @@ pub(super) fn entry<S: ConversationStore>(
     }
 }
 
+/// A room's last answer, when it was given, and who asked for it.
+type LastAnswer = (String, Instant, Option<String>);
+
 /// Serves `delegate_workers`: one run of the team at a time per room, and
 /// a room's answer served again to a repeat within the window.
 struct TeamServer {
@@ -123,8 +126,8 @@ struct TeamServer {
     /// One lock per room, held while its team runs: another room's call
     /// does not wait on it. A lock lives while a call holds it.
     rooms: Mutex<HashMap<RoomId, Weak<tokio::sync::Mutex<()>>>>,
-    /// Each room's last answer, when it was given, and who asked for it.
-    answers: Mutex<HashMap<RoomId, (String, Instant, Option<String>)>>,
+    /// Each room's last answer.
+    answers: Mutex<HashMap<RoomId, LastAnswer>>,
     /// The rooms whose team runs in the background, until it ended
     /// (Python's `_running`).
     running: Mutex<HashSet<RoomId>>,

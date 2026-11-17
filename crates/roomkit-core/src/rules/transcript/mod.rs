@@ -427,7 +427,7 @@ pub fn conversation_with_input(
         labelled,
         people: &people,
         spoken: &spoken,
-        discussion: &memory.turn_notes,
+        own: &memory.turn_notes,
         remembered: &memory.notes,
     };
     let (messages, input) = rendered(turns, &notes);
@@ -876,21 +876,22 @@ pub fn earlier_turns(events: &[RoomEvent], channel_id: &ChannelId) -> Vec<Replay
 
 /// What a turn's notes say (RFC §6.4): how speakers are named when the
 /// turns are `labelled`, who takes part when two `people` or more do, then
-/// what the memory retrieved for the turn (`remembered`).
+/// what the memory retrieved for the turn (`remembered`), then the
+/// channel's `own` (the room's tasks, a discussion's).
 struct Notes<'a> {
     labelled: bool,
     people: &'a [String],
     spoken: &'a [String],
-    discussion: &'a [String],
+    own: &'a [String],
     remembered: &'a [String],
 }
 
 impl Notes<'_> {
     /// The blocks a copy of a runtime mark is replaced in: the memory's,
-    /// then the discussion's, whose notes quote what people wrote.
+    /// then the channel's own, whose notes quote what others wrote.
     fn after_the_runtime_s(&self) -> Vec<String> {
-        let (memory, discussion) = (self.remembered.iter(), self.discussion.iter());
-        memory.chain(discussion).cloned().collect()
+        let (memory, own) = (self.remembered.iter(), self.own.iter());
+        memory.chain(own).cloned().collect()
     }
 
     /// The notes' blocks, in order: the runtime's own, then the memory's,
@@ -1016,9 +1017,9 @@ pub fn turn_sources<'a>(
 /// `None` for an event that reads as no text, which waits a turn of its
 /// own, and for an event that opens no turn (a notice, a reaction: RFC
 /// §6.4; an edit or a delete: RFC §10.3), whose own turn the agent does
-/// not take. Python's `steered_message`: its speakers are the context's
-/// events' and `event`'s, nameless ones told apart and counted by source,
-/// as the conversation counts them.
+/// not take. Python's `steered_message`: its speakers are those of the
+/// events the agent may read and `event`'s, nameless ones told apart and
+/// counted by source, as the conversation counts them ([`asking_label`]).
 pub fn steered_text(
     event: &RoomEvent,
     context: &RoomContext,
@@ -1031,28 +1032,11 @@ pub fn steered_text(
     if text.is_empty() {
         return None;
     }
-    let mut authors = Authors::new(context);
-    // The turns the conversation counts: the agent's own and the
-    // application's instructions aside, and those that read as no text.
-    let others = context.recent_events.iter().filter(|recent| {
-        recent.id != event.id
-            && recent.source.channel_id != *channel_id
-            && !matches!(
-                recent.r#type,
-                EventType::Instruction | EventType::ToolCallStart | EventType::ToolCallEnd
-            )
-            && !text_of(&recent.content).trim().is_empty()
-    });
-    let mut speakers: Vec<Option<Speaker>> = others
-        .chain([event])
-        .map(|said| speaker(said, &mut authors))
-        .collect();
-    tell_apart(speakers.iter_mut().flatten());
-    let sources = speakers.iter().flatten().map(|said| said.source.as_str());
-    let several = labels_turns(sources, people_taking_part(context, channel_id).len());
-    match speakers.last().cloned().flatten() {
-        Some(said) if several => Some(labelled_lines(&text, &said.label)),
-        Some(_) | None => Some(text),
+    // Labelled as the turn's history labels it: the speakers the agent may
+    // read, its own turns and the application's instructions aside.
+    match asking_label(event, context, channel_id) {
+        Some(label) => Some(labelled_lines(&text, &label)),
+        None => Some(text),
     }
 }
 

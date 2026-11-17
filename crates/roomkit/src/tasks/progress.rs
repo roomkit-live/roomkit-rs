@@ -9,11 +9,9 @@ use crate::kit::RoomKit;
 use crate::orchestration::lifecycle::DETAIL_LIMIT;
 use crate::orchestration::{PostOptions, StatusLevel};
 use crate::store::ConversationStore;
+use crate::tasks::lines::{TASK_ACTION, truthy};
 use crate::tasks::text::bounded_text;
 use crate::{GetRoomOptions, RoomKitError};
-
-/// The action a task's entries carry.
-const TASK_ACTION: &str = "task";
 
 impl<S: ConversationStore> RoomKit<S> {
     /// Posts `detail` as how far the task whose child room is
@@ -70,22 +68,9 @@ impl<S: ConversationStore> RoomKit<S> {
     }
 }
 
-/// Whether Python reads `value` as true.
-fn truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(flag) => *flag,
-        Value::String(text) => !text.is_empty(),
-        Value::Number(number) => number.as_f64() != Some(0.0),
-        Value::Array(items) => !items.is_empty(),
-        Value::Object(members) => !members.is_empty(),
-    }
-}
-
 /// `value` as Python's `str()` reads it.
 fn python_str(value: &Value) -> String {
-    match value {
-        Value::String(text) => text.clone(),
-        other => other.to_string(),
-    }
+    value
+        .as_str()
+        .map_or_else(|| value.to_string(), str::to_owned)
 }

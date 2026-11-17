@@ -794,6 +794,22 @@ fn a_steered_message_counts_no_reply_of_the_agent_as_a_speaker() {
     );
 }
 
+// Python: core/_room_turns.py steered_message reads the speakers through
+// asking_label, the events the agent may read: a message a hook blocked
+// names no speaker.
+#[test]
+fn a_steered_message_counts_no_blocked_message_s_author_as_a_speaker() {
+    let mut room = Timeline::new();
+    room.says("sms", "+15550001", None, "Refund me");
+    let event = room.says("sms", "+15550002", None, "Do not refund them");
+    room.context.recent_events[0].status = EventStatus::Blocked;
+    let agent = ChannelId::new(AGENT).unwrap();
+    assert_eq!(
+        steered_text(&event, &room.context, &agent).as_deref(),
+        Some("Do not refund them")
+    );
+}
+
 fn read_with(room: &Timeline, event: &RoomEvent, memory: &super::TurnMemory) -> Vec<Message> {
     super::conversation_with_memory(
         &ChannelId::new(AGENT).unwrap(),

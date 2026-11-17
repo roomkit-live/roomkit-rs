@@ -812,4 +812,71 @@ mod tests {
             ToolError::UnservedToolCall("tool \"o'k\" is not served here".to_owned()).to_string()
         );
     }
+
+    // Python: tests/tasks/test_task_progress_note.py::test_progress_outside_a_tasks_room_posts_nothing,
+    // and tasks/status.py post_task_progress's default worker name.
+    #[tokio::test]
+    async fn progress_outside_a_task_s_room_posts_nothing_and_inside_names_the_worker() {
+        use roomkit::orchestration::RecentOptions;
+
+        use crate::tools::{ToolTurnContextOptions, tool_turn_context};
+
+        let kit = RoomKit::new(RoomKitOptions::default());
+        let mut child = Metadata::new();
+        child.insert("parent_room_id".to_owned(), json!("r"));
+        child.insert("task_id".to_owned(), json!("t1"));
+        for (room, metadata) in [("r", Metadata::new()), ("r::task-t1", child)] {
+            let create = CreateRoomOptions {
+                room_id: Some(RoomId::new(room).unwrap()),
+                metadata,
+                ..CreateRoomOptions::default()
+            };
+            kit.create_room(create).await.unwrap();
+        }
+        let within = |room: &str| ToolTurnContextOptions {
+            room_id: Some(RoomId::new(room).unwrap()),
+            ..ToolTurnContextOptions::default()
+        };
+        let outside_a_call = post_task_progress(&kit, "12/20 s").await.unwrap();
+        let in_its_parent = tool_turn_context(within("r"), post_task_progress(&kit, "12/20 s"))
+            .await
+            .unwrap()
+            .unwrap();
+        let in_no_room = tool_turn_context(within("gone"), post_task_progress(&kit, "12/20 s"))
+            .await
+            .unwrap()
+            .unwrap();
+        let nothing = kit.status_bus().recent(RecentOptions::default()).await;
+        let in_its_room =
+            tool_turn_context(within("r::task-t1"), post_task_progress(&kit, "12/20 s"))
+                .await
+                .unwrap()
+                .unwrap();
+        let mut posted = Vec::new();
+        for _ in 0..200 {
+            posted = kit.status_bus().recent(RecentOptions::default()).await;
+            if !posted.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        kit.close().await.unwrap();
+
+        assert_eq!(
+            (outside_a_call, in_its_parent, in_no_room, nothing.len()),
+            (false, false, false, 0)
+        );
+        assert!(in_its_room);
+        let entry = &posted[0];
+        assert_eq!(
+            (
+                entry.agent_id.as_str(),
+                entry.action.as_str(),
+                entry.detail.as_str()
+            ),
+            ("worker", "task", "12/20 s")
+        );
+        assert_eq!(entry.metadata.get("task_id"), Some(&json!("t1")));
+        assert_eq!(entry.metadata.get("room_id"), Some(&json!("r")));
+    }
 }

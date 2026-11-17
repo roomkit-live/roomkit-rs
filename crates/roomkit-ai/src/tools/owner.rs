@@ -26,10 +26,15 @@ impl DynToolset for OwnerToolset {
         call: ToolCall,
         context: ToolContext,
     ) -> BoxFuture<'_, Result<ToolResult, ToolError>> {
+        // Who asked: the turn's, else the scope's a caller described, as
+        // a call its handler serves reads it (RFC §19.7).
+        let requester = context
+            .requester
+            .or_else(crate::tools::current_tool_requester);
         Box::pin(async move {
             let answer = self
                 .turn
-                .call_owner_tool(&call.name, call.arguments, &call.id, context.requester)
+                .call_owner_tool(&call.name, call.arguments, &call.id, requester)
                 .await;
             match answer {
                 OwnerToolAnswer::Served(serde_json::Value::String(text)) => {

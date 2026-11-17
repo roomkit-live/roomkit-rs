@@ -183,12 +183,13 @@ fn one_pass<S: ConversationStore>(asked: Asked<S>) -> Taken {
     Taken::Later(Box::pin(async move {
         // The supervisor reads the request under its author's label when
         // several people speak (RFC §19.7).
-        let asker = asking_label(
+        let author = asking_label(
             &asked.event,
             &asked.context,
             &asked.team.supervisor.channel_id,
         );
-        let present = |results: &[Presented]| one_pass_results(&message, results, asker.as_deref());
+        let present =
+            |results: &[Presented]| one_pass_results(&message, results, author.as_deref());
         asked.answered_from(&message, present).await
     }))
 }

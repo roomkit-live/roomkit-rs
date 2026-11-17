@@ -179,19 +179,24 @@ fn list_mismatches(
 }
 
 /// Whether `actual` is a string holding `texts`: a text, or each text of a
-/// list in its order, one after the end of the one before.
+/// non-empty list of texts in its order, one after the end of the one
+/// before; any other `texts` is a scenario's mistake.
 fn contains(texts: &Value, actual: Option<&Value>, path: &str) -> Vec<String> {
-    let texts: Vec<&str> = texts.as_array().map_or_else(
-        || texts.as_str().into_iter().collect(),
-        |items| items.iter().filter_map(Value::as_str).collect(),
+    let texts: Option<Vec<&str>> = texts.as_array().map_or_else(
+        || texts.as_str().map(|text| vec![text]),
+        |items| items.iter().map(Value::as_str).collect(),
     );
+    let Some(texts) = texts.filter(|texts| !texts.is_empty()) else {
+        return vec![format!(
+            "{path}: $contains takes a text or a non-empty list of texts"
+        )];
+    };
+    let Some(Value::String(held)) = actual else {
+        return vec![format!("{path}: {} is not a string", shown(actual))];
+    };
     let mut at = 0;
     for text in texts {
-        let found = match actual {
-            Some(Value::String(held)) => held.get(at..).and_then(|rest| rest.find(text)),
-            _ => None,
-        };
-        let Some(found) = found else {
+        let Some(found) = held.get(at..).and_then(|rest| rest.find(text)) else {
             let after = if at > 0 {
                 " after the text before it"
             } else {
@@ -232,6 +237,16 @@ fn contains_a_list_holds_each_text_in_its_order() {
             matches,
             "{actual:?}"
         );
+    }
+    let anything = Some(serde_json::json!("anything"));
+    for malformed in [
+        serde_json::json!([]),
+        serde_json::json!(["a", 1]),
+        serde_json::json!(1),
+    ] {
+        let expected = serde_json::json!({ "$contains": malformed });
+        let found = mismatches(&expected, anything.as_ref(), "$", &mut Names::default());
+        assert!(!found.is_empty(), "{malformed}");
     }
 }
 

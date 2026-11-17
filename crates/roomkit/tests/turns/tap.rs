@@ -1,8 +1,8 @@
 //! RFC §10.6.3, §10.6.4: the probe's turn, a streamed answer whose tool
 //! sends an event through its turn's host, carries the messages the Python
 //! implementation's in-memory backend carries for it, in the same order,
-//! leaving aside those of features 0.1 lacks (the readers of owner-process
-//! state a Python turn asks first, `room_tasks` and `room_vision`, its
+//! leaving aside those of features 0.1 lacks (the reader of owner-process
+//! state a Python turn asks after `room_tasks`, `room_vision`, its
 //! ephemerals, its framework events).
 //!
 //! The messages this crate carries for the turn are kept in
@@ -86,7 +86,7 @@ fn python_steps() -> Vec<String> {
         .iter()
         .filter(|(_, message)| {
             let verb = message["message"]["verb"].as_str();
-            matches!(verb, Some("room_tasks" | "room_vision"))
+            verb == Some("room_vision")
         })
         .map(|(_, message)| message["message"]["call_id"].as_str().unwrap().to_owned())
         .collect();

@@ -68,7 +68,9 @@ pub(super) fn render_tasks_note(
     if tasks.is_empty() {
         return None;
     }
-    let shown = &tasks[tasks.len().saturating_sub(TASKS_NOTE_LIMIT)..];
+    let shown = tasks
+        .get(tasks.len().saturating_sub(TASKS_NOTE_LIMIT)..)
+        .unwrap_or(tasks);
     let mut lines = vec![TASKS_NOTE.to_owned()];
     lines.extend(shown.iter().map(|task| task_line(task, now, metadata)));
     if shown.iter().any(running) {
@@ -85,14 +87,17 @@ fn running(task: &Metadata) -> bool {
 /// and ending carrying no text of their own (RFC §6.4).
 fn task_line(task: &Metadata, now: Timestamp, metadata: &Metadata) -> String {
     let asked = task.get("task").and_then(Value::as_str).unwrap_or_default();
-    let worker = match task.get("agent") {
-        Some(Value::String(agent)) => agent_handle(metadata, agent).to_owned(),
-        Some(Value::Null) | None => String::new(),
-        Some(other) => other.to_string(),
+    let worker = match task.get("agent").and_then(Value::as_str) {
+        Some(agent) => agent_handle(metadata, agent).to_owned(),
+        None => task
+            .get("agent")
+            .filter(|agent| !agent.is_null())
+            .map(python_str)
+            .unwrap_or_default(),
     };
     let mut line = format!("- {}", identifier(&worker, "worker"));
     if !asked.is_empty() {
-        line.push_str(&format!(", asked {}", quoted(asked, TEXT_LIMIT)));
+        line = format!("{line}, asked {}", quoted(asked, TEXT_LIMIT));
     }
     if !running(task) {
         let status = task.get("status").map(python_str).unwrap_or_default();
@@ -112,17 +117,16 @@ fn task_line(task: &Metadata, now: Timestamp, metadata: &Metadata) -> String {
         .filter(|progress| !progress.is_empty())
     {
         let at = ago(task.get("progress_at"), now);
-        state.push_str(&format!("; at {}{at}", quoted(progress, TEXT_LIMIT)));
+        state = format!("{state}; at {}{at}", quoted(progress, TEXT_LIMIT));
     }
     format!("{line}: {state}; no result yet")
 }
 
 /// A status as Python's `str()` reads it.
 fn python_str(value: &Value) -> String {
-    match value {
-        Value::String(text) => text.clone(),
-        other => other.to_string(),
-    }
+    value
+        .as_str()
+        .map_or_else(|| value.to_string(), str::to_owned)
 }
 
 fn ago(ts: Option<&Value>, now: Timestamp) -> String {
