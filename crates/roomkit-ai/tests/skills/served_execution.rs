@@ -82,7 +82,7 @@ async fn served_execution_reaches_only_approved_host_tools_and_never_a_script_ex
             Approval::Failed,
             Approval::Approved,
         ] {
-            counters(streaming, approval).await;
+            Box::pin(counters(streaming, approval)).await;
         }
     }
 }
