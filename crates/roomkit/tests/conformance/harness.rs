@@ -133,7 +133,11 @@ struct TextRecorder {
 }
 
 impl RealtimeBackend for TextRecorder {
-    fn publish<'a>(&'a self, channel: &'a str, event: EphemeralEvent) -> RealtimeFuture<'a, ()> {
+    fn publish<'a>(
+        &'a self,
+        channel: &'a str,
+        event: EphemeralEvent,
+    ) -> RealtimeFuture<'a, Result<(), roomkit::ChannelError>> {
         if event.r#type == EphemeralEventType::TextDelta {
             lock(&self.recorded)
                 .entry(event.room_id.to_string())

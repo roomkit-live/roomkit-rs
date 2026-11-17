@@ -330,6 +330,8 @@ pub(crate) fn kit_error(error: &RoomKitError) -> WireError {
     record.attributes.extend(fields);
     if let RoomKitError::Store(failure) = error {
         record.causes = store::causes(&**failure);
+    } else if let RoomKitError::Realtime(failure) = error {
+        record.causes = store::causes(&**failure);
     }
     record
 }
@@ -387,6 +389,7 @@ fn rebuilt_variant(error: &WireError) -> Option<RoomKitError> {
             RoomKitError::RoomNotFound(RoomId::new(id).ok()?)
         }
         "Store" => store::rebuild(error)?,
+        "Realtime" => store::rebuild_realtime(error)?,
         "Value" => RoomKitError::Value(error.message.clone()),
         "Runtime" => RoomKitError::Runtime(error.message.clone()),
         "Type" => RoomKitError::Type(error.message.clone()),
@@ -434,6 +437,7 @@ fn variant_of(error: &RoomKitError) -> (&'static str, Metadata) {
         RoomKitError::KitClosed => "KitClosed",
         RoomKitError::ShutdownCancelled => "ShutdownCancelled",
         RoomKitError::Store(_) => "Store",
+        RoomKitError::Realtime(_) => "Realtime",
         RoomKitError::Lock(_) => "Lock",
         RoomKitError::Channel { .. } => "Channel",
         RoomKitError::Router(_) => "Router",

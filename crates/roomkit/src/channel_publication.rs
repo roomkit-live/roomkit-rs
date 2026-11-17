@@ -74,7 +74,9 @@ impl ChannelPublication {
                             .map(|held| held.created_at),
                     };
                 }
-                kit.inner.realtime.publish_to_room(&room, event).await;
+                if let Err(error) = kit.inner.realtime.publish_to_room(&room, event).await {
+                    tracing::debug!(target: "roomkit::turns", room_id = %room, %error, "publishing a channel notification failed");
+                }
             })
         });
         *self

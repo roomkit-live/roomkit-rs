@@ -88,7 +88,7 @@ async fn publish_subscribe_and_multiple_subscribers() {
     backend.subscribe("ch", second).await;
     let published = event(EphemeralEventType::TypingStart, "user-1");
 
-    backend.publish("ch", published.clone()).await;
+    backend.publish("ch", published.clone()).await.unwrap();
 
     let received = (
         next(&mut first_received).await.id,
@@ -107,13 +107,15 @@ async fn unsubscribe_stops_delivery() {
     let id = backend.subscribe("ch", callback).await;
     backend
         .publish("ch", event(EphemeralEventType::TypingStart, "user-1"))
-        .await;
+        .await
+        .unwrap();
     let first = next(&mut received).await.r#type;
 
     let removed = backend.unsubscribe(&id).await;
     backend
         .publish("ch", event(EphemeralEventType::TypingStop, "user-1"))
-        .await;
+        .await
+        .unwrap();
     let unknown = backend.unsubscribe("nonexistent").await;
 
     let after = received.try_recv().ok().map(|event| event.r#type);
@@ -135,7 +137,10 @@ async fn room_convenience_methods() {
         ..event(EphemeralEventType::ReadReceipt, "user-1")
     };
 
-    backend.publish_to_room(&room("room-1"), receipt).await;
+    backend
+        .publish_to_room(&room("room-1"), receipt)
+        .await
+        .unwrap();
 
     let data = next(&mut received).await.data;
     backend.close().await;
@@ -163,7 +168,8 @@ async fn queue_overflow_drops_oldest() {
     for user in ["user-0", "user-1", "user-2"] {
         backend
             .publish("ch", event(EphemeralEventType::TypingStart, user))
-            .await;
+            .await
+            .unwrap();
     }
     let mut users = Vec::new();
     for _ in 0..2 {
@@ -190,9 +196,9 @@ async fn an_event_published_twice_before_its_callback_runs_reaches_it_once() {
     let twice = event(EphemeralEventType::TypingStart, "user-1");
     let after = event(EphemeralEventType::TypingStop, "user-1");
 
-    backend.publish("ch", twice.clone()).await;
-    backend.publish("ch", twice.clone()).await;
-    backend.publish("ch", after.clone()).await;
+    backend.publish("ch", twice.clone()).await.unwrap();
+    backend.publish("ch", twice.clone()).await.unwrap();
+    backend.publish("ch", after.clone()).await.unwrap();
 
     let ids = [next(&mut received).await.id, next(&mut received).await.id];
     backend.close().await;
@@ -218,7 +224,8 @@ async fn subscription_count_and_close_stops_all_subscriptions() {
     counts.push(backend.subscription_count());
     backend
         .publish("ch2", event(EphemeralEventType::TypingStart, "user-1"))
-        .await;
+        .await
+        .unwrap();
 
     assert_eq!(
         (counts, received.try_recv().is_err()),
@@ -245,10 +252,12 @@ async fn callback_error_does_not_stop_subscription() {
 
     backend
         .publish("ch", event(EphemeralEventType::TypingStart, "user-1"))
-        .await;
+        .await
+        .unwrap();
     backend
         .publish("ch", event(EphemeralEventType::TypingStop, "user-1"))
-        .await;
+        .await
+        .unwrap();
 
     let second = tokio::time::timeout(WAIT, received.recv()).await.unwrap();
     backend.close().await;
@@ -498,7 +507,11 @@ struct Recording {
 }
 
 impl RealtimeBackend for Recording {
-    fn publish<'a>(&'a self, channel: &'a str, event: EphemeralEvent) -> RealtimeFuture<'a, ()> {
+    fn publish<'a>(
+        &'a self,
+        channel: &'a str,
+        event: EphemeralEvent,
+    ) -> RealtimeFuture<'a, Result<(), roomkit::ChannelError>> {
         self.reached.lock().unwrap().push(channel.to_owned());
         self.inner.publish(channel, event)
     }
@@ -768,7 +781,8 @@ async fn create_room_ends_the_subscriptions_of_an_earlier_room_of_its_id() {
     );
     kit.realtime()
         .publish_to_room(&room("shared-id"), typing)
-        .await;
+        .await
+        .unwrap();
     assert_eq!(next(&mut heard).await.user_id, "globex-user");
     for _ in 0..20 {
         tokio::task::yield_now().await;
@@ -804,7 +818,8 @@ async fn a_subscription_made_before_its_room_reads_nothing_of_a_room_gone() {
     late.room_created_at = Some(gone.created_at);
     kit.realtime()
         .publish_to_room(&room("shared-id"), late)
-        .await;
+        .await
+        .unwrap();
     kit.create_room(scoped("globex")).await.unwrap();
     kit.publish_typing(&room("shared-id"), "globex-user", typing_for("globex"))
         .await

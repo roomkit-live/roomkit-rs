@@ -152,8 +152,10 @@ async fn drain(
             tracing::debug!(target: "roomkit::turns", room_id = %room, "its answer does not reach the room: an ephemeral is not published");
             continue;
         }
-        if let Some(realtime) = kit.realtime() {
-            realtime.publish_to_room(&room, event).await;
+        if let Some(realtime) = kit.realtime()
+            && let Err(error) = realtime.publish_to_room(&room, event).await
+        {
+            tracing::error!(target: "roomkit::turns", room_id = %room, %error, "publishing a turn notification failed");
         }
     }
 }

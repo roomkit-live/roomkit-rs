@@ -71,6 +71,8 @@ the mapping and its tests. The check does not generate or update this document.
 | `roomkit::RoomKit` | — | `hook_handler` |
 | `roomkit::RoomKit` | — | `downgrade` |
 | `roomkit::StoreFailure` | — | Whole type |
+| `roomkit::realtime::RealtimeFailure` (also `roomkit::RealtimeFailure`) | — | Owns a publication's original error, message and cause; `Deref`, `AsRef`, `into_inner`; identity equality |
+| `roomkit::RoomKitError::Realtime` | Backend exception | A recoverable explicit publication failure; preserves the backend error |
 | `roomkit::TurnHost` | — | `respond_with_stream` |
 | `roomkit::WeakRoomKit` | — | Whole type |
 | `roomkit::default_inbound_event` | — | Whole type |
@@ -436,3 +438,13 @@ and tags do not write through, and a provider already generating keeps the
 definitions its turn prepared. Python's mutable objects can still be observed
 through those retained aliases; this boundary is an accepted difference, not a
 shared aliasing guarantee.
+
+`RealtimeBackend::publish` and `publish_to_room` return
+`RealtimeFuture<Result<(), ChannelError>>`. Existing backend implementations must
+return `Ok(())` on success and `Err(cause.into())` on failure. Explicit kit
+publications propagate `RoomKitError::Realtime(RealtimeFailure)`, whose owned
+backend error retains its display and source chain. Local presence retries
+recoverable failures; closing the kit cancels an in-flight retry. Turn-owner
+notifications log at ERROR and continue, as Python's owner publisher does;
+notifications published directly by an idle channel log at DEBUG and continue.
+This Rust error form was approved on 2026-11-17.

@@ -170,10 +170,14 @@ impl InMemoryRealtime {
 }
 
 impl RealtimeBackend for InMemoryRealtime {
-    fn publish<'a>(&'a self, channel: &'a str, event: EphemeralEvent) -> RealtimeFuture<'a, ()> {
+    fn publish<'a>(
+        &'a self,
+        channel: &'a str,
+        event: EphemeralEvent,
+    ) -> RealtimeFuture<'a, Result<(), crate::ChannelError>> {
         Box::pin(async move {
             if self.closed.load(Ordering::Acquire) {
-                return;
+                return Ok(());
             }
             let queues: Vec<Arc<Queue>> = {
                 let state = self.state();
@@ -189,6 +193,7 @@ impl RealtimeBackend for InMemoryRealtime {
             for queue in queues {
                 queue.enqueue(event.clone());
             }
+            Ok(())
         })
     }
 

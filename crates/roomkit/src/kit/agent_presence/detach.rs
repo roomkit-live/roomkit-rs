@@ -26,10 +26,14 @@ pub(in crate::kit) async fn run<S: ConversationStore>(
     };
     let (result, forgotten) = crate::driver::run(inner, "detach_channel", tracked).await?;
     if let Some(binding) = forgotten {
-        inner
-            .agent_presence
-            .detached(&binding.room_id, &binding.channel_id)
-            .await;
+        let owner = Arc::clone(inner);
+        super::call::run(inner, async move {
+            owner
+                .agent_presence
+                .detached(&binding.room_id, &binding.channel_id)
+                .await;
+        })
+        .await?;
     }
     Ok(result)
 }

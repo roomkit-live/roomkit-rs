@@ -28,7 +28,11 @@ struct Texts {
 }
 
 impl RealtimeBackend for Texts {
-    fn publish<'a>(&'a self, channel: &'a str, event: EphemeralEvent) -> RealtimeFuture<'a, ()> {
+    fn publish<'a>(
+        &'a self,
+        channel: &'a str,
+        event: EphemeralEvent,
+    ) -> RealtimeFuture<'a, Result<(), roomkit::ChannelError>> {
         if event.r#type == EphemeralEventType::TextDelta {
             let text = event.data.get("text").and_then(Value::as_str).unwrap();
             self.published.lock().unwrap().push(text.to_owned());

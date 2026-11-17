@@ -26,13 +26,18 @@ struct AwaitedRealtime {
 }
 
 impl RealtimeBackend for AwaitedRealtime {
-    fn publish<'a>(&'a self, topic: &'a str, event: EphemeralEvent) -> RealtimeFuture<'a, ()> {
+    fn publish<'a>(
+        &'a self,
+        topic: &'a str,
+        event: EphemeralEvent,
+    ) -> RealtimeFuture<'a, Result<(), roomkit::ChannelError>> {
         self.topics.lock().unwrap().push(topic.to_owned());
         let callback = self.callback.lock().unwrap().clone();
         Box::pin(async move {
             if let Some(callback) = callback {
                 callback(event).await;
             }
+            Ok(())
         })
     }
     fn subscribe<'a>(

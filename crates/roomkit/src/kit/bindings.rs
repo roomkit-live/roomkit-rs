@@ -101,7 +101,8 @@ impl<S: ConversationStore> RoomKit<S> {
         };
         let bound = driver::run_on(&self.inner, environment, "attach_channel", attach).await??;
         if bound.category == roomkit_core::model::ChannelCategory::Intelligence {
-            self.publish_agent_presence(room_id, Some(channel_id)).await;
+            self.publish_presence_in_call(room_id, Some(channel_id))
+                .await?;
         }
         Ok(bound)
     }

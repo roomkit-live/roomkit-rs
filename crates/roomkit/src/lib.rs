@@ -186,6 +186,8 @@ pub use self::hooks::{
 pub use self::lock_manager::{
     InMemoryLockManager, InMemoryLockManagerOptions, RoomLock, RoomLockManager,
 };
+#[doc(inline)]
+pub use self::realtime::RealtimeFailure;
 // For the AI channel's loop alone: the payloads of its triggers, which
 // roomkit-ai defines, and what their hooks came to.
 #[doc(hidden)]

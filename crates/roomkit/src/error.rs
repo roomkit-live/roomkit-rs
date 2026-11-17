@@ -221,6 +221,9 @@ pub enum RoomKitError {
     /// error it met is the cause.
     #[error("the store failed")]
     Store(#[source] StoreFailure),
+    /// A realtime publication failed; retains the original backend error (RFC §8.4).
+    #[error("{0}")]
+    Realtime(#[source] crate::RealtimeFailure),
     /// The room's lock could not be taken, as Python propagates the lock
     /// manager's exception.
     #[error("the room lock failed: {}", .0.message)]
@@ -368,6 +371,7 @@ impl RoomKitError {
             Self::Runtime(_) => "RuntimeError".to_owned(),
             Self::Type(_) => "TypeError".to_owned(),
             Self::Store(_) => turns::CHANNEL_ERROR.to_owned(),
+            Self::Realtime(failure) => turns::record_of(&**failure).error_type,
             Self::RoomNotFound(_)
             | Self::RoomAlreadyExists(_)
             | Self::RoomClosed { .. }

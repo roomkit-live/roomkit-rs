@@ -3,7 +3,10 @@
 //! stored. Python's `roomkit.realtime`: the event, the backend that carries
 //! it, and the in-memory backend a kit uses by default.
 
+mod failure;
 mod memory;
+use crate::ChannelError;
+pub use failure::RealtimeFailure;
 
 use std::future::Future;
 use std::pin::Pin;
@@ -135,7 +138,14 @@ pub type RealtimeFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// another, Redis pub/sub or NATS for several processes.
 pub trait RealtimeBackend: Send + Sync + 'static {
     /// Hands `event` to every subscription of `channel`.
-    fn publish<'a>(&'a self, channel: &'a str, event: EphemeralEvent) -> RealtimeFuture<'a, ()>;
+    ///
+    /// # Errors
+    /// Returns the backend failure with its original cause, as Python raises.
+    fn publish<'a>(
+        &'a self,
+        channel: &'a str,
+        event: EphemeralEvent,
+    ) -> RealtimeFuture<'a, Result<(), ChannelError>>;
 
     /// Runs `callback` for each event published to `channel` from now on;
     /// the id that [`unsubscribe`](Self::unsubscribe) takes.
@@ -150,11 +160,14 @@ pub trait RealtimeBackend: Send + Sync + 'static {
 
     /// Hands `event` to the room `room_id`'s subscriptions, those of the
     /// channel `room:<room_id>`.
+    ///
+    /// # Errors
+    /// Propagates the publication failure from [`publish`](Self::publish).
     fn publish_to_room<'a>(
         &'a self,
         room_id: &'a RoomId,
         event: EphemeralEvent,
-    ) -> RealtimeFuture<'a, ()> {
+    ) -> RealtimeFuture<'a, Result<(), ChannelError>> {
         Box::pin(async move { self.publish(&room_channel(room_id), event).await })
     }
 

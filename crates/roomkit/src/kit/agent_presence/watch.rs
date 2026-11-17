@@ -76,7 +76,7 @@ impl Watch {
         }
         let claim = Arc::new(Claim {
             online,
-            pending: AtomicBool::new(true),
+            pending: AtomicBool::new(false),
         });
         state.claims.insert(key, Arc::clone(&claim));
         Some(claim)
@@ -102,6 +102,18 @@ impl<S: ConversationStore> RoomKit<S> {
                 kit.publish_agent_presence(&room, None).await;
             }
         }));
+    }
+
+    pub(in crate::kit) async fn publish_presence_in_call(
+        &self,
+        room: &RoomId,
+        channel: Option<&ChannelId>,
+    ) -> Result<(), RoomKitError> {
+        let (kit, room, channel) = (self.clone(), room.clone(), channel.cloned());
+        super::call::run(&self.inner, async move {
+            kit.publish_agent_presence(&room, channel.as_ref()).await;
+        })
+        .await
     }
 
     pub(crate) async fn publish_agent_presence(&self, room: &RoomId, channel: Option<&ChannelId>) {
@@ -160,17 +172,20 @@ impl<S: ConversationStore> RoomKit<S> {
         else {
             return Ok(());
         };
-        self.publish_presence(
-            room,
-            channel.as_str(),
-            if claim.online { "online" } else { "offline" },
-            PublishPresenceOptions::default(),
-        )
-        .await?;
+        let result = self
+            .publish_presence(
+                room,
+                channel.as_str(),
+                if claim.online { "online" } else { "offline" },
+                PublishPresenceOptions::default(),
+            )
+            .await;
+        // Cancellation keeps the claim but does not create a retry. Only
+        // a recoverable refusal queues it, as Python's except Exception.
         // Only this allocation changes: a detach or room close may already
         // have removed it, and a new attach has its own independent claim.
-        claim.pending.store(false, Ordering::SeqCst);
-        Ok(())
+        claim.pending.store(result.is_err(), Ordering::SeqCst);
+        result
     }
 
     fn retry_agent_presence(&self) {
@@ -226,7 +241,10 @@ async fn retry_loop<S: ConversationStore>(
         if *closing.borrow() {
             return;
         }
-        kit.retry_pending_presence().await;
+        tokio::select! {
+            _ = closing.changed() => return,
+            () = kit.retry_pending_presence() => {}
+        }
         {
             let mut state = kit
                 .inner

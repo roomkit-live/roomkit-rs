@@ -29,7 +29,11 @@ struct HeldPresence {
 }
 
 impl RealtimeBackend for HeldPresence {
-    fn publish<'a>(&'a self, channel: &'a str, event: EphemeralEvent) -> RealtimeFuture<'a, ()> {
+    fn publish<'a>(
+        &'a self,
+        channel: &'a str,
+        event: EphemeralEvent,
+    ) -> RealtimeFuture<'a, Result<(), roomkit::ChannelError>> {
         Box::pin(async move {
             if event.r#type == EphemeralEventType::PresenceOnline {
                 if self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
@@ -41,7 +45,7 @@ impl RealtimeBackend for HeldPresence {
                     .unwrap()
                     .push((event.r#type, event.user_id.clone()));
             }
-            self.inner.publish(channel, event).await;
+            self.inner.publish(channel, event).await
         })
     }
 

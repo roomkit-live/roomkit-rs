@@ -149,8 +149,11 @@ impl<S: ConversationStore> RoomKit<S> {
     ) -> Result<(), RoomKitError> {
         self.inner.open()?;
         event.room_created_at = self.room_mark(room_id, organization_id).await?;
-        self.inner.realtime.publish_to_room(room_id, event).await;
-        Ok(())
+        self.inner
+            .realtime
+            .publish_to_room(room_id, event)
+            .await
+            .map_err(|error| RoomKitError::Realtime(error.into()))
     }
 
     /// Publishes that `user_id` started typing in the room, or stopped

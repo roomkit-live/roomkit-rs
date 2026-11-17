@@ -484,6 +484,22 @@ approved = "2026-10-27"
 reason = "a variant carries a foreign error, the cause kept"
 
 [[exception]]
+rust = "roomkit::RealtimeFailure"
+approved = "2026-11-17"
+reason = "language: root re-export of the owned realtime backend error, as StoreFailure is re-exported"
+
+[[exception]]
+rust = "roomkit::realtime::RealtimeFailure"
+approved = "2026-11-17"
+reason = "language: an owned backend error with its original cause, display and identity equality, also re-exported at roomkit::RealtimeFailure"
+
+[[exception]]
+rust = "roomkit::RoomKitError"
+members = ["Realtime"]
+approved = "2026-11-17"
+reason = "language: explicit publications propagate the realtime backend exception in their existing Result; RealtimeFailure retains the foreign error and cause"
+
+[[exception]]
 rust = "roomkit::TurnHost"
 members = ["respond_with_stream"]
 approved = "2026-10-27"
@@ -1385,4 +1401,4 @@ reason = "Language: Python SkillChangedError's chained cause is optional and ret
 rust = "roomkit::turns::ExecutorInfo::covers"
 params = ["room_hooks", "organization_id"]
 approved = "2026-11-17"
-reason = "Explicit borrowed slice and optional organization retain Python defaults as [] and None; coverage errors remain fallible (HITL eb3c6f0b)."
+reason = "Explicit borrowed slice and optional organization retain Python defaults as [] and None; coverage errors remain fallible."

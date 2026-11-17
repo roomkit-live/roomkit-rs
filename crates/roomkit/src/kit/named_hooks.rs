@@ -50,7 +50,7 @@ impl<S: ConversationStore> RoomKit<S> {
             },
             |()| name.to_owned(),
         )?;
-        self.publish_agent_presence(room_id, None).await;
+        self.publish_presence_in_call(room_id, None).await?;
         Ok(())
     }
 
@@ -77,7 +77,7 @@ impl<S: ConversationStore> RoomKit<S> {
                 .hooks
                 .holds_room_hooks_beyond(room_id, &BTreeSet::new());
             self.inner.room_hook_lifetime.released(room_id, name, holds);
-            self.publish_agent_presence(room_id, None).await;
+            self.publish_presence_in_call(room_id, None).await?;
         }
         Ok(removed)
     }

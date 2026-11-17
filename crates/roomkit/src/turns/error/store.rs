@@ -1,4 +1,4 @@
-//! Store causes cross as bounded records, never reconstructed driver objects.
+//! Store and realtime causes cross as bounded records, never reconstructed driver objects.
 
 use std::error::Error;
 use std::fmt;
@@ -60,7 +60,7 @@ pub(super) fn causes(error: &(dyn Error + 'static)) -> Vec<WireError> {
     causes
 }
 
-pub(super) fn rebuild(error: &WireError) -> Option<RoomKitError> {
+fn rebuild_cause(error: &WireError) -> Option<Box<Cause>> {
     let mut next = None;
     for cause in error.causes.iter().take(CAUSES_KEPT).rev() {
         next = Some(Box::new(Cause {
@@ -70,7 +70,21 @@ pub(super) fn rebuild(error: &WireError) -> Option<RoomKitError> {
     }
     // An old or incomplete record has no driver's cause to reconstruct.
     // Keep the codec's ordinary RemoteTurn fallback instead of inventing one.
-    Some(RoomKitError::Store(crate::store::StoreFailure::new(*next?)))
+    next
+}
+
+pub(super) fn rebuild(error: &WireError) -> Option<RoomKitError> {
+    Some(RoomKitError::Store(crate::store::StoreFailure::new(
+        *rebuild_cause(error)?,
+    )))
+}
+
+pub(super) fn rebuild_realtime(error: &WireError) -> Option<RoomKitError> {
+    let cause = *rebuild_cause(error)?;
+    let kind = cause.record.error_type.clone();
+    let attributes = (*cause.record.attributes).clone();
+    let cause = ClassedError::new(kind, cause).with_attributes(attributes);
+    Some(RoomKitError::Realtime(crate::RealtimeFailure::new(cause)))
 }
 
 #[cfg(test)]
@@ -78,6 +92,34 @@ mod tests {
     use super::*;
     use crate::turns::error::{kit_error, one, rebuild_kit_error};
     use serde_json::json;
+
+    #[test]
+    fn a_realtime_failure_roundtrips_its_class_message_attributes_and_cause() {
+        let cause = Cause {
+            record: ErrorRecord::new("ConnectionError", "realtime down"),
+            next: Some(Box::new(Cause {
+                record: ErrorRecord::new("OSError", "transport unavailable"),
+                next: None,
+            })),
+        };
+        let error = ClassedError::new("ConnectionError", cause)
+            .with_attributes(json!({"retryable": true}).as_object().unwrap().clone());
+        let original = RoomKitError::Realtime(crate::RealtimeFailure::new(error));
+        assert_eq!(original.class_name(), "ConnectionError");
+        let crossed = kit_error(&original);
+        let rebuilt = rebuild_kit_error(&crossed);
+        assert!(matches!(rebuilt, RoomKitError::Realtime(_)));
+        assert_eq!(rebuilt.to_string(), "realtime down");
+        assert_eq!(rebuilt.class_name(), "ConnectionError");
+        assert_eq!(rebuilt.source().unwrap().to_string(), "realtime down");
+        assert_eq!(
+            rebuilt.source().unwrap().source().unwrap().to_string(),
+            "transport unavailable"
+        );
+        assert_eq!(kit_error(&rebuilt), crossed);
+        assert_eq!(crossed.causes[0].attributes["retryable"], true);
+        assert_eq!(crossed.causes[1].kind, "OSError");
+    }
 
     #[test]
     fn a_store_cause_roundtrips_its_class_message_and_attributes() {

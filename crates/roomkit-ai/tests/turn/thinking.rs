@@ -144,12 +144,27 @@ async fn a_whole_call_closes_no_window() {
     assert_eq!(blocks(events).await, ["Before.After."]);
 }
 
-/// A realtime backend whose every publish never returns.
+/// A realtime backend whose turn notifications never return.
 struct Stuck;
 
 impl RealtimeBackend for Stuck {
-    fn publish<'a>(&'a self, _channel: &'a str, _event: EphemeralEvent) -> RealtimeFuture<'a, ()> {
-        Box::pin(std::future::pending())
+    fn publish<'a>(
+        &'a self,
+        _channel: &'a str,
+        event: EphemeralEvent,
+    ) -> RealtimeFuture<'a, Result<(), roomkit::ChannelError>> {
+        // Attaching the agent publishes its initial presence before the
+        // turn under test starts. Only the turn notifications are held.
+        if matches!(
+            event.r#type,
+            EphemeralEventType::PresenceOnline
+                | EphemeralEventType::PresenceAway
+                | EphemeralEventType::PresenceOffline
+        ) {
+            Box::pin(std::future::ready(Ok(())))
+        } else {
+            Box::pin(std::future::pending())
+        }
     }
 
     fn subscribe<'a>(
