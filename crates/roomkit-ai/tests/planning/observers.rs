@@ -151,7 +151,7 @@ async fn publication_boundary(streaming: bool, fail: bool) {
     kit.hook(
         HookTrigger::OnPlanUpdated,
         move |event: PlanUpdatedEvent, context: RoomContext| {
-            assert_eq!(event.room_id, context.room.id);
+            assert_eq!(event.room_id, context.room.id.as_str());
             keeping.lock().unwrap().push(event);
             hearing.notify_one();
             async {}

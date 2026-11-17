@@ -111,7 +111,7 @@ fn notify(context: &ToolContext, tasks: &[PlanTaskHandle]) {
     });
     let event = PlanUpdatedEvent {
         tasks: tasks.to_vec(),
-        ..PlanUpdatedEvent::new(context.room_id.clone(), context.channel_id.clone())
+        ..PlanUpdatedEvent::new(context.room_id.to_string(), context.channel_id.to_string())
     };
     turn.observe_turn(&event, || {});
 }

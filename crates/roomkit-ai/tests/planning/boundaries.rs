@@ -90,6 +90,16 @@ fn payload_defaults_are_independent_and_preserve_open_task_objects() {
 }
 
 #[test]
+fn payload_identifiers_do_not_apply_record_validation() {
+    // Python: test_planning_boundaries.py::test_plan_event_keeps_identifiers_without_applying_record_validation
+    for (room, channel) in [("", ""), ("room", "all"), ("room", "a b")] {
+        let event = PlanUpdatedEvent::new(room.parse().unwrap(), channel.parse().unwrap());
+        assert_eq!(event.room_id.as_str(), room);
+        assert_eq!(event.channel_id.as_str(), channel);
+    }
+}
+
+#[test]
 fn both_public_constructors_refuse_a_host_collision_when_planning_is_enabled() {
     let options = || AiChannelOptions {
         enable_planning: true,

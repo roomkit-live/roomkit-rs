@@ -1,6 +1,6 @@
 //! The observed plan payload, separate from the private planner's validation.
 
-use roomkit::model::{ChannelId, RoomId, Timestamp};
+use roomkit::model::Timestamp;
 use roomkit::{HookTrigger, TurnPayload};
 use roomkit_core::ops::{Environment, SystemEnvironment};
 
@@ -11,10 +11,10 @@ use crate::PlanTaskHandle;
 /// no realtime backend is configured.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlanUpdatedEvent {
-    /// The room whose plan changed.
-    pub room_id: RoomId,
+    /// The room whose plan changed; this payload does not validate record ids.
+    pub room_id: String,
     /// The channel that stored the plan.
-    pub channel_id: ChannelId,
+    pub channel_id: String,
     /// A list of shared task objects. Editing an object changes the stored
     /// plan; editing this list does not. Cloning the event copies its list
     /// and shares its objects, as Python's observer payload does.
@@ -24,9 +24,9 @@ pub struct PlanUpdatedEvent {
 }
 
 impl PlanUpdatedEvent {
-    /// An empty plan for `channel_id` in `room_id`, now. Other values can
-    /// be supplied by struct update, as for [`crate::ThinkingEvent`].
-    pub fn new(room_id: RoomId, channel_id: ChannelId) -> Self {
+    /// An empty plan for `channel_id` in `room_id`, now, without validating ids.
+    /// Other values can be supplied by struct update, as for [`crate::ThinkingEvent`].
+    pub fn new(room_id: String, channel_id: String) -> Self {
         Self {
             room_id,
             channel_id,
