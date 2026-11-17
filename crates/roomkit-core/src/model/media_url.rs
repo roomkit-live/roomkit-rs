@@ -10,7 +10,8 @@ use super::ModelError;
 pub(super) const MEDIA_URL_RULE: &str = "URL must be a link (http://, https://), a data: URI, or a \
      reference <scheme>://... (two letters of scheme at least, no part of it between '+' a scheme \
      a reader fetches, opens or runs, such as file, ftp, http, smb, sftp, ws or javascript, no \
-     '..' segment, backslash or control character, even percent-encoded)";
+     '..' segment, backslash or control character, even percent-encoded, and no rest starting \
+     with '~', a drive letter or an encoded slash)";
 
 /// Why an audio or a video URL is refused, Python's message.
 pub(super) const PLAYABLE_URL_RULE: &str = "URL must start with http://, https://, or data:";
@@ -20,17 +21,21 @@ pub(super) const PLAYABLE_URL_RULE: &str = "URL must start with http://, https:/
 const MOST_DECODINGS: usize = 3;
 
 /// The schemes a reader fetches, opens or runs by itself, without the
-/// application, in order: files on the machine or on a share, the network
-/// protocols generic readers (curl, ffmpeg, GIO) fetch, code to run, and a
-/// link's, which a reader that splits a compound scheme on `+` fetches.
+/// application, in order: files on the machine, in an archive or on a
+/// share, the network protocols generic readers (curl, ffmpeg, GIO) fetch,
+/// the wrappers that read through another protocol, a file or a descriptor,
+/// code to run, and a link's, which a reader that splits a compound scheme
+/// on `+` fetches.
 #[rustfmt::skip]
-const REFUSED_SCHEMES: [&str; 59] = [
-    "afp", "cifs", "dav", "davs", "dict", "file", "ftp", "ftps", "gopher", "gophers", "hls", "http",
-    "https", "icecast", "imap", "imaps", "ipfs", "ipns", "jar", "javascript", "ldap", "ldaps",
-    "mmsh", "mmst", "mqtt", "nfs", "pop3", "pop3s", "rtmp", "rtmpe", "rtmps", "rtmpt", "rtmpte",
-    "rtmpts", "rtp", "rtsp", "rtsps", "scp", "sctp", "sftp", "smb", "smbs", "smtp", "smtps", "srt",
-    "srtp", "ssh", "tcp", "telnet", "tftp", "tls", "udp", "udplite", "unix", "vbscript", "webdav",
-    "ws", "wss", "zmq",
+const REFUSED_SCHEMES: [&str; 84] = [
+    "admin", "afp", "amqp", "archive", "async", "bluray", "cache", "cifs", "concat", "concatf",
+    "crypto", "dav", "davs", "dict", "expect", "fd", "ffrtmpcrypt", "ffrtmphttp", "file", "ftp",
+    "ftps", "gopher", "gophers", "hls", "http", "httpproxy", "https", "icecast", "imap", "imaps",
+    "ipfs", "ipns", "jar", "javascript", "ldap", "ldaps", "local", "mmsh", "mmst", "mqtt", "nfs",
+    "phar", "php", "pipe", "pop3", "pop3s", "recent", "resource", "rist", "rtmp", "rtmpe", "rtmps",
+    "rtmpt", "rtmpte", "rtmpts", "rtp", "rtsp", "rtsps", "scp", "sctp", "sftp", "smb", "smbs",
+    "smtp", "smtps", "srt", "srtp", "ssh", "subfile", "tar", "tcp", "telnet", "tftp", "tls",
+    "trash", "udp", "udplite", "unix", "vbscript", "webdav", "ws", "wss", "zip", "zmq",
 ];
 
 /// A media content's `url`, its scheme lower-cased when it is a link or a
@@ -92,8 +97,8 @@ fn lowercase_scheme(url: &str) -> String {
 /// included), and nothing a path reader could
 /// follow once it has percent-decoded the rest, up to three times, the most
 /// an ordinary reference is encoded: no backslash, no control character, no
-/// segment that is `..` with the whitespace around it trimmed, and no escape
-/// left to decode.
+/// segment that is `..` with the whitespace around it trimmed, no escape
+/// left to decode, and no start a path reader roots a path at.
 pub(crate) fn is_safe_reference(url: &str) -> bool {
     let Some((scheme, rest)) = url.split_once("://") else {
         return false;
@@ -105,8 +110,20 @@ pub(crate) fn is_safe_reference(url: &str) -> bool {
     if !well_formed || refused_scheme(scheme) {
         return false;
     }
-    decoded(rest)
-        .is_some_and(|rest| !rest.contains('\\') && !holds_control(&rest) && !holds_parent(&rest))
+    let raw = rest;
+    decoded(raw).is_some_and(|rest| {
+        !rest.contains('\\') && !holds_control(&rest) && !holds_parent(&rest) && !rooted(raw, &rest)
+    })
+}
+
+/// Whether `rest`, decoded from `raw`, starts where a path reader roots a
+/// path: a home directory (`~`), a drive letter (`C:`), or a slash that only
+/// decoding writes (`%2F`). A slash written as such (`app:///a`) is an
+/// empty authority, which the application spells as it chooses.
+fn rooted(raw: &str, rest: &str) -> bool {
+    rest.starts_with('~')
+        || matches!(rest.as_bytes(), [letter, b':', ..] if letter.is_ascii_alphabetic())
+        || (rest.starts_with('/') && !raw.starts_with('/'))
 }
 
 /// Whether `scheme`, or one of its parts joined by `+` (`hls+http`,
@@ -257,6 +274,11 @@ mod tests {
             "app-media://a/b\u{7f}",
             "app-media://a/b\u{85}",
             "app-media://photos/%25252541.png",
+            "app-media://~root/.ssh/id_rsa",
+            "app-media://%7Eroot/a.png",
+            "app-media://C:/Windows/win.ini",
+            "app-media://%2Fetc/passwd",
+            "app-media://%252Fetc/passwd",
         ] {
             assert!(!is_safe_reference(url), "{url:?} is accepted");
         }
@@ -269,6 +291,9 @@ mod tests {
             "app-media://photos/100%",
             "app-media://photos/%e9t%C3%A9.png",
             "app-media://photos/%252541.png",
+            "app-media:///photos/1.png",
+            "app-media://a~b/c.png",
+            "app-media://ab:8080/c.png",
         ] {
             assert!(is_safe_reference(url), "{url:?} is refused");
         }
@@ -287,6 +312,9 @@ mod tests {
             "jar://host/a.jar",
             "hls+http://host/a.m3u8",
             "crypto+file://a",
+            "cache:///tmp/a.wav",
+            "admin:///etc/shadow",
+            "php://filter/a",
         ] {
             assert!(!is_safe_reference(url), "{url:?} is accepted");
         }

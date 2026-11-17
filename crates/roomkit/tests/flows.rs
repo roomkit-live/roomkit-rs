@@ -932,7 +932,8 @@ fn javascript_media() -> EventContent {
 const JAVASCRIPT_REFUSED: &str = "URL must be a link (http://, https://), a data: URI, or a \
      reference <scheme>://... (two letters of scheme at least, no part of it between '+' a scheme \
      a reader fetches, opens or runs, such as file, ftp, http, smb, sftp, ws or javascript, no \
-     '..' segment, backslash or control character, even percent-encoded): \"javascript:alert(1)\"";
+     '..' segment, backslash or control character, even percent-encoded, and no rest starting \
+     with '~', a drive letter or an encoded slash): \"javascript:alert(1)\"";
 
 /// Python rejects this content at construction, before `process_inbound` can
 /// spend a token. A Rust struct literal must not bypass that boundary.

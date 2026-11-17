@@ -116,7 +116,8 @@ fn javascript_refused() -> StoreError {
         "URL must be a link (http://, https://), a data: URI, or a reference <scheme>://... (two \
          letters of scheme at least, no part of it between '+' a scheme a reader fetches, opens or \
          runs, such as file, ftp, http, smb, sftp, ws or javascript, no '..' segment, backslash or \
-         control character, even percent-encoded): \"javascript:alert(1)\""
+         control character, even percent-encoded, and no rest starting with '~', a drive letter or \
+         an encoded slash): \"javascript:alert(1)\""
             .to_owned(),
     )
 }

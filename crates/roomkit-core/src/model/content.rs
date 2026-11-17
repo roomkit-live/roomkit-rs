@@ -242,7 +242,8 @@ impl MediaContent {
     /// link, a `data:` URI nor a reference: a scheme of one character, or
     /// one a reader fetches, opens or runs (`file`, `smb`, `javascript`…),
     /// alone or joined by `+`, a `..` segment, a backslash or a control
-    /// character, percent-encoded or not (RFC §6.4).
+    /// character, percent-encoded or not, or a rest after `://` that starts
+    /// with `~`, a drive letter or a slash only decoding writes (RFC §6.4).
     pub fn new(url: impl Into<String>, mime_type: impl Into<String>) -> Result<Self, ModelError> {
         Ok(Self {
             url: media_url(url.into())?,
@@ -1060,7 +1061,8 @@ mod tests {
                              reference <scheme>://... (two letters of scheme at least, no part \
                              of it between '+' a scheme a reader fetches, opens or runs, such \
                              as file, ftp, http, smb, sftp, ws or javascript, no '..' segment, \
-                             backslash or control character, even percent-encoded)",
+                             backslash or control character, even percent-encoded, and no \
+                             rest starting with '~', a drive letter or an encoded slash)",
                 }
             })
         );
