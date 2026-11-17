@@ -294,6 +294,12 @@ pub(crate) fn with_attached_media(event: &RoomEvent, reader: Option<&AttachedMed
             return event.clone();
         }
     };
+    // A media the content model refuses fails the reader, as building it
+    // fails Python's reader.
+    let Some(attached) = checked(attached) else {
+        tracing::warn!(target: "roomkit::ai", event_id = %event.id, "the attached-media reader named a media URL the content model refuses");
+        return event.clone();
+    };
     match followed_by(&event.content, attached) {
         Some(content) => RoomEvent {
             content,
@@ -301,6 +307,20 @@ pub(crate) fn with_attached_media(event: &RoomEvent, reader: Option<&AttachedMed
         },
         None => event.clone(),
     }
+}
+
+/// `attached` as the content model writes it (RFC §6.4): a link's scheme in
+/// lower case; `None` when it refuses one, which a struct literal skips.
+fn checked(attached: Vec<MediaContent>) -> Option<Vec<MediaContent>> {
+    attached
+        .into_iter()
+        .map(|media| {
+            let url = MediaContent::new(media.url.clone(), media.mime_type.clone())
+                .ok()?
+                .url;
+            Some(MediaContent { url, ..media })
+        })
+        .collect()
 }
 
 /// `content`'s parts then `attached`; a text without words gives them its
@@ -819,6 +839,20 @@ mod tests {
         let broken = AttachedMedia::new(|_| Err("record unreadable".into()));
         let event = message("look", &["photo-1"]);
         assert_eq!(with_attached_media(&event, Some(&broken)), event);
+    }
+
+    // Python builds an attached media with its content model, whose refusal
+    // fails the reader (RFC §6.4); a struct literal skips the model.
+    #[test]
+    fn a_reader_naming_a_media_url_the_model_refuses_names_none() {
+        let literal = AttachedMedia::new(|_| {
+            Ok(vec![MediaContent {
+                url: "app-media://a/%2e%2e/secret".to_owned(),
+                ..MediaContent::new("app-media://photo-1", "image/png")?
+            }])
+        });
+        let event = message("look", &["photo-1"]);
+        assert_eq!(with_attached_media(&event, Some(&literal)), event);
     }
 
     // Python: tests/test_author_images.py::TestMention::test_an_image_that_does_not_resolve_leaves_the_turn_a_mention

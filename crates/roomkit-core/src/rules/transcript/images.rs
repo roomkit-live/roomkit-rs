@@ -4,6 +4,7 @@
 //! channel's to decide.
 
 use super::data_uri::{is_space, to_data_uri};
+use crate::model::is_safe_reference;
 
 /// The most bytes an image holds: Anthropic's documented per-image limit,
 /// Python's `MAX_AUTHOR_IMAGE_BYTES`. An inline image's are read off its
@@ -36,11 +37,12 @@ impl Image {
     /// type and parameters in lower case (Python's `canonical_data_uri`):
     /// the base64's form is the provider's to judge. A link (`http`,
     /// `https`) goes as written, its scheme in lower case: the provider
-    /// fetches it. An application reference is held to what a reader could
-    /// not take for something else: a scheme of two characters at least,
-    /// none a reader fetches, opens or runs, no `..` segment, backslash or
-    /// control character. Anything else returns `None`, and the channel
-    /// reads a mention in its place.
+    /// fetches it. An application reference is held to the content
+    /// model's rule (RFC §6.4), which a struct literal skips: a scheme of
+    /// two characters at least, no part of it a reader fetches, opens or
+    /// runs, no `..` segment, backslash or control character, percent-encoded
+    /// or not, and something after `://`. Anything else returns `None`, and
+    /// the channel reads a mention in its place.
     pub fn new(url: &str, mime_type: &str) -> Option<Self> {
         let mime_type = vision_type(mime_type)?;
         let (scheme, rest) = url.split_once(':')?;
@@ -54,18 +56,7 @@ impl Image {
                 mime_type,
             });
         }
-        if !rest.starts_with("//")
-            || rest.len() <= 2
-            || scheme.len() < 2
-            || matches!(lower.as_str(), "file" | "ftp" | "javascript" | "vbscript")
-            || !scheme.bytes().enumerate().all(|(i, b)| {
-                b.is_ascii_alphabetic()
-                    || i > 0 && (b.is_ascii_digit() || matches!(b, b'+' | b'-' | b'.'))
-            })
-            || url.contains('\\')
-            || url.chars().any(char::is_control)
-            || rest.split('/').any(|part| part == "..")
-        {
+        if rest.len() <= 2 || !is_safe_reference(url) {
             return None;
         }
         Some(Self {
@@ -179,8 +170,16 @@ mod tests {
             "photo.png",
             "media://../secret",
             "media://a\\secret",
+            "media://a/%2e%2e/secret",
+            "media://a/ ../secret",
+            "media://a/b?..",
+            "smb://host/a.png",
+            "hls+http://host/a.png",
         ] {
-            assert!(Image::new(url, "image/png").is_none());
+            assert!(
+                Image::new(url, "image/png").is_none(),
+                "{url:?} is accepted"
+            );
         }
         let image = Image::new("DATA:IMAGE/JPG;BASE64,AQIDBA==", "IMAGE/JPG; x=1").unwrap();
         assert_eq!(image.url(), "data:image/jpeg;base64,AQIDBA==");

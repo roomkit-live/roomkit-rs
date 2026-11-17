@@ -23,6 +23,7 @@ pub mod identity;
 mod ids;
 mod inbound;
 mod media_url;
+pub(crate) use media_url::is_safe_reference;
 mod output;
 mod participant;
 mod persistence;

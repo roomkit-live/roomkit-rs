@@ -94,7 +94,7 @@ fn lowercase_scheme(url: &str) -> String {
 /// an ordinary reference is encoded: no backslash, no control character, no
 /// segment that is `..` with the whitespace around it trimmed, and no escape
 /// left to decode.
-fn is_safe_reference(url: &str) -> bool {
+pub(crate) fn is_safe_reference(url: &str) -> bool {
     let Some((scheme, rest)) = url.split_once("://") else {
         return false;
     };
@@ -158,6 +158,9 @@ fn decoded(text: &str) -> Option<Cow<'_, str>> {
 /// `text` with each `%` and two hex digits replaced by the byte they name;
 /// `None` when it holds none.
 fn percent_decoded(text: &str) -> Option<String> {
+    if !text.contains('%') {
+        return None;
+    }
     let bytes = text.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
     let mut changed = false;
