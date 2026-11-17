@@ -20,27 +20,36 @@ use crate::provider::{AiMessage, AiRole};
 use crate::steering::Steering;
 use crate::tool_eviction::ToolEviction;
 
+/// What [`Loop::after_calls`] reads and writes: the conversation and what
+/// the round's generation measured, the turn's steering and its system
+/// prompt.
+type Read<'a> = (
+    (&'a mut Vec<Message>, &'a Metadata),
+    (&'a Steering, &'a mut Option<String>),
+);
+
 impl Loop {
     /// What follows round `round_index` once its calls `ran`, as
     /// [`between_rounds`](Self::between_rounds) says, then why the loop
-    /// ends there, if it does: a call that served the turn's result tool
-    /// ends it, nothing asked after it (RFC §23.3); a cancel `steering`
-    /// reads, with the messages steered in, cancels it (RFC §21.3).
+    /// ends there, if it does: a cancel `steering` reads, with the messages
+    /// steered in, cancels it (RFC §21.3); a call that served the turn's
+    /// result tool ends it, nothing asked after it, unless the round gave
+    /// the model something to read, an `AFTER_TOOL_ROUND` message or a
+    /// steered directive (RFC §23.3).
     pub(super) async fn after_calls(
         &mut self,
         round_index: u32,
         ran: Ran,
-        (messages, usage): (&mut Vec<Message>, &Metadata),
-        (steering, system_prompt): (&Steering, &mut Option<String>),
+        ((messages, usage), (steering, system_prompt)): Read<'_>,
     ) -> Option<LoopEndReason> {
         let submitted = ran.submitted(&self.ending_turn());
-        self.between_rounds(round_index, ran, messages, usage).await;
-        if submitted {
-            return Some(LoopEndReason::Completed);
+        let asked = self.between_rounds(round_index, ran, messages, usage).await;
+        let read = (messages.len(), system_prompt.clone());
+        if steering.read(messages, system_prompt) {
+            return Some(LoopEndReason::Cancelled);
         }
-        steering
-            .read(messages, system_prompt)
-            .then_some(LoopEndReason::Cancelled)
+        let steered = read != (messages.len(), system_prompt.clone());
+        (submitted && !asked && !steered).then_some(LoopEndReason::Completed)
     }
 
     /// The names of the tools the room's owner serves the turn whose
@@ -56,19 +65,23 @@ impl Loop {
     /// the conversation and `usage` what the round's generation measured:
     /// `AFTER_TOOL_ROUND`, its messages read after the results, then the
     /// memory's compaction of the history; nothing for a round that ran no
-    /// call (Python's `_run_announced_calls`).
+    /// call (Python's `_run_announced_calls`). Whether `AFTER_TOOL_ROUND`
+    /// added a message.
     async fn between_rounds(
         &mut self,
         round_index: u32,
         ran: Ran,
         messages: &mut Vec<Message>,
         usage: &Metadata,
-    ) {
+    ) -> bool {
         let ran_calls = !ran.calls.is_empty();
-        messages.extend(self.after_tool_round(round_index, ran).await);
+        let added = self.after_tool_round(round_index, ran).await;
+        let asked = !added.is_empty();
+        messages.extend(added);
         if ran_calls {
             self.compact_after_round(messages, usage).await;
         }
+        asked
     }
 
     /// Hands the memory the history before the turn's input, `messages`
