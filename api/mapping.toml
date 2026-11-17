@@ -1309,12 +1309,6 @@ members = ["call"]
 approved = "2026-11-04"
 reason = "Rust has no object to call: Python's ids(server_id, name) is ids.call(server_id, name), a server's id read as text before it, none as empty (HITL 8a3d3780)"
 
-[[missing]]
-python = "roomkit.SpeakQueueChange"
-members = ["TURN_SKIPPED"]
-scope = "text"
-reason = "not yet in Rust: a discussion skipping the turns of an agent no executor serves, Python's RMK-1626, whose lot ports it and takes this entry off"
-
 [[exception]]
 python = "roomkit.PendingInput.__init__"
 params = ["status", "result", "reject_reason"]

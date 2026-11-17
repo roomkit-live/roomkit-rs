@@ -48,6 +48,9 @@ pub enum SpeakQueueChange {
     Waiting,
     /// The discussion is over.
     Over,
+    /// A queued turn was dropped because no executor serves its agent
+    /// (RFC §10.6.7), Python's `TURN_SKIPPED`.
+    TurnSkipped,
 }
 
 /// Carried to `ON_SPEAK_QUEUE` hooks: one change of a room's speak queue.

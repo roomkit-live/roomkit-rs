@@ -1512,7 +1512,8 @@ mod tests {
                         | crate::SpeakQueueChange::Listening
                         | crate::SpeakQueueChange::TalkingAgain
                         | crate::SpeakQueueChange::Waiting
-                        | crate::SpeakQueueChange::Over => {}
+                        | crate::SpeakQueueChange::Over
+                        | crate::SpeakQueueChange::TurnSkipped => {}
                     }
                 }
             },

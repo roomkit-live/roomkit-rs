@@ -449,3 +449,10 @@ recoverable failures; closing the kit cancels an in-flight retry. Turn-owner
 notifications log at ERROR and continue, as Python's owner publisher does;
 notifications published directly by an idle channel log at DEBUG and continue.
 This Rust error form was approved on 2026-11-17.
+
+## Discussion queue changes
+
+`SpeakQueueChange::TurnSkipped` is Python's `TURN_SKIPPED`, serialized as
+`"turn_skipped"`. It can be constructed and read as public queue-change data.
+Detecting an offline remote executor and skipping its queued discussion turn
+remain unsupported; adding this value does not enable those runtime behaviors.
