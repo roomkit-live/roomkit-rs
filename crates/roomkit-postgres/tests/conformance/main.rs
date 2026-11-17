@@ -31,6 +31,8 @@ mod delegate_calls;
 mod discussion_calls;
 #[path = "../../../roomkit/tests/conformance/errors.rs"]
 mod errors;
+#[path = "../../../roomkit/tests/conformance/extra_tools.rs"]
+mod extra_tools;
 #[path = "../../../roomkit/tests/conformance/handoff_calls.rs"]
 mod handoff_calls;
 #[path = "../../../roomkit/tests/conformance/harness.rs"]

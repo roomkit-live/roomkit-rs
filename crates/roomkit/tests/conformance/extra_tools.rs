@@ -11,6 +11,14 @@ use crate::run::{Run, lock};
 
 pub(crate) type Reader = Arc<dyn Fn() -> Vec<AiToolHandle> + Send + Sync>;
 
+pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
+    match call {
+        "agent.extra_tools" => Some(&["channel_id"]),
+        "agent.replace_extra_tool" => Some(&["channel_id", "index", "definition"]),
+        _ => None,
+    }
+}
+
 pub(crate) fn reader(agent: &Scripted) -> Reader {
     match agent {
         Scripted::Channel(channel) => {
@@ -41,7 +49,7 @@ pub(crate) fn call(run: &Run, name: &str, spec: &Value) -> Result<Called, Unread
     let definitions = read();
     if name == "agent.extra_tools" {
         return Ok(Ok(Value::Array(
-            definitions.iter().map(|tool| dump(tool.get())).collect(),
+            definitions.iter().map(|tool| dump(&tool.get())).collect(),
         )));
     }
     let index: usize = field(spec, "index")?;
@@ -67,7 +75,7 @@ fn definition(spec: &Value) -> Result<AiTool, Unreadable> {
     })
 }
 
-fn dump(tool: AiTool) -> Value {
+fn dump(tool: &AiTool) -> Value {
     json!({"name":tool.name, "description":tool.description, "parameters":tool.parameters,
         "tags":tool.tags, "changes_state":tool.changes_state, "defer_loading":tool.defer_loading})
 }
