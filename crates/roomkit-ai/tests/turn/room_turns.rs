@@ -589,7 +589,8 @@ async fn a_strategy_that_takes_the_agent_s_turns_orders_them_itself() {
         },
     )
     .unwrap();
-    // The reviewer approves through its verdict, then closes its turn.
+    // The reviewer approves through its verdict, which ends its turn
+    // (RMK-357): the second answer is never asked for.
     let mut verdict = AiToolCall::new("review", "submit_review");
     verdict.arguments = Metadata::from_iter([
         ("approved".to_owned(), serde_json::json!(true)),
@@ -651,8 +652,8 @@ async fn a_strategy_that_takes_the_agent_s_turns_orders_them_itself() {
     );
     // The loop's answer, which no stream carries, once its reviewer read it.
     assert_eq!(said(&kit, "prod").await, ["draft"]);
-    // Its verdict's call, then its closing turn.
-    assert_eq!(reviewing.calls().len(), 2);
+    // Its verdict's call alone.
+    assert_eq!(reviewing.calls().len(), 1);
     kit.close().await.unwrap();
 }
 

@@ -83,6 +83,7 @@ async fn the_given_tool_is_injected_and_its_call_captured() {
                 r#"{"approved": true, "feedback": "", "next_task": "write it up"}"#,
             )],
         ),
+        // Never asked: the served verdict ends the turn (RMK-357).
         ScriptedRound::answering("Done."),
     ]);
     let kit = kit(&model).await;
@@ -104,8 +105,12 @@ async fn the_given_tool_is_injected_and_its_call_captured() {
         (
             TaskStatus::Completed,
             Some(r#"{"approved": true, "feedback": "", "next_task": "write it up"}"#),
-            // The re-read of stored results after it (RFC §21.5).
-            vec![vec!["submit_verdict".to_owned(), "read_stored_result".to_owned()]; 2]
+            // The re-read of stored results after it (RFC §21.5); one
+            // request, the served verdict ending the turn (RMK-357).
+            vec![vec![
+                "submit_verdict".to_owned(),
+                "read_stored_result".to_owned()
+            ]]
         )
     );
 }
