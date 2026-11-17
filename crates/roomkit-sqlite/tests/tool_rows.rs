@@ -134,14 +134,19 @@ async fn overlapping_turns_read_back_from_the_file_pair_by_their_correlation_id(
             roomkit::model::ToolCall::new(id, "lookup_order", roomkit::model::Metadata::new());
         Message::assistant_calls("", vec![call])
     };
+    let result = |text: &str| {
+        let mut result = Message::tool_result("c1", text);
+        result.outcome = Some(ToolCallOutcome::Served);
+        result
+    };
     assert_eq!(
         read,
         [
             Message::new(Role::User, "Order 42?"),
             call("c1"),
-            Message::tool_result("c1", "A's"),
+            result("A's"),
             call("c1"),
-            Message::tool_result("c1", "B's"),
+            result("B's"),
             Message::new(Role::User, "And then?"),
         ]
     );
