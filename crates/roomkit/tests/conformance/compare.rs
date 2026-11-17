@@ -294,8 +294,29 @@ impl Comparison<'_> {
                 &format!("models.{channel}"),
             );
         }
+        self.external_handlers();
         self.continuations();
         self.acp();
+    }
+
+    fn external_handlers(&mut self) {
+        for (channel, expected) in self.expect["external_handlers"]
+            .as_object()
+            .into_iter()
+            .flatten()
+        {
+            let actual = self
+                .observed
+                .external_handlers
+                .get(channel)
+                .cloned()
+                .map(Value::Array);
+            self.check(
+                expected,
+                actual.as_ref(),
+                &format!("external_handlers.{channel}"),
+            );
+        }
     }
 
     fn continuations(&mut self) {
