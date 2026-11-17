@@ -1,5 +1,15 @@
 //! Task delegation (RFC §23): a delegated task's handle and its result,
 //! and the runner its background work runs on, Python's `roomkit.tasks`.
+//!
+//! The names a host uses to identify the task tools it registered:
+//!
+//! ```
+//! use roomkit::tasks::{BACKGROUND_TOOL, CANCEL_TASK_TOOL, TASK_STATUS_TOOL};
+//!
+//! assert_eq!(BACKGROUND_TOOL, "work_in_background");
+//! assert_eq!(TASK_STATUS_TOOL, "task_status");
+//! assert_eq!(CANCEL_TASK_TOOL, "cancel_task");
+//! ```
 
 // The tasks a kit runs in the background, tracked so that the kit's close
 // can wait for them and cut them (decision 3 of step 2b, RFC §12.10.4):
@@ -62,6 +72,15 @@ pub use self::runner::{InMemoryTaskRunner, OnCompleteCallback, SubmitOptions, Ta
 pub use crate::kit::background_tools::{
     TaskToolWindow, cancel_task_definition, task_status_definition,
 };
+
+/// The tool that starts long work as a task: Python's `BACKGROUND_TOOL`.
+pub const BACKGROUND_TOOL: &str = "work_in_background";
+
+/// The tool that lists the room's tasks: Python's `TASK_STATUS_TOOL`.
+pub const TASK_STATUS_TOOL: &str = "task_status";
+
+/// The tool that cancels one of them: Python's `CANCEL_TASK_TOOL`.
+pub const CANCEL_TASK_TOOL: &str = "cancel_task";
 
 use std::collections::{HashMap, HashSet};
 use std::pin::pin;

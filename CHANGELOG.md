@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Expose `BACKGROUND_TOOL`, `TASK_STATUS_TOOL` and `CANCEL_TASK_TOOL` in `roomkit::tasks` for hosts that identify registered task tools.
+
 - Expose `received_events` for callers filtering blocked rows from an event history.
 
 - Expose `RESPONSE_SEGMENT_SEPARATOR`, the paragraph break between the segments of a text response.

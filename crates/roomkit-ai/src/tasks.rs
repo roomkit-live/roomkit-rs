@@ -10,8 +10,8 @@ use std::sync::LazyLock;
 use roomkit::model::Metadata;
 use roomkit::orchestration::StrategyAgent;
 use roomkit::tasks::{
-    DelegateHandler, TaskToolWindow, cancel_task_definition, delegate_tool_definition,
-    task_status_definition,
+    CANCEL_TASK_TOOL, DelegateHandler, TASK_STATUS_TOOL, TaskToolWindow, cancel_task_definition,
+    delegate_tool_definition, task_status_definition,
 };
 use roomkit::{ConversationStore, RoomKit, RoomKitError, WeakRoomKit};
 use roomkit_core::rules::python_repr;
@@ -20,12 +20,6 @@ use serde_json::{Value, json};
 use crate::tools::{
     AiTool, Tool, ToolError, ToolFuture, ToolResult, current_tool_call, current_tool_room_metadata,
 };
-
-/// The tool [`TaskStatusTool`] serves: Python's `TASK_STATUS_TOOL`.
-const TASK_STATUS_TOOL: &str = "task_status";
-
-/// The tool [`CancelTaskTool`] serves: Python's `CANCEL_TASK_TOOL`.
-const CANCEL_TASK_TOOL: &str = "cancel_task";
 
 #[cfg(test)]
 #[path = "tasks/names.rs"]

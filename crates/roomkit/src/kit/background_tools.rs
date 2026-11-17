@@ -22,18 +22,9 @@ use crate::store::ConversationStore;
 use crate::tasks::json::{dumps_object, json as write_json, object};
 use crate::tasks::lines::{Line, ROOM_TASKS_WINDOW, room_lines};
 use crate::tasks::text::identifier;
-use crate::tasks::{AGENT_REACH, TaskReach};
+use crate::tasks::{AGENT_REACH, BACKGROUND_TOOL, CANCEL_TASK_TOOL, TASK_STATUS_TOOL, TaskReach};
 use crate::turn::{OwnerCall, OwnerToolAnswer};
 use crate::turns::served::{OwnerServe, OwnerToolEntry};
-
-/// The tool that starts long work as a task: Python's `BACKGROUND_TOOL`.
-const BACKGROUND_TOOL: &str = "work_in_background";
-
-/// The tool that lists the room's tasks: Python's `TASK_STATUS_TOOL`.
-const TASK_STATUS_TOOL: &str = "task_status";
-
-/// The tool that cancels one of them: Python's `CANCEL_TASK_TOOL`.
-const CANCEL_TASK_TOOL: &str = "cancel_task";
 
 /// How many tasks, the latest, `task_status` lists at most.
 const TASK_STATUS_LIMIT: usize = 10;

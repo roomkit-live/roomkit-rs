@@ -35,6 +35,7 @@ use crate::orchestration::gather::gather_or_cut;
 use crate::orchestration::lifecycle::post_agent_lifecycle;
 use crate::orchestration::worker_run::{WorkerStatus, completed_or_failed, run_worker};
 use crate::store::ConversationStore;
+use crate::tasks::TASK_STATUS_TOOL;
 use crate::tasks::handback::bounded;
 use crate::tasks::json::dumps_object;
 use crate::turn::{OwnerCall, OwnerToolAnswer};
@@ -49,10 +50,6 @@ const DEDUP_WINDOW: Duration = Duration::from_secs(30);
 
 /// The agent a background team's run posts its terminal entry as.
 const ORCHESTRATION: &str = "orchestration";
-
-/// The tool a supervisor follows its background team with, when it was
-/// given it (RFC §23.4): Python's `TASK_STATUS_TOOL`.
-const TASK_STATUS_TOOL: &str = "task_status";
 
 /// A delegated child room's segment: the supervised flow runs the
 /// supervisor there to frame and judge, where it must answer rather than
