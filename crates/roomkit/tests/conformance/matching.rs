@@ -137,14 +137,8 @@ fn object_mismatches(
             other => vec![format!("{path}: {} contains {needle:?}", shown(other))],
         };
     }
-    if let Some(Value::String(needle)) = expected.get("$contains") {
-        return match actual {
-            Some(Value::String(text)) if text.contains(needle.as_str()) => Vec::new(),
-            other => vec![format!(
-                "{path}: {} does not contain {needle:?}",
-                shown(other)
-            )],
-        };
+    if let Some(texts) = expected.get("$contains") {
+        return contains(texts, actual, path);
     }
     let Some(Value::Object(actual)) = actual else {
         return vec![format!("{path}: expected an object, got {}", shown(actual))];
@@ -182,6 +176,63 @@ fn list_mismatches(
             mismatches(want, Some(got), &format!("{path}[{position}]"), names)
         })
         .collect()
+}
+
+/// Whether `actual` is a string holding `texts`: a text, or each text of a
+/// list in its order, one after the end of the one before.
+fn contains(texts: &Value, actual: Option<&Value>, path: &str) -> Vec<String> {
+    let texts: Vec<&str> = texts.as_array().map_or_else(
+        || texts.as_str().into_iter().collect(),
+        |items| items.iter().filter_map(Value::as_str).collect(),
+    );
+    let mut at = 0;
+    for text in texts {
+        let found = match actual {
+            Some(Value::String(held)) => held.get(at..).and_then(|rest| rest.find(text)),
+            _ => None,
+        };
+        let Some(found) = found else {
+            let after = if at > 0 {
+                " after the text before it"
+            } else {
+                ""
+            };
+            return vec![format!(
+                "{path}: {} does not contain {text:?}{after}",
+                shown(actual)
+            )];
+        };
+        at += found + text.len();
+    }
+    Vec::new()
+}
+
+#[test]
+fn contains_a_list_holds_each_text_in_its_order() {
+    let expected =
+        serde_json::json!({"$contains": ["running for ", " s; at “12/20 s” (", " s ago)"]});
+    for (actual, matches) in [
+        (
+            Some(serde_json::json!("running for 3 s; at “12/20 s” (1 s ago)")),
+            true,
+        ),
+        (
+            Some(serde_json::json!("running for 3 s; at “12/20 s”")),
+            false,
+        ),
+        (
+            Some(serde_json::json!("at “12/20 s” (1 s ago); running for 3 s")),
+            false,
+        ),
+        (Some(serde_json::json!("running for; at")), false),
+        (None, false),
+    ] {
+        assert_eq!(
+            mismatches(&expected, actual.as_ref(), "$", &mut Names::default()).is_empty(),
+            matches,
+            "{actual:?}"
+        );
+    }
 }
 
 fn starts_with(prefix: &str, actual: Option<&Value>, path: &str) -> Vec<String> {

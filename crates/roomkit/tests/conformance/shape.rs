@@ -251,6 +251,8 @@ const TOOL: &[&str] = &[
     "declared",
     "returns_json",
     "returns_allowed_names",
+    "returns_requester",
+    "posts_progress",
     "report_claim_probe",
     "writes_record",
     "writes_structured_content",

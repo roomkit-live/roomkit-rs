@@ -1133,6 +1133,7 @@ fn scripted_handler(tools: Vec<Value>, run: &Arc<Run>) -> ToolHandler {
             };
             write_record(&behaviour);
             write_structured_content(&behaviour)?;
+            post_progress(&behaviour, &run).await?;
             if let (Some(gate), Some(run)) = (behaviour["gate"].as_str(), run.upgrade()) {
                 run.gates.hold(gate).await;
             }
@@ -1362,6 +1363,7 @@ fn tools(spec: &Value, run: &Arc<Run>) -> Tools {
                 async move {
                     write_record(&behaviour);
                     write_structured_content(&behaviour)?;
+                    post_progress(&behaviour, &run).await?;
                     if let (Some(gate), Some(run)) = (behaviour["gate"].as_str(), run.upgrade()) {
                         run.gates.hold(gate).await;
                     }
@@ -1383,6 +1385,18 @@ pub(crate) fn write_record(spec: &Value) {
     ) {
         record.update(keys.clone());
     }
+}
+
+/// Posts a tool's `posts_progress` as its task's progress, before its gate
+/// (README, "Scripted agents"); outside a task's child room it posts nothing.
+async fn post_progress(spec: &Value, run: &Weak<Run>) -> Result<(), ToolError> {
+    let (Some(detail), Some(run)) = (spec["posts_progress"].as_str(), run.upgrade()) else {
+        return Ok(());
+    };
+    roomkit_ai::tasks::post_task_progress(run.kit(), detail)
+        .await
+        .map(drop)
+        .map_err(|error| ToolError::failed(error.to_string()))
 }
 
 /// Publish through the real call context, before the scripted answer or gate.
@@ -1409,6 +1423,10 @@ pub(crate) async fn answer(tool: &Value) -> Result<ToolResult, ToolError> {
     }
     if let Some(value) = tool.get("returns_json") {
         return Ok(ToolResult::Json(value.clone()));
+    }
+    if tool["returns_requester"].as_bool() == Some(true) {
+        let requester = roomkit_ai::current_tool_requester();
+        return Ok(ToolResult::Text(json!(requester).to_string()));
     }
     if tool["returns_allowed_names"].as_bool() == Some(true) {
         let names = roomkit_ai::current_tool_allowed_names().map(|names| {
