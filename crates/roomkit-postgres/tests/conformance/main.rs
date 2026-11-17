@@ -117,6 +117,16 @@ pub(crate) type Kit = RoomKit<PostgresStore>;
 /// The store of the kit the runner builds.
 pub(crate) type Store = PostgresStore;
 
+/// Shared fixture checks have the same service requirement as scenarios.
+#[expect(clippy::print_stderr, reason = "report a skipped external-service test")]
+pub(crate) fn backend_available() -> bool {
+    if support::dsn().is_some() {
+        return true;
+    }
+    eprintln!("POSTGRES_DSN is not set: the conformance check is skipped on Postgres");
+    false
+}
+
 /// A kit over a store on a new schema, with the advisory lock a deployment on
 /// this store takes, unless the scenario scripts one; built with what
 /// `configure` makes of the defaults, and the schema, dropped once the run is
@@ -169,8 +179,7 @@ pub(crate) async fn process_kit(
 /// exactly the known failures. Without `POSTGRES_DSN` it skips itself.
 #[test]
 fn every_scenario_gives_what_the_rfc_says() {
-    if support::dsn().is_none() {
-        eprintln!("POSTGRES_DSN is not set: the conformance suite is skipped on Postgres");
+    if !backend_available() {
         return;
     }
     scenarios::every_scenario_gives_what_the_rfc_says(

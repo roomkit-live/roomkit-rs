@@ -76,6 +76,11 @@ pub(crate) type Kit = RoomKit<InMemoryStore>;
 /// The store of the kit the runner builds.
 pub(crate) type Store = InMemoryStore;
 
+/// The memory runner needs no external service for its fixture checks.
+pub(crate) const fn backend_available() -> bool {
+    true
+}
+
 /// A kit over an empty store, built with what `configure` makes of the
 /// defaults, and what keeps the store until the run ends: nothing here.
 #[expect(

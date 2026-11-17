@@ -114,6 +114,11 @@ pub(crate) type Kit = RoomKit<SqliteStore>;
 /// The store of the kit the runner builds.
 pub(crate) type Store = SqliteStore;
 
+/// The SQLite runner creates its own files for fixture checks.
+pub(crate) const fn backend_available() -> bool {
+    true
+}
+
 /// A kit over a store on a new file, built with what `configure` makes of
 /// the defaults, and the file, removed once the run is over.
 #[expect(

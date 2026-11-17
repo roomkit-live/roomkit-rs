@@ -28,6 +28,9 @@ fn malformed_approval_controls_are_not_truthy_host_decisions() {
 
 #[tokio::test]
 async fn sanitized_read_errors_never_hide_a_wrong_server_request() {
+    if !crate::backend_available() {
+        return;
+    }
     let mut scenario = scenario("load-refuses-size");
     scenario["steps"][0]["servers"]["remote"]["replies"][1]["method"] = json!("wrong/read");
     let problems = crate::harness::run(&scenario).await;
@@ -41,6 +44,9 @@ async fn sanitized_read_errors_never_hide_a_wrong_server_request() {
 
 #[tokio::test]
 async fn an_error_cannot_pass_as_an_expected_null_result() {
+    if !crate::backend_available() {
+        return;
+    }
     let mut scenario = scenario("only-full-copies-fetch-unlisted");
     scenario["steps"][0]["expect"]["result"]["results"][3] = json!({"status":"ok","result":null});
     let problems = crate::harness::run(&scenario).await;
@@ -52,6 +58,9 @@ async fn an_error_cannot_pass_as_an_expected_null_result() {
 
 #[tokio::test]
 async fn approval_exhaustion_is_not_an_expected_execution_refusal() {
+    if !crate::backend_available() {
+        return;
+    }
     let mut scenario = scenario("execution-absent-approval");
     scenario["steps"][0]["servers"]["remote"]["approvals"] = json!([]);
     let problems = crate::harness::run(&scenario).await;
