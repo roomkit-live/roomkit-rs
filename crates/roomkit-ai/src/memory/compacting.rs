@@ -12,9 +12,10 @@ use roomkit::ChannelError;
 use roomkit::model::{ChannelId, Metadata, RoomContext, RoomEvent, RoomId};
 use tokio::time::Instant;
 
-use super::footprint::{history_event_costs, turn_history_budget};
+use super::footprint::{Labels, history_event_costs, turn_history_budget};
 use super::summary::{
-    SUMMARIZER_PROMPT, SUMMARY_FAILED, SummaryLines, summary_message, unavailable,
+    SUMMARIZER_PROMPT, SUMMARY_FAILED, SummaryLines, labels_sent, summary_message, summary_request,
+    unavailable,
 };
 use super::{
     CompactOptions, IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions,
@@ -24,6 +25,11 @@ use crate::provider::{AiContext, AiMessage, AiProvider, AiRole};
 
 /// How many summaries the cache keeps, the least recently used dropped.
 const MAX_CACHE_ENTRIES: usize = 200;
+
+/// What the summarizer is asked to do with the turns it reads.
+const INSTRUCTION: &str = "Summarize this conversation concisely. Focus on: decisions made, key \
+                           findings, tool results, errors encountered, and current task state. \
+                           Be specific about file names, error messages, and action outcomes.";
 
 /// What [`CompactingMemory::new`] takes beside its inner memory, its
 /// summarizer and its window: Python's keywords and their defaults.
@@ -111,10 +117,12 @@ impl<P: AiProvider> CompactingMemory<P> {
         inner: MemoryResult,
         budget: usize,
         mut lines: SummaryLines<'_>,
+        labels: &Labels,
     ) -> MemoryResult {
         let budget = to_i64(budget);
-        // An event costs what the history replays with it too (RFC §20).
-        let costs: Vec<i64> = history_event_costs(&inner.events)
+        // An event costs what the history replays with it too (RFC §20),
+        // and its label where the conversation labels it (RFC §20.3).
+        let costs: Vec<i64> = history_event_costs(&inner.events, Some(labels))
             .into_iter()
             .map(to_i64)
             .collect();
@@ -162,12 +170,7 @@ impl<P: AiProvider> CompactingMemory<P> {
         events: &[RoomEvent],
         lines: &SummaryLines<'_>,
     ) -> String {
-        let prompt = format!(
-            "Summarize this conversation concisely. Focus on: decisions made, key findings, tool \
-             results, errors encountered, and current task state. Be specific about file names, \
-             error messages, and action outcomes.\n\n{}",
-            lines.lines(events).join("\n")
-        );
+        let prompt = summary_request(INSTRUCTION, &lines.lines(events), None);
         let key = (room_id.clone(), lines.channel_id.cloned());
         let now = Instant::now();
         if let Some(summary) = self.cached(&key, &prompt, now) {
@@ -266,6 +269,9 @@ impl<P: AiProvider> MemoryProvider for CompactingMemory<P> {
                 .retrieve(room_id, current_event, context, options)
                 .await?;
             let inner = without_current_event(inner, current_event);
+            // Each turn counted as it is sent, with its label where the
+            // conversation labels it (RFC §20.3).
+            let labels = labels_sent(context, &inner.events, current_event, channel_id.as_ref());
             // What the inner memory carries besides its events is not
             // compacted: it is paid for first, with the rest of the turn.
             let budget = turn_history_budget(
@@ -274,6 +280,7 @@ impl<P: AiProvider> MemoryProvider for CompactingMemory<P> {
                 current_event,
                 0,
                 Some(&inner),
+                Some(&labels),
             );
             let lines = SummaryLines {
                 context,
@@ -281,7 +288,7 @@ impl<P: AiProvider> MemoryProvider for CompactingMemory<P> {
                 channel_id: channel_id.as_ref(),
                 kept: Vec::new(),
             };
-            Ok(self.compacted(room_id, inner, budget, lines).await)
+            Ok(self.compacted(room_id, inner, budget, lines, &labels).await)
         })
     }
 

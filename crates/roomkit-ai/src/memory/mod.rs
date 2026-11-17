@@ -28,6 +28,7 @@ mod retrieval;
 mod sliding_window;
 mod summarizing;
 mod summary;
+mod summary_chain;
 #[cfg(test)]
 mod testing;
 mod token_estimator;

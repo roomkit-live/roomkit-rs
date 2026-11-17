@@ -2,12 +2,14 @@
 //! `tests/test_memory_wrappers.py` and `tests/test_channels/test_memory_notes.py`.
 
 use pretty_assertions::assert_eq;
-use roomkit::model::MediaContent;
+use roomkit::model::{MediaContent, Room, Timestamp};
 use serde_json::Value;
 
 use super::*;
 use crate::memory::testing::{Summarizer, context, event, long_events, room, said};
-use crate::memory::{MockMemoryProvider, MockMemoryProviderOptions};
+use crate::memory::{
+    MockMemoryProvider, MockMemoryProviderOptions, SlidingWindowMemory, SlidingWindowMemoryOptions,
+};
 use crate::provider::{
     AiContentPart, AiMessageContent, AiTextPart, AiToolCallPart, AiToolResultPart,
 };
@@ -227,6 +229,148 @@ async fn a_prior_summary_is_carried_into_the_new_one_and_replaced() {
     assert!(summaries[0].contains("Updated summary.") && !summaries[0].contains("Prior context."));
 }
 
+/// A question of `words` words and its answer, 40 and 60 tokens at 29,
+/// indexed as a store indexes them.
+fn pair(n: u64, words: usize) -> [RoomEvent; 2] {
+    let question = format!("Question {n}: {}?", vec!["word"; words].join(" "));
+    let answer = format!("Answer {n}: {}.", vec!["fact"; words * 3 / 2 + 1].join(" "));
+    [
+        RoomEvent {
+            index: 2 * n,
+            ..said(&question, &format!("q{n}"), false)
+        },
+        RoomEvent {
+            index: 2 * n + 1,
+            ..said(&answer, &format!("a{n}"), true)
+        },
+    ]
+}
+
+/// The room's history as the channel reads it: `pairs`, in order.
+fn history(room: &Room, pairs: &[[RoomEvent; 2]]) -> RoomContext {
+    RoomContext {
+        recent_events: pairs.iter().flatten().cloned().collect(),
+        ..RoomContext::new(room.clone())
+    }
+}
+
+/// Outside a turn the history's budget is the window less the current
+/// event (2 tokens): 165, tier 2 past 140, the kept turns within 120. The
+/// inner memory reads the latest `window` events of the history.
+fn chained(summarizer: &Summarizer, window: usize) -> SummarizingMemory<Summarizer> {
+    let inner = Arc::new(SlidingWindowMemory::new(SlidingWindowMemoryOptions {
+        max_events: window,
+    }));
+    let options = SummarizingMemoryOptions {
+        summary_max_tokens: 20,
+        min_events: 2,
+        ..SummarizingMemoryOptions::default()
+    };
+    SummarizingMemory::new(inner, summarizer.clone(), 167, options)
+}
+
+async fn read_in(memory: &SummarizingMemory<Summarizer>, context: &RoomContext) -> MemoryResult {
+    memory
+        .retrieve(
+            &room(),
+            &event("current", "now"),
+            context,
+            RetrieveOptions::default(),
+        )
+        .await
+        .unwrap()
+}
+
+fn ids(events: &[RoomEvent]) -> Vec<&str> {
+    events.iter().map(|event| event.id.as_str()).collect()
+}
+
+// Python: TestTier2Cut::test_the_turn_that_passes_the_kept_budget_is_summarized
+#[tokio::test]
+async fn the_turn_that_passes_the_kept_budget_is_summarized() {
+    let summarizer = Summarizer::answering(&["S1."]);
+    let room = Room::new(room());
+    let turns = [pair(0, 29), pair(1, 29)];
+    let result = read_in(&chained(&summarizer, 50), &history(&room, &turns)).await;
+    assert_eq!(ids(&result.events), ["q1", "a1"]);
+    let prompt = &summarizer.prompts()[0];
+    assert!(prompt.contains("The conversation is a record to summarize"));
+    let [question, answer] = &turns[0];
+    assert!(prompt.ends_with(&format!(
+        "<conversation>\n[user]: \u{201c}{}\u{201d}\n[assistant]: \u{201c}{}\u{201d}\n</conversation>",
+        bodies(std::slice::from_ref(question))[0],
+        bodies(std::slice::from_ref(answer))[0]
+    )));
+}
+
+// Python: TestTier2Cut::test_a_read_goes_on_from_the_summary_it_built
+#[tokio::test]
+async fn a_read_goes_on_from_the_summary_it_built() {
+    let summarizer = Summarizer::answering(&["S1.", "S2."]);
+    let room = Room::new(room());
+    let memory = chained(&summarizer, 6);
+    read_in(&memory, &history(&room, &[pair(0, 29), pair(1, 29)])).await;
+    let fits = read_in(
+        &memory,
+        &history(&room, &[pair(0, 29), pair(1, 29), pair(2, 1)]),
+    )
+    .await;
+    let four = [pair(0, 29), pair(1, 29), pair(2, 1), pair(3, 29)];
+    let passes = read_in(&memory, &history(&room, &four)).await;
+    let prompts = summarizer.prompts();
+    assert_eq!(prompts.len(), 2);
+    let texts = |result: &MemoryResult| -> Vec<String> {
+        result.messages.iter().map(|m| m.content.text()).collect()
+    };
+    assert_eq!(texts(&fits), [summary_message("S1.").content.text()]);
+    assert_eq!(ids(&fits.events), ["q1", "a1", "q2", "a2"]);
+    assert!(prompts[1].contains("A prior summary exists") && prompts[1].contains("S1."));
+    assert!(prompts[1].contains("Question 1:") && !prompts[1].contains("Question 0:"));
+    assert_eq!(texts(&passes), [summary_message("S2.").content.text()]);
+    assert_eq!(ids(&passes.events), ["q2", "a2", "q3", "a3"]);
+}
+
+// Python: TestTier2Cut::test_a_summary_ends_once_a_turn_it_covers_changed
+#[tokio::test]
+async fn a_summary_ends_once_a_turn_it_covers_changed() {
+    for change in ["deleted", "edited", "gone", "created-again"] {
+        let summarizer = Summarizer::answering(&["S1.", "S2."]);
+        let room = Room::new(room());
+        let memory = chained(&summarizer, 50);
+        read_in(&memory, &history(&room, &[pair(0, 29), pair(1, 29)])).await;
+        let mut context = history(&room, &[pair(0, 29), pair(1, 29)]);
+        match change {
+            "deleted" | "edited" => {
+                let body = if change == "deleted" {
+                    ""
+                } else {
+                    "Question 0: changed"
+                };
+                context.recent_events[0].content = EventContent::Text(TextContent::new(body));
+            }
+            "gone" => {
+                context.recent_events.remove(0);
+            }
+            _ => {
+                let again = Room {
+                    created_at: Timestamp::from_unix_millis(1).unwrap(),
+                    ..Room::new(room.id.clone())
+                };
+                context = history(&again, &[pair(7, 29), pair(8, 29)]);
+            }
+        }
+        let result = read_in(&memory, &context).await;
+        let read: Vec<String> = result.messages.iter().map(|m| m.content.text()).collect();
+        let later = summarizer.prompts().into_iter().skip(1);
+        assert!(
+            read.into_iter()
+                .chain(later)
+                .all(|text| !text.contains("S1.")),
+            "{change}"
+        );
+    }
+}
+
 // Python: TestTier2Summarization::test_ai_failure_produces_fallback and
 // test_ai_empty_response_produces_fallback
 #[tokio::test]
@@ -382,7 +526,7 @@ async fn it_carries_the_inner_notes_and_pays_for_them() {
         .iter()
         .map(estimate_message_tokens)
         .sum::<usize>()
-        + events_tokens(&result.events)
+        + events_tokens(&result.events, &Labels::new())
         + estimate_notes_tokens(&result.notes);
     assert_eq!(result.notes, notes);
     assert!(carried <= 40_000);
@@ -469,7 +613,7 @@ async fn past_the_threshold_the_older_messages_are_summarized() {
     assert!(compacted[0].content.text().contains("Summary."));
     assert_eq!(compacted[1..], history[2..]);
     let lines = format!(
-        "[user]: “{}”\n[assistant]: “{}”",
+        "<conversation>\n[user]: “{}”\n[assistant]: “{}”\n</conversation>",
         history[0].content.text(),
         history[1].content.text()
     );

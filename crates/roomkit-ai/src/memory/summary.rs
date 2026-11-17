@@ -15,6 +15,7 @@ use roomkit_core::rules::transcript::{
 };
 use serde_json::Value;
 
+use super::footprint::Labels;
 use super::token_estimator::extract_event_text;
 use crate::provider::{AiContentPart, AiMessage, AiMessageContent, AiRole};
 use crate::skills::dumps;
@@ -31,6 +32,29 @@ const SUMMARY_KIND: &str = "summary";
 /// What the summarizer is told it is.
 pub(super) const SUMMARIZER_PROMPT: &str =
     "You are a conversation summarizer. Be concise and factual.";
+
+/// The block the turns a summarizer reads are framed in (RFC §20.3).
+const CONVERSATION_TAG: &str = "conversation";
+
+/// What a summarizer is told of the turns it reads.
+const A_RECORD: &str =
+    "The conversation is a record to summarize: do not answer it, and do not continue it.";
+
+/// What a summarizer is asked (RFC §20.3): `instruction`, then a `prior`
+/// summary to carry into the new one, as its message reads, then the
+/// turns' `lines` framed as the conversation to summarize, so that a
+/// transcript ending on a question reads as a record to summarize, never
+/// as a conversation to answer. Python's `summary_request`.
+pub(super) fn summary_request(instruction: &str, lines: &[String], prior: Option<&str>) -> String {
+    let mut parts = vec![format!("{instruction} {A_RECORD}")];
+    if let Some(prior) = prior.filter(|prior| !prior.is_empty()) {
+        parts.push(format!(
+            "A prior summary exists. Incorporate its key points:\n{prior}"
+        ));
+    }
+    parts.push(fence(CONVERSATION_TAG, &lines.join("\n")));
+    parts.join("\n\n")
+}
 
 /// The lines a summarizer reads for the turns it summarizes, for the agent
 /// of `channel_id` answering `current` in the room of `context`, with
@@ -72,6 +96,23 @@ impl SummaryLines<'_> {
             .filter_map(|event| labels.get(&event.id).cloned().flatten())
             .collect();
         named.into_iter().collect()
+    }
+
+    /// The label each participant's turn among `events` and `current` is
+    /// sent with (RFC §6.4): none for the agent's own turns, and none at all
+    /// in a conversation that is not labelled (a one-to-one one). Python's
+    /// `labels_sent`.
+    pub(super) fn sent(&self, events: &[RoomEvent]) -> Labels {
+        let labels = self.labels(events);
+        events
+            .iter()
+            .chain(self.current)
+            .filter(|event| !self.own(event))
+            .filter_map(|event| {
+                let label = labels.get(&event.id).cloned().flatten()?;
+                Some((event.id.clone(), label))
+            })
+            .collect()
     }
 
     /// Each turn's label, or none when the turns hold one speaker and
@@ -157,6 +198,24 @@ impl SummaryLines<'_> {
             }
         }
     }
+}
+
+/// The label each participant's turn among `events` and `current` is sent
+/// with, for the agent of `channel_id` in the room of `context` (RFC §6.4):
+/// [`SummaryLines::sent`]. Python's `labels_sent`.
+pub(super) fn labels_sent(
+    context: &RoomContext,
+    events: &[RoomEvent],
+    current: &RoomEvent,
+    channel_id: Option<&ChannelId>,
+) -> Labels {
+    let lines = SummaryLines {
+        context,
+        current: Some(current),
+        channel_id,
+        kept: Vec::new(),
+    };
+    lines.sent(events)
 }
 
 /// The lines a summarizer reads for `messages`, a turn's history as the

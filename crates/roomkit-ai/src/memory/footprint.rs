@@ -4,13 +4,20 @@
 
 use std::future::Future;
 
-use roomkit::model::RoomEvent;
+use std::collections::HashMap;
+
+use roomkit::model::{EventId, RoomEvent};
+use roomkit_core::rules::transcript::labelled_text;
 
 use super::MemoryResult;
 use super::token_estimator::{
     EstimateEventTokensOptions, HistoryBudgetOptions, estimate_event_tokens, estimate_notes_tokens,
-    history_budget,
+    estimate_tokens, extract_event_text, history_budget,
 };
+
+/// The label each participant's turn is sent with where the conversation
+/// labels its turns (RFC §6.4), by event id: Python's `labels_sent`.
+pub(crate) type Labels = HashMap<EventId, String>;
 
 /// What a turn takes of the context window besides its history (RFC §20),
 /// measured by the AI channel as the turn's first round will send it,
@@ -72,13 +79,16 @@ pub(crate) async fn measured<F: Future>(footprint: TurnFootprint, read: F) -> F:
 /// input, never added to it. The reply is reserved once, the larger of the
 /// safety margin and the turn's reply budget. `carried` is what a wrapped
 /// memory returned: its messages and its notes occupy the window and no
-/// trimming cuts them. Outside a turn nothing is measured.
+/// trimming cuts them. Outside a turn nothing is measured. The current
+/// event is counted as it is sent: with its label when `labels`, the
+/// conversation's, give it one.
 pub(crate) fn turn_history_budget(
     max_context_tokens: usize,
     safety_margin_ratio: f64,
     current_event: &RoomEvent,
     reserved_tokens: usize,
     carried: Option<&MemoryResult>,
+    labels: Option<&Labels>,
 ) -> usize {
     let footprint = FOOTPRINT
         .try_with(|footprint| (footprint.input_tokens, footprint.reply_tokens))
@@ -87,7 +97,7 @@ pub(crate) fn turn_history_budget(
     let notes = carried.map_or(0, |carried| estimate_notes_tokens(&carried.notes));
     let options = HistoryBudgetOptions {
         safety_margin_ratio,
-        reserved_tokens: reserved_tokens.max(measured) + notes,
+        reserved_tokens: reserved_tokens.max(measured) + notes + label_cost(current_event, labels),
         messages: carried.map(|carried| carried.messages.as_slice()),
         current_event: Some(current_event),
         reply_tokens: footprint.map_or(0, |(_, reply)| reply),
@@ -105,10 +115,17 @@ pub(crate) fn turn_history_budget(
 /// answer, which an instruction and its rounds read before), else after the
 /// last event before it; one charged to no event (its turn and its place
 /// out of `events`) is not replayed, and costs nothing.
-pub(crate) fn history_event_costs(events: &[RoomEvent]) -> Vec<usize> {
+///
+/// A participant's turn is counted as it is sent: with the label and the
+/// JSON string each of its lines carries when `labels`, the
+/// conversation's, give it one.
+pub(crate) fn history_event_costs(events: &[RoomEvent], labels: Option<&Labels>) -> Vec<usize> {
     let mut costs: Vec<usize> = events
         .iter()
-        .map(|event| estimate_event_tokens(event, EstimateEventTokensOptions::default()))
+        .map(|event| {
+            estimate_event_tokens(event, EstimateEventTokensOptions::default())
+                + label_cost(event, labels)
+        })
         .collect();
     let indexes: Vec<u64> = events.iter().map(|event| event.index).collect();
     // Read in place: the footprint is the turn's, its pieces left with it.
@@ -126,6 +143,21 @@ pub(crate) fn history_event_costs(events: &[RoomEvent]) -> Vec<usize> {
 
 /// The position among `events` of the one a replayed piece at timeline
 /// `index` of `turn` reads with, `None` for none (Python's `_charged`).
+/// What `event`'s label adds to it where the conversation labels it
+/// (`labels`): the label and the JSON string each of its lines is sent as
+/// (RFC §6.4, §20.3); nothing for a turn sent as typed. Python's
+/// `label_cost`.
+pub(crate) fn label_cost(event: &RoomEvent, labels: Option<&Labels>) -> usize {
+    let Some(label) = labels.and_then(|labels| labels.get(&event.id)) else {
+        return 0;
+    };
+    let text = extract_event_text(event);
+    if text.is_empty() {
+        return 0;
+    }
+    estimate_tokens(&labelled_text(&text, label)).saturating_sub(estimate_tokens(&text))
+}
+
 fn charged(events: &[RoomEvent], indexes: &[u64], index: u64, turn: Option<&str>) -> Option<usize> {
     let after = indexes.partition_point(|known| *known < index);
     if let Some(turn) = turn {
@@ -176,12 +208,12 @@ mod tests {
             ],
             ..TurnFootprint::new(0, 0)
         };
-        let costs = measured(footprint, async { history_event_costs(&events) }).await;
+        let costs = measured(footprint, async { history_event_costs(&events, None) }).await;
         // t1's pieces read with its answer; t9's, whose turn has no event,
         // with the last event before it; the turn-less one before every
         // event with none.
         assert_eq!(costs, [own[0], own[1] + 1110, own[2]]);
-        assert_eq!(history_event_costs(&events), own);
+        assert_eq!(history_event_costs(&events, None), own);
     }
 
     // Python: tests/test_turn_footprint.py::test_outside_a_turn_there_is_no_footprint

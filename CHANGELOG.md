@@ -32,6 +32,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Expose `turn_report_claim`: retained callbacks share each call's report right with observers and cancellation while keeping turns isolated.
 
+- **`SummarizingMemory` summarizes the turn its tier-2 cut passes, frames the turns it summarizes, and carries its summary into the next read**, as Python's (RFC §20.3, RMK-363). The turn that passed what the kept turns may take was kept, then dropped by the final cut: an answer was neither summarized nor kept. The summarizer (`CompactingMemory`'s too) now reads the turns in a `<conversation>` block, as a record to summarize, not to answer or continue. The memory keeps the summary it built for each room and agent, with the room's creation mark and each turn it covers: the next read gives it, then the turns after those it covers, and calls the summarizer only past the second threshold, with the prior summary and the new turns alone; a room created again, or a covered turn deleted, edited or gone from the history the channel reads, ends it.
+
+- **A memory that keeps a budget counts a labelled turn as it is sent**, as Python's (RFC §20.3, RMK-636). Where the conversation labels its turns, `BudgetAwareMemory`, `CompactingMemory` and `SummarizingMemory` count each turn, the current one included, with its label and the JSON string of each line; a one-to-one conversation is counted as before.
+
+- **The people note names each person as their turns read, tells people with no name apart, and names twenty at most**, as Python's (RFC §6.4, RMK-917). A person whose transport stamps another name than their record is named under the label their latest turn read carries; two people with no name on one channel read `@sms1` and `@sms1 (2)`; past twenty people the note counts the others (`and 10 others`).
+
 - Expose `roomkit::tools::named_blocks` and `FENCED_TAGS`, preserving Python's default tags and supplied tag order (RFC §6.4).
 
 - The first and last lines of an ACP agent's room context (`[Room context — …`, `[End of room context]`) are runtime marks, short ones, as Python's: a participant's copy in a missed message or in the request is replaced, the block roomkit-acp writes around them kept (RFC §6.4, RMK-1736).

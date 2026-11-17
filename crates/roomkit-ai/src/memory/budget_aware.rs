@@ -9,7 +9,8 @@ use std::sync::Arc;
 use roomkit::ChannelError;
 use roomkit::model::{Metadata, RoomContext, RoomEvent, RoomId};
 
-use super::footprint::{history_event_costs, turn_history_budget};
+use super::footprint::{Labels, history_event_costs, turn_history_budget};
+use super::summary::labels_sent;
 use super::token_estimator::{EstimateEventTokensOptions, estimate_event_tokens};
 use super::{
     CompactOptions, IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions,
@@ -112,23 +113,30 @@ impl BudgetAwareMemory {
 
     /// What the history may take of the window for `current_event`, once
     /// `inner`'s messages and notes, and the turn, are paid for.
-    fn budget(&self, inner: &MemoryResult, current_event: &RoomEvent) -> usize {
+    fn budget(&self, inner: &MemoryResult, current_event: &RoomEvent, labels: &Labels) -> usize {
         turn_history_budget(
             self.max_context_tokens,
             self.options.safety_margin_ratio,
             current_event,
             self.options.reserved_tokens,
             Some(inner),
+            Some(labels),
         )
     }
 
-    /// `events`' latest that fit `budget`, the latest `min_events` always.
-    fn trimmed(&self, mut events: Vec<RoomEvent>, budget: usize) -> Vec<RoomEvent> {
+    /// `events`' latest that fit `budget`, the latest `min_events` always,
+    /// each counted as it is sent (`labels`).
+    fn trimmed(
+        &self,
+        mut events: Vec<RoomEvent>,
+        budget: usize,
+        labels: &Labels,
+    ) -> Vec<RoomEvent> {
         let mut total = 0;
         let mut keep_from = 0;
         // Each event with what the history replays with it: a turn is kept or
         // cut whole, its rounds of tool calls with it (RFC §20).
-        let costs = history_event_costs(&events);
+        let costs = history_event_costs(&events, Some(labels));
         for (at, cost) in costs.iter().copied().enumerate().rev() {
             if total + cost > budget && events.len() - at > self.options.min_events {
                 keep_from = at + 1;
@@ -161,13 +169,17 @@ impl MemoryProvider for BudgetAwareMemory {
     ) -> Pin<Box<dyn Future<Output = Result<MemoryResult, ChannelError>> + Send + 'a>> {
         Box::pin(async move {
             self.refuse_overflow(current_event)?;
+            let channel_id = options.channel_id.clone();
             let inner = self
                 .inner
                 .retrieve(room_id, current_event, context, options)
                 .await?;
             let inner = without_current_event(inner, current_event);
-            let budget = self.budget(&inner, current_event);
-            let events = self.trimmed(inner.events, budget);
+            // Each turn counted as it is sent, with its label where the
+            // conversation labels it (RFC §20.3).
+            let labels = labels_sent(context, &inner.events, current_event, channel_id.as_ref());
+            let budget = self.budget(&inner, current_event, &labels);
+            let events = self.trimmed(inner.events, budget, &labels);
             Ok(MemoryResult { events, ..inner })
         })
     }

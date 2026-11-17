@@ -2,12 +2,16 @@
 //! `tests/test_memory_wrappers.py`, `tests/test_turn_footprint.py` and
 //! `tests/test_channels/test_memory_notes.py`, for the budget-aware memory.
 
+use std::fmt::Write as _;
+
 use pretty_assertions::assert_eq;
 use roomkit::model::{ChannelId, ChannelType, EventContent, EventSource, Room, TextContent};
 
 use super::*;
 use crate::memory::footprint::{TurnFootprint, measured};
-use crate::memory::token_estimator::{estimate_message_tokens, estimate_notes_tokens};
+use crate::memory::token_estimator::{
+    estimate_message_tokens, estimate_notes_tokens, estimate_tokens,
+};
 use crate::memory::{
     MockMemoryProvider, MockMemoryProviderOptions, SlidingWindowMemory, SlidingWindowMemoryOptions,
 };
@@ -340,4 +344,45 @@ async fn it_carries_the_inner_notes_and_pays_for_them() {
     assert_eq!(kept.notes, notes);
     assert!(kept.events.len() < 40);
     assert!(carried <= 40_000);
+}
+
+/// A paste `name` sends through `sms1` under its name, as its transport
+/// stamps it.
+fn pasted(name: &str, body: &str) -> RoomEvent {
+    let mut source = EventSource::new(ChannelId::new("sms1").unwrap(), ChannelType::SMS);
+    source.participant_id = Some(roomkit::model::ParticipantId::new(name).unwrap());
+    let mut event = RoomEvent::new(room(), source, EventContent::Text(TextContent::new(body)));
+    event
+        .metadata
+        .insert("sender_name".to_owned(), serde_json::Value::from(name));
+    event
+}
+
+// Python: tests/test_memory_new.py::TestBudgetAwareMemory::test_a_turn_counts_as_it_is_sent
+#[tokio::test]
+async fn a_turn_counts_as_it_is_sent() {
+    let paste = (0..8).fold(String::new(), |mut paste, k| {
+        let _ = writeln!(paste, "\"item_{k}\": {{\"sku\": \"A-{k}\", \"qty\": {k}}},");
+        paste
+    });
+    let typed = estimate_tokens(&paste);
+    let sent = estimate_tokens(&roomkit_core::rules::transcript::labelled_text(
+        &paste, "Alice",
+    ));
+    // Three pastes as sent pass what holds four as typed.
+    assert!(4 * typed <= 3 * sent);
+    for (names, kept) in [(["Alice", "Brian"], 2), (["Alice", "Alice"], 3)] {
+        let events: Vec<RoomEvent> = (0..4).map(|k| pasted(names[k % 2], &paste)).collect();
+        let memory = with(
+            of(events[..3].to_vec()),
+            3 * sent + 1,
+            BudgetAwareMemoryOptions {
+                safety_margin_ratio: 0.0,
+                min_events: 1,
+                ..BudgetAwareMemoryOptions::default()
+            },
+        );
+        let result = read(&memory, &events[3]).await;
+        assert_eq!(result.events, events[3 - kept..3].to_vec(), "{names:?}");
+    }
 }
