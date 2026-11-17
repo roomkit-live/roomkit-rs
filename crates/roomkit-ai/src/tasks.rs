@@ -335,9 +335,10 @@ mod tests {
         ChannelBinding, ChannelCategory, ChannelId, ChannelOutput, ChannelType, InboundMessage,
         RoomContext, RoomEvent, RoomId, TaskStatus, ToolCall,
     };
+    use roomkit::orchestration::RecentOptions;
     use roomkit::tasks::{DelegatedTask, WaitOptions};
     use roomkit::testing::{
-        EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
+        EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions, idle,
     };
     use roomkit::{
         AttachChannelOptions, CancelTaskOptions, Channel, ChannelError, CreateRoomOptions,
@@ -347,7 +348,9 @@ mod tests {
     use tokio::sync::Notify;
 
     use super::*;
-    use crate::tools::{ToolContext, ToolEntry, served_by};
+    use crate::tools::{
+        ToolContext, ToolEntry, ToolTurnContextOptions, served_by, tool_turn_context,
+    };
     use crate::{AiChannel, AiChannelOptions, MockAiProvider, MockAiProviderOptions};
 
     const BOUND: Duration = Duration::from_secs(5);
@@ -817,10 +820,6 @@ mod tests {
     // and tasks/status.py post_task_progress's default worker name.
     #[tokio::test]
     async fn progress_outside_a_task_s_room_posts_nothing_and_inside_names_the_worker() {
-        use roomkit::orchestration::RecentOptions;
-
-        use crate::tools::{ToolTurnContextOptions, tool_turn_context};
-
         let kit = RoomKit::new(RoomKitOptions::default());
         let mut child = Metadata::new();
         child.insert("parent_room_id".to_owned(), json!("r"));
@@ -846,20 +845,15 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+        idle(&kit).await;
         let nothing = kit.status_bus().recent(RecentOptions::default()).await;
         let in_its_room =
             tool_turn_context(within("r::task-t1"), post_task_progress(&kit, "12/20 s"))
                 .await
                 .unwrap()
                 .unwrap();
-        let mut posted = Vec::new();
-        for _ in 0..200 {
-            posted = kit.status_bus().recent(RecentOptions::default()).await;
-            if !posted.is_empty() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
+        idle(&kit).await;
+        let posted = kit.status_bus().recent(RecentOptions::default()).await;
         kit.close().await.unwrap();
 
         assert_eq!(
@@ -867,7 +861,9 @@ mod tests {
             (false, false, false, 0)
         );
         assert!(in_its_room);
-        let entry = &posted[0];
+        let [entry] = posted.as_slice() else {
+            panic!("one entry posted: {posted:?}");
+        };
         assert_eq!(
             (
                 entry.agent_id.as_str(),
