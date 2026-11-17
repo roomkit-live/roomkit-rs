@@ -6,7 +6,7 @@ mod replay;
 mod wire;
 
 pub(crate) use folding::Folding;
-pub(crate) use wire::{body, request};
+pub(crate) use wire::{body, input, request};
 
 #[cfg(test)]
 mod tests;

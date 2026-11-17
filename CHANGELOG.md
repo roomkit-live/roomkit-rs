@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Expose Chat Completions message rendering and validated dialects through `roomkit_ai`. The OpenAI provider uses the same renderer for Chat Completions requests.
+
 - Expose the immutable `roomkit::tasks::BackgroundSetup` model and validate its hand-back mode at construction.
 
 - Expose `RunSkillScriptTool` for applications that supply a skill registry and a script executor through the ordinary tool API.

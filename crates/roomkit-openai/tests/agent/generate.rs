@@ -39,6 +39,43 @@ fn hello() -> AiContext {
     }
 }
 
+/// The normal provider request preserves the public renderer's distinction
+/// between strings, ordered text parts and an empty part list.
+#[tokio::test]
+async fn a_generation_sends_the_public_chat_messages() {
+    let (provider, fake) = provider(vec![Reply::completion("done")]).await;
+    let context = AiContext {
+        system_prompt: Some("brief".into()),
+        messages: vec![
+            AiMessage::new(AiRole::User, "start"),
+            AiMessage::new(
+                AiRole::Assistant,
+                vec![
+                    AiContentPart::Text(AiTextPart::new("A")),
+                    AiContentPart::Text(AiTextPart::new("B")),
+                ],
+            ),
+            AiMessage::new(AiRole::User, Vec::new()),
+        ],
+        ..AiContext::default()
+    };
+    let expected = roomkit_ai::chat_messages(
+        &context.messages,
+        context.system_prompt.as_deref(),
+        &roomkit_ai::OPENAI_CHAT,
+        "openai",
+    )
+    .unwrap();
+    provider.generate(&context).await.unwrap();
+    assert_eq!(
+        fake.requests()
+            .first()
+            .and_then(|r| r.body.get("messages"))
+            .cloned(),
+        Some(json!(expected))
+    );
+}
+
 /// The error one generation fails with, `generate` or streamed.
 async fn failure(replies: Vec<Reply>, streamed: bool) -> ProviderError {
     failure_on(OpenAiApi::ChatCompletions, replies, streamed).await

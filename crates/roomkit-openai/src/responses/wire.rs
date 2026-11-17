@@ -14,13 +14,23 @@ pub(super) fn malformed(reason: &str) -> OpenAiError {
     }
 }
 
-/// Translate the public transcript; replay metadata preserves reasoning and
-/// output layout without introducing instructions or additional tool calls.
-pub(crate) fn request(config: &OpenAiConfig, request: &Request) -> Result<Value, OpenAiError> {
+/// Render the conversation into Responses input, preserving replay metadata.
+pub(crate) fn input(messages: &[roomkit_ai::AiMessage]) -> Result<Vec<Value>, OpenAiError> {
+    // The provider validates every input image before it reads stored Responses output.
+    let mut normalized = Vec::new();
+    for source in messages {
+        normalized.extend(crate::request::response_messages(source)?);
+    }
     let mut input = Vec::new();
-    for message in &request.messages {
+    for message in &normalized {
         append_message(&mut input, message)?;
     }
+    Ok(input)
+}
+
+/// Build the Responses body using its rendered input.
+pub(crate) fn request(config: &OpenAiConfig, request: &Request) -> Result<Value, OpenAiError> {
+    let mut input = request.messages.clone();
     let tools: Vec<_> = request
         .tools
         .iter()

@@ -3,6 +3,8 @@
 //! it answers.
 
 mod catalog;
+mod chat_dialect;
+mod chat_messages;
 mod context;
 mod date;
 mod dynamic;
@@ -22,6 +24,8 @@ use futures_core::Stream;
 
 pub(crate) use self::catalog::BILLED_USAGE_COUNTERS;
 pub use self::catalog::{ModelInfo, ModelPricing, listing};
+pub use self::chat_dialect::{ChatDialect, ChatDialectOptions, OPENAI_CHAT};
+pub use self::chat_messages::chat_messages;
 pub use self::context::{
     AiContentPart, AiContext, AiImagePart, AiMessage, AiMessageContent, AiRole, AiTextPart,
     AiThinkingPart, AiToolCallPart, AiToolResultPart,

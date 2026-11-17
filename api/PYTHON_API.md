@@ -13,6 +13,7 @@ the mapping and its tests. The check does not generate or update this document.
 
 | Rust name | Python name | Members or parameters |
 | --- | --- | --- |
+| `roomkit_ai::ChatDialect`, `roomkit_ai::ChatDialectOptions` | `roomkit.providers.ai.ChatDialect` | The options carry the five Python defaults. `ChatDialect::new(options)` validates their dependencies. Read-only accessors preserve the frozen result (decision 8d00f04e). |
 | `roomkit::tasks::BackgroundSetup` | `roomkit.tasks.BackgroundSetup` | `Default` selects the agent and relay. The two-argument `new(worker, hand_back)` validates immediately. Borrowed accessors expose immutable fields, including arbitrary worker text. |
 | `roomkit_ai::RunSkillScriptTool` | `roomkit.RunSkillScriptTool` | `NAME` is the Python class variable `name`. The `Tool` trait supplies `definition` and `handler`. |
 | `roomkit_ai::Answers` | Python speaking/classifier contract | `new`, `insert`, `get`, `remove`, `len`, `is_empty`, `snapshot`, `iter` |

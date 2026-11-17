@@ -253,11 +253,7 @@ impl OpenAiAiProvider {
         }
         let tools = !request.tools.is_empty();
         reasoning::check_model_serves(&self.config.model, self.official_entry(), tools)?;
-        let dialect = self
-            .vendor
-            .dialect()
-            .with_thinking_field(self.config.thinking_field.as_deref());
-        let completion = CompletionRequest::new(&self.config, request, streamed, dialect);
+        let completion = CompletionRequest::new(&self.config, request, streamed);
         let mut value = serde_json::to_value(completion).map_err(|_| OpenAiError::Malformed {
             reason: "could not encode request".into(),
         })?;
@@ -566,11 +562,25 @@ impl OpenAiAiProvider {
         if let Err(error) = self.refuse_schema(context) {
             return stream::refused(error);
         }
-        let events = match Request::of(context) {
+        let events = match self.prepare(context) {
             Ok(request) => stream::answer(self, request, streamed),
-            Err(error) => return stream::refused(self.failed(error)),
+            Err(error) => return stream::refused(error),
         };
         checked_stream(events, context, self.vendor.provider(), refusal)
+    }
+
+    /// Render exactly the messages the selected wire sends, before any request.
+    pub(crate) fn prepare(&self, context: &AiContext) -> Result<Request, ProviderError> {
+        let messages = if self.config.api == OpenAiApi::Responses {
+            crate::responses::input(&context.messages).map_err(|error| self.failed(error))?
+        } else {
+            let dialect = self
+                .vendor
+                .dialect()
+                .with_thinking_field(self.config.thinking_field.as_deref());
+            dialect.messages(context, self.vendor.provider())?
+        };
+        Ok(Request::of(context, messages))
     }
 
     /// Refuses a response schema on `context` the call cannot carry.

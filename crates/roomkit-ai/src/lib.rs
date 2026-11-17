@@ -145,6 +145,7 @@ pub use self::provider::{
     is_context_overflow_message, round_parts, speech_tags, thinking_parts_of, tool_arguments,
     with_speech_tags,
 };
+pub use self::provider::{ChatDialect, ChatDialectOptions, OPENAI_CHAT, chat_messages};
 #[doc(hidden)]
 pub use self::provider::{FirstToken, listing, read_tool_calls};
 pub use self::provider::{

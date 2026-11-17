@@ -80,7 +80,7 @@ fn request(effort: Option<&str>, switch: Option<bool>) -> Request {
         messages: vec![roomkit_ai::AiMessage::new(roomkit_ai::AiRole::User, "Hi")],
         ..roomkit_ai::AiContext::default()
     };
-    Request::of(&context).unwrap()
+    Request::of(&context, Vec::new())
 }
 
 fn thinking(sampling: &Sampling) -> Option<Value> {
@@ -136,7 +136,7 @@ fn deepseek_reads_a_budget_as_a_switch_without_its_size() {
             messages: vec![roomkit_ai::AiMessage::new(roomkit_ai::AiRole::User, "Hi")],
             ..roomkit_ai::AiContext::default()
         };
-        let request = Request::of(&context).unwrap();
+        let request = Request::of(&context, Vec::new());
         thinking(
             &Vendor::DeepSeek {
                 enable_thinking: None,

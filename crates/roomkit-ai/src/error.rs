@@ -5,6 +5,13 @@
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum AiError {
+    /// The provider selected incompatible Chat Completions dialect settings.
+    #[error("{reason}")]
+    ChatDialect {
+        /// Which combination Python's constructor refuses.
+        reason: &'static str,
+    },
+
     /// The policy's bound must be strictly positive.
     #[error("speak_timeout must be positive")]
     SpeakTimeout,

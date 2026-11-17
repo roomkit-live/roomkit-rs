@@ -15,12 +15,13 @@ fn request(message: Message) -> Result<Value, crate::error::OpenAiError> {
         base_url: Some("https://example.com/v1".into()),
         ..OpenAiConfig::new("", "fake")
     };
+    let mut input = Vec::new();
+    super::replay::append_message(&mut input, &message)?;
     wire::request(
         &config,
         &Request {
             system_prompt: None,
-            messages: vec![message],
-            reasoning: Vec::new(),
+            messages: input,
             tools: vec![],
             temperature: None,
             max_tokens: None,
@@ -147,9 +148,27 @@ fn a_steered_answer_replays_its_reasoning_items() {
         base_url: Some("https://example.com/v1".into()),
         ..OpenAiConfig::new("", "fake")
     };
-    let asked = Request::of(&context).unwrap();
+    let asked = Request::of(&context, wire::input(&context.messages).unwrap());
     assert_eq!(
         wire::request(&config, &asked).unwrap()["input"],
         json!([reasoning, said])
     );
+}
+
+#[test]
+fn an_invalid_input_image_is_reported_before_replaying_stored_output() {
+    use crate::error::OpenAiError;
+    use roomkit_ai::AiImagePart;
+    let mut answer = AiMessage::new(AiRole::Assistant, "ok");
+    answer
+        .metadata
+        .insert(OUTPUT.into(), json!("malformed replay data"));
+    let image = AiMessage::new(
+        AiRole::User,
+        vec![AiContentPart::Image(AiImagePart::new("data:invalid"))],
+    );
+    assert!(matches!(
+        wire::input(&[answer, image]),
+        Err(OpenAiError::Image(_))
+    ));
 }

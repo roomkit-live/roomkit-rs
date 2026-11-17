@@ -18,14 +18,8 @@ use crate::reasoning::thinking_switch;
 #[derive(Clone, Debug)]
 pub(crate) struct Request {
     pub(crate) system_prompt: Option<String>,
-    pub(crate) messages: Vec<Message>,
-    /// Each message's reasoning, by its place in `messages`: an assistant's
-    /// thinking parts joined, `None` for a message no assistant wrote, which
-    /// never carries a reasoning field, its call round's included (Python's
-    /// `_with_thinking_field` reads the message's own role). A vendor's
-    /// dialect reads it ([`crate::dialect::ChatDialect`]); OpenAI's sends
-    /// none unless its configuration names the field.
-    pub(crate) reasoning: Vec<Option<String>>,
+    /// Messages rendered for the selected wire, before the provider contacts its endpoint.
+    pub(crate) messages: Vec<serde_json::Value>,
     pub(crate) tools: Vec<AiTool>,
     /// The turn's temperature, when it gives one.
     pub(crate) temperature: Option<f64>,
@@ -44,30 +38,16 @@ pub(crate) struct Request {
 }
 
 impl Request {
-    /// The request `context` stands for.
-    ///
-    /// # Errors
-    ///
-    /// [`OpenAiError::Image`] for an image part whose `data:` URI does not
-    /// read: the request is never sent.
-    pub(crate) fn of(context: &AiContext) -> Result<Self, OpenAiError> {
-        let mut written = Vec::new();
-        let mut reasoning = Vec::new();
-        for message in &context.messages {
-            let rendered = messages(message)?;
-            let thought = reasoning_of(message);
-            reasoning.extend(rendered.iter().map(|_| thought.clone()));
-            written.extend(rendered);
-        }
+    /// The request `context` stands for, with the selected wire's rendered messages.
+    pub(crate) fn of(context: &AiContext, messages: Vec<serde_json::Value>) -> Self {
         let switch = thinking_switch(
             context.thinking_budget,
             context.enable_thinking,
             context.reasoning_effort.as_deref(),
         );
-        Ok(Self {
+        Self {
             system_prompt: context.system_prompt.clone(),
-            messages: written,
-            reasoning,
+            messages,
             tools: context.tools.clone(),
             temperature: Some(context.temperature),
             max_tokens: context.max_tokens,
@@ -75,30 +55,8 @@ impl Request {
             thinking_off: switch == Some(false),
             thinking_switch: switch,
             response_schema: context.response_schema.clone(),
-        })
+        }
     }
-}
-
-/// What an assistant's `message` reasoned, its thinking parts joined in
-/// order (Python's `chat_request._thinking`); `None` for any other role.
-fn reasoning_of(message: &AiMessage) -> Option<String> {
-    if message.role != AiRole::Assistant {
-        return None;
-    }
-    let AiMessageContent::Parts(parts) = &message.content else {
-        return Some(String::new());
-    };
-    let thought = parts
-        .iter()
-        .filter_map(|part| match part {
-            AiContentPart::Thinking(part) => Some(part.thinking.as_str()),
-            AiContentPart::Text(_)
-            | AiContentPart::Image(_)
-            | AiContentPart::ToolCall(_)
-            | AiContentPart::ToolResult(_) => None,
-        })
-        .collect();
-    Some(thought)
 }
 
 /// The transcript messages `message` is: a round's tool message is one per
@@ -107,7 +65,7 @@ fn reasoning_of(message: &AiMessage) -> Option<String> {
 /// user's (Python's `chat_request._tool_messages`); any other is one. A
 /// message that calls is the round that called, whatever results it also
 /// holds, which are left out (Python's `chat_request._rendered`, RMK-1408).
-fn messages(message: &AiMessage) -> Result<Vec<Message>, OpenAiError> {
+pub(crate) fn response_messages(message: &AiMessage) -> Result<Vec<Message>, OpenAiError> {
     let parts = match &message.content {
         AiMessageContent::Parts(parts) => parts.as_slice(),
         AiMessageContent::Text(_) => &[],
@@ -156,16 +114,8 @@ fn messages(message: &AiMessage) -> Result<Vec<Message>, OpenAiError> {
     Ok(written)
 }
 
-/// `message` as the transcript writes it, its tool results left out: its
-/// text, its images, its calls; a message of text and images keeps its
-/// parts in order, each image at its place (Python's `chat_request._plain`);
-/// one that calls is the assistant's round, whatever its role (Python's
-/// `chat_request._call_round`).
-/// A model's reasoning is not written here (RFC §6.4): a generic Chat
-/// Completions server would read it as text the model said, and its prompt
-/// cache would not survive it; a vendor's dialect writes it in its own field
-/// from [`Request::reasoning`]. Responses keeps its reasoning items in the
-/// round's metadata.
+/// Normalize a source message into the transcript layout used by Responses.
+/// Reasoning items for that API are replayed from the provider's response metadata.
 fn message(message: &AiMessage) -> Result<Message, OpenAiError> {
     let parts: &[AiContentPart] = match &message.content {
         AiMessageContent::Text(text) => {
@@ -406,7 +356,7 @@ mod tests {
             messages: vec![AiMessage::new(AiRole::Assistant, parts)],
             ..AiContext::default()
         };
-        let mut written = Request::of(&context).unwrap().messages;
+        let mut written = response_messages(&context.messages[0]).unwrap();
         written.remove(0)
     }
 
@@ -446,7 +396,7 @@ mod tests {
                 messages: vec![AiMessage::new(held, vec![result, call_part()])],
                 ..AiContext::default()
             };
-            let written = Request::of(&context).unwrap().messages;
+            let written = response_messages(&context.messages[0]).unwrap();
             let read: Vec<(Role, usize, Option<String>)> = written
                 .iter()
                 .map(|message| {
@@ -499,7 +449,7 @@ mod tests {
             )],
             ..AiContext::default()
         };
-        let written = Request::of(&context).unwrap().messages;
+        let written = response_messages(&context.messages[0]).unwrap();
         let read: Vec<(Role, Option<&str>, &str, Vec<&str>)> = written
             .iter()
             .map(|message| {
@@ -539,9 +489,8 @@ mod tests {
             )],
             ..AiContext::default()
         };
-        let written: Vec<(Role, Option<String>, String)> = Request::of(&context)
+        let written: Vec<(Role, Option<String>, String)> = response_messages(&context.messages[0])
             .unwrap()
-            .messages
             .into_iter()
             .map(|message| (message.role, message.tool_call_id, message.text))
             .collect();

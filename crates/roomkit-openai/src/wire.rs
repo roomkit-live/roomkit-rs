@@ -3,7 +3,6 @@
 
 use crate::call_slots::{CallSlots, Fragment, FragmentId};
 use crate::config::OpenAiConfig;
-use crate::dialect::ChatDialect;
 use crate::request::{RawCall, Request, Whole, done as finished};
 use crate::request::{push_text, push_thinking};
 use reqwest::StatusCode;
@@ -17,7 +16,6 @@ use crate::error::OpenAiError;
 use crate::think_tags::{
     Segment, ThinkTagParser, extract_think_tags, field_reasoning, merge_thinking,
 };
-use roomkit_core::rules::transcript::{Message, Part, Role};
 
 /// The longest provider message an error keeps, in characters.
 const MESSAGE_LIMIT: usize = 500;
@@ -32,7 +30,7 @@ const NAME_LIMIT: usize = 64;
 #[derive(Debug, Serialize)]
 pub(crate) struct CompletionRequest<'a> {
     model: &'a str,
-    messages: Vec<WireMessage<'a>>,
+    messages: &'a [Value],
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<WireTool<'a>>,
     /// Sent only when true: a completion answered whole names no `stream`,
@@ -55,38 +53,6 @@ struct StreamOptions {
     include_usage: bool,
 }
 
-/// One message of a request.
-#[derive(Debug, Serialize)]
-struct WireMessage<'a> {
-    role: &'static str,
-    /// The text; `null` for an assistant's message that only calls.
-    content: Option<Value>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    tool_calls: Vec<WireCall<'a>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tool_call_id: Option<&'a str>,
-    /// The vendor's reasoning field, when its dialect writes one.
-    #[serde(flatten)]
-    reasoning: serde_json::Map<String, Value>,
-}
-
-/// A call an assistant's message made, as the wire writes it: its
-/// arguments as JSON text.
-#[derive(Debug, Serialize)]
-struct WireCall<'a> {
-    id: &'a str,
-    #[serde(rename = "type")]
-    kind: &'static str,
-    function: WireFunction<'a>,
-}
-
-#[derive(Debug, Serialize)]
-struct WireFunction<'a> {
-    name: &'a str,
-    arguments: String,
-}
-
-/// A tool a request declares.
 #[derive(Debug, Serialize)]
 struct WireTool<'a> {
     #[serde(rename = "type")]
@@ -109,35 +75,9 @@ impl<'a> CompletionRequest<'a> {
     /// `max_completion_tokens` when the configuration says, the stream's
     /// usage when it asks for it. `streamed` false asks for the completion
     /// whole, as Python's `generate` does.
-    pub(crate) fn new(
-        config: &'a OpenAiConfig,
-        request: &'a Request,
-        streamed: bool,
-        dialect: ChatDialect<'_>,
-    ) -> Self {
+    pub(crate) fn new(config: &'a OpenAiConfig, request: &'a Request, streamed: bool) -> Self {
         let model = config.model.as_str();
-        let system = request
-            .system_prompt
-            .as_deref()
-            .filter(|prompt| !prompt.is_empty())
-            .map(|prompt| WireMessage {
-                role: "system",
-                content: Some(Value::String(prompt.into())),
-                tool_calls: Vec::new(),
-                tool_call_id: None,
-                reasoning: serde_json::Map::new(),
-            });
-        let thinking = request.reasoning.iter().map(Option::as_deref);
-        let messages = system
-            .into_iter()
-            .chain(
-                request
-                    .messages
-                    .iter()
-                    .zip(thinking.chain(std::iter::repeat(None)))
-                    .map(|(message, thinking)| wire_message(message, thinking, dialect)),
-            )
-            .collect();
+        let messages = &request.messages;
         let tools = request
             .tools
             .iter()
@@ -169,92 +109,6 @@ impl<'a> CompletionRequest<'a> {
             max_tokens,
             max_completion_tokens,
         }
-    }
-}
-
-/// `message` as the wire writes it, an assistant's `thinking` in the
-/// field `dialect` reads it from, if any; a message no assistant wrote
-/// (`thinking` `None`) carries none.
-fn wire_message<'a>(
-    message: &'a Message,
-    thinking: Option<&str>,
-    dialect: ChatDialect<'_>,
-) -> WireMessage<'a> {
-    let calls: Vec<WireCall<'_>> = message
-        .tool_calls
-        .iter()
-        .map(|call| WireCall {
-            id: &call.id,
-            kind: "function",
-            function: WireFunction {
-                name: &call.name,
-                arguments: roomkit_ai::dumps(&Value::Object(call.arguments.clone())),
-            },
-        })
-        .collect();
-    // An assistant's message that only calls has no text; a message of
-    // parts sends them in order, whatever its role (Python's
-    // `chat_request._plain`).
-    let content = if !message.parts.is_empty() {
-        Some(Value::Array(
-            message.parts.iter().filter_map(part_block).collect(),
-        ))
-    } else if message.images.is_empty() || message.role != Role::User {
-        Some(message.text.as_str())
-            .filter(|text| calls.is_empty() || !text.is_empty())
-            .map(|text| Value::String(text.into()))
-    } else {
-        let mut parts = vec![serde_json::json!({"type":"text","text":message.text})];
-        parts.extend(
-            message
-                .images
-                .iter()
-                .filter(|image| image.is_resolved())
-                .map(
-                    |image| serde_json::json!({"type":"image_url","image_url":{"url":image.url()}}),
-                ),
-        );
-        Some(Value::Array(parts))
-    };
-    let mut reasoning = serde_json::Map::new();
-    if message.role == Role::Assistant
-        && let Some(thinking) = thinking
-        && let Some((field, value)) = dialect.field(thinking, !calls.is_empty())
-    {
-        reasoning.insert(field.to_owned(), Value::String(value));
-    }
-    WireMessage {
-        role: role(message.role),
-        content,
-        tool_calls: calls,
-        tool_call_id: message.tool_call_id.as_deref(),
-        reasoning,
-    }
-}
-
-/// A part of a message as the wire writes it: a text, or an
-/// image the provider can fetch; an image the host has not resolved, or a
-/// part the transcript adds later, is not sent.
-fn part_block(part: &Part) -> Option<Value> {
-    match part {
-        Part::Text(text) => Some(serde_json::json!({"type": "text", "text": text})),
-        Part::Image(image) if image.is_resolved() => {
-            Some(serde_json::json!({"type": "image_url", "image_url": {"url": image.url()}}))
-        }
-        // An image not resolved, or a part the transcript adds later.
-        Part::Image(_) | _ => None,
-    }
-}
-
-/// The wire's name of `role`.
-fn role(role: Role) -> &'static str {
-    match role {
-        Role::Assistant => "assistant",
-        Role::Tool => "tool",
-        Role::System => "system",
-        // A role this agent does not know yet reads as a user's: never as
-        // the model's own words, nor as the system's.
-        Role::User | _ => "user",
     }
 }
 
@@ -1088,7 +942,6 @@ mod tests {
             let request = Request {
                 system_prompt: None,
                 messages: Vec::new(),
-                reasoning: Vec::new(),
                 tools: Vec::new(),
                 temperature: None,
                 max_tokens: turn,
@@ -1097,13 +950,8 @@ mod tests {
                 thinking_switch: None,
                 response_schema: None,
             };
-            let body = serde_json::to_value(CompletionRequest::new(
-                &config,
-                &request,
-                true,
-                crate::dialect::OPENAI_CHAT,
-            ))
-            .unwrap();
+            let body =
+                serde_json::to_value(CompletionRequest::new(&config, &request, true)).unwrap();
             (
                 body.get("max_tokens").cloned(),
                 body.get("max_completion_tokens").cloned(),
@@ -1130,7 +978,6 @@ mod tests {
         let request = Request {
             system_prompt: None,
             messages: Vec::new(),
-            reasoning: Vec::new(),
             tools: Vec::new(),
             temperature: Some(0.7),
             max_tokens: None,
@@ -1146,13 +993,8 @@ mod tests {
                 supports_custom_temperature: switches.1,
                 ..OpenAiConfig::new("sk-1", model)
             };
-            let body = serde_json::to_value(CompletionRequest::new(
-                &config,
-                &request,
-                true,
-                crate::dialect::OPENAI_CHAT,
-            ))
-            .unwrap();
+            let body =
+                serde_json::to_value(CompletionRequest::new(&config, &request, true)).unwrap();
             (
                 body.get("max_completion_tokens").is_some(),
                 body.get("temperature").is_some(),
@@ -1259,14 +1101,13 @@ mod tests {
             )],
             ..AiContext::default()
         };
-        let request = Request::of(&context).unwrap();
-        let body = serde_json::to_value(CompletionRequest::new(
-            &config,
-            &request,
-            false,
-            crate::dialect::OPENAI_CHAT,
-        ))
-        .unwrap();
+        let request = Request::of(
+            &context,
+            crate::dialect::OPENAI_CHAT
+                .messages(&context, "openai")
+                .unwrap(),
+        );
+        let body = serde_json::to_value(CompletionRequest::new(&config, &request, false)).unwrap();
         assert_eq!(
             body["messages"][0]["tool_calls"][0]["function"]["arguments"],
             Value::from("{\"q\": \"caf\\u00e9\", \"n\": 42}")
@@ -1288,14 +1129,14 @@ mod tests {
                 messages: vec![AiMessage::new(role, held)],
                 ..AiContext::default()
             };
-            let request = Request::of(&context).unwrap();
-            let body = serde_json::to_value(CompletionRequest::new(
-                &config,
-                &request,
-                false,
-                crate::dialect::DEEPSEEK_CHAT,
-            ))
-            .unwrap();
+            let request = Request::of(
+                &context,
+                crate::dialect::DEEPSEEK_CHAT
+                    .messages(&context, "openai")
+                    .unwrap(),
+            );
+            let body =
+                serde_json::to_value(CompletionRequest::new(&config, &request, false)).unwrap();
             (
                 body["messages"][0]["role"].clone(),
                 body["messages"][0].get("reasoning_content").cloned(),
@@ -1937,38 +1778,29 @@ mod image_tests {
     use super::*;
     #[test]
     fn author_images_use_native_parts_in_both_protocols() {
-        let mut message = Message::new(Role::User, "Describe this image");
-        message.images.push(
-            roomkit_core::rules::transcript::Image::new(
-                "data:image/png;base64,AQIDBA==",
-                "image/png",
-            )
-            .unwrap(),
-        );
-        let request = Request {
-            system_prompt: None,
-            messages: vec![message],
-            reasoning: Vec::new(),
-            tools: vec![],
-            temperature: None,
-            max_tokens: None,
-            reasoning_effort: None,
-            thinking_off: false,
-            thinking_switch: None,
-            response_schema: None,
+        use roomkit_ai::{AiContentPart, AiContext, AiImagePart, AiMessage, AiRole, AiTextPart};
+        let context = AiContext {
+            messages: vec![AiMessage::new(
+                AiRole::User,
+                vec![
+                    AiContentPart::Text(AiTextPart::new("Describe this image")),
+                    AiContentPart::Image(AiImagePart::new("data:image/png;base64,AQIDBA==")),
+                ],
+            )],
+            ..Default::default()
         };
+        let request = Request::of(
+            &context,
+            crate::dialect::OPENAI_CHAT
+                .messages(&context, "openai")
+                .unwrap(),
+        );
         let config = OpenAiConfig {
             base_url: Some("http://localhost/v1".into()),
             vision: true,
             ..OpenAiConfig::new("", "vision-fixture")
         };
-        let chat = serde_json::to_value(CompletionRequest::new(
-            &config,
-            &request,
-            true,
-            crate::dialect::OPENAI_CHAT,
-        ))
-        .unwrap();
+        let chat = serde_json::to_value(CompletionRequest::new(&config, &request, true)).unwrap();
         assert_eq!(
             chat.pointer("/messages/0/content/0/text"),
             Some(&Value::String("Describe this image".into()))
@@ -1977,7 +1809,11 @@ mod image_tests {
             chat.pointer("/messages/0/content/1/type"),
             Some(&Value::String("image_url".into()))
         );
-        let response = crate::responses::request(&config, &request).unwrap();
+        let response_request = Request::of(
+            &context,
+            crate::responses::input(&context.messages).unwrap(),
+        );
+        let response = crate::responses::request(&config, &response_request).unwrap();
         assert_eq!(
             response.pointer("/input/0/content/1/type"),
             Some(&Value::String("input_image".into()))
@@ -2009,19 +1845,18 @@ mod image_tests {
             )],
             ..AiContext::default()
         };
-        let request = Request::of(&context).unwrap();
+        let request = Request::of(
+            &context,
+            crate::dialect::OPENAI_CHAT
+                .messages(&context, "openai")
+                .unwrap(),
+        );
         let config = OpenAiConfig {
             base_url: Some("http://localhost/v1".into()),
             vision: true,
             ..OpenAiConfig::new("", "vision-fixture")
         };
-        let chat = serde_json::to_value(CompletionRequest::new(
-            &config,
-            &request,
-            true,
-            crate::dialect::OPENAI_CHAT,
-        ))
-        .unwrap();
+        let chat = serde_json::to_value(CompletionRequest::new(&config, &request, true)).unwrap();
         assert_eq!(
             chat.pointer("/messages/0/content"),
             Some(&serde_json::json!([
@@ -2030,7 +1865,11 @@ mod image_tests {
                 {"type": "text", "text": "compare with mine"},
             ]))
         );
-        let response = crate::responses::request(&config, &request).unwrap();
+        let response_request = Request::of(
+            &context,
+            crate::responses::input(&context.messages).unwrap(),
+        );
+        let response = crate::responses::request(&config, &response_request).unwrap();
         assert_eq!(
             response.pointer("/input/0/content"),
             Some(&serde_json::json!([

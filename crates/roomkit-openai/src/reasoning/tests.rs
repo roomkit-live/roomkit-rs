@@ -330,7 +330,7 @@ fn on_the_responses_api_the_floor_applies_and_the_tool_turn_locks_do_not() {
     let sent = |provider: &OpenAiAiProvider, turn: Option<&str>, tools: bool| {
         let mut asked = context(tools);
         asked.reasoning_effort = turn.map(str::to_owned);
-        let request = crate::request::Request::of(&asked).unwrap();
+        let request = provider.prepare(&asked).unwrap();
         provider.body(&request, true).unwrap()["reasoning"]["effort"].clone()
     };
     let effort = |value: &str| serde_json::Value::from(value);
@@ -384,7 +384,7 @@ fn a_turn_s_context_states_off_on_the_wire() {
             enable_thinking,
             ..AiContext::default()
         };
-        let request = crate::request::Request::of(&context).unwrap();
+        let request = provider.prepare(&context).unwrap();
         let body = provider.body(&request, false).unwrap();
         assert_eq!(body["reasoning_effort"], "minimal");
         // On the Responses API too (RFC §6.7).
@@ -393,7 +393,8 @@ fn a_turn_s_context_states_off_on_the_wire() {
             ..OpenAiConfig::new("sk-test", "gpt-5")
         })
         .unwrap();
-        let body = responses.body(&request, false).unwrap();
+        let response_request = responses.prepare(&context).unwrap();
+        let body = responses.body(&response_request, false).unwrap();
         assert_eq!(body["reasoning"]["effort"], "minimal");
     }
 }

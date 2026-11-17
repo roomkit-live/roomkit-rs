@@ -63,17 +63,52 @@ impl<'a> ChatDialect<'a> {
         }
     }
 
-    /// The reasoning field an assistant's message carries, and its value:
-    /// its `thinking` when it has any, the placeholder on a round that
-    /// `calls` when the field is required, none otherwise (Python's
-    /// `chat_request._with_thinking_field`).
-    pub(crate) fn field(&self, thinking: &str, calls: bool) -> Option<(&'a str, String)> {
+    /// Render the original message parts with the public Chat Completions renderer.
+    pub(crate) fn messages(
+        &self,
+        context: &roomkit_ai::AiContext,
+        provider: &str,
+    ) -> Result<Vec<serde_json::Value>, roomkit_ai::ProviderError> {
+        let options = roomkit_ai::ChatDialectOptions {
+            thinking_field: self.thinking_field.map(str::to_owned),
+            round_thinking_required: self.round_thinking_required,
+            round_thinking_placeholder: self.round_thinking_placeholder.into(),
+            ..Default::default()
+        };
+        let dialect = roomkit_ai::ChatDialect::new(options).map_err(|error| {
+            roomkit_ai::ProviderError::new(
+                error.to_string(),
+                roomkit_ai::ProviderErrorOptions {
+                    provider: provider.into(),
+                    ..Default::default()
+                },
+            )
+        })?;
+        roomkit_ai::chat_messages(
+            &context.messages,
+            context.system_prompt.as_deref(),
+            &dialect,
+            provider,
+        )
+    }
+
+    #[cfg(test)]
+    fn field(&self, thinking: &str, calls: bool) -> Option<(&'a str, String)> {
+        use roomkit_ai::{
+            AiContentPart, AiContext, AiMessage, AiRole, AiThinkingPart, AiToolCallPart,
+        };
         let field = self.thinking_field?;
-        if !thinking.is_empty() {
-            return Some((field, thinking.to_owned()));
+        let mut parts = vec![AiContentPart::Thinking(AiThinkingPart::new(thinking))];
+        if calls {
+            parts.push(AiContentPart::ToolCall(AiToolCallPart::new("c", "tool")));
         }
-        (calls && self.round_thinking_required)
-            .then(|| (field, self.round_thinking_placeholder.to_owned()))
+        let ctx = AiContext {
+            messages: vec![AiMessage::new(AiRole::Assistant, parts)],
+            ..AiContext::default()
+        };
+        self.messages(&ctx, "app").unwrap()[0][field]
+            .as_str()
+            .map(|value| (field, value.to_owned()))
     }
 }
 
