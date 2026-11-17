@@ -326,8 +326,34 @@ pub(crate) fn load_context<'a, S: ConversationStore>(
     room_id: &'a RoomId,
     recent_events: RecentEvents,
 ) -> impl Future<Output = Result<Option<RoomContext>, StoreError>> + Send + 'a {
+    load_context_carrying(store, room_id, recent_events, None)
+}
+
+/// Refresh the room and members, reusing the history of the same snapshot when
+/// it covers the current window (RFC §10.1).
+pub(crate) fn load_context_carrying<'a, S: ConversationStore>(
+    store: &'a S,
+    room_id: &'a RoomId,
+    recent_events: RecentEvents,
+    carrying: Option<&'a RoomContext>,
+) -> impl Future<Output = Result<Option<RoomContext>, StoreError>> + Send + 'a {
+    load_context_with_window(
+        store,
+        room_id,
+        move |bindings| recent_events.limit(bindings),
+        carrying,
+    )
+}
+
+/// Group the context reads for an explicit or binding-dependent history window.
+pub(crate) fn load_context_with_window<'a, S: ConversationStore>(
+    store: &'a S,
+    room_id: &'a RoomId,
+    history_limit: impl Fn(&[ChannelBinding]) -> usize + Send + 'a,
+    carrying: Option<&'a RoomContext>,
+) -> impl Future<Output = Result<Option<RoomContext>, StoreError>> + Send + 'a {
     let reads: crate::channel::BoxFuture<'a, Result<Option<RoomContext>, StoreError>> =
-        Box::pin(read_context(store, room_id, recent_events));
+        Box::pin(read_context(store, room_id, history_limit, carrying));
     store.connection(reads)
 }
 
@@ -336,17 +362,7 @@ pub(crate) fn load_context<'a, S: ConversationStore>(
 async fn read_context<S: ConversationStore>(
     store: &S,
     room_id: &RoomId,
-    recent_events: RecentEvents,
-) -> Result<Option<RoomContext>, StoreError> {
-    load_context_carrying(store, room_id, recent_events, None).await
-}
-
-/// Refresh the room and members, reusing the history of the same snapshot when
-/// it covers the current window (RFC §10.1).
-pub(crate) async fn load_context_carrying<S: ConversationStore>(
-    store: &S,
-    room_id: &RoomId,
-    recent_events: RecentEvents,
+    history_limit: impl Fn(&[ChannelBinding]) -> usize,
     carrying: Option<&RoomContext>,
 ) -> Result<Option<RoomContext>, StoreError> {
     let (room, bindings, participants) = store.load_room_context(room_id).await?;
@@ -354,7 +370,7 @@ pub(crate) async fn load_context_carrying<S: ConversationStore>(
         return Ok(None);
     };
     // Nothing bound reads history and no hook is registered: no read.
-    let limit = recent_events.limit(&bindings);
+    let limit = history_limit(&bindings);
     let (recent_events, history_start_index) = if limit == 0 {
         (Vec::new(), None)
     } else if let Some(carried) = carrying.filter(|ctx| {
@@ -362,7 +378,7 @@ pub(crate) async fn load_context_carrying<S: ConversationStore>(
             && ctx.room.created_at == room.created_at
             && ctx.room.organization_id == room.organization_id
             && ctx.room.event_count == room.event_count
-            && limit <= recent_events.limit(&ctx.bindings)
+            && limit <= history_limit(&ctx.bindings)
     }) {
         crate::history::window::bounded_from(
             carried.recent_events.clone(),

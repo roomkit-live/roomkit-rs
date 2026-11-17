@@ -59,7 +59,7 @@ pub(crate) use self::calls::channel_failed;
 pub(crate) use self::calls::cut_by_close;
 pub(crate) use self::calls::perform;
 use self::calls::{WentOn, Written};
-pub(crate) use self::calls::{load_context, load_context_carrying};
+pub(crate) use self::calls::{load_context, load_context_carrying, load_context_with_window};
 use self::holds::{Answer, Held, Hold, Leases, Rooms, Waited, Waiting};
 use self::in_flight::InFlight;
 use self::inbound::Caller;

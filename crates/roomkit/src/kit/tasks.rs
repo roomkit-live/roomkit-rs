@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use roomkit_core::model::{
     ChannelCategory, ChannelId, ChannelType, ErrorRecord, EventSource, EventStatus, EventType,
-    Metadata, Room, RoomContext, RoomEvent, RoomId, TURNS_KEY, TaskStatus, TextContent, Visibility,
+    Metadata, Room, RoomEvent, RoomId, TURNS_KEY, TaskStatus, TextContent, Visibility,
 };
 use roomkit_core::ops::failure_log::{self, Log};
 use roomkit_core::ops::{DelegatedAnswer, DelegatedTurn};
@@ -31,7 +31,7 @@ use crate::error::{RoomKitError, repr};
 use crate::orchestration::StatusLevel;
 use crate::orchestration::lifecycle::post_agent_lifecycle;
 use crate::store::ConversationStore;
-use crate::store::{GetConversationOptions, PatchRoomMetadataOptions};
+use crate::store::PatchRoomMetadataOptions;
 use crate::tasks::background::validate_hand_back;
 use crate::tasks::brief::{conversation_block, worker_description};
 use crate::tasks::handback::{CALLER_HANDS_BACK, MAX_RESULT_CHARS, bounded_to, hand_back};
@@ -45,10 +45,6 @@ use crate::{AttachChannelOptions, CreateRoomOptions, GetRoomOptions, SendEventOp
 /// The fewest of the parent room's latest messages a delegation's
 /// conversation is read from: Python's `recent_limit` floor.
 const CONVERSATION_FLOOR: u64 = 50;
-
-/// The key of a room's private state holding its register of authors,
-/// which labels the conversation's lines (RFC §6.4).
-const AUTHOR_REGISTER: &str = "author_register";
 
 /// The action a task's entries carry on the status bus.
 const TASK_ACTION: &str = "task";
@@ -448,26 +444,11 @@ impl<S: ConversationStore> RoomKit<S> {
         if count == 0 {
             return Ok(None);
         }
-        let store = self.store();
-        let (room, bindings, participants) = store.load_room_context(room_id).await?;
-        let Some(room) = room else {
-            return Ok(None);
-        };
-        let options = GetConversationOptions {
-            limit: count.saturating_mul(4).max(CONVERSATION_FLOOR),
-            after_index: None,
-        };
-        let recent_events = store.get_conversation(room_id, options).await?;
-        let author_register = store.get_private_state(room_id, AUTHOR_REGISTER).await?;
-        let context = RoomContext {
-            room,
-            bindings,
-            participants,
-            recent_events,
-            author_register,
-            history_start_index: None,
-        };
-        Ok(conversation_block(&context, readers, count))
+        let limit = count.saturating_mul(4).max(CONVERSATION_FLOOR);
+        let window = usize::try_from(limit).unwrap_or(usize::MAX);
+        let context =
+            driver::load_context_with_window(self.store(), room_id, move |_| window, None).await?;
+        Ok(context.and_then(|context| conversation_block(&context, readers, count)))
     }
 
     /// Whether the kit registers `channel_id` as an intelligence channel.

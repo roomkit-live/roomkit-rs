@@ -1,6 +1,7 @@
 //! A minimal backend whose connection entry can be counted independently
 //! of the default context loader under test.
 
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use roomkit::model::{
@@ -9,10 +10,15 @@ use roomkit::model::{
 };
 use roomkit::{ConversationStore, InMemoryStore, StoreError, store};
 
+tokio::task_local! {
+    static SCOPE_ID: usize;
+}
+
 #[derive(Debug, Default)]
 pub(super) struct ScopedReads {
     inner: InMemoryStore,
     pub(super) entries: AtomicUsize,
+    pub(super) parent_reads: Mutex<Vec<Option<usize>>>,
 }
 
 macro_rules! forward {
@@ -30,8 +36,38 @@ impl ConversationStore for ScopedReads {
         T: Send + 'a,
         E: From<StoreError> + Send + 'a,
     {
-        self.entries.fetch_add(1, Ordering::Relaxed);
-        work.await
+        let id = self.entries.fetch_add(1, Ordering::Relaxed);
+        SCOPE_ID.scope(id, work).await
+    }
+
+    async fn get_conversation(
+        &self,
+        room_id: &RoomId,
+        options: store::GetConversationOptions,
+    ) -> Result<Vec<RoomEvent>, StoreError> {
+        if room_id.as_str() == "parent" {
+            self.parent_reads
+                .lock()
+                .unwrap()
+                .push(SCOPE_ID.try_with(|id| *id).ok());
+        }
+        self.inner.get_conversation(room_id, options).await
+    }
+
+    async fn get_private_state(
+        &self,
+        room_id: &RoomId,
+        key: &str,
+    ) -> Result<Option<roomkit::model::Metadata>, StoreError> {
+        if room_id.as_str() == "parent" && key == "author_register" {
+            self.parent_reads
+                .lock()
+                .unwrap()
+                .push(SCOPE_ID.try_with(|id| *id).ok());
+            // Stop before a child room is created and its own context reads begin.
+            return Err(StoreError::Value("parent register unavailable".to_owned()));
+        }
+        self.inner.get_private_state(room_id, key).await
     }
 
     forward! {

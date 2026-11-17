@@ -72,3 +72,38 @@ async fn the_default_context_loader_enters_the_backends_connection_block() {
     assert_eq!(missing, (None, Vec::new(), Vec::new()));
     assert_eq!(store.entries.load(Ordering::Relaxed), 2);
 }
+
+#[tokio::test]
+async fn delegation_reads_the_parent_history_and_author_register_in_one_scope() {
+    use roomkit::testing::{EchoAgent, EchoAgentOptions};
+    use roomkit::{DelegateOptions, RoomKit, RoomKitOptions};
+
+    let store = super::connection_store::ScopedReads::default();
+    let parent = RoomId::new("parent").unwrap();
+    let worker = ChannelId::new("worker").unwrap();
+    store.create_room(Room::new(parent.clone())).await.unwrap();
+    let kit = RoomKit::new(RoomKitOptions::with_store(store));
+    kit.register_channel(EchoAgent::new(
+        worker.clone(),
+        "done",
+        EchoAgentOptions::default(),
+    ))
+    .unwrap();
+    let options = DelegateOptions {
+        conversation: 1,
+        ..DelegateOptions::default()
+    };
+    let error = kit
+        .delegate(&parent, &worker, "work", options)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("parent register unavailable"));
+    {
+        let reads = kit.store().parent_reads.lock().unwrap();
+        assert!(
+            matches!(reads.as_slice(), [Some(history), Some(register)] if history == register),
+            "{reads:?}"
+        );
+    }
+    kit.close().await.unwrap();
+}
