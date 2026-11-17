@@ -142,7 +142,7 @@ mod tests {
     use super::*;
 
     fn keys(value: Value) -> Metadata {
-        value.as_object().expect("object").clone()
+        serde_json::from_value(value).expect("object")
     }
 
     #[test]
