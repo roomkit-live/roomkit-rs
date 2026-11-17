@@ -259,7 +259,10 @@ async fn run_step<S: ConversationStore>(
         if revisions >= team.max_revisions {
             break (rendered, None, true);
         }
-        task = compose_rework(&task, &rendered, &verdict.feedback);
+        // Each rework starts from the step's own task, never from the
+        // previous rework: the worker reads its task once, with only its
+        // latest output and the supervisor's latest feedback.
+        task = compose_rework(first_task, &rendered, &verdict.feedback);
     };
     let step = Step {
         role: worker_label(worker).to_owned(),

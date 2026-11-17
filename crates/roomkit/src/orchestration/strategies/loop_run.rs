@@ -7,6 +7,7 @@ use roomkit_core::model::{
     ChannelId, ChannelOutput, ChannelType, ErrorRecord, EventSource, Metadata, RoomEvent, RoomId,
     TaskStatus, TextContent,
 };
+use roomkit_core::rules::transcript::fence;
 use serde_json::{Value, json};
 
 use super::loop_review::{Review, run_reviewers};
@@ -223,7 +224,7 @@ async fn execute_loop<S: ConversationStore>(
             tracing::info!(target: "roomkit::orchestration", "[loop] All reviewers approved at iteration {iteration}");
             break;
         }
-        current = revision_prompt(&output, &reviews);
+        current = revision_prompt(task, &output, &reviews);
     }
     save_loop_state(kit, room_id, &outcome).await?;
     Ok(outcome)
@@ -292,17 +293,19 @@ fn capitalize(text: &str) -> String {
     })
 }
 
-/// The producer's next task: its output, with the feedback of every
-/// reviewer who did not approve it.
-fn revision_prompt(output: &str, reviews: &[Review]) -> String {
+/// The producer's next task: its original `task`, its latest output, and
+/// the latest feedback of every reviewer who did not approve it, as a
+/// supervisor's rework is composed.
+fn revision_prompt(task: &str, output: &str, reviews: &[Review]) -> String {
     let feedback: Vec<String> = reviews
         .iter()
         .filter(|review| !review.approved)
         .map(Review::feedback_block)
         .collect();
     format!(
-        "Revise your previous work based on the reviewers' feedback. Your previous output and \
-         their feedback are set apart below.\n\n{}\n\n{}",
+        "Your task:\n{}\n\nRevise your previous work based on the reviewers' feedback. Your \
+         previous output and their feedback are set apart below.\n\n{}\n\n{}",
+        fence("task", task),
         worker_block("Your previous output", output),
         feedback.join("\n\n")
     )
