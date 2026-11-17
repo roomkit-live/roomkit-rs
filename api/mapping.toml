@@ -56,6 +56,7 @@ roomkit_ai = ["roomkit.providers.ai", "roomkit", "roomkit.tools", "roomkit.skill
 "roomkit_ai::speaking" = ["roomkit.speaking", "roomkit"]
 "roomkit_ai::classifiers" = ["roomkit.classifiers", "roomkit"]
 roomkit_openai = ["roomkit.providers.openai"]
+roomkit_provider_http = ["roomkit.providers"]
 roomkit_anthropic = ["roomkit.providers.anthropic"]
 "roomkit_openai::deepseek" = ["roomkit.providers.deepseek"]
 "roomkit_openai::minimax" = ["roomkit.providers.minimax"]

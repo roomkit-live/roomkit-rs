@@ -1,10 +1,16 @@
-//! Internal HTTP primitives shared by model adapters, without vendor policy.
+//! Outbound URL validation for applications and HTTP primitives shared by model adapters.
 
 use std::sync::Arc;
 
+mod public_url;
+
+pub use public_url::{ValidatePublicUrlOptions, validate_public_url};
+
+#[doc(hidden)]
 pub mod sse;
 
 /// A bounded event stream that could not be decoded.
+#[doc(hidden)]
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum SseError {
     /// The stream exceeded its byte budget.
@@ -37,6 +43,7 @@ pub enum SseError {
 ///
 /// # Errors
 /// Fails when the cryptography provider has no usable protocol version.
+#[doc(hidden)]
 pub fn tls_config() -> Result<rustls::ClientConfig, String> {
     let roots = rustls::RootCertStore {
         roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),

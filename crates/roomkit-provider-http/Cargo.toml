@@ -1,6 +1,6 @@
 [package]
 name = "roomkit-provider-http"
-description = "Internal bounded HTTP and SSE primitives for RoomKit model providers"
+description = "Outbound URL validation and shared HTTP support for RoomKit providers"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

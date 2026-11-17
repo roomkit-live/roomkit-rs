@@ -38,6 +38,7 @@ CRATES = (
     "roomkit",
     "roomkit_ai",
     "roomkit_openai",
+    "roomkit_provider_http",
     "roomkit_anthropic",
     "roomkit_sqlite",
     "roomkit_postgres",
