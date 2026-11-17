@@ -2,28 +2,6 @@
 
 use serde_json::json;
 
-// Python: tests/conformance/test_acp_handler_fixture.py::test_handler_fixture_rejects_malformed_controls
-#[test]
-fn test_external_handler_rejects_non_string_gate_names() {
-    for value in [json!(null), json!(true), json!(1), json!([]), json!({})] {
-        for gate in ["decision_gate", "report_gate"] {
-            let handler = json!({gate: value});
-            for channel in [
-                json!({"id":"agent", "type":"ai", "external_tool_handler":handler}),
-                json!({"id":"agent", "type":"ai", "acp":{
-                    "cwd":"/srv/project", "agent":{}, "external_tool_handler":handler}}),
-            ] {
-                let errors =
-                    crate::shape::unknown_members(&json!({"setup":{"channels":[channel]}}));
-                assert!(
-                    errors.iter().any(|error| error.contains(gate)),
-                    "{errors:?}"
-                );
-            }
-        }
-    }
-}
-
 // Python: tests/conformance/test_acp_observer_timing.py::test_timing_controls_reject_non_string_gate_names
 #[test]
 fn test_timing_controls_reject_non_string_gate_names() {

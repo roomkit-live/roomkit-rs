@@ -71,18 +71,9 @@ struct Spec {
     decisions: Option<VecDeque<Reply>>,
     #[serde(default)]
     reports: Reports,
-    #[serde(default)]
-    decision_gate: Option<String>,
-    #[serde(default)]
-    report_gate: Option<String>,
 }
 
 fn parse(value: &Value) -> Result<Spec, String> {
-    for gate in ["decision_gate", "report_gate"] {
-        if value.get(gate).is_some_and(|value| !value.is_string()) {
-            return Err(format!("{gate}: expected a string"));
-        }
-    }
     if !value.is_object()
         || value
             .get("decisions")
@@ -109,21 +100,12 @@ pub(crate) fn build(
     channel: &str,
     run: &Arc<Run>,
 ) -> Result<Option<Arc<dyn ExternalToolHandler>>, Unreadable> {
-    build_observed(acp, channel, run, &run.acp_handlers)
-}
-
-pub(crate) fn build_observed(
-    spec: &Value,
-    channel: &str,
-    run: &Arc<Run>,
-    observed: &Mutex<std::collections::BTreeMap<String, Wire>>,
-) -> Result<Option<Arc<dyn ExternalToolHandler>>, Unreadable> {
-    let Some(value) = spec.get("external_tool_handler") else {
+    let Some(value) = acp.get("external_tool_handler") else {
         return Ok(None);
     };
     let spec = parse(value).map_err(|e| format!("acp.external_tool_handler: {e}"))?;
     let calls = Wire::default();
-    lock(observed).insert(channel.to_owned(), Arc::clone(&calls));
+    lock(&run.acp_handlers).insert(channel.to_owned(), Arc::clone(&calls));
     Ok(Some(Arc::new(Scripted {
         policy: PolicyExternalToolHandler::new(roomkit_ai::PolicyExternalToolHandlerOptions {
             policy: spec
@@ -140,8 +122,6 @@ pub(crate) fn build_observed(
         }),
         replies: Mutex::new(spec.decisions),
         reports: spec.reports,
-        decision_gate: spec.decision_gate,
-        report_gate: spec.report_gate,
         calls,
         run: Arc::downgrade(run),
     })))
@@ -151,19 +131,11 @@ struct Scripted {
     policy: PolicyExternalToolHandler,
     replies: Mutex<Option<VecDeque<Reply>>>,
     reports: Reports,
-    decision_gate: Option<String>,
-    report_gate: Option<String>,
     calls: Wire,
     run: Weak<Run>,
 }
 
 impl Scripted {
-    async fn hold(&self, gate: Option<&str>) {
-        if let (Some(gate), Some(run)) = (gate, self.run.upgrade()) {
-            run.gates.hold(gate).await;
-        }
-    }
-
     fn record(&self, method: &str, mut data: Value) {
         data["method"] = json!(method);
         data["channel_id"] = json!(self.channel_id());
@@ -198,7 +170,6 @@ impl Scripted {
         &self,
         delegate: impl Future<Output = Result<(), ToolError>>,
     ) -> Result<(), ToolError> {
-        self.hold(self.report_gate.as_deref()).await;
         if self.reports == Reports::RaiseBefore {
             return Err(ToolError::raised_as("RuntimeError", "audit sink down"));
         }
@@ -239,7 +210,6 @@ impl ExternalToolHandler for Scripted {
         Box::pin(async move {
             self.record("process_tool_call", json!({"name": name, "arguments": arguments,
                 "tool_call_id": options.tool_call_id, "room_id": options.room_id, "session_id": options.session_id}));
-            self.hold(self.decision_gate.as_deref()).await;
             match self.next() {
                 Some(decision) => decision,
                 None => {
