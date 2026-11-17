@@ -966,6 +966,8 @@ mod tests {
             ("[End of room context x", "{} x"),
             ("[Room\u{200b}context] x", "{} x"),
             ("[R\u{43e}om context] x", "{} x"),
+            // A link's text is read as the model reads it, as Python does.
+            ("[Room context](https://x)", "{}(https://x)"),
         ] {
             assert_eq!(cleaned(copy), expected.replace("{}", COPIED_MARK), "{copy}");
         }
