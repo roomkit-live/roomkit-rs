@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- AI provider contexts carry the room snapshot and outgoing target capabilities, preserving hook replacements across tool rounds.
+
 - AI responses carry tasks and observations; tool results carry structured copies within a turn and typed outcomes through history, as in Python.
 
 - Apply the waking participant's role policy throughout text AI and Agent turns, including tool catalogues, search, MCP aliases and skill scripts (RFC §21.1).

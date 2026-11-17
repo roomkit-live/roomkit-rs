@@ -987,12 +987,6 @@ params = ["initial"]
 approved = "2026-11-10"
 reason = "language: a record holding keys is ResponseMetadata::from(keys), an empty one ResponseMetadata::new() (HITL 5f1b8943)"
 
-[[missing]]
-python = "roomkit.providers.ai.AIContext.__init__"
-params = ["room", "target_capabilities", "target_media_types"]
-scope = "text"
-reason = "not in 0.x: the context's room and its targets' capabilities"
-
 [[exception]]
 python = "roomkit.providers.ai.AIContext"
 members = ["model_copy"]

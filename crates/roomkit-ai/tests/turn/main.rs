@@ -8,6 +8,7 @@ mod author_images;
 mod bounds;
 mod composition;
 mod config;
+mod context_fields;
 mod handler_depth;
 mod history;
 mod human_input;

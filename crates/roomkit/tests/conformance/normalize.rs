@@ -191,6 +191,14 @@ impl Normalizer {
     /// index of its room: an event's `index`, a room's counters.
     fn index_member(&self, object: &Map<String, Value>, key: &str, raw: i64) -> Option<Value> {
         let room_of = |member: &str| object.get(member).and_then(Value::as_str);
+        if key == "history_start_index" {
+            let room = object.get("room")?.get("id")?.as_str()?;
+            return Some(Value::from(if raw == 0 {
+                0
+            } else {
+                self.index(room, raw)
+            }));
+        }
         if key == "index" && object.contains_key("source") {
             return room_of("room_id").map(|room| Value::from(self.index(room, raw)));
         }
@@ -370,6 +378,34 @@ fn instant_key(text: &str) -> (String, String) {
 mod tests {
     use super::{Normalizer, Observed};
     use serde_json::json;
+
+    #[test]
+    fn context_history_boundary_uses_its_room_lifecycle_indexes() {
+        let lifecycle: Vec<_> = [0, 1]
+            .into_iter()
+            .map(|index| {
+                json!({
+                    "id": format!("life-{index}"), "room_id": "r", "index": index,
+                    "source": {"channel_id": "system"}, "visibility": "internal",
+                    "content": {"type": "system"},
+                })
+            })
+            .collect();
+        let observed = Observed {
+            timelines: [("r".into(), lifecycle)].into(),
+            ..Observed::default()
+        };
+        let mut normalizer = Normalizer::new(&observed);
+        for (raw, expected) in [(None, None), (Some(0), Some(0)), (Some(3), Some(1))] {
+            let snapshot = json!({"room": {"id": "r"}, "history_start_index": raw});
+            assert_eq!(
+                normalizer.value(&snapshot)["history_start_index"],
+                json!(expected)
+            );
+            let other = json!({"room": {"id": "other"}, "history_start_index": raw});
+            assert_eq!(normalizer.value(&other)["history_start_index"], json!(raw));
+        }
+    }
 
     #[test]
     fn acp_option_ids_are_not_event_ids() {

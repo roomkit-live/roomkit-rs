@@ -15,7 +15,9 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use roomkit::model::{LoopEndReason, Metadata, RoomEvent};
+use roomkit::model::{
+    ChannelCapabilities, ChannelMediaType, LoopEndReason, Metadata, RoomContext, RoomEvent,
+};
 use roomkit_core::rules::transcript::{Message, Role, without_mark_copies};
 use serde_json::Value;
 
@@ -30,6 +32,10 @@ use crate::tools::AiTool;
 /// itself (RFC §6.4).
 #[derive(Clone, Default)]
 pub(crate) struct Adopted {
+    /// The provider's room snapshot and target metadata, as its hook left them.
+    pub(crate) room: Option<RoomContext>,
+    pub(crate) target_capabilities: Option<ChannelCapabilities>,
+    pub(crate) target_media_types: Vec<ChannelMediaType>,
     /// The messages the hooks gave, or a compaction made (RFC §6.4),
     /// standing for the memory's and for the conversation's first
     /// messages, as many as the second member says.
@@ -47,6 +53,16 @@ pub(crate) struct Adopted {
     /// Every message left by a hook whose answered input is no longer identifiable.
     /// Only results appended after this prefix may be shortened.
     pub(crate) protected_prefix: Option<usize>,
+}
+
+impl Adopted {
+    fn keep_provider_room(&mut self, context: &AiContext) {
+        self.room.clone_from(&context.room);
+        self.target_capabilities
+            .clone_from(&context.target_capabilities);
+        self.target_media_types
+            .clone_from(&context.target_media_types);
+    }
 }
 
 /// The calls a round ran, as `AFTER_TOOL_ROUND` hands them: none when the
@@ -119,6 +135,7 @@ impl Loop {
     /// too, a tool they added or redefined declared as they left it, one
     /// they took out withdrawn (Python's `_adopt_hook_toolset`).
     fn adopt(&mut self, built: &AiContext, left: AiContext, conversation: usize) {
+        self.adopted.keep_provider_room(&left);
         if left.messages != built.messages {
             let had_input = self.adopted.answered_input.is_some();
             self.adopted.answered_input = self

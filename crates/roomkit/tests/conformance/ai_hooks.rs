@@ -78,6 +78,9 @@ impl Scripted for AiGenerationEvent {
             "purpose": self.purpose,
             "trigger": self.trigger.as_ref().map(|event| event.id.as_str()),
             "system_prompt": self.ai_context.system_prompt,
+            "room": self.ai_context.room,
+            "target_capabilities": self.ai_context.target_capabilities,
+            "target_media_types": self.ai_context.target_media_types,
             "messages": crate::agents::messages(&self.ai_context),
             "tools": self.ai_context.tools.iter().map(|tool| tool.name.as_str()).collect::<Vec<_>>(),
         })

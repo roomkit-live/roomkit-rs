@@ -2,7 +2,9 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use roomkit::model::{Metadata, ResponseMetadata, ToolCallOutcome};
+use roomkit::model::{
+    ChannelCapabilities, ChannelMediaType, Metadata, ResponseMetadata, RoomContext, ToolCallOutcome,
+};
 use roomkit_core::rules::transcript::{Image, Message, Part, Role};
 use serde_json::{Map, Value};
 
@@ -37,6 +39,12 @@ pub struct AiContext {
     pub reasoning_effort: Option<String>,
     /// The tools the model may call, in the toolset's order.
     pub tools: Vec<AiTool>,
+    /// The room snapshot supplied to this turn; absent by default.
+    pub room: Option<RoomContext>,
+    /// The outgoing transports' shared capabilities; absent when there is no target.
+    pub target_capabilities: Option<ChannelCapabilities>,
+    /// The content categories shared by those transports, in no specified order.
+    pub target_media_types: Vec<ChannelMediaType>,
     /// The JSON Schema the answer satisfies (RFC §6.7), within the portable
     /// subset of [`check_portable_schema`](crate::check_portable_schema):
     /// `generate` then returns one JSON document in its `content`, or fails
@@ -66,6 +74,9 @@ impl std::fmt::Debug for AiContext {
             .field("enable_thinking", &self.enable_thinking)
             .field("reasoning_effort", &self.reasoning_effort)
             .field("tools", &self.tools)
+            .field("room", &self.room)
+            .field("target_capabilities", &self.target_capabilities)
+            .field("target_media_types", &self.target_media_types)
             .field("response_schema", &self.response_schema)
             .field("metadata", &metadata)
             .field("response_metadata", &self.response_metadata)
@@ -84,6 +95,9 @@ impl Default for AiContext {
             enable_thinking: None,
             reasoning_effort: None,
             tools: Vec::new(),
+            room: None,
+            target_capabilities: None,
+            target_media_types: Vec::new(),
             response_schema: None,
             metadata: Metadata::new(),
             response_metadata: ResponseMetadata::default(),

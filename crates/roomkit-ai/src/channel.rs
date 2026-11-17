@@ -47,7 +47,7 @@ use crate::steering::{Loops, SteerOptions};
 use crate::tool_eviction::{DEFAULT_EVICT_THRESHOLD_TOKENS, Reread, ToolEviction};
 use crate::tool_loop::TurnTelemetry;
 use crate::tool_loop::{
-    Adopted, Bounds, Loop, RepeatGuard, Resilience, TextPublication, ThinkingPublication,
+    Bounds, Loop, RepeatGuard, Resilience, TextPublication, ThinkingPublication,
 };
 use crate::tool_search::{
     DEFAULT_TOOL_SEARCH_THRESHOLD, DEFAULT_TOOL_SEARCH_THRESHOLD_PCT,
@@ -65,6 +65,7 @@ use crate::turn_config::{AiChannelTurnConfig, TurnConfigFuture, TurnConfigs, bas
 use crate::turn_settings::{ReasoningLevels, TurnSettings, VALUE_ERROR};
 
 mod context;
+mod targets;
 use self::context::PreparedAnswer;
 
 /// The metadata word of an instruction that stands alone (RFC §10.1.1
@@ -1768,7 +1769,7 @@ impl<P: AiProvider> AiChannel<P> {
             remembered: Vec::new(),
             memory: Arc::clone(&self.memory),
             loops: Arc::clone(&self.loops),
-            adopted: Adopted::default(),
+            adopted: self.provider_room(&context),
             deferred: crate::tool_loop::DeferredTools::default(),
             sent_images: None,
             tool_usage: Arc::clone(&self.media.tool_usage),
