@@ -248,6 +248,7 @@ async fn closes_with_owner_sibling(sibling: bool, via_hook: bool) {
             })
         }),
         waits: false,
+        ends_turn: false,
         owner: None,
     };
     let dropped = Arc::new(AtomicBool::new(false));
@@ -263,6 +264,7 @@ async fn closes_with_owner_sibling(sibling: bool, via_hook: bool) {
             })
         }),
         waits: false,
+        ends_turn: false,
         owner: None,
     };
     kit.inner
