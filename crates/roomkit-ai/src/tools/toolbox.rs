@@ -26,6 +26,10 @@ pub(crate) struct Toolbox {
     /// themselves behind it: what serves a tool a generation hook adds
     /// (RFC §6.4).
     handler: Option<usize>,
+    /// The constructor's host definitions occupy the first slots, even when
+    /// a person's handler intercepts a name.
+    host_count: usize,
+    interceptors: HashMap<String, usize>,
     /// The names of the tools the agent may serve itself in a turn, which no
     /// other tool may take (RFC §21.1): Tool Search's, and the skill tools'
     /// once it was given a registry.
@@ -65,6 +69,61 @@ impl std::fmt::Debug for Toolbox {
 }
 
 impl Toolbox {
+    /// Refreshes the constructor's host definitions before preparing a turn.
+    /// Mutable names follow Python's `declared_once`: the last wins, and a
+    /// channel-owned name retains its own definition (RFC §21.1).
+    pub(crate) fn with_host_tools(
+        &self,
+        definitions: Vec<AiTool>,
+        channel: &str,
+        collisions: &Collisions,
+    ) -> Self {
+        let Some(handler) = self.handler else {
+            return self.clone();
+        };
+        let mut turn = self.clone();
+        for (old, _) in self.tools.iter().take(self.host_count) {
+            turn.served.remove(&old.name);
+        }
+        turn.tools = self.tools.iter().skip(self.host_count).cloned().collect();
+        let kept = turn.keep_host_definitions(definitions, channel, collisions);
+        turn.host_count = kept.len();
+        turn.injected_at = kept.len() + self.injected_at.saturating_sub(self.host_count);
+        let mut host = Vec::with_capacity(kept.len());
+        for tool in kept {
+            let at = self
+                .interceptors
+                .get(&tool.name)
+                .copied()
+                .unwrap_or(handler);
+            turn.served.insert(tool.name.clone(), at);
+            host.push((tool, at));
+        }
+        turn.tools.splice(0..0, host);
+        turn
+    }
+
+    fn keep_host_definitions(
+        &self,
+        definitions: Vec<AiTool>,
+        channel: &str,
+        collisions: &Collisions,
+    ) -> Vec<AiTool> {
+        let mut kept: Vec<AiTool> = Vec::new();
+        for tool in definitions {
+            if self.reserved.contains(&tool.name) || self.served.contains_key(&tool.name) {
+                collisions.served(channel, &tool.name);
+                continue;
+            }
+            if let Some(earlier) = kept.iter().position(|kept| kept.name == tool.name) {
+                collisions.duplicate(channel, &tool.name);
+                kept.remove(earlier);
+            }
+            kept.push(tool);
+        }
+        kept
+    }
+
     /// Takes `toolset`, the host's tool handler's, whose tools join the
     /// agent's, and which serves a tool a generation hook adds (RFC §6.4).
     ///
@@ -81,6 +140,7 @@ impl Toolbox {
         let position = self.toolsets.len();
         self.insert(toolset, declared, false)?;
         self.handler = Some(position);
+        self.host_count = self.tools.len();
         self.injected_at = self.tools.len();
         Ok(())
     }
@@ -427,6 +487,7 @@ impl Toolbox {
         let position = self.toolsets.len();
         self.toolsets.push(toolset);
         for name in names {
+            self.interceptors.insert(name.clone(), position);
             if let Some(served) = self.served.get_mut(name) {
                 *served = position;
                 for (tool, at) in &mut self.tools {

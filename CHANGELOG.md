@@ -10,6 +10,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **BREAKING: `ON_AI_THINKING` fires once per reasoning block, as the block closes, with the block's text**, as Python's (RFC §8.4, §9.2, RMK-817); it fired as the block opened, `ThinkingEvent::thinking` always empty; a host that used it to learn that the model began to reason reads the `THINKING_START` ephemeral instead.
 
+- Expose `AiChannel::extra_tools` and `Agent::extra_tools` as shared host definitions; replacements update subsequent turns while keeping the original handlers.
+
 - Expose `roomkit::tools::named_blocks` and `FENCED_TAGS`, preserving Python's default tags and supplied tag order (RFC §6.4).
 
 - The first and last lines of an ACP agent's room context (`[Room context — …`, `[End of room context]`) are runtime marks, short ones, as Python's: a participant's copy in a missed message or in the request is replaced, the block roomkit-acp writes around them kept (RFC §6.4, RMK-1736).

@@ -368,6 +368,9 @@ async fn other_call(
     name: &str,
     spec: &Value,
 ) -> Result<Called, Unreadable> {
+    if matches!(name, "agent.extra_tools" | "agent.replace_extra_tool") {
+        return crate::extra_tools::call(run, name, spec);
+    }
     if name == "mcp_session" {
         return crate::mcp_host::session(spec).await.map(Ok);
     }
@@ -763,6 +766,8 @@ pub(crate) fn register_channel(
         run.kit().register_channel(agent)
     } else if channel.get("model").is_some() {
         let (agent, models) = agents::scripted_agent(channel, run)?;
+        crate::run::lock(&run.host_tool_readers)
+            .insert(id.to_string(), crate::extra_tools::reader(&agent));
         crate::run::lock(&run.models).extend(models);
         match agent {
             agents::Scripted::Channel(agent) => run.kit().register_channel(*agent),

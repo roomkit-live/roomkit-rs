@@ -149,14 +149,14 @@ pub use self::skills::{
 pub use self::steering::SteerOptions;
 pub use self::tool_search::{TOOL_FIND_TOOLS, TOOL_LIST_TOOLS, TOOL_SEARCH_INFRA_TOOL_NAMES};
 pub use self::tools::{
-    AiTool, BeforeToolDecision, ExternalToolFuture, ExternalToolHandler, ExternalToolHandlerState,
-    FireBeforeHookOptions, FireOnToolHookOptions, OnToolCancelledOptions, OnToolRefusedOptions,
-    OnToolResultOptions, PolicyExternalToolHandler, PolicyExternalToolHandlerOptions,
-    ProcessToolCallOptions, RoleOverride, RoleOverrideMode, RoleOverrideOptions, Tool,
-    ToolCallContext, ToolDecision, ToolEntry, ToolError, ToolFuture, ToolHandler, ToolPolicy,
-    ToolPolicyOptions, ToolResult, ToolResultPart, ToolStructuredContent, ToolTurnContextOptions,
-    compose_tool_handlers, current_response_metadata, current_tool_actor_id,
-    current_tool_allowed_names, current_tool_call, current_tool_chain_depth,
+    AiTool, AiToolHandle, BeforeToolDecision, ExternalToolFuture, ExternalToolHandler,
+    ExternalToolHandlerState, FireBeforeHookOptions, FireOnToolHookOptions, OnToolCancelledOptions,
+    OnToolRefusedOptions, OnToolResultOptions, PolicyExternalToolHandler,
+    PolicyExternalToolHandlerOptions, ProcessToolCallOptions, RoleOverride, RoleOverrideMode,
+    RoleOverrideOptions, Tool, ToolCallContext, ToolDecision, ToolEntry, ToolError, ToolFuture,
+    ToolHandler, ToolPolicy, ToolPolicyOptions, ToolResult, ToolResultPart, ToolStructuredContent,
+    ToolTurnContextOptions, compose_tool_handlers, current_response_metadata,
+    current_tool_actor_id, current_tool_allowed_names, current_tool_call, current_tool_chain_depth,
     current_tool_requester, current_tool_room, current_tool_room_id, extract_tools,
     tool_turn_context,
 };

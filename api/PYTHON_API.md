@@ -25,6 +25,7 @@ the mapping and its tests. The check does not generate or update this document.
 | `roomkit_ai::safe_join_filename` | `roomkit.skills.safe_join_filename` | `kind: Option<&str>`, `None` for `"file"`; `Result<PathBuf, SkillPathError>` preserves the path error (HITL 63fe8e98). |
 | `roomkit_ai::tool_turn_context` | `roomkit.tools.tool_turn_context` | `work`: scoped future replacing the enclosed `with` block (HITL 47e0cee0) |
 | `roomkit_ai::ToolStructuredContent` | — | Whole type |
+| `roomkit_ai::AiToolHandle` | `AIChannel.extra_tools`, `Agent.extra_tools` elements | Shared `get`/`replace` handles; reads and prepared provider contexts are snapshots (approved 2026-11-17). |
 | `roomkit_ai::ExternalToolHandler` | — | `state` |
 | `roomkit_ai::ExternalToolHandlerState` | — | Whole type |
 | `roomkit_ai::ExternalToolFuture` | — | Whole type |
@@ -363,3 +364,19 @@ from serialized data, matching Python's `model_dump`. Deserialization validates
 fresh overrides; the typed constructor accepts an already constructed override
 without revalidating its edits. Resolution validates only the lists Python
 reconstructs. These forms and the source migration were approved on 2026-11-16 (RMK-1709).
+
+## Host tool definitions
+
+`AIChannel.extra_tools` and `Agent.extra_tools` are `extra_tools() ->
+Vec<AiToolHandle>` in Rust. The vector is independent; cloned handles and
+channel clones share each host definition. `get() -> AiTool` reads an owned
+snapshot and `replace(AiTool)` replaces the definition for subsequent turns.
+Neither operation changes the handler or installs a tool. Owner, human and
+infrastructure definitions remain outside the getter.
+
+The Rust form was approved on 2026-11-17. Its precise ownership
+boundary was approved separately: a snapshot's nested parameters
+and tags do not write through, and a provider already generating keeps the
+definitions its turn prepared. Python's mutable objects can still be observed
+through those retained aliases; this boundary is an accepted difference, not a
+shared aliasing guarantee.

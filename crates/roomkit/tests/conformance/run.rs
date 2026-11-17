@@ -138,6 +138,7 @@ pub(crate) struct Run {
     after_turn: Mutex<Vec<JoinHandle<()>>>,
     /// The scripted agents' models, by channel.
     pub(crate) models: Mutex<BTreeMap<String, ScriptedProvider>>,
+    pub(crate) host_tool_readers: Mutex<BTreeMap<String, crate::extra_tools::Reader>>,
     pub(crate) model_methods: Mutex<BTreeMap<String, crate::agents::GenerationMethods>>,
     /// What each scripted ACP agent received, by its channel.
     pub(crate) acp_channels:
@@ -226,6 +227,7 @@ impl Run {
             handles: Mutex::default(),
             after_turn: Mutex::default(),
             models: Mutex::default(),
+            host_tool_readers: Mutex::default(),
             model_methods: Mutex::default(),
             acp_channels: Mutex::default(),
             acp_wires: Mutex::default(),

@@ -226,6 +226,11 @@ impl<P: AiProvider> Agent<P> {
         self.channel.set_system_prompt(prompt);
     }
 
+    /// The host's tool definitions, as [`AiChannel::extra_tools`] (RFC §10.6.5).
+    pub fn extra_tools(&self) -> Vec<crate::AiToolHandle> {
+        self.channel.extra_tools()
+    }
+
     /// The handler serving its tools' calls: Python's `tool_handler`.
     pub fn tool_handler(&self) -> Option<ToolHandler> {
         self.channel.tool_handler()

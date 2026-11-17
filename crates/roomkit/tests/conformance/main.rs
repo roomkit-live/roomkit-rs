@@ -29,6 +29,7 @@ mod compare;
 mod delegate_calls;
 mod discussion_calls;
 mod errors;
+mod extra_tools;
 mod handoff_calls;
 mod harness;
 mod identity;

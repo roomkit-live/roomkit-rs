@@ -1533,6 +1533,7 @@ fn request(request: &AiContext) -> Value {
         "target_capabilities": request.target_capabilities,
         "target_media_types": request.target_media_types,
         "tools": tools,
+        "tool_names": request.tools.iter().map(|tool| &tool.name).collect::<Vec<_>>(),
         "tool_definitions": request.tools.iter().map(|tool| (tool.name.clone(), json!({ "description": tool.description, "parameters": tool.parameters }))).collect::<serde_json::Map<_, _>>(),
         "deferred_tools": request.tools.iter().filter(|tool| tool.defer_loading).map(|tool| &tool.name).collect::<Vec<_>>(),
         "reopened_tools": request.messages.iter().filter(|message| message.metadata.get("reopening") == Some(&Value::Bool(true))).flat_map(AiMessage::tool_results).flat_map(|result| result.references.iter()).collect::<Vec<_>>(),

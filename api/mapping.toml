@@ -716,9 +716,9 @@ reason = "not in 0.x: the thinker"
 
 [[missing]]
 python = "roomkit.Agent"
-members = ["extra_tools", "thinks_while_listening"]
+members = ["thinks_while_listening"]
 scope = "text"
-reason = "not in 0.x: tools added at run time and the thinker"
+reason = "not in 0.x: the thinker"
 
 [[missing]]
 python = "roomkit.Agent"
@@ -1151,9 +1151,9 @@ reason = "not in 0.x: continuation, thinking, sandbox, external tools, planning,
 
 [[missing]]
 python = "roomkit.AIChannel"
-members = ["extra_tools", "thinks_while_listening"]
+members = ["thinks_while_listening"]
 scope = "text"
-reason = "not in 0.x: tools added at run time and the thinker"
+reason = "not in 0.x: the thinker"
 
 [[exception]]
 rust = "roomkit_ai::ToolStructuredContent"
@@ -1383,3 +1383,8 @@ rust = "roomkit_ai::SkillRegistry::closed_tool_names"
 params = ["activated"]
 approved = "2026-11-15"
 reason = "Rust has no default call arguments: an explicit empty set is Python's activated=() (HITL 73da84cd)"
+
+[[exception]]
+rust = "roomkit_ai::AiToolHandle"
+approved = "2026-11-17"
+reason = "language: extra_tools returns shared cloneable host definitions with get/replace. get, nested fields and already prepared provider contexts are owned snapshots; replace changes subsequent turns."

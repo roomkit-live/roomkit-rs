@@ -444,6 +444,7 @@ pub struct AiChannel<P> {
     /// sits in `resilience`.
     provider: Option<Arc<P>>,
     toolbox: Arc<Toolbox>,
+    extra_tools: Vec<crate::AiToolHandle>,
     /// The host's handler, which the setter replaces.
     tool_handler: Arc<RwLock<Option<ToolHandler>>>,
     policy: ToolPolicy,
@@ -573,6 +574,7 @@ impl<P> Clone for AiChannel<P> {
             capabilities: self.capabilities.clone(),
             provider: self.provider.clone(),
             toolbox: Arc::clone(&self.toolbox),
+            extra_tools: self.extra_tools.clone(),
             tool_handler: Arc::clone(&self.tool_handler),
             policy: self.policy.clone(),
             bounds: self.bounds.clone(),
@@ -740,6 +742,7 @@ impl<P: AiProvider> AiChannel<P> {
             channel_id,
             provider,
             toolbox: Arc::new(surface.toolbox),
+            extra_tools: surface.extra_tools,
             tool_handler: surface.tool_handler,
             policy,
             bounds: loop_bounds(
@@ -878,6 +881,26 @@ impl<P: AiProvider> AiChannel<P> {
             .system_prompt
             .write()
             .unwrap_or_else(PoisonError::into_inner) = prompt.filter(|prompt| !prompt.is_empty());
+    }
+
+    /// The host's tool definitions, in constructor order (RFC §10.6.5).
+    /// The returned vector is independent; its handles share their definitions
+    /// with this channel and its clones. Owner and infrastructure tools are absent.
+    pub fn extra_tools(&self) -> Vec<crate::AiToolHandle> {
+        self.extra_tools.clone()
+    }
+
+    fn host_toolbox(&self, base: &Toolbox) -> Arc<Toolbox> {
+        let definitions = self
+            .extra_tools
+            .iter()
+            .map(crate::AiToolHandle::get)
+            .collect();
+        Arc::new(base.with_host_tools(
+            definitions,
+            self.channel_id.as_str(),
+            self.turn_configs.collisions(),
+        ))
     }
 
     /// The host's handler, serving the tools the options define that
@@ -1583,6 +1606,7 @@ fn refuse_tool_names(tools: &[ToolEntry]) -> Result<(), AiError> {
 struct ToolSurface {
     toolbox: Toolbox,
     tool_handler: Arc<RwLock<Option<ToolHandler>>>,
+    extra_tools: Vec<crate::AiToolHandle>,
     human_input: Option<(HumanInputToolHandler, Arc<AtomicU64>)>,
     skills: Option<Arc<SkillTools>>,
     /// The store of large results the re-read serves (RFC §21.5).
@@ -1623,7 +1647,14 @@ fn tool_surface(
     // Always a slot for the host's handler: it serves the tools a
     // generation hook adds, a handler set later included (RFC §6.4).
     let serving = Some(host_handler(&tool_handler));
+    let mut extra_tools = Vec::new();
     if let Some(served) = served_by(serving, tools)? {
+        extra_tools = served
+            .1
+            .iter()
+            .cloned()
+            .map(crate::AiToolHandle::new)
+            .collect();
         toolbox.add_handler(served.0, served.1)?;
     }
     // A registry given, an empty one too, reserves the skill tools' names
@@ -1641,6 +1672,7 @@ fn tool_surface(
     Ok(ToolSurface {
         toolbox,
         tool_handler,
+        extra_tools,
         human_input,
         skills,
         eviction,
@@ -1732,8 +1764,10 @@ impl<P: AiProvider> AiChannel<P> {
         // The tools the room's owner serves this turn join the agent's own
         // (RFC §10.6.5), before the turn's own, none of which is declared
         // under their names (RFC §21.1).
-        let owned = crate::tools::owner::with_owner_tools(&self.toolbox, turn.as_ref())?;
+        let live = self.host_toolbox(&self.toolbox);
+        let owned = crate::tools::owner::with_owner_tools(&live, turn.as_ref())?;
         let configured = self.turn_configs.resolve(&binding, &context).await?;
+        let owned = self.host_toolbox(&owned);
         let configured = configured.as_ref();
         let mut settings = self.turn_settings(&binding, configured)?;
         let (toolbox, skills) = self.turn_toolbox(owned, configured, &binding)?;
@@ -2020,7 +2054,10 @@ impl<P: AiProvider> Channel for AiChannel<P> {
     /// kit sets up on it may not take (RFC §21.1), as Python's registry's
     /// `own_names`.
     fn own_tool_names(&self) -> Vec<String> {
-        self.toolbox.own_names().cloned().collect()
+        self.host_toolbox(&self.toolbox)
+            .own_names()
+            .cloned()
+            .collect()
     }
 
     /// Cuts the running turns' calls and waits up to five seconds for their
