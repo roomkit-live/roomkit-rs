@@ -472,6 +472,37 @@ async fn a_call_from_a_task_s_room_answers_with_its_task_s_result_on_the_option(
         assert_eq!(ended.output.as_deref(), Some("Dug."));
         kit.close().await.unwrap();
     }
+
+    // A task that failed answers its status and an empty result.
+    let failing = roomkit_ai::AiChannel::new(
+        id("digger"),
+        roomkit_ai::testing::ScriptedProvider::new([
+            roomkit_ai::testing::ScriptedRound::answering("").failing("Broke."),
+        ]),
+        roomkit_ai::AiChannelOptions::default(),
+    )
+    .unwrap();
+    let options = DelegateHandlerOptions {
+        wait_in_task_rooms: true,
+        ..DelegateHandlerOptions::default()
+    };
+    let (kit, model) = kit_delegating_in_turn(failing, options);
+    let room = conversation(&kit).await;
+    let task = kit
+        .delegate(
+            &room,
+            &id("researcher"),
+            "Look it up.",
+            DelegateOptions::default(),
+        )
+        .await
+        .unwrap();
+    task.wait(WaitOptions::default()).await.unwrap();
+
+    let answer = told(&model.calls()[1]);
+    assert_eq!(answer["status"], json!("failed"), "{answer}");
+    assert_eq!(answer["result"], json!(""));
+    kit.close().await.unwrap();
 }
 
 // Python: tests/tasks/test_delegate.py::TestWaitInTaskRooms::test_a_call_from_the_conversation_s_room_starts_a_background_task

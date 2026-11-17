@@ -88,9 +88,10 @@ pub struct DelegateHandlerOptions<S = InMemoryStore> {
     /// type cannot hold one.
     pub max_result_chars: NonZeroUsize,
     /// Python `wait_in_task_rooms=False`: whether a call made from a task's
-    /// room, by a worker delegating in turn, runs its task inline: the call
-    /// answers once the task ended, with its result, and cancelling the
-    /// worker's task cancels it too. At `false`: it starts a background
+    /// room, by a worker delegating in turn or by the host itself, runs its
+    /// task inline: the call answers once the task ended, with its status and
+    /// its result (empty for a failed task), and cancelling the worker's task
+    /// cancels it too. At `false`: it starts a background
     /// task, as from any room.
     pub wait_in_task_rooms: bool,
 }
