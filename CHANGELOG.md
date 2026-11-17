@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Refuse a media reference in every spelling a reader decodes or trims (a `..` segment, backslash or control character percent-encoded, a `..` padded with whitespace, an escape left after three decodings) and in any scheme a reader fetches, opens or runs by itself, alone or joined by `+` (`smb`, `sftp`, `ws`, `rtsp`, `hls+http`…), as Python does (RFC §6.4, RMK-1028).
+
 - AI provider contexts carry the room snapshot and outgoing target capabilities, preserving hook replacements across tool rounds.
 
 - AI responses carry tasks and observations; tool results carry structured copies within a turn and typed outcomes through history, as in Python.

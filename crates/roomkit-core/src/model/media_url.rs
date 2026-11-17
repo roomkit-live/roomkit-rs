@@ -8,8 +8,9 @@ use super::ModelError;
 
 /// Why a media content's `url` is refused, Python's message.
 pub(super) const MEDIA_URL_RULE: &str = "URL must be a link (http://, https://), a data: URI, or a \
-     reference <scheme>://... (two letters of scheme at least, not file, ftp, javascript or \
-     vbscript, no '..' segment, backslash or control character, even percent-encoded)";
+     reference <scheme>://... (two letters of scheme at least, no part of it between '+' a scheme \
+     a reader fetches, opens or runs, such as file, ftp, http, smb, sftp, ws or javascript, no \
+     '..' segment, backslash or control character, even percent-encoded)";
 
 /// Why an audio or a video URL is refused, Python's message.
 pub(super) const PLAYABLE_URL_RULE: &str = "URL must start with http://, https://, or data:";
@@ -18,8 +19,19 @@ pub(super) const PLAYABLE_URL_RULE: &str = "URL must start with http://, https:/
 /// after them is refused.
 const MOST_DECODINGS: usize = 3;
 
-/// The schemes a reader could fetch or open itself, or run.
-const REFUSED_SCHEMES: [&str; 4] = ["file", "ftp", "javascript", "vbscript"];
+/// The schemes a reader fetches, opens or runs by itself, without the
+/// application, in order: files on the machine or on a share, the network
+/// protocols generic readers (curl, ffmpeg, GIO) fetch, code to run, and a
+/// link's, which a reader that splits a compound scheme on `+` fetches.
+#[rustfmt::skip]
+const REFUSED_SCHEMES: [&str; 59] = [
+    "afp", "cifs", "dav", "davs", "dict", "file", "ftp", "ftps", "gopher", "gophers", "hls", "http",
+    "https", "icecast", "imap", "imaps", "ipfs", "ipns", "jar", "javascript", "ldap", "ldaps",
+    "mmsh", "mmst", "mqtt", "nfs", "pop3", "pop3s", "rtmp", "rtmpe", "rtmps", "rtmpt", "rtmpte",
+    "rtmpts", "rtp", "rtsp", "rtsps", "scp", "sctp", "sftp", "smb", "smbs", "smtp", "smtps", "srt",
+    "srtp", "ssh", "tcp", "telnet", "tftp", "tls", "udp", "udplite", "unix", "vbscript", "webdav",
+    "ws", "wss", "zmq",
+];
 
 /// A media content's `url`, its scheme lower-cased when it is a link or a
 /// `data:` URI, as every reader tests it; a reference keeps its scheme,
@@ -75,8 +87,9 @@ fn lowercase_scheme(url: &str) -> String {
 
 /// Whether `url` is a reference no reader could take for something else:
 /// `<scheme>://…` with a scheme of two characters at least (one reads as a
-/// Windows drive), a letter then letters, digits, `+`, `.` or `-`, not a
-/// scheme a reader fetches, opens or runs, and nothing a path reader could
+/// Windows drive), a letter then letters, digits, `+`, `.` or `-`, no part
+/// of it between `+` a scheme a reader fetches, opens or runs (a link's
+/// included), and nothing a path reader could
 /// follow once it has percent-decoded the rest, up to three times, the most
 /// an ordinary reference is encoded: no backslash, no control character, no
 /// segment that is `..` with the whitespace around it trimmed, and no escape
@@ -89,11 +102,20 @@ fn is_safe_reference(url: &str) -> bool {
     let well_formed = characters.next().is_some_and(|c| c.is_ascii_alphabetic())
         && scheme.len() >= 2
         && characters.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'));
-    if !well_formed || REFUSED_SCHEMES.contains(&scheme.to_ascii_lowercase().as_str()) {
+    if !well_formed || refused_scheme(scheme) {
         return false;
     }
     decoded(rest)
         .is_some_and(|rest| !rest.contains('\\') && !holds_control(&rest) && !holds_parent(&rest))
+}
+
+/// Whether `scheme`, or one of its parts joined by `+` (`hls+http`,
+/// `crypto+file`), is a scheme a reader fetches, opens or runs.
+fn refused_scheme(scheme: &str) -> bool {
+    scheme
+        .to_ascii_lowercase()
+        .split('+')
+        .any(|part| REFUSED_SCHEMES.binary_search(&part).is_ok())
 }
 
 /// Whether `text` holds a control character (Unicode Cc: C0, DEL and C1),
@@ -247,6 +269,37 @@ mod tests {
         ] {
             assert!(is_safe_reference(url), "{url:?} is refused");
         }
+    }
+
+    /// Python's `TestReferenceURL`: a scheme a reader fetches, opens or runs
+    /// by itself is refused, whatever its case and alone or joined by `+`;
+    /// an application's own scheme and a cloud store are not.
+    #[test]
+    fn a_scheme_a_reader_fetches_by_itself_is_no_reference() {
+        for url in [
+            "smb://host/share/a.png",
+            "SFTP://host/a.png",
+            "ws://host/a",
+            "rtsp://host/live",
+            "jar://host/a.jar",
+            "hls+http://host/a.m3u8",
+            "crypto+file://a",
+        ] {
+            assert!(!is_safe_reference(url), "{url:?} is accepted");
+        }
+        for url in [
+            "x-app://media/1",
+            "store+v2://bucket/a.png",
+            "s3://bucket/key.png",
+        ] {
+            assert!(is_safe_reference(url), "{url:?} is refused");
+        }
+    }
+
+    /// The refused schemes are in order, which their binary search needs.
+    #[test]
+    fn the_refused_schemes_are_sorted() {
+        assert!(REFUSED_SCHEMES.is_sorted());
     }
 
     /// A scheme `://` matches as the first `://` of the URL, so a reference
