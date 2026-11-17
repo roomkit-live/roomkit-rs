@@ -125,8 +125,9 @@ fn the_fixture_is_the_one_its_generator_wrote() {
 
 /// RFC §1.4, §10.6.3: every message Python's in-memory backend carried for
 /// the turn is read, and writing it back loses none of its members. This
-/// historical fixture predates the optional history boundary: its absence
-/// reads as unknown, written as null. That is the only added member.
+/// historical fixture predates the optional history boundary and host-call
+/// records: their absence reads as unknown, written as null. Only those
+/// members may be added; the original Python messages remain unchanged.
 #[test]
 fn every_message_python_carried_reads_and_rewrites_with_nothing_lost() {
     let (mut lost, mut added) = (Vec::new(), BTreeSet::new());
@@ -138,6 +139,16 @@ fn every_message_python_carried_reads_and_rewrites_with_nothing_lost() {
                 after.pointer("/context/history_start_index"),
                 Some(&Value::Null)
             );
+        }
+        for pointer in [
+            "/message/context/response_metadata",
+            "/message/record_changes",
+        ] {
+            if message.pointer(pointer).is_none()
+                && let Some(value) = after.pointer(pointer)
+            {
+                assert_eq!(value, &Value::Null, "{line}:{family}{pointer}");
+            }
         }
         differences(
             &format!("{line}:{family}"),
@@ -158,7 +169,11 @@ fn every_message_python_carried_reads_and_rewrites_with_nothing_lost() {
         (
             29,
             BTreeSet::new(),
-            BTreeSet::from(["context.history_start_index".to_owned()])
+            BTreeSet::from([
+                "context.history_start_index".to_owned(),
+                "message.context.response_metadata".to_owned(),
+                "message.record_changes".to_owned(),
+            ])
         )
     );
 }
