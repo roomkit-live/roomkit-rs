@@ -17,6 +17,16 @@ use roomkit_ai::{FromToolOptions, ToolDeclarationOrigin};
 use std::time::Duration;
 
 #[test]
+fn a_turn_has_no_tool_timeout_overrides_by_default() {
+    // roomkit.AIChannelTurnConfig.__init__(tool_timeouts) = None
+    assert!(
+        roomkit_ai::AiChannelTurnConfig::default()
+            .tool_timeouts
+            .is_none()
+    );
+}
+
+#[test]
 fn script_result_defaults_as_python() {
     let result = roomkit_ai::ScriptResult::new(7);
     // roomkit.skills.ScriptResult.__init__(stdout) = ''

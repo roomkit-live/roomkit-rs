@@ -4,11 +4,15 @@
 //! configuration's or its binding's (Python's `_resolve_turn`,
 //! `_turn_base_tools`).
 
-use std::collections::HashSet;
+mod bounds;
+pub(crate) use bounds::for_turn as turn_bounds;
+
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use roomkit::model::{ChannelBinding, Metadata, RoomContext};
 use roomkit::{ChannelError, ClassedError};
@@ -64,6 +68,11 @@ pub struct AiChannelTurnConfig {
     /// registry, an empty one included: one built without declares no skill
     /// tools. Never installed on the channel, nor read by another turn.
     pub skills: Option<SkillRegistry>,
+    /// Per-tool bounds for this turn (RFC §21.6), above the channel's named
+    /// bounds. Missing names keep theirs; a named `None` is unbounded.
+    /// An absent or empty map keeps the channel's bounds. Zero fails the
+    /// turn before generation. Never installed on the shared channel.
+    pub tool_timeouts: Option<BTreeMap<String, Option<Duration>>>,
 }
 
 impl fmt::Debug for AiChannelTurnConfig {
@@ -82,6 +91,7 @@ impl fmt::Debug for AiChannelTurnConfig {
             .field("turn_budget_usd", &self.turn_budget_usd)
             .field("tool_handler", &self.tool_handler.is_some())
             .field("skills", &self.skills.is_some())
+            .field("tool_timeouts", &self.tool_timeouts)
             .finish()
     }
 }

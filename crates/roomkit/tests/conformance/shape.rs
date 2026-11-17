@@ -175,6 +175,7 @@ const AGENT: &[&str] = &[
 ];
 const HUMAN_INPUT: &[&str] = &["tool_names", "timeout_ms", "tools"];
 const TURN_CONFIG: &[&str] = &[
+    "tool_timeouts_ms",
     "system_prompt",
     "thinking_budget",
     "enable_thinking",
@@ -977,6 +978,11 @@ fn skills(skills: &Value, path: &str, found: &mut Vec<String>) {
 
 fn turn_config(config: &Value, path: &str, found: &mut Vec<String>) {
     optional(config, TURN_CONFIG, path, found);
+    turn_tool_bounds(
+        &config["tool_timeouts_ms"],
+        &format!("{path}.tool_timeouts_ms"),
+        found,
+    );
     for (index, tool) in items(&config["tools"]) {
         members(tool, TURN_TOOL, &format!("{path}.tools[{index}]"), found);
     }
@@ -984,6 +990,23 @@ fn turn_config(config: &Value, path: &str, found: &mut Vec<String>) {
         members(tool, TOOL, &format!("{path}.tool_handler[{index}]"), found);
     }
     skills(&config["skills"], &format!("{path}.skills"), found);
+}
+
+fn turn_tool_bounds(bounds: &Value, path: &str, found: &mut Vec<String>) {
+    if bounds.is_null() {
+        return;
+    }
+    let Some(bounds) = bounds.as_object() else {
+        found.push(format!("{path}: expected an object or null"));
+        return;
+    };
+    for (name, bound) in bounds {
+        if !bound.is_null() && bound.as_u64().is_none() {
+            found.push(format!(
+                "{path}.{name}: expected nonnegative integer milliseconds or null"
+            ));
+        }
+    }
 }
 
 fn memory(memory: &Value, path: &str, found: &mut Vec<String>) {
@@ -1432,6 +1455,28 @@ fn model_call(call: &Value, path: &str, found: &mut Vec<String>) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // Python: tests/conformance/test_turn_bounds_fixture.py
+    #[test]
+    fn turn_bounds_are_checked_without_hiding_zero_from_the_public_api() {
+        for (bounds, accepted) in [
+            (json!([]), false),
+            (json!(""), false),
+            (json!({"slow": true}), false),
+            (json!({"slow": -1}), false),
+            (json!({"slow": 1.5}), false),
+            (Value::Null, true),
+            (json!({}), true),
+            (json!({"slow": null}), true),
+            (json!({"slow": 0}), true),
+            (json!({"slow": 20}), true),
+        ] {
+            let scenario = json!({"setup":{"channels":[{"id":"ai","type":"ai",
+                "config_provider":{"room":{"tool_timeouts_ms":bounds}}
+            }]}});
+            assert_eq!(unknown_members(&scenario).is_empty(), accepted);
+        }
+    }
 
     // Python: tests/conformance/test_binding_fixture.py::test_binding_callback_controls_are_synchronous_and_explicit
     #[test]

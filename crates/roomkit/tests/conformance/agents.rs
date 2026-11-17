@@ -1268,6 +1268,12 @@ fn turn_config(spec: &Value, run: &Arc<Run>) -> Result<AiChannelTurnConfig, Stri
             .get("skills")
             .map(|skills| run.skills.registry(skills, &spec["skills_requires_match"]))
             .transpose()?,
+        tool_timeouts: spec["tool_timeouts_ms"].as_object().map(|bounds| {
+            bounds
+                .iter()
+                .map(|(name, bound)| (name.clone(), bound.as_u64().map(Duration::from_millis)))
+                .collect()
+        }),
     })
 }
 

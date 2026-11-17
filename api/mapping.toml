@@ -1318,12 +1318,6 @@ members = ["input_request"]
 scope = "text"
 reason = "not yet in Rust: the owner reads an open human-input request, Python's RMK-1467, whose lot ports it and takes this entry off (HITL 40019981)"
 
-[[missing]]
-python = "roomkit.AIChannelTurnConfig.__init__"
-params = ["tool_timeouts"]
-scope = "text"
-reason = "not yet in Rust: a turn's configuration bounds its calls with its tools, Python's RMK-1469, whose lot ports it and takes this entry off (HITL 40019981)"
-
 [[exception]]
 python = "roomkit.PendingInput.__init__"
 params = ["status", "result", "reject_reason"]
