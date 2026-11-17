@@ -31,9 +31,11 @@
 //! An externally supplied standard pool must provide
 //! [`PostgresStoreOptions::cancel_query`], including when framework reads enter
 //! the block. Keep a clone of the pool's TLS connector for that callback; a
-//! plaintext pool must explicitly use `tokio_postgres::NoTls`. There is no TLS
-//! fallback inside a block. A token from a custom raw connection may not know
-//! its actual target; such a pool cannot use this capability as-is.
+//! plaintext pool must explicitly use `tokio_postgres::NoTls`. Cancellation
+//! follows the pool's configured SSL mode. RoomKit does not retry a failed
+//! scoped cancellation with a different TLS policy. A token from a custom raw
+//! connection may not know its actual target; such a pool cannot use this
+//! capability as-is.
 //!
 //! Cancellation-safe reuse requires a tokio-postgres version whose
 //! `cancel_query` waits for the cancellation connection to close. A root
