@@ -408,7 +408,7 @@ async fn conversation(kit: &RoomKit) -> RoomId {
 
 /// What the tool answered the call `context` hands its model, as JSON.
 fn told(context: &AiContext) -> serde_json::Value {
-    let answers: Vec<&ToolResult> = context
+    let answers: Vec<String> = context
         .messages
         .iter()
         .filter_map(|message| match &message.content {
@@ -417,14 +417,18 @@ fn told(context: &AiContext) -> serde_json::Value {
         })
         .flatten()
         .filter_map(|part| match part {
-            AiContentPart::ToolResult(result) => Some(&result.result),
-            _ => None,
+            AiContentPart::ToolResult(result) => Some(match &result.result {
+                ToolResult::Text(text) => text.clone(),
+                other @ (ToolResult::Json(_) | ToolResult::Parts(_)) => format!("{other:?}"),
+            }),
+            AiContentPart::Text(_)
+            | AiContentPart::Image(_)
+            | AiContentPart::Thinking(_)
+            | AiContentPart::ToolCall(_) => None,
         })
         .collect();
-    let [ToolResult::Text(text)] = answers.as_slice() else {
-        panic!("one text answer expected: {answers:?}");
-    };
-    serde_json::from_str(text).unwrap()
+    assert_eq!(answers.len(), 1, "{answers:?}");
+    serde_json::from_str(answers.first().unwrap()).unwrap()
 }
 
 // Python: tests/tasks/test_delegate.py::TestWaitInTaskRooms::test_the_call_answers_with_its_task_s_result_on_the_option
