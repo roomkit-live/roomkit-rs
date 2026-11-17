@@ -6,7 +6,7 @@ use std::time::Duration;
 use roomkit::human_input::{HumanInputHandler, PendingInputEvent, RejectOptions};
 use roomkit::model::hook::AllowOptions;
 use roomkit::model::{HookResult, RoomContext};
-use roomkit::{HookOptions, HookTrigger, RoomKit, RoomKitOptions};
+use roomkit::{HookOptions, HookTrigger, InputRequestOptions, RoomKit, RoomKitOptions};
 use roomkit_ai::{AiChannelOptions, Tools};
 use serde_json::json;
 use tokio::sync::oneshot;
@@ -46,7 +46,7 @@ async fn asking() -> (
 async fn held(kit: &RoomKit, id: &str) -> PendingInputEvent {
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
-            if let Some(request) = kit.input_request(id, Default::default()) {
+            if let Some(request) = kit.input_request(id, InputRequestOptions::default()) {
                 return request;
             }
             tokio::task::yield_now().await;
@@ -72,15 +72,23 @@ async fn the_owner_reads_an_independent_snapshot_with_the_original_creation_time
     read.arguments
         .insert("question".to_owned(), json!("Changed by the reader"));
     assert_eq!(
-        room.kit.input_request(&id, Default::default()),
+        room.kit.input_request(&id, InputRequestOptions::default()),
         Some(expected)
     );
     let other = RoomKit::new(RoomKitOptions::default());
-    assert!(other.input_request(&id, Default::default()).is_none());
+    assert!(
+        other
+            .input_request(&id, InputRequestOptions::default())
+            .is_none()
+    );
     other.close().await.unwrap();
 
     assert!(room.kit.answer_input(&id, "Blue").await.unwrap());
-    assert!(room.kit.input_request(&id, Default::default()).is_none());
+    assert!(
+        room.kit
+            .input_request(&id, InputRequestOptions::default())
+            .is_none()
+    );
     turn.await.unwrap();
     room.kit.close().await.unwrap();
 }
@@ -109,7 +117,7 @@ async fn a_request_the_handler_settles_is_no_longer_read() {
         turn.await.unwrap();
         assert!(
             room.kit
-                .input_request(&event.pending_id, Default::default())
+                .input_request(&event.pending_id, InputRequestOptions::default())
                 .is_none()
         );
         room.kit.close().await.unwrap();

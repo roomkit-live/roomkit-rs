@@ -12,7 +12,9 @@ use pretty_assertions::assert_eq;
 use roomkit::human_input::{CreateOptions, HumanInputHandler, PendingInputEvent, WaitOptions};
 use roomkit::model::hook::AllowOptions;
 use roomkit::model::{HookResult, Metadata, RoomContext, ToolCall};
-use roomkit::{HookExecution, HookOptions, HookTrigger, RoomKitError, ToolCallEvent};
+use roomkit::{
+    HookExecution, HookOptions, HookTrigger, InputRequestOptions, RoomKitError, ToolCallEvent,
+};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
     AiChannelOptions, AiTool, HumanInputToolHandler, HumanInputToolHandlerOptions, ToolContext,
@@ -156,7 +158,7 @@ async fn a_request_still_open_when_its_turn_ends_is_withdrawn() {
     let pending_id = asked_id.await.unwrap();
     assert!(
         room.kit
-            .input_request(&pending_id, Default::default())
+            .input_request(&pending_id, InputRequestOptions::default())
             .is_none()
     );
 
@@ -202,7 +204,7 @@ async fn a_detached_request_a_turn_raised_outlives_the_turn() {
     let pending_id = raised.lock().unwrap()[0].clone();
     assert!(
         room.kit
-            .input_request(&pending_id, Default::default())
+            .input_request(&pending_id, InputRequestOptions::default())
             .is_none()
     );
 

@@ -30,10 +30,11 @@ impl<S: ConversationStore> RoomKit<S> {
         request_id: &str,
         options: InputRequestOptions,
     ) -> Option<PendingInputEvent> {
+        let InputRequestOptions { organization_id } = options;
         self.inner
             .turns
             .inputs
-            .request(request_id, options.organization_id.as_deref())
+            .request(request_id, organization_id.as_deref())
     }
 
     /// Answers the human-input request `request_id` of a turn this kit
