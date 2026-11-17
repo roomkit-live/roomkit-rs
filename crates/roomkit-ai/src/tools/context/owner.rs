@@ -101,8 +101,8 @@ mod tests {
             scope.owner_context().allowed_names,
             Some(["one".to_owned(), "two".to_owned()].into())
         );
-        let held: Arc<dyn ToolCallScope> = scope.clone();
-        let restored = held.into_any().downcast::<Scope>().ok().expect("AI scope");
+        let held: Arc<dyn ToolCallScope> = Arc::<Scope>::clone(&scope);
+        let restored = held.into_any().downcast::<Scope>().expect("AI scope");
         assert!(Arc::ptr_eq(&scope, &restored));
     }
 
