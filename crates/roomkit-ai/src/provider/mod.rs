@@ -43,7 +43,7 @@ pub use self::model_tags::{
 pub use self::response::{
     AiResponse, AiToolCall, CallIds, ServedCall, StreamDone, StreamEvent, StreamTextDelta,
     StreamThinkingDelta, StreamToolCall, StreamToolCallDelta, StreamUsage, read_tool_calls,
-    thinking_parts_of, tool_arguments,
+    stream_call_of, thinking_parts_of, tool_arguments, tool_call_of,
 };
 pub(crate) use self::response::{is_malformed_call, ran_out_of_room, response_events};
 pub use self::response_schema::{

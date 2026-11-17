@@ -418,6 +418,16 @@ impl StreamToolCall {
     }
 }
 
+/// Copy a tool call into an independent streamed event, preserving every field.
+pub fn stream_call_of(call: &AiToolCall) -> StreamToolCall {
+    call.clone().into()
+}
+
+/// Copy a streamed event into an independent tool call, preserving every field.
+pub fn tool_call_of(event: &StreamToolCall) -> AiToolCall {
+    event.clone().into()
+}
+
 impl From<AiToolCall> for StreamToolCall {
     fn from(call: AiToolCall) -> Self {
         let AiToolCall {
