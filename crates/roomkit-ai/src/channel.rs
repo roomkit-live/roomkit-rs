@@ -1780,10 +1780,10 @@ impl<P: AiProvider> AiChannel<P> {
         let configured = configured.as_ref();
         let mut settings = self.turn_settings(&binding, configured)?;
         let (toolbox, skills) = self.turn_toolbox(owned, configured, &binding)?;
-        let bounds = crate::turn_config::turn_bounds(&self.bounds, configured)?;
         self.warn_unoffered_human_tools(&toolbox);
         // The context is built for the provider the turn runs on (RFC §6.4).
         let started = self.start_turn(&event, &binding, &mut settings).await?;
+        let bounds = crate::turn_config::turn_bounds(&self.bounds, configured)?;
         let vision = started.provider.dyn_supports_vision();
         let stands_alone = stands_alone(&event);
         let window = (&context, &*started.provider);
