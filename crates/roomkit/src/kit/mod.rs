@@ -23,7 +23,9 @@
 //!   revocation and timers (RFC §11.7).
 
 pub(crate) mod addresses;
+mod agent_presence;
 mod background;
+pub use agent_presence::AgentPresenceOptions;
 pub(crate) mod background_tools;
 mod bindings;
 pub(crate) mod channel_detach;
@@ -326,6 +328,7 @@ pub(crate) struct Inner<S> {
     pub(crate) turn_runners: crate::turn_runners::TurnRunners<S>,
     /// The discussion this process runs for each room (RFC §19.7.5).
     pub(crate) discussions: discussions::DiscussionSeams,
+    pub(crate) agent_presence: agent_presence::watch::Watch,
 }
 
 impl<S> std::fmt::Debug for Inner<S> {
@@ -483,6 +486,7 @@ impl<S: ConversationStore> RoomKit<S> {
             room_subscriptions: room_subscriptions::RoomSubscriptions::default(),
             turn_runners: crate::turn_runners::TurnRunners::default(),
             discussions: discussions::DiscussionSeams::default(),
+            agent_presence: agent_presence::watch::Watch::default(),
         });
         inner.subscribe_status_bus();
         inner.name_held_deliveries();
@@ -775,6 +779,19 @@ impl<S> Inner<S> {
     /// Emits the framework event `notice` reports, now: the end of its
     /// handlers, which the call that emitted it waits for.
     pub(crate) fn emit(&self, notice: CoreEvent) -> Option<Handled> {
+        if let CoreEvent::RoomClosed { room_id, .. } | CoreEvent::RoomArchived { room_id, .. } =
+            &notice
+        {
+            self.agent_presence.forget(room_id, None);
+        }
+        if let CoreEvent::RoomChannelDetached {
+            room_id,
+            channel_id,
+            ..
+        } = &notice
+        {
+            self.agent_presence.forget(room_id, Some(channel_id));
+        }
         let event = FrameworkEvent::of(notice, self.environment.now());
         self.events.emit(&self.tasks, event)
     }

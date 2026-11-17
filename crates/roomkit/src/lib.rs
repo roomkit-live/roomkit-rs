@@ -199,9 +199,9 @@ pub use self::kit::{
     RenameMemberOptions, ResolveParticipantOptions,
 };
 pub use self::kit::{
-    AddRoomHookOptions, ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions,
-    CheckRoomTimersOptions, CloseRoomOptions, CommitEventOptions, CreateRoomOptions,
-    DeleteEventOptions, DetachChannelOptions, GetBindingOptions, GetRoomOptions,
+    AddRoomHookOptions, AgentPresenceOptions, ArchiveRoomOptions, AttachChannelOptions,
+    CheckAllTimersOptions, CheckRoomTimersOptions, CloseRoomOptions, CommitEventOptions,
+    CreateRoomOptions, DeleteEventOptions, DetachChannelOptions, GetBindingOptions, GetRoomOptions,
     GetTimelineOptions, HasHooksOptions, HookEngine, IdentityHookOptions, ListBindingsOptions,
     ListMembersOptions, MuteOptions, MuteOutputOptions, PauseRoomOptions, PostOptions,
     ProcessInboundOptions, RemoveRoomHookOptions, ReopenRoomOptions, ResumeRoomOptions, RoomKit,

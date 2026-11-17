@@ -30,6 +30,8 @@
 
 mod public_options;
 pub use public_options::{HookOptions, RoomHookOptions, TakesOptions};
+mod presence;
+pub use presence::{AgentPresence, ExecutorInfo, ExecutorInfoOptions};
 
 mod call_state;
 mod channel_calls;
@@ -227,6 +229,10 @@ impl Turns {
     /// Whether the owner reads no turn's stream.
     pub(crate) fn reads_none(&self) -> bool {
         *lock(&self.reads) == 0
+    }
+
+    pub(crate) fn executor_id(&self) -> &str {
+        &self.executor_id
     }
 
     /// What is told each time a read ends.

@@ -49,6 +49,7 @@ mod loop_hooks;
 mod media;
 mod provider_reports;
 mod report_claim;
+mod room_context;
 use report_claim::{ReportClaim, RunningCall};
 mod publication_scope;
 mod publish;
@@ -1282,6 +1283,10 @@ pub(crate) struct OwnerCall {
 pub(crate) trait TurnKit: Send + Sync {
     fn declared_verb(&self, name: &str) -> Option<crate::turns::declared::Declaration>;
     fn external_tool_context(&self, room_id: RoomId) -> BoxFuture<'static, Option<RoomContext>>;
+    fn room_context(
+        &self,
+        room_id: RoomId,
+    ) -> BoxFuture<'static, Result<RoomContext, RoomKitError>>;
 
     fn room_hook_names(&self, room: &RoomId) -> Vec<String>;
     fn defines_room_hooks(&self, names: &[String]) -> bool;
@@ -1463,6 +1468,12 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
     }
     fn external_tool_context(&self, room_id: RoomId) -> BoxFuture<'static, Option<RoomContext>> {
         external_tools::current_context(Weak::clone(self), room_id)
+    }
+    fn room_context(
+        &self,
+        room_id: RoomId,
+    ) -> BoxFuture<'static, Result<RoomContext, RoomKitError>> {
+        room_context::read_context(Weak::clone(self), room_id)
     }
 
     fn room_hook_names(&self, room: &RoomId) -> Vec<String> {

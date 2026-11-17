@@ -2,6 +2,8 @@
 //! §10.6.8): each side writes an error as a record, its kind, its message,
 //! what classifies it and its causes, and rebuilds the errors it knows.
 
+mod store;
+
 use std::error::Error;
 
 use roomkit_core::model::{ChannelId, DeliveryError, ErrorRecord, Metadata, RoomId};
@@ -326,6 +328,9 @@ pub(crate) fn kit_error(error: &RoomKitError) -> WireError {
         .attributes
         .insert(VARIANT.to_owned(), Value::from(variant));
     record.attributes.extend(fields);
+    if let RoomKitError::Store(failure) = error {
+        record.causes = store::causes(&**failure);
+    }
     record
 }
 
@@ -381,6 +386,7 @@ fn rebuilt_variant(error: &WireError) -> Option<RoomKitError> {
             let id = error.attributes.get("room_id")?.as_str()?;
             RoomKitError::RoomNotFound(RoomId::new(id).ok()?)
         }
+        "Store" => store::rebuild(error)?,
         "Value" => RoomKitError::Value(error.message.clone()),
         "Runtime" => RoomKitError::Runtime(error.message.clone()),
         "Type" => RoomKitError::Type(error.message.clone()),

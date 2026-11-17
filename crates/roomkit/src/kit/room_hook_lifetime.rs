@@ -294,15 +294,24 @@ impl<S: ConversationStore> RoomKit<S> {
     /// registered while no room held it (RFC §9.1, §17.2). Python's
     /// `RoomHookLifetime.forget_earlier_room`.
     pub(super) fn forget_room_hooks(&self, room_id: &RoomId, created_at: Timestamp) {
+        let mut names_forgotten = false;
         self.inner
             .room_hook_lifetime
             .room_created(room_id, created_at, |keep| {
                 let Ok(removed) = self.inner.try_change_config(|config| {
-                    Ok::<_, std::convert::Infallible>(config.hooks.forget_room(room_id, keep))
+                    let before = config.hooks.enabled_room_hooks(room_id);
+                    let removed = config.hooks.forget_room(room_id, keep);
+                    names_forgotten = before != config.hooks.enabled_room_hooks(room_id);
+                    Ok::<_, std::convert::Infallible>(removed)
                 });
                 // An operation that read them before runs none of them.
                 self.inner.retire_forgotten(removed);
             });
+        if names_forgotten {
+            // A context read may already hold the publication gate. Publish
+            // apart, after the lifetime lock is released, as Python does.
+            self.publish_agent_presence_later(room_id.clone());
+        }
     }
 }
 

@@ -527,6 +527,9 @@ async fn lifecycle_call(
             Value::Null
         }),
         "kit_executor.close"
+        | "kit_executor.executor_id"
+        | "executors"
+        | "agent_presence"
         | "kit_executor.closed"
         | "kit_executor.hook"
         | "kit_executor.room_hook"

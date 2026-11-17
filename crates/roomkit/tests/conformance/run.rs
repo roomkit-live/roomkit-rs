@@ -500,6 +500,7 @@ impl Run {
         let observed = lock(&self.observed);
         [
             &observed.thinking_events,
+            &observed.presence_events,
             &observed.tool_events,
             &observed.custom_events,
             &observed.subscribers,
@@ -508,6 +509,17 @@ impl Run {
         .flat_map(|kind| kind.values())
         .map(Vec::len)
         .sum()
+    }
+
+    pub(crate) fn record_presence_event(&self, room_id: &str, event: Value) {
+        if !self.recording.load(Ordering::SeqCst) {
+            return;
+        }
+        lock(&self.observed)
+            .presence_events
+            .entry(room_id.to_owned())
+            .or_default()
+            .push(event);
     }
 
     pub(crate) fn record_custom_event(&self, room_id: &str, event: Value) {

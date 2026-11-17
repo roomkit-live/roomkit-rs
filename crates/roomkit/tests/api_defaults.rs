@@ -1780,3 +1780,26 @@ fn declared_host_verbs_need_their_turn_by_default() {
     // roomkit.RoomKit.declare_host_verb(between_turns) = False
     assert!(!defaults.between_turns);
 }
+
+#[test]
+fn local_presence_defaults() {
+    let info = roomkit::turns::ExecutorInfoOptions::default();
+    // roomkit.turns.ExecutorInfo.__init__(node) = None
+    assert!(info.node.is_none());
+    // roomkit.turns.ExecutorInfo.__init__(hosts) = None
+    assert!(info.hosts.is_none());
+    // roomkit.turns.ExecutorInfo.__init__(organizations) = None
+    assert!(info.organizations.is_none());
+    // roomkit.turns.ExecutorInfo.__init__(room_hooks) = frozenset([])
+    assert!(info.room_hooks.is_empty());
+    // roomkit.turns.ExecutorInfo.__init__(last_beat) = None
+    assert!(info.last_beat.is_none());
+    // roomkit.turns.ExecutorInfo.__init__(online) = True
+    assert!(info.online);
+    // roomkit.RoomKit.agent_presence(organization_id) = None
+    assert!(
+        roomkit::AgentPresenceOptions::default()
+            .organization_id
+            .is_none()
+    );
+}

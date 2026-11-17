@@ -406,6 +406,7 @@ const EXPECT: &[&str] = &[
     "dispatch_turns",
     "observations",
     "thinking_events",
+    "presence_events",
     "tool_events",
     "custom_events",
     "subscribers",
@@ -459,7 +460,11 @@ fn base_arguments(call: &str) -> Option<&'static [&'static str]> {
         return Some(&["peer", "operations", "discover", "tool_filter"]);
     }
     Some(match call {
-        "close" | "kit_executor.close" | "kit_executor.closed" => &[],
+        "close"
+        | "kit_executor.close"
+        | "kit_executor.closed"
+        | "kit_executor.executor_id"
+        | "executors" => &[],
         "process_inbound" => &["message", "room_id", "defer_delivery"],
         "delivery.cancel" => &["of", "reason", "timeout_ms"],
         "delivery.wait" => &["of"],
@@ -494,7 +499,7 @@ fn base_arguments(call: &str) -> Option<&'static [&'static str]> {
         "delete_event" => &["room_id", "event_id", "cascade_replies"],
         "create_room" => &["room", "orchestration"],
         "pause_room" | "resume_room" | "reopen_room" | "close_room" | "archive_room"
-        | "check_timers" | "regenerate_target" => &["room_id"],
+        | "check_timers" | "regenerate_target" | "agent_presence" => &["room_id"],
         "set_room_timers" => &["room_id", "timers"],
         "set_agent_response_policy" => &["room_id", "policy"],
         "send_greeting" => &["room_id", "channel_id", "agent_id", "greeting"],

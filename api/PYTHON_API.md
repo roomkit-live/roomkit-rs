@@ -13,6 +13,11 @@ the mapping and its tests. The check does not generate or update this document.
 
 | Rust name | Python name | Members or parameters |
 | --- | --- | --- |
+| `roomkit::TurnHost::room_context` | `roomkit.TurnHost.room_context` | `Result<Metadata, RoomKitError>` reads fresh owned JSON, including history despite a zero channel window; failures keep the existing kit mapping and store causes. |
+| `roomkit::turns::ExecutorInfo`, `roomkit::turns::ExecutorInfoOptions` | `roomkit.turns.ExecutorInfo` | Required string id plus Python defaults; owned optional `BTreeSet<String>` declarations, `Timestamp` heartbeat and cloned snapshots (HITL eb3c6f0b). |
+| `roomkit::turns::ExecutorInfo::covers` | `roomkit.turns.ExecutorInfo.covers` | `room_hooks: &[String]` and `organization_id: Option<&str>` use `[]` and `None` for Python's defaults; `Result<bool, RoomKitError>` preserves gated invalid-prefix errors (HITL eb3c6f0b). |
+| `roomkit::turns::AgentPresence` | `roomkit.turns.AgentPresence` | Three required fields; owned executor-id list, independent across returned snapshots (HITL eb3c6f0b). |
+| `roomkit::RoomKit::agent_presence`, `roomkit::AgentPresenceOptions` | `roomkit.RoomKit.agent_presence` | Owned sorted presence list and optional organization scope; a local kit's `executors()` excludes its own executor (HITL eb3c6f0b). |
 | `roomkit::turns::DeclaredVerb` | `roomkit.turns.DeclaredVerb` | Cloneable `new(callback)`/`call` wrapper over owned `Metadata` arguments and `Result<Value, ChannelError>`. Direct invocation preserves errors; a host call rebuilds known kit errors and preserves other recorded classes/messages through `RemoteTurn` (HITL 50d017c9). |
 | `roomkit::RoomKit::declare_host_verb`, `roomkit::turns::DeclareHostVerbOptions` | `roomkit.RoomKit.declare_host_verb` | `between_turns: false` by default; synchronous registration refuses closing kits, empty names, built-ins and duplicates. |
 | `roomkit::TurnHost::call` | `roomkit.TurnHost.call` | `arguments: Option<Metadata>` uses an empty object for `None`; results cross as `serde_json::Value` and failures use the existing kit error mapping (HITL 50d017c9). |

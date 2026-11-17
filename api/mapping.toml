@@ -1295,22 +1295,10 @@ approved = "2026-11-04"
 reason = "Rust has no object to call: Python's ids(server_id, name) is ids.call(server_id, name), a server's id read as text before it, none as empty (HITL 8a3d3780)"
 
 [[missing]]
-python = "roomkit.RoomKit"
-members = ["agent_presence", "executors"]
-scope = "text"
-reason = "not yet in Rust: which executors serve a kit's agents and their presence in a room, Python's RMK-1626, whose lot ports it and takes this entry off"
-
-[[missing]]
 python = "roomkit.SpeakQueueChange"
 members = ["TURN_SKIPPED"]
 scope = "text"
 reason = "not yet in Rust: a discussion skipping the turns of an agent no executor serves, Python's RMK-1626, whose lot ports it and takes this entry off"
-
-[[missing]]
-python = "roomkit.TurnHost"
-members = ["room_context"]
-scope = "text"
-reason = "not yet in Rust: the room an executor's turn reads, sent by the room owner, Python's RMK-1619, whose lot ports it and takes this entry off"
 
 [[exception]]
 python = "roomkit.PendingInput.__init__"
@@ -1392,3 +1380,9 @@ reason = "Language: served discovery and verification preserve sanitized message
 rust = "roomkit_ai::SkillError::Changed::source"
 approved = "2026-11-17"
 reason = "Language: Python SkillChangedError's chained cause is optional and retained alongside its public name."
+
+[[exception]]
+rust = "roomkit::turns::ExecutorInfo::covers"
+params = ["room_hooks", "organization_id"]
+approved = "2026-11-17"
+reason = "Explicit borrowed slice and optional organization retain Python defaults as [] and None; coverage errors remain fallible (HITL eb3c6f0b)."

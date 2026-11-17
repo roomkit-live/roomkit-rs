@@ -380,6 +380,7 @@ impl Comparison<'_> {
         for (kind, recorded) in [
             ("observations", &self.observed.observations),
             ("thinking_events", &self.observed.thinking_events),
+            ("presence_events", &self.observed.presence_events),
             ("tool_events", &self.observed.tool_events),
             ("custom_events", &self.observed.custom_events),
             ("text_events", &self.observed.text_events),

@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Add fresh `TurnHost::room_context` reads, preserving store failure causes across the host link, and local executor presence readers and change notifications (RFC §10.6.5–§10.6.7).
+
 - **A delegated agent's turn ends once its result tool's call is served**, as Python's (RFC §23.3, RMK-357). After `submit_result`, `submit_verdict` or `submit_review`, the turn asked its model once more, and re-prompted it when it said nothing: a supervised review cost three calls where one does. Nothing is asked after the served call now; a call an `ON_TOOL_CALL` hook blocks is no result and the turn goes on. A turn request's owner tool carries `ends_turn` to the executor.
 
 - **A pending sender's record takes the name an identity hook's `pending()` gives**, as Python's (RFC §11.3, RMK-357). `IdentityHookResult::pending` with a `display_name` created the pending participant without a name, on `ON_IDENTITY_UNKNOWN` and `ON_IDENTITY_AMBIGUOUS` alike; the record now carries it.

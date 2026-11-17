@@ -104,7 +104,7 @@ pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
             "conversation",
             "hand_back",
         ],
-        "host.room_tasks" => &[],
+        "host.room_tasks" | "host.room_context" => &[],
         _ => return None,
     })
 }
@@ -392,27 +392,30 @@ async fn host_call(
                 timeout: timeout_ms.map(std::time::Duration::from_millis),
             };
             let outcome = host.wait_task(&task_id, options).await;
-            // The failure as it crosses: its kind, its message and its
-            // attributes.
-            let waited = |result: &Option<roomkit::tasks::DelegatedTaskResult>| {
-                result.as_ref().map_or(Value::Null, |result| {
-                    let exception = result.exception.as_ref().map(|failure| {
-                        json!({
-                            "kind": failure.error_type,
-                            "message": failure.message,
-                            "attributes": failure.attributes,
-                        })
-                    });
-                    json!({ "result": result, "exception": exception })
-                })
-            };
-            (finish(run, name, outcome, waited), None)
+            (
+                finish(run, name, outcome, |result| waited(result.as_ref())),
+                None,
+            )
         }
         "host.room_tasks" => {
             let outcome = host.room_tasks().await;
             (finish(run, name, outcome, dump), None)
         }
+        "host.room_context" => {
+            let outcome = host.room_context().await;
+            (finish(run, name, outcome, dump), None)
+        }
         other => return Err(format!("no call {other}")),
+    })
+}
+
+/// A waited task's failure keeps its recorded kind, message and attributes.
+fn waited(result: Option<&roomkit::tasks::DelegatedTaskResult>) -> Value {
+    result.map_or(Value::Null, |result| {
+        let exception = result.exception.as_ref().map(|failure| {
+            json!({"kind": failure.error_type, "message": failure.message, "attributes": failure.attributes})
+        });
+        json!({"result": result, "exception": exception})
     })
 }
 

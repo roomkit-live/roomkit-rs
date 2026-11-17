@@ -475,6 +475,12 @@ impl fmt::Display for Recorded {
 
 impl std::error::Error for Recorded {}
 
+pub(crate) fn stored_record<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a ErrorRecord> {
+    error.downcast_ref::<Recorded>().map(|recorded| &recorded.0)
+}
+
 /// A store failure the core recorded: a store's `ValueError` as itself, as
 /// Python propagates it, any other as the store's failure.
 fn store_failure(record: ErrorRecord) -> RoomKitError {

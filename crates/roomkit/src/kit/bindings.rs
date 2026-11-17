@@ -99,7 +99,11 @@ impl<S: ConversationStore> RoomKit<S> {
             Some((draw, floor)) => attach.made_in(draw, floor),
             None => attach,
         };
-        Ok(driver::run_on(&self.inner, environment, "attach_channel", attach).await??)
+        let bound = driver::run_on(&self.inner, environment, "attach_channel", attach).await??;
+        if bound.category == roomkit_core::model::ChannelCategory::Intelligence {
+            self.publish_agent_presence(room_id, Some(channel_id)).await;
+        }
+        Ok(bound)
     }
 
     /// Why an attach of `channel_id`, which no channel is registered under,

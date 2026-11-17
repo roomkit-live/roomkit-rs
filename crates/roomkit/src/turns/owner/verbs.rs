@@ -31,8 +31,8 @@ use crate::turns::error::{from_record, kit_error, one};
 use crate::turns::records::RoomRecords;
 use crate::turns::wire::{
     ADD_OBSERVATION, AddObservation, BETWEEN_TURNS, CallContext, DELEGATE, Delegate, OwnerMessage,
-    POST_STATUS, PostStatus, ROOM_TASKS, RoomCallResult, SEND_EVENT, UPDATE_ROOM_METADATA,
-    UpdateRoomMetadata, WAIT_TASK, WaitTask, WireError, host_result_kind,
+    POST_STATUS, PostStatus, ROOM_CONTEXT, ROOM_TASKS, ReadRoomContext, RoomCallResult, SEND_EVENT,
+    UPDATE_ROOM_METADATA, UpdateRoomMetadata, WAIT_TASK, WaitTask, WireError, host_result_kind,
 };
 
 /// The refusal of a verb the host may not ask.
@@ -146,6 +146,14 @@ async fn run_verb(
         ROOM_TASKS => {
             let _: crate::turns::wire::RoomTasks = decoded(verb, arguments)?;
             to_data(&kit.room_tasks(scope.room_id.clone()).await)
+        }
+        ROOM_CONTEXT => {
+            let _: ReadRoomContext = decoded(verb, arguments)?;
+            let context = kit
+                .room_context(scope.room_id.clone())
+                .await
+                .map_err(|error| Box::new(kit_error(&error)))?;
+            to_data(&context)
         }
         _ => Err(refusal(
             VALUE_ERROR,

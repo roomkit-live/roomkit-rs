@@ -43,6 +43,11 @@ impl<S: ConversationStore> RoomKit<S> {
 }
 
 impl<S: ConversationStore> TurnExecutor<S> {
+    /// The id this executor answers with, Python's `executor_id`.
+    pub fn executor_id(&self) -> &str {
+        self.kit.inner.turns.executor_id()
+    }
+
     /// The engine on which this executor's hooks are registered.
     pub fn hooks(&self) -> HookEngine<S> {
         self.kit.hooks_for(HookTrigger::BeforeToolUse)

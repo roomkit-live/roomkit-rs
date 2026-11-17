@@ -434,9 +434,14 @@ async fn settle_ephemerals(run: &Arc<Run>) {
 }
 
 fn records_ephemerals(scenario: &Value) -> bool {
-    ["thinking_events", "tool_events", "custom_events"]
-        .iter()
-        .any(|kind| scenario["expect"].get(kind).is_some())
+    [
+        "thinking_events",
+        "tool_events",
+        "custom_events",
+        "presence_events",
+    ]
+    .iter()
+    .any(|kind| scenario["expect"].get(kind).is_some())
 }
 
 /// Records the room's thinking and tool call events, for a scenario that
@@ -459,10 +464,24 @@ async fn subscribe_thinking(run: &Arc<Run>, room: &str) -> Result<(), String> {
                     | EphemeralEventType::ThinkingDelta
                     | EphemeralEventType::ThinkingEnd
             );
+            let presence = matches!(
+                event.r#type,
+                EphemeralEventType::PresenceOnline | EphemeralEventType::PresenceOffline
+            );
             let custom = event.r#type == EphemeralEventType::Custom;
-            let Some(run) = recorder.upgrade().filter(|_| thinking || tool || custom) else {
+            let Some(run) = recorder
+                .upgrade()
+                .filter(|_| thinking || tool || custom || presence)
+            else {
                 return;
             };
+            if presence {
+                run.record_presence_event(
+                    &room,
+                    json!({"type": event.r#type, "user_id": event.user_id}),
+                );
+                return;
+            }
             if custom {
                 run.record_custom_event(&room, json!({"room_id": event.room_id, "channel_id": event.channel_id, "data": event.data}));
                 return;

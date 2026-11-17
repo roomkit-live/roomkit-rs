@@ -22,6 +22,25 @@ use crate::run::Run;
 pub(crate) async fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Called, Unreadable> {
     let kit = run.kit();
     match name {
+        "kit_executor.executor_id" => Ok(finish(
+            run,
+            name,
+            Ok(kit.turn_executor().executor_id().to_owned()),
+            |id| Value::String(id.clone()),
+        )),
+        "executors" => Ok(finish(run, name, kit.executors().await, crate::calls::dump)),
+        "agent_presence" => {
+            let room: RoomId = field(spec, "room_id")?;
+            let options = roomkit::AgentPresenceOptions {
+                organization_id: optional::<Option<String>>(spec, "organization_id")?.flatten(),
+            };
+            Ok(finish(
+                run,
+                name,
+                kit.agent_presence(&room, options).await,
+                crate::calls::dump,
+            ))
+        }
         "kit_executor.close" => {
             kit.turn_executor().close().await;
             Ok(finish(run, name, Ok(()), |()| Value::Null))
