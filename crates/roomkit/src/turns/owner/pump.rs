@@ -224,7 +224,9 @@ impl Pump {
                 context,
             } => self.serve_tool(call_id, name, arguments, &context),
             Frame::CallCancel { call_id } => {
-                if let Some(call) = self.calls.remove(&call_id) {
+                if let Some(call) = self.calls.remove(&call_id)
+                    && !self.kit.is_close_caller(call.id())
+                {
                     call.abort();
                     self.withdrawn.retain(|call| !call.is_finished());
                     self.withdrawn.push(call);
@@ -448,7 +450,9 @@ impl Drop for Pump {
     /// pipes shut, and whoever awaits its end told.
     fn drop(&mut self) {
         for call in self.calls.values() {
-            call.abort();
+            if !self.kit.is_close_caller(call.id()) {
+                call.abort();
+            }
         }
         self.state.over.send_replace(true);
         // Its human-input requests are withdrawn, an answer awaiting its

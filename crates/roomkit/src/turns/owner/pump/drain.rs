@@ -11,11 +11,12 @@ impl Pump {
     /// inline registry: an aborted call cannot register a later child. Then
     /// wait for those children's existing completion, within the same cut.
     pub(super) async fn end_calls(&mut self) -> Ending {
-        for call in self.calls.values() {
-            call.abort();
-        }
         let mut calls = std::mem::take(&mut self.withdrawn);
         calls.extend(self.calls.drain().map(|(_, call)| call));
+        calls.retain(|call| !self.kit.is_close_caller(call.id()));
+        for call in &calls {
+            call.abort();
+        }
         let mut cancelled = self.state.cancel.subscribe();
         let mut deadline = self.cancel_deadline();
         let cleanup = async {

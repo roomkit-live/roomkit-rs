@@ -1,6 +1,7 @@
 //! Python: `tests/test_executor_close_contract.py`; actual backend ancestry.
 
 use std::future::{Future, ready};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -104,7 +105,10 @@ async fn nested_turn_client_preserves_both_ancestors_when_closing() {
     kit.close().await.unwrap();
 }
 
-struct CallsOwner;
+struct CallsOwner {
+    expects_answer: bool,
+    sibling: bool,
+}
 impl Channel for CallsOwner {
     fn channel_id(&self) -> ChannelId {
         channel("ai")
@@ -137,10 +141,18 @@ impl Channel for CallsOwner {
         _context: RoomContext,
     ) -> Result<ChannelOutput, ChannelError> {
         let host = crate::current_turn_host().unwrap();
-        let answer = host
-            .call_owner_tool("close", Metadata::new(), "c1", None)
-            .await;
-        assert!(matches!(answer, crate::turn::OwnerToolAnswer::Served(_)));
+        let answer = if self.sibling {
+            tokio::join!(
+                host.call_owner_tool("close", Metadata::new(), "c1", None),
+                host.call_owner_tool("wait", Metadata::new(), "c2", None),
+            )
+            .0
+        } else {
+            host.call_owner_tool("close", Metadata::new(), "c1", None).await
+        };
+        if self.expects_answer {
+            assert!(matches!(answer, crate::turn::OwnerToolAnswer::Served(_)));
+        }
         Ok(ChannelOutput::empty())
     }
 }
@@ -148,7 +160,11 @@ impl Channel for CallsOwner {
 // Python: test_a_close_from_an_owner_served_tool_spares_its_turn
 #[tokio::test]
 async fn a_close_from_an_owner_served_tool_spares_its_turn() {
-    let kit = kit_with(CallsOwner).await;
+    let kit = kit_with(CallsOwner {
+        expects_answer: true,
+        sibling: false,
+    })
+    .await;
     let entry = crate::turns::served::OwnerToolEntry {
         definition: serde_json::json!({"name": "close", "description": "Close executor", "parameters": {"type": "object"}}),
         serve: Arc::new(|kit, _call| {
@@ -172,4 +188,78 @@ async fn a_close_from_an_owner_served_tool_spares_its_turn() {
     assert!(result.error.is_none());
     assert!(kit.turn_executor().closed());
     kit.close().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_kit_close_from_an_owner_served_tool_finishes_its_call() {
+    for sibling in [false, true] {
+        closes_with_owner_sibling(sibling).await;
+    }
+}
+
+struct Dropped(Arc<AtomicBool>);
+
+impl Drop for Dropped {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+async fn closes_with_owner_sibling(sibling: bool) {
+    let kit = kit_with(CallsOwner {
+        expects_answer: false,
+        sibling,
+    })
+    .await;
+    let closed = Arc::new(tokio::sync::Notify::new());
+    let told = Arc::clone(&closed);
+    let started = Arc::new(tokio::sync::Notify::new());
+    let begins = Arc::clone(&started);
+    let entry = crate::turns::served::OwnerToolEntry {
+        definition: serde_json::json!({"name": "close", "description": "Close kit", "parameters": {"type": "object"}}),
+        serve: Arc::new(move |kit, _call| {
+            let told = Arc::clone(&told);
+            let begins = Arc::clone(&begins);
+            Box::pin(async move {
+                assert!(crate::current_turn_host().is_none());
+                if sibling {
+                    begins.notified().await;
+                }
+                kit.close().await.unwrap();
+                told.notify_one();
+                crate::turn::OwnerToolAnswer::Served(serde_json::json!("closed"))
+            })
+        }),
+        waits: false,
+        owner: None,
+    };
+    let dropped = Arc::new(AtomicBool::new(false));
+    let tracks = Arc::clone(&dropped);
+    let waiting = crate::turns::served::OwnerToolEntry {
+        definition: serde_json::json!({"name": "wait", "description": "Wait", "parameters": {"type": "object"}}),
+        serve: Arc::new(move |_, _| {
+            let (started, tracks) = (Arc::clone(&started), Arc::clone(&tracks));
+            Box::pin(async move {
+                let _dropped = Dropped(tracks);
+                started.notify_one();
+                std::future::pending().await
+            })
+        }),
+        waits: false,
+        owner: None,
+    };
+    kit.inner
+        .owner_tools
+        .register_all(&channel("ai"), vec![entry, waiting])
+        .unwrap();
+    let asking = tokio::spawn({
+        let kit = kit.clone();
+        async move { says(&kit, "hello").await }
+    });
+    tokio::time::timeout(Duration::from_secs(30), closed.notified())
+        .await
+        .unwrap();
+    drop(asking.await.unwrap());
+    crate::testing::idle(&kit).await;
+    assert_eq!(dropped.load(Ordering::SeqCst), sibling);
 }

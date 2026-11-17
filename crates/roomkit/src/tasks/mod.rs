@@ -525,7 +525,12 @@ impl Tasks {
 
     /// Whether the current task is one a close is called from.
     pub(crate) fn acting(&self) -> bool {
-        task::try_id().is_some_and(|id| self.state().acting.contains(&id))
+        task::try_id().is_some_and(|id| self.is_close_caller(id))
+    }
+
+    /// Whether this exact task joined the close, not a sibling in its unit.
+    pub(crate) fn is_close_caller(&self, id: task::Id) -> bool {
+        self.state().acting.contains(&id)
     }
 
     /// Waits until no tracked task runs, spared or not.
