@@ -1161,6 +1161,12 @@ fn scripted_handler(tools: Vec<Value>, run: &Arc<Run>) -> ToolHandler {
             if let (Some(gate), Some(run)) = (behaviour["gate"].as_str(), run.upgrade()) {
                 run.gates.hold(gate).await;
             }
+            if let Some(script) = behaviour.get("host_calls") {
+                let run = run
+                    .upgrade()
+                    .ok_or_else(|| ToolError::failed("scenario ended"))?;
+                return crate::host_verbs::call_from_tool(script, &run).await;
+            }
             match behaviour["report_claim_probe"].as_str() {
                 Some(mode) => Ok(claims.answer(mode)),
                 None => answer(&behaviour).await,
@@ -1390,6 +1396,12 @@ fn tools(spec: &Value, run: &Arc<Run>) -> Tools {
                     post_progress(&behaviour, &run).await?;
                     if let (Some(gate), Some(run)) = (behaviour["gate"].as_str(), run.upgrade()) {
                         run.gates.hold(gate).await;
+                    }
+                    if let Some(script) = behaviour.get("host_calls") {
+                        let run = run
+                            .upgrade()
+                            .ok_or_else(|| ToolError::failed("scenario ended"))?;
+                        return crate::host_verbs::call_from_tool(script, &run).await;
                     }
                     match behaviour["report_claim_probe"].as_str() {
                         Some(mode) => Ok(claims.answer(mode)),

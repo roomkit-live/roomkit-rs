@@ -91,6 +91,10 @@ impl Gates {
             .is_ok_and(|result| result.is_ok())
     }
 
+    pub(crate) fn reach(&self, name: &str) {
+        self.gate(name).reached.send_replace(true);
+    }
+
     pub(crate) fn open(&self, name: &str) {
         self.gate(name).opened.send_replace(true);
     }

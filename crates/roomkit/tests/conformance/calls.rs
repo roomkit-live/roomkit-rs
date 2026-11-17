@@ -368,6 +368,10 @@ async fn other_call(
     name: &str,
     spec: &Value,
 ) -> Result<Called, Unreadable> {
+    if crate::host_verbs::arguments(name).is_some() {
+        return crate::host_verbs::call(run, name, spec).await;
+    }
+
     if matches!(name, "agent.extra_tools" | "agent.replace_extra_tool") {
         return crate::extra_tools::call(run, name, spec);
     }

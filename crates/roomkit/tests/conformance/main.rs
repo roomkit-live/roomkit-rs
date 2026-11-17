@@ -33,6 +33,7 @@ mod errors;
 mod extra_tools;
 mod handoff_calls;
 mod harness;
+mod host_verbs;
 mod identity;
 mod input_calls;
 mod kit_executor;

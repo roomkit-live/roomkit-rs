@@ -256,6 +256,7 @@ const TOOL: &[&str] = &[
     "returns_requester",
     "posts_progress",
     "report_claim_probe",
+    "host_calls",
     "writes_record",
     "writes_structured_content",
     "returns_parts",
@@ -525,6 +526,7 @@ fn base_arguments(call: &str) -> Option<&'static [&'static str]> {
             return binding_arguments(other)
                 .or_else(|| crate::room_queries::arguments(other))
                 .or_else(|| crate::extra_tools::arguments(other))
+                .or_else(|| crate::host_verbs::arguments(other))
                 .or_else(|| crate::task_calls::arguments(other))
                 .or_else(|| crate::store_calls::arguments(other))
                 .or_else(|| crate::member_calls::arguments(other))
@@ -942,6 +944,11 @@ fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
     for (index, tool) in items(&channel["tools"]) {
         let tool_path = format!("{path}.tools[{index}]");
         members(tool, TOOL, &tool_path, found);
+        crate::host_verbs::tool_shape(
+            &tool["host_calls"],
+            &format!("{tool_path}.host_calls"),
+            found,
+        );
         optional(
             &tool["raises"],
             RAISES,
@@ -1001,7 +1008,13 @@ fn turn_config(config: &Value, path: &str, found: &mut Vec<String>) {
         members(tool, TURN_TOOL, &format!("{path}.tools[{index}]"), found);
     }
     for (index, tool) in items(&config["tool_handler"]) {
-        members(tool, TOOL, &format!("{path}.tool_handler[{index}]"), found);
+        let tool_path = format!("{path}.tool_handler[{index}]");
+        members(tool, TOOL, &tool_path, found);
+        crate::host_verbs::tool_shape(
+            &tool["host_calls"],
+            &format!("{tool_path}.host_calls"),
+            found,
+        );
     }
     skills(&config["skills"], &format!("{path}.skills"), found);
 }
@@ -1257,6 +1270,9 @@ fn call(call: &Value, extra: &[&str], path: &str, found: &mut Vec<String>) {
                     self::call(&operation["action"], &[], &format!("{at}.action"), found);
                 }
             }
+        }
+        "declare_host_verb" => {
+            crate::host_verbs::handler_shape(&call["handler"], &format!("{path}.handler"), found);
         }
         "create_room" => members(&call["room"], NEW_ROOM, &format!("{path}.room"), found),
         "register_channel" => channel(&call["channel"], &format!("{path}.channel"), found),
