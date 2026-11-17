@@ -7,7 +7,8 @@ use rmcp::model::ClientJsonRpcMessage;
 use tokio::sync::{Notify, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
-use crate::http::client::{Client, Failure, HttpFailure};
+use super::client::Client;
+use crate::http::client::{Failure, HttpFailure};
 
 struct Pending {
     message: ClientJsonRpcMessage,

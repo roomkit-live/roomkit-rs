@@ -397,10 +397,16 @@ the HTTP transport. These Rust forms are approved in HITL e4ef09db.
 
 Legacy SSE reads the POST address from the GET stream's endpoint event and
 keeps its configured raw authority check. Redirects have the SDK's separate
-same-origin and method-preservation rules. Failed POST opening and rejected
-endpoint announcements retain the caller's connection deadline, and failed
-or cancelled opening closes the GET stream and stops the POST writer before
-returning. It does not create a Streamable HTTP session or send DELETE.
+same-origin and method-preservation rules. Rejected endpoint announcements
+retain the caller's connection deadline. A failed POST stops the writer;
+a response already awaited keeps its own deadline. Failed or cancelled
+opening closes the GET stream and stops the POST writer before returning. It does not create a Streamable HTTP session or send DELETE.
+Its TCP connect and TLS handshake each have the Python SDK's five-second
+budget. Each logical header/body write has five seconds, including partial
+writes and TLS flushing; reads have 300 seconds between progress. These are
+separate from the caller's opening/call bounds: a POST response may take more
+than five seconds. Legacy SSE uses owned Hyper/rustls I/O for those deadlines
+(approved in HITL 057d2d9a); Streamable HTTP retains its existing client.
 
 
 `FromCommandOptions.discover` and `FromUrlOptions.discover` default to true;

@@ -9,9 +9,13 @@ repository.workspace = true
 publish.workspace = true
 
 [features]
-http = ["dep:reqwest", "dep:rustls", "dep:webpki-roots", "dep:futures-util", "dep:sse-stream", "rmcp/transport-streamable-http-client"]
+http = ["dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:tokio-rustls", "dep:reqwest", "dep:rustls", "dep:webpki-roots", "dep:futures-util", "dep:sse-stream", "rmcp/transport-streamable-http-client"]
 
 [dependencies]
+hyper = { workspace = true, optional = true }
+hyper-util = { workspace = true, optional = true }
+http-body-util = { workspace = true, optional = true }
+tokio-rustls = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
 webpki-roots = { workspace = true, optional = true }

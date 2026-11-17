@@ -1,5 +1,6 @@
 //! Legacy SSE has one GET reader and a separately owned sequential POST writer.
 
+pub(super) mod client;
 mod endpoint;
 pub(crate) mod request;
 mod writer;
@@ -15,8 +16,9 @@ use rmcp::{
 };
 use tokio::sync::Notify;
 
-use super::client::{Client, Failure, HttpFailure};
+use super::client::{Failure, HttpFailure};
 use crate::server::MESSAGE_LIMIT;
+use client::Client;
 use writer::Writer;
 
 pub(super) async fn connect(
@@ -89,7 +91,7 @@ impl Legacy {
         let parsed = Url::parse(url).map_err(|_| failure.record(None, "invalid MCP endpoint"))?;
         let response = client.legacy_get(parsed, headers.clone()).await?;
         let mut stream =
-            super::sse::stream(response, client.clone(), failure.clone(), MESSAGE_LIMIT);
+            super::sse::legacy_stream(response, client.clone(), failure.clone(), MESSAGE_LIMIT);
         let target = announced(url, &mut stream, &failure).await?;
         Ok(Self {
             stream: Some(stream),
@@ -105,7 +107,21 @@ async fn announced(
     failure: &Failure,
 ) -> Result<Url, HttpFailure> {
     while let Some(event) = stream.next().await {
-        let event = event.map_err(|_| failure.record(None, "MCP event stream failed"))?;
+        let event = match event {
+            Ok(event) => event,
+            Err(sse_stream::Error::Body(cause))
+                if cause
+                    .downcast_ref::<HttpFailure>()
+                    .is_some_and(|error| error.is_response_read()) =>
+            {
+                failure.record(None, "MCP event stream failed");
+                // Before announcing the endpoint, Python's reader waits to
+                // hand its IO exception to an unconnected zero-buffer stream.
+                // The GET closes; the caller's opening bound still applies.
+                return std::future::pending().await;
+            }
+            Err(_) => return Err(failure.record(None, "MCP event stream failed")),
+        };
         if event.event.as_deref() != Some("endpoint") {
             continue;
         }
@@ -157,5 +173,35 @@ impl Transport<RoleClient> for Legacy {
         self.stream.take();
         self.writer.close().await;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn only_read_failures_wait_for_the_opening_bound() {
+        for reason in [
+            "HTTP response interrupted",
+            "MCP SSE event exceeds its size limit",
+        ] {
+            let failure = Failure::default();
+            let error = sse_stream::Error::Body(Box::new(failure.record(None, reason)));
+            let mut stream = futures_util::stream::iter([Err(error)]).boxed();
+            let result = announced("http://example.test/mcp", &mut stream, &failure);
+            tokio::pin!(result);
+            assert_eq!(
+                futures_util::poll!(&mut result).is_pending(),
+                reason == "HTTP response interrupted"
+            );
+        }
+        let failure = Failure::default();
+        let mut stream = futures_util::stream::iter([Err(sse_stream::Error::InvalidLine)]).boxed();
+        assert!(
+            announced("http://example.test/mcp", &mut stream, &failure)
+                .await
+                .is_err()
+        );
     }
 }

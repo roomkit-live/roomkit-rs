@@ -109,6 +109,28 @@ impl Peer {
         .unwrap()
     }
 
+    pub(super) async fn messages(&self, count: usize) {
+        loop {
+            let changed = self.shared.changed.notified();
+            if self.shared.seen.lock().unwrap().messages.len() >= count {
+                return;
+            }
+            changed.await;
+        }
+    }
+
+    pub(super) fn comment(&self) {
+        self.shared
+            .seen
+            .lock()
+            .unwrap()
+            .sender
+            .as_ref()
+            .unwrap()
+            .send(": keepalive\n\n".into())
+            .unwrap();
+    }
+
     pub(super) async fn opening_ready(&self, stage: &str) {
         loop {
             let changed = self.shared.changed.notified();

@@ -2064,6 +2064,9 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "futures-util",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "nix",
  "pretty_assertions",
  "reqwest",
@@ -2077,6 +2080,7 @@ dependencies = [
  "sse-stream",
  "thiserror",
  "tokio",
+ "tokio-rustls",
  "tracing",
  "url",
  "webpki-roots",

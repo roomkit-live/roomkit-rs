@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Match legacy MCP SSE network deadlines per connect, read and complete write, preserving slow POST responses, cancellation and reentry.
+
 - Export the default structured delegation tool as `SUBMIT_RESULT` at the root and in `orchestration`. The default and explicitly selected tool now format structured summary and reason values like Python.
 
 - Add process-wide content logging controls and bounded, opt-in DEBUG tool payloads; preserve source diagnostic levels without logging private unserved-tool messages.

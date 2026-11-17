@@ -1,5 +1,4 @@
 //! Bounded HTTP I/O; the SDK owns MCP negotiation, sessions and cancellation.
-mod legacy;
 use crate::{McpError, server::MESSAGE_LIMIT};
 use reqwest::{
     Method, RequestBuilder, Response,
@@ -28,6 +27,12 @@ type Headers = HashMap<HeaderName, HeaderValue>;
 pub(super) struct HttpFailure {
     status: Option<u16>,
     reason: &'static str,
+}
+
+impl HttpFailure {
+    pub(super) fn is_response_read(self) -> bool {
+        self.reason == "HTTP response interrupted"
+    }
 }
 
 #[derive(Clone, Default)]
@@ -60,7 +65,7 @@ pub(super) struct Client {
 /// TLS with rustls's ring provider and the webpki roots, as the OpenAI
 /// agent's client: the same trust on every host, and no system TLS library.
 /// HTTP/1.1 is offered by ALPN, as reqwest's own rustls configuration does.
-fn tls_config() -> Option<rustls::ClientConfig> {
+pub(in crate::http) fn tls_config() -> Option<rustls::ClientConfig> {
     let roots = rustls::RootCertStore {
         roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
     };

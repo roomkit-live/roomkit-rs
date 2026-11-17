@@ -10,6 +10,8 @@
 //!   a bounded start, and a host-selected HTTP transport. Streamable HTTP
 //!   accepts JSON or SSE responses and deletes its session at close; legacy
 //!   SSE keeps a GET reader and sends messages to its announced POST address.
+//!   Its TCP/TLS connects and complete writes each have five seconds; reads
+//!   have 300 seconds between progress, separately from opening/call bounds.
 //!   [`new`](McpToolProvider::new) accepts either transport or stdio.
 //! - A channel serves its tools through
 //!   [`get_tools`](McpToolProvider::get_tools) and

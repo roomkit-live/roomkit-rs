@@ -11,19 +11,53 @@ pub(super) fn stream(
 ) -> BoxedSseResponse {
     let capture = lease.capture.clone();
     let bytes = try_unfold(
-        (response, lease, failure, Bound::default()),
-        move |(mut response, lease, failure, mut bound)| async move {
-            let Some(chunk) = response
+        (response, lease, failure.clone()),
+        |(mut response, lease, failure)| async move {
+            let chunk = response
                 .chunk()
                 .await
-                .map_err(|_| failure.record(None, "HTTP event stream interrupted"))?
-            else {
-                return Ok(None);
-            };
-            if !bound.accept(&chunk, limit) {
-                return Err(failure.record(None, "MCP SSE event exceeds its size limit"));
+                .map_err(|_| failure.record(None, "HTTP event stream interrupted"))?;
+            Ok(chunk.map(|chunk| (chunk, (response, lease, failure))))
+        },
+    );
+    events(bytes, capture, failure, limit)
+}
+
+pub(super) fn legacy_stream(
+    response: super::legacy::client::response::Response,
+    lease: super::legacy::client::Client,
+    failure: Failure,
+    limit: usize,
+) -> BoxedSseResponse {
+    let capture = lease.capture.clone();
+    let bytes = try_unfold((response, lease), |(mut response, lease)| async move {
+        let chunk = response.chunk().await?;
+        Ok(chunk.map(|chunk| (chunk, (response, lease))))
+    });
+    events(bytes, capture, failure, limit)
+}
+
+fn events(
+    bytes: impl futures_util::Stream<Item = Result<hyper::body::Bytes, super::client::HttpFailure>>
+    + Send
+    + 'static,
+    capture: crate::raw::Capture,
+    failure: Failure,
+    limit: usize,
+) -> BoxedSseResponse {
+    let bytes = try_unfold(
+        (Box::pin(bytes), Bound::default()),
+        move |(mut bytes, mut bound)| {
+            let failure = failure.clone();
+            async move {
+                let Some(chunk) = bytes.next().await.transpose()? else {
+                    return Ok(None);
+                };
+                if !bound.accept(&chunk, limit) {
+                    return Err(failure.record(None, "MCP SSE event exceeds its size limit"));
+                }
+                Ok(Some((chunk, (bytes, bound))))
             }
-            Ok(Some((chunk, (response, lease, failure, bound))))
         },
     );
     sse_stream::SseStream::from_bytes_stream(bytes)
