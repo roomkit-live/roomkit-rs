@@ -35,7 +35,7 @@ struct Gate {
     release: Notify,
 }
 
-struct Server {
+pub(super) struct Server {
     listing: Mutex<Vec<Value>>,
     current: Mutex<Value>,
     files: Mutex<BTreeMap<String, String>>,
@@ -45,7 +45,7 @@ struct Server {
     read_errors: Mutex<BTreeMap<String, std::io::ErrorKind>>,
 }
 impl Server {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             listing: Mutex::new(vec![entry()]),
             current: Mutex::new(entry()),

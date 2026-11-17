@@ -3,6 +3,7 @@
 use super::Node;
 use base64::Engine;
 use std::fmt::Write as _;
+mod decimal;
 mod timestamp;
 use base64::engine::{GeneralPurpose, GeneralPurposeConfig};
 use saphyr_parser::{ScalarStyle, Tag};
@@ -50,18 +51,21 @@ pub(super) fn read(text: &str, style: ScalarStyle, tag: Option<&Tag>) -> Result<
         "int" => integer(text)
             .ok_or_else(|| "the frontmatter cannot construct a YAML value".to_owned())?,
         "float" => {
-            let lower = text.to_lowercase();
-            if matches!(lower.as_str(), ".inf" | "+.inf" | "-.inf" | ".nan") {
+            let number = float(text)
+                .ok_or_else(|| "the frontmatter cannot construct a YAML value".to_owned())?;
+            if !number.is_finite() {
                 return Ok(Node::NonFinite(
-                    match lower.as_str() {
-                        "-.inf" => "-Infinity",
-                        ".nan" => "NaN",
-                        _ => "Infinity",
+                    if number.is_nan() {
+                        "NaN"
+                    } else if number.is_sign_negative() {
+                        "-Infinity"
+                    } else {
+                        "Infinity"
                     }
                     .to_owned(),
                 ));
             }
-            float(text).ok_or_else(|| "the frontmatter cannot construct a YAML value".to_owned())?
+            Value::Number(Number::from_f64(number).ok_or("the frontmatter is not YAML")?)
         }
         "timestamp" => Value::String(
             timestamp::read(text)
@@ -108,28 +112,18 @@ fn implicit(text: &str) -> String {
 fn integer(text: &str) -> Option<Value> {
     let cleaned = text.replace('_', "");
     let negative = cleaned.starts_with('-');
-    let value = cleaned.trim_start_matches(['-', '+']);
-    if value.is_empty()
-        || cleaned
-            .chars()
-            .take_while(|c| matches!(c, '-' | '+'))
-            .count()
-            > 1
-    {
+    // SafeLoader removes one sign, then Python's int reads the remainder.
+    // An explicit tag can therefore carry two signs; resolution is stricter.
+    let value = cleaned.strip_prefix(['-', '+']).unwrap_or(&cleaned);
+    if value.is_empty() {
         return None;
     }
-    let number = if value.contains(':') {
+    let number = if value.contains(':') && !value.starts_with('0') {
         let mut parts = value.split(':');
         let first = parts.next()?;
-        if first.starts_with('0') {
-            return None;
-        }
-        let mut result = first.parse::<i128>().ok()?;
+        let mut result = decimal::ascii(first.trim()).parse::<i128>().ok()?;
         for part in parts {
-            let part = part.parse::<i128>().ok()?;
-            if part >= 60 {
-                return None;
-            }
+            let part = decimal::ascii(part.trim()).parse::<i128>().ok()?;
             result = result.checked_mul(60)?.checked_add(part)?;
         }
         result
@@ -143,7 +137,7 @@ fn integer(text: &str) -> Option<Value> {
         } else {
             (10, value)
         };
-        i128::from_str_radix(digits, radix).ok()?
+        i128::from_str_radix(decimal::ascii(digits.trim()).as_str(), radix).ok()?
     };
     let number = if negative {
         number.checked_neg()?
@@ -157,19 +151,24 @@ fn integer(text: &str) -> Option<Value> {
     }
 }
 
-fn float(text: &str) -> Option<Value> {
-    let cleaned = text.replace('_', "");
-    let number = if cleaned.contains(':') {
-        let negative = cleaned.starts_with('-');
+fn float(text: &str) -> Option<f64> {
+    let cleaned = decimal::ascii(&text.replace('_', "").to_lowercase());
+    let negative = cleaned.starts_with('-');
+    let value = cleaned.strip_prefix(['-', '+']).unwrap_or(&cleaned);
+    let number = if value == ".inf" {
+        f64::INFINITY
+    } else if value == ".nan" {
+        f64::NAN
+    } else if value.contains(':') {
         let mut result = 0.0;
-        for part in cleaned.trim_start_matches(['-', '+']).split(':') {
-            result = result * 60.0 + part.parse::<f64>().ok()?;
+        for part in value.split(':') {
+            result = result * 60.0 + part.trim().parse::<f64>().ok()?;
         }
-        if negative { -result } else { result }
+        result
     } else {
-        cleaned.parse::<f64>().ok()?
+        value.trim().parse::<f64>().ok()?
     };
-    Number::from_f64(number).map(Value::Number)
+    Some(if negative { -number } else { number })
 }
 
 fn bytes_repr(bytes: &[u8]) -> String {

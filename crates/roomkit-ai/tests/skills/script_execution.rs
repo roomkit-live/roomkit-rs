@@ -140,9 +140,9 @@ impl ScriptExecutor for Held {
 }
 
 #[derive(Clone)]
-struct Model {
-    inner: ScriptedProvider,
-    streaming: bool,
+pub(super) struct Model {
+    pub(super) inner: ScriptedProvider,
+    pub(super) streaming: bool,
 }
 impl AiProvider for Model {
     fn model_name(&self) -> &'static str {
@@ -281,7 +281,7 @@ fn script_model(streaming: bool) -> Model {
     }
 }
 
-async fn turn(agent: AiChannel<Model>) {
+pub(super) async fn turn(agent: AiChannel<Model>) {
     let room = "r".parse().unwrap();
     let event = RoomEvent::new(
         room,
