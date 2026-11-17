@@ -408,7 +408,7 @@ impl Shared {
     /// The call's record, `reported` merged into it, each channel's end beside
     /// the others': Python's `merge_caller_record`.
     fn reported(&self, reported: &Metadata) -> ResponseMetadata {
-        report::merge_record(&self.record, reported);
+        self.record.merge_caller_record(reported);
         self.record.clone()
     }
 

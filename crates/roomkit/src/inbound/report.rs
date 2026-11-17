@@ -2,10 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use roomkit_core::model::{
-    ChannelId, DeliveryResult, ErrorRecord, Metadata, ResponseMetadata, RoomEvent,
-};
-use serde_json::Value;
+use roomkit_core::model::{ChannelId, DeliveryResult, ErrorRecord, Metadata, RoomEvent};
 
 use super::InboundResult;
 
@@ -15,7 +12,8 @@ use super::InboundResult;
 /// copies its values into the result's owned collections: later changes to the
 /// source mapping, events or nested metadata require another report. Python's
 /// delivery mapping and list elements remain aliased instead. The result's
-/// own [`ResponseMetadata`] stays shared with its existing readers.
+/// own [`ResponseMetadata`](roomkit_core::model::ResponseMetadata) stays shared
+/// with its existing readers.
 #[derive(Clone, Copy, Debug)]
 pub struct CascadeReport<'a> {
     /// The cascade's transport deliveries, replacing the result's mapping.
@@ -41,6 +39,7 @@ impl InboundResult {
     /// keys overwrite, and `turns` entries merge by channel, replacing each
     /// incoming channel's whole entry. Each report counts those key writes,
     /// even when its values have not changed.
+    /// Reports sharing the caller record merge into it atomically.
     ///
     /// The first error stays; cancellation is always replaced. The event,
     /// duplicate/block decision, reason and delivery handle are untouched.
@@ -50,29 +49,13 @@ impl InboundResult {
         if !self.duplicate {
             self.unavailable_targets = Some(cascade.unavailable_targets.to_vec());
         }
-        merge_record(&self.response_metadata, cascade.response_metadata);
+        self.response_metadata
+            .merge_caller_record(cascade.response_metadata);
         self.response_events = cascade.response_events.to_vec();
         if self.error.is_none() {
             self.error = cascade.error.cloned();
         }
         self.cancellation_reason = cascade.cancelled.map(str::to_owned);
-    }
-}
-
-/// Python's `merge_caller_record`, shared with the deferred result's backfill.
-pub(super) fn merge_record(into: &ResponseMetadata, record: &Metadata) {
-    let mut turns = match into.get("turns") {
-        Some(Value::Object(turns)) => turns,
-        _ => Metadata::new(),
-    };
-    if let Some(Value::Object(ended)) = record.get("turns") {
-        turns.extend(ended.clone());
-    }
-    // Keep non-object and empty `turns` values when no channel entries replace
-    // them. The original key write also counts before the merged one.
-    into.update(record.clone());
-    if !turns.is_empty() {
-        into.insert("turns", Value::Object(turns));
     }
 }
 

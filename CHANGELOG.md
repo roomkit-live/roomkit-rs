@@ -6,7 +6,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-- Expose `InboundResult::report_cascade` with a borrowed `CascadeReport` data view. Reports copy source values and preserve the shared caller record, duplicate availability and first error. Deferred record merges also retain non-object `turns` values and count every reported key write, as in Python.
+- Expose `InboundResult::report_cascade` with a borrowed `CascadeReport` data view. Reports copy source values and preserve the shared caller record, duplicate availability and first error. Concurrent reports keep each channel's contribution. Deferred record merges also retain non-object `turns` values and count every reported key write, as in Python.
 
 - Cancelling a worker joins its inline delegation within the existing deadline; owner handlers that close their kit, directly or through a hook, finish without preserving unrelated handlers (RFC §10.6.8, §23.4).
 

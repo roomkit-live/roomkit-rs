@@ -24,6 +24,7 @@ use serde_json::Value;
 
 use super::Metadata;
 
+mod cascade;
 mod changes;
 
 /// Turn-level metadata merged into every message event the turn produces:

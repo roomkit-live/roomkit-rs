@@ -16,6 +16,9 @@ use roomkit::{
 };
 use serde_json::{Value, json};
 
+#[path = "report_cascade/concurrent.rs"]
+mod concurrent;
+
 #[derive(Default)]
 struct Report {
     deliveries: BTreeMap<ChannelId, DeliveryResult>,
