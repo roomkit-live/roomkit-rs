@@ -380,6 +380,10 @@ pub(crate) fn room_language(room: &Room) -> Option<&str> {
 }
 
 impl<P: AiProvider> Channel for Agent<P> {
+    fn external_tool_bridge(&self) -> Option<roomkit::external_tools::ExternalToolBridge> {
+        self.channel.external_tool_bridge()
+    }
+
     fn channel_id(&self) -> ChannelId {
         self.channel.channel_id()
     }

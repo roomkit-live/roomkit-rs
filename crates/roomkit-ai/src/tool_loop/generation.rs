@@ -220,8 +220,8 @@ impl Generation {
                     read_text(std::mem::take(&mut holding), read, window, out).await;
                     window.text.flush();
                     transcript.add_call(call.id.clone());
-                    if let Some(served) = call.served.clone() {
-                        let (call, result) = provider_calls.hand(call, served, out).await;
+                    if provider_calls.takes(&call) {
+                        let (call, result) = provider_calls.hand(call, steering, out).await;
                         served_calls.push(call);
                         served_results.push(result);
                     } else {
@@ -494,8 +494,10 @@ fn read_calls(calls: Vec<StreamToolCall>) -> Vec<Called> {
             };
             let mut call = ToolCall::new(given.id, given.name, given.arguments);
             call.intent = given.intent;
+            let report = crate::tools::announce_tool_call(&call.id);
+            let duplicate = duplicate || report.duplicate();
             Called {
-                report: crate::tools::announce_tool_call(&call.id),
+                report,
                 call,
                 partial,
                 metadata: given.metadata,

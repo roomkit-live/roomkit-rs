@@ -1,9 +1,9 @@
 //! Hook callbacks for registered handlers, including calls outside a turn.
 
 use super::{
-    Arc, BoxFuture, ChannelId, ChannelType, ConversationStore, GateChain, GateEnd, HookExecution,
-    HookOutcome, HookSpec, HookTrigger, Inner, Metadata, RoomContext, RoomId, ToolCall,
-    ToolCallChain, ToolCallEvent, ToolCallReport, TurnKit, Value, hooks,
+    Arc, ChannelId, ChannelType, ConversationStore, GateChain, GateEnd, HookExecution, HookOutcome,
+    HookSpec, HookTrigger, Inner, Metadata, RoomContext, RoomId, ToolCall, ToolCallChain,
+    ToolCallEvent, ToolCallReport, TurnKit, Value, hooks,
 };
 use crate::external_tools::{
     ExternalToolBridge, ExternalToolDecision, ExternalToolReport, note_report,
@@ -165,6 +165,9 @@ impl Notification {
         // The SYNC chain and context read may fail before this point. A
         // handler raising after delegation has already made this report.
         note_report(&event.tool_call_id);
+        if !crate::external_tools::claim_external_report() {
+            return;
+        }
         self.observe(&event);
         let mut data = Metadata::from_iter([
             ("tool_name".to_owned(), Value::from(event.name.as_str())),
@@ -243,7 +246,7 @@ impl Notification {
             };
             // Context layers move their input by value. Keep the observer's
             // tracing state on the heap before passing through those layers.
-            let task: BoxFuture<'static, ()> = Box::pin(crate::keep_context(Box::pin(bounded)));
+            let task = crate::external_tools::observer_context(Box::pin(bounded));
             let _closed = self.kit.spawn_observer(task);
         }
     }

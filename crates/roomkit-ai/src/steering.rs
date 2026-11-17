@@ -44,6 +44,7 @@ pub struct SteerOptions {
 #[derive(Debug, Default)]
 pub(crate) struct Loops {
     running: Mutex<Vec<Arc<Running>>>,
+    pub(crate) reports: Arc<crate::shutdown::Reports>,
 }
 
 /// One running loop, as steering addresses it.
@@ -105,10 +106,10 @@ impl Loops {
                     .then(|| Arc::clone(&running.lifetime))
             })
             .collect();
-        if waiting.is_empty() {
-            return;
-        }
-        let ended = crate::stream::join_all(waiting.iter().map(|turn| turn.wait()).collect());
+        let ended = async {
+            crate::stream::join_all(waiting.iter().map(|turn| turn.wait()).collect()).await;
+            self.reports.wait(&current).await;
+        };
         if tokio::time::timeout(std::time::Duration::from_secs(5), ended)
             .await
             .is_err()

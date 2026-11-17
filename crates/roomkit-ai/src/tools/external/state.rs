@@ -52,8 +52,10 @@ impl ExternalToolHandlerState {
         options: FireOnToolHookOptions,
     ) {
         let call = ToolCall::new(options.tool_call_id, tool_name, tool_input.clone());
-        self.bridge
-            .report(
+        let claim = crate::tools::turn_report_claim(&call.id, &self.channel_id());
+        roomkit::external_tools::with_external_tool_report_claim(
+            claim,
+            self.bridge.report(
                 ExternalToolReport {
                     call,
                     result: result.to_owned(),
@@ -64,8 +66,9 @@ impl ExternalToolHandlerState {
                     refused_but_ran: options.refused_but_ran,
                 },
                 options.room_id,
-            )
-            .await;
+            ),
+        )
+        .await;
     }
 
     /// The default cancelled report, for a custom override delegating to its inherited behavior.

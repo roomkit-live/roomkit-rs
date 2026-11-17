@@ -211,6 +211,7 @@ pub(crate) struct Loop {
     pub(crate) skill_gates: SkillGates,
     pub(crate) policy: ToolPolicy,
     pub(crate) bounds: Bounds,
+    pub(crate) external_tool_handler: Option<Arc<dyn crate::tools::ExternalToolHandler>>,
     pub(crate) continuation: Option<crate::ContinuationPolicy>,
     /// What the turn may spend (RFC §6.4); `None` sets no budget.
     pub(crate) budget: Option<TurnBudget>,

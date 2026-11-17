@@ -25,23 +25,33 @@ pub(crate) struct Occurrence {
     id: String,
     owner: Arc<()>,
     reported: AtomicBool,
+    duplicate: bool,
 }
 
 impl Occurrence {
     pub(crate) fn detached(id: &str) -> Arc<Self> {
-        Self::new(id, Arc::new(()))
+        Self::new(id, Arc::new(()), false)
     }
 
-    fn new(id: &str, owner: Arc<()>) -> Arc<Self> {
+    fn new(id: &str, owner: Arc<()>, duplicate: bool) -> Arc<Self> {
         Arc::new(Self {
             id: id.to_owned(),
             owner,
             reported: AtomicBool::new(false),
+            duplicate,
         })
     }
 
     pub(crate) fn claim(&self) -> bool {
         !self.reported.swap(true, Ordering::AcqRel)
+    }
+
+    pub(crate) fn reported(&self) -> bool {
+        self.reported.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn duplicate(&self) -> bool {
+        self.duplicate
     }
 
     pub(crate) fn callback(self: &Arc<Self>) -> Arc<dyn Fn() -> bool + Send + Sync> {
@@ -60,8 +70,8 @@ impl Reports {
     }
 
     pub(super) fn announce(&self, id: &str) -> Arc<Occurrence> {
-        let entry = Occurrence::new(id, Arc::clone(&self.owner));
         let mut calls = self.calls.lock().unwrap_or_else(PoisonError::into_inner);
+        let entry = Occurrence::new(id, Arc::clone(&self.owner), calls.holders.contains_key(id));
         calls
             .holders
             .entry(id.to_owned())

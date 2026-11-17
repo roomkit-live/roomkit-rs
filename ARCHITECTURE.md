@@ -34,12 +34,22 @@ Closing the kit and adapters is part of the host's resource lifecycle.
 
 ## External tool handlers
 
-`AcpChannelOptions::external_tool_handler` accepts an `Arc<dyn ExternalToolHandler>`.
+`AiChannelOptions::external_tool_handler` and
+`AcpChannelOptions::external_tool_handler` accept an `Arc<dyn ExternalToolHandler>`.
 `PolicyExternalToolHandler` checks the tool policy before the registered
 `BEFORE_TOOL_USE` hooks. Applications can implement a handler to wait for approval
 and delegate reporting through its embedded `ExternalToolHandlerState`.
-The service starts after the connection handshake and stops once after transport
-closure. A reconnect retains the running service.
+AI routes undeclared provider calls to this handler and keeps local or withdrawn
+tools on its own execution path. A call already served by the provider keeps its
+original outcome. Pending calls can be denied, rewritten, or given a replacement
+result; reports retain the full result before the model's result is bounded.
+Cancellation reports each occurrence once, preserving an already known outcome.
+Kit-owned recovery is tracked observer work; standalone recovery is joined by the
+channel's existing close grace and does not become an addressable AI turn.
+AI neither starts nor stops the handler's service.
+
+For ACP, the service starts after the connection handshake and stops once after
+transport closure. A reconnect retains the running service.
 
 ACP only accepts approval or refusal: replacement arguments or a replacement
 result are refused because the protocol cannot apply them. A result the agent

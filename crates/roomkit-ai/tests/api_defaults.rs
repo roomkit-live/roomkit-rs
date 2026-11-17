@@ -223,6 +223,8 @@ fn ai_channel_options_defaults_as_python() {
     assert_eq!(defaults.tool_search_threshold_tokens, Some(8000));
     // roomkit.AIChannel.__init__(max_context_events) = 50
     assert_eq!(defaults.max_context_events, 50);
+    // roomkit.AIChannel.__init__(external_tool_handler) = None
+    assert!(defaults.external_tool_handler.is_none());
     // roomkit.AIChannel.__init__(continuation) = None
     assert!(defaults.continuation.is_none());
     // roomkit.AIChannel.__init__(max_empty_retries) = 1

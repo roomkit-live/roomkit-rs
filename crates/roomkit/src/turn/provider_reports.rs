@@ -3,6 +3,21 @@
 use super::{Arc, ExecutionContext, HookTrigger, ToolCallReport, TurnHost};
 
 impl TurnHost {
+    /// Capture a tool report's cleanup while its call is live. Invoking the
+    /// returned closure schedules observer work, which a cut cannot abort and
+    /// which the kit's idle/close waits for. Drop itself supplies no context.
+    #[doc(hidden)]
+    pub fn tool_report_cleanup(
+        &self,
+        work: super::BoxFuture<'static, ()>,
+    ) -> Box<dyn FnOnce() + Send> {
+        let kit = Arc::clone(&self.shared.kit);
+        let work = crate::external_tools::observer_context(work);
+        Box::new(move || {
+            let _closed = kit.spawn_observer(work);
+        })
+    }
+
     /// Reports a provider-owned call, without authorizing or rewriting it.
     /// The occurrence owns its report; another call holding its wire id is untouched.
     #[doc(hidden)]

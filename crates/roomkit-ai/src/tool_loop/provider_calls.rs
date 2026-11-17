@@ -1,5 +1,10 @@
-//! Calls already served by a provider: report first, then hand their rows.
+//! Provider-owned calls: original outcomes, or decisions by an external handler.
 
+mod closing;
+mod decision;
+mod reports;
+
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use roomkit::model::{RoomId, ToolCall, ToolCallOutcome};
@@ -7,20 +12,27 @@ use roomkit::{ToolCallReport, TurnHost};
 use serde_json::Value;
 use tokio::time::Instant;
 
-use super::tool_events::{Ended, ToolEvents};
+use super::tool_events::ToolEvents;
 use super::{Loop, ToolEnd, TurnItem};
-use crate::provider::{AiToolCall, ProviderError, ServedCall, StreamToolCall};
+use crate::provider::{AiToolCall, ProviderError, StreamToolCall};
 use crate::rows::end_row;
+use crate::steering::Steering;
 use crate::stream::Yielder;
 use crate::tool_eviction::ToolEviction;
-use crate::tools::ToolResult;
+use crate::tools::{ExternalToolHandler, Occurrence, ToolResult};
+use closing::Closing;
+use decision::Decided;
+use reports::Recovery;
 
-/// An attempt's provider-call bridge, independent of local tool authorization.
+/// An attempt's external-call bridge, independent of local authorization.
 pub(super) struct ProviderCalls {
     turn: Option<TurnHost>,
     events: Option<ToolEvents>,
     eviction: Arc<ToolEviction>,
     room_id: RoomId,
+    handler: Option<Arc<dyn ExternalToolHandler>>,
+    local: HashSet<String>,
+    reports: Arc<crate::shutdown::Reports>,
 }
 
 impl Loop {
@@ -38,114 +50,111 @@ impl Loop {
             ),
             eviction: Arc::clone(&self.eviction),
             room_id: self.context.room_id.clone(),
+            handler: self.external_tool_handler.clone(),
+            reports: Arc::clone(&self.loops.reports),
+            local: self
+                .toolbox
+                .own_names()
+                .cloned()
+                .chain(self.adopted.withdrawn.iter().cloned())
+                .collect(),
         }
     }
 }
 
 impl ProviderCalls {
-    /// The provider already acted. A SYNC report cannot replace its result;
-    /// only copies delivered to the model and timeline are bounded.
+    pub(super) fn takes(&self, call: &StreamToolCall) -> bool {
+        call.served.is_some() || self.handler.is_some() && !self.local.contains(&call.name)
+    }
+
     pub(super) async fn hand(
         &self,
         call: StreamToolCall,
-        served: ServedCall,
+        steering: &Steering,
+        out: &Yielder<Result<TurnItem, ProviderError>>,
+    ) -> (AiToolCall, ToolEnd) {
+        let entry = crate::tools::announce_tool_call(&call.id);
+        crate::tools::within_reporting(
+            Arc::clone(&entry),
+            self.hand_entry(call, &entry, steering, out),
+        )
+        .await
+    }
+
+    /// Known results are reported before START. Pending decisions start only
+    /// once the reader asks past START; their known end precedes their report.
+    async fn hand_entry(
+        &self,
+        mut call: StreamToolCall,
+        entry: &Arc<Occurrence>,
+        steering: &Steering,
         out: &Yielder<Result<TurnItem, ProviderError>>,
     ) -> (AiToolCall, ToolEnd) {
         let started = Instant::now();
         let ran = ToolCall::new(call.id.clone(), call.name.clone(), call.arguments.clone());
-        let entry = crate::tools::announce_tool_call(&ran.id);
-        crate::tools::within_reporting(Arc::clone(&entry), self.report(&ran, &served, &entry))
-            .await;
-        out.give(Ok(TurnItem::ToolStart(ran.clone()))).await;
-        if let Some(events) = &self.events {
-            events.started([&ran]);
+        let mut recovery = Recovery::new(self, ran.clone(), Arc::clone(entry));
+        let known = call.served.as_ref().map(|served| Decided {
+            report: ToolCallReport::new(ran.clone()).ended(
+                if served.is_error {
+                    ToolCallOutcome::Failed
+                } else {
+                    ToolCallOutcome::Served
+                },
+                Value::String(served.result.clone()),
+            ),
+            by_channel: false,
+        });
+        if let Some(known) = &known {
+            recovery.known(&known.report);
+            self.report(known, entry).await;
+            recovery.complete();
         }
-        let end = self.end(ran, &served, started.elapsed());
+        out.give(Ok(TurnItem::ToolStart(ran.clone()))).await;
+        let mut closing = Closing::started(self.events.clone(), self.turn.clone(), &ran);
+        let pending = known.is_none();
+        let decided = match known {
+            Some(known) => Some(known),
+            None => self.settle(&call, entry, steering).await,
+        };
+        let report = decided.as_ref().map_or_else(
+            || {
+                let text = reports::cancelled(&ran.name, true);
+                ToolCallReport::new(ran).ended(ToolCallOutcome::Cancelled, Value::String(text))
+            },
+            |decided| decided.report.clone(),
+        );
+        let end = self.end(&report, started.elapsed());
         if let Some(turn) = &self.turn {
             turn.call_ended(0, end_row(end.clone()));
         }
-        let closing = Closing {
-            events: self.events.clone(),
-            turn: self.turn.clone(),
-            ended: Ended {
-                call: end.call.clone(),
-                result: end.result.as_text(),
-                failed: served.is_error,
-            },
-            duration_ms: u64::try_from(end.duration.as_millis()).unwrap_or(u64::MAX),
-        };
+        closing.ended(&end);
+        if pending && let Some(decided) = &decided {
+            recovery.known(&report);
+            self.report(decided, entry).await;
+            recovery.complete();
+        }
+        closing.handing();
         out.give(Ok(TurnItem::ToolEnd(end.clone()))).await;
         closing.handed();
+        call.arguments.clone_from(&end.call.arguments);
         (call.into(), end)
     }
-    async fn report(
-        &self,
-        ran: &ToolCall,
-        served: &ServedCall,
-        entry: &Arc<crate::tools::Occurrence>,
-    ) {
-        if let Some(turn) = &self.turn {
-            let turn = turn.with_tool_report_claim(entry.callback());
-            let report = ToolCallReport::new(ran.clone())
-                .ended(outcome(served), Value::String(served.result.clone()));
-            turn.report_provider_tool_call(report).await;
-        }
-        entry.claim();
-    }
 
-    fn end(&self, ran: ToolCall, served: &ServedCall, duration: std::time::Duration) -> ToolEnd {
+    fn end(&self, report: &ToolCallReport, duration: std::time::Duration) -> ToolEnd {
         let result = self.eviction.bounded(
             self.room_id.as_str(),
-            ToolResult::Text(served.result.clone()),
-            &ran.id,
+            ToolResult::Text(report.result.as_str().unwrap_or_default().to_owned()),
+            &report.call.id,
         );
         ToolEnd {
-            call: ran,
-            outcome: outcome(served),
+            call: report.call.clone(),
+            outcome: report.outcome.unwrap_or(ToolCallOutcome::Failed),
             result,
             duration,
             announced_only: false,
             structured_content: None,
             references: Vec::new(),
         }
-    }
-}
-
-/// A provider's END handed to the reader still needs its publication when
-/// that reader stops without asking for the next item.
-struct Closing {
-    events: Option<ToolEvents>,
-    turn: Option<TurnHost>,
-    ended: Ended,
-    duration_ms: u64,
-}
-
-impl Closing {
-    fn handed(mut self) {
-        if let Some(events) = self.events.take() {
-            events.ended(std::slice::from_ref(&self.ended), Some(self.duration_ms));
-        }
-    }
-}
-
-impl Drop for Closing {
-    fn drop(&mut self) {
-        let Some(events) = self.events.take() else {
-            return;
-        };
-        if self.turn.as_ref().is_some_and(TurnHost::stream_was_cut) {
-            events.ended(&[Ended::aborted(self.ended.call.clone())], None);
-        } else {
-            events.ended(std::slice::from_ref(&self.ended), Some(self.duration_ms));
-        }
-    }
-}
-
-fn outcome(served: &ServedCall) -> ToolCallOutcome {
-    if served.is_error {
-        ToolCallOutcome::Failed
-    } else {
-        ToolCallOutcome::Served
     }
 }
 

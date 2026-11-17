@@ -130,6 +130,24 @@ struct ReportWatch {
 }
 
 tokio::task_local! { static REPORT: Option<ReportWatch>; }
+tokio::task_local! { static CLAIM: Option<Arc<dyn Fn() -> bool + Send + Sync>>; }
+
+/// The AI occurrence's report right, consumed only at the observer boundary.
+/// Other adapters have no such right and retain their existing behavior.
+#[doc(hidden)]
+pub fn with_external_tool_report_claim<F: Future>(
+    claim: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
+    work: F,
+) -> impl Future<Output = F::Output> {
+    let work = Box::pin(work);
+    async move { CLAIM.scope(claim, work).await }
+}
+
+pub(crate) fn claim_external_report() -> bool {
+    CLAIM
+        .try_with(|claim| claim.as_ref().is_none_or(|claim| claim()))
+        .unwrap_or(true)
+}
 
 /// Run one handler report and tell whether it reached the framework's observers.
 /// Each attempt owns its witness: reused ids and concurrent calls never share it.
@@ -165,5 +183,19 @@ impl std::fmt::Debug for ExternalToolBridge {
 /// Copy the report witness with the other context inherited by child tasks.
 pub(crate) fn within_current_report<F: Future>(future: F) -> impl Future<Output = F::Output> {
     let watch = REPORT.try_with(Clone::clone).ok().flatten();
-    REPORT.scope(watch, future)
+    let claim = CLAIM.try_with(Clone::clone).ok().flatten();
+    REPORT.scope(watch, CLAIM.scope(claim, future))
+}
+
+/// Capture readable turn state while it is live, leaving the observer's own
+/// tracked unit intact. Copying the old producer's Marks would make its
+/// callback's close wait for this new observer instead of sparing it.
+pub(crate) fn observer_context(work: BoxFuture<'static, ()>) -> BoxFuture<'static, ()> {
+    let work = crate::tool_call_scope::within_current_tool_call(work);
+    let work = within_current_report(work);
+    let work = crate::turn_record::within_current_turn_record(work);
+    let work = crate::turns::context::TurnScope::current().scope(work);
+    Box::pin(
+        crate::context::ExecutionContext::current().scope(crate::turn::within_current_turn(work)),
+    )
 }

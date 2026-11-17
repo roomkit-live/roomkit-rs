@@ -1,5 +1,8 @@
 //! Closing the turns a channel currently owns, without cutting the caller.
 
+mod reports;
+pub(crate) use reports::Reports;
+
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};

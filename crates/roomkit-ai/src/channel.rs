@@ -58,7 +58,8 @@ use crate::tool_search::{
 use crate::tool_usage::{ToolUsageMemory, TurnMedia, used_tools};
 use crate::tools::toolbox::Toolbox;
 use crate::tools::{
-    AiTool, DynToolset, ToolContext, ToolEntry, ToolError, ToolHandler, ToolPolicy, served_by,
+    AiTool, DynToolset, ExternalToolHandler, ToolContext, ToolEntry, ToolError, ToolHandler,
+    ToolPolicy, served_by,
 };
 use crate::transcript_content::{Describer, TurnReader};
 use crate::turn_budget::{TurnBudget, check_budgets, refuse_unpositive, turn_budget};
@@ -164,6 +165,9 @@ pub struct AiChannelOptions {
     /// `None` ends the turn; even an empty instruction asks for another try,
     /// sharing `max_empty_retries`. A failure ends the turn without provider retry.
     pub continuation: Option<ContinuationPolicy>,
+    /// Decides provider-side calls and reports provider outcomes (RFC §9.3).
+    /// Registration wires its hooks; `AIChannel` does not start or stop its service.
+    pub external_tool_handler: Option<Arc<dyn ExternalToolHandler>>,
     /// How a generation its provider refused as worth another try
     /// ([`ProviderError::retryable`](crate::ProviderError::retryable)),
     /// before it handed anything, is tried again (RFC §6.4): Python's
@@ -347,6 +351,7 @@ impl Default for AiChannelOptions {
             tool_loop_warn_after: 25,
             max_empty_retries: 1,
             continuation: None,
+            external_tool_handler: None,
             retry_policy: None,
             tool_timeout: Some(Duration::from_secs(30)),
             tool_timeouts: BTreeMap::new(),
@@ -458,6 +463,7 @@ pub struct AiChannel<P> {
     policy: ToolPolicy,
     bounds: Bounds,
     continuation: Option<ContinuationPolicy>,
+    external_tool_handler: Option<Arc<dyn ExternalToolHandler>>,
     /// The turn's budget of billed tokens, under its binding's.
     turn_budget_tokens: Option<u64>,
     /// The turn's cost budget, under its binding's.
@@ -588,6 +594,7 @@ impl<P> Clone for AiChannel<P> {
             policy: self.policy.clone(),
             bounds: self.bounds.clone(),
             continuation: self.continuation.clone(),
+            external_tool_handler: self.external_tool_handler.clone(),
             turn_budget_tokens: self.turn_budget_tokens,
             turn_budget_usd: self.turn_budget_usd,
             resilience: self.resilience.clone(),
@@ -765,6 +772,7 @@ impl<P: AiProvider> AiChannel<P> {
                 (options.tool_timeout, options.tool_timeouts),
             ),
             continuation: options.continuation,
+            external_tool_handler: options.external_tool_handler,
             turn_budget_tokens: options.turn_budget_tokens,
             turn_budget_usd: options.turn_budget_usd,
             resilience,
@@ -1808,6 +1816,7 @@ impl<P: AiProvider> AiChannel<P> {
             policy,
             skill_gates: crate::tool_loop::SkillGates::new(skills),
             bounds,
+            external_tool_handler: self.external_tool_handler.clone(),
             continuation: self.continuation.clone(),
             budget: started.budget,
             resilience: self.resilience.clone(),
@@ -1930,6 +1939,12 @@ fn with_discussion_turn(event: &RoomEvent, memory: TurnMemory, notes: Vec<String
 }
 
 impl<P: AiProvider> Channel for AiChannel<P> {
+    fn external_tool_bridge(&self) -> Option<roomkit::external_tools::ExternalToolBridge> {
+        self.external_tool_handler
+            .as_ref()
+            .map(|handler| handler.state().bridge())
+    }
+
     fn channel_id(&self) -> ChannelId {
         self.channel_id.clone()
     }

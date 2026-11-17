@@ -14,6 +14,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **A code reply made with `defer_delivery` returns `verification_code` as soon as it is known for one**, with no handle, as Python's (RFC §11.7.4, §11.7.6, RMK-913): it waited for the agents' answer to the released message. The attempt, the release and the answer go on as the kit's own work, a failure of theirs logged; without `defer_delivery` the reply still returns once the answer is in, whatever `process_timeout` or its caller.
 
+- Route AI provider calls through external tool handlers, preserving local ownership, original reports and cancellation cleanup.
+
 - Add `RoomKit::input_request` to read owned snapshots of open human-input requests within their owning organization.
 
 - **BREAKING: closing a room takes its strategy back out**, as Python's (RFC §19.7, §5.1, RMK-341). What a strategy set up for a room, its room hooks, the tools and turn runners kept for its agents, the agents it attached and its state, stayed after `close_room`, after the room's timers closed it and after `archive_room` archived it still open, so a kit kept every closed room's install for its life, and a reopened room still ran it. Its close or its archiving now uninstalls it as `uninstall_strategy` does, once the close is written and announced (`room_closed` before the agents' detach events) and before the call that closed it returns, the timeline kept. `install_strategy` refuses a CLOSED or ARCHIVED room with `RoomKitError::RoomClosed`; a reopened room holds no strategy until its host installs one again.
