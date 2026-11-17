@@ -148,7 +148,8 @@ impl Channel for CallsOwner {
             )
             .0
         } else {
-            host.call_owner_tool("close", Metadata::new(), "c1", None).await
+            host.call_owner_tool("close", Metadata::new(), "c1", None)
+                .await
         };
         if self.expects_answer {
             assert!(matches!(answer, crate::turn::OwnerToolAnswer::Served(_)));
