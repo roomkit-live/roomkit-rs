@@ -1,4 +1,6 @@
 //! A scripted JSON/SSE peer, never a replacement client implementation.
+#[path = "peer/legacy.rs"]
+mod legacy;
 use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
@@ -10,10 +12,12 @@ use tokio::task::{JoinHandle, JoinSet};
 use crate::calls::Unreadable;
 
 struct State {
+    legacy: Option<legacy::State>,
     spec: Value,
     position: usize,
     initialized: usize,
     discovery: bool,
+    tool_call: bool,
     requests: Vec<Value>,
     problems: Vec<String>,
 }
@@ -26,7 +30,7 @@ pub(super) struct Peer {
 }
 
 impl Peer {
-    pub(super) async fn start(spec: Value) -> Result<Self, Unreadable> {
+    pub(super) async fn start(spec: Value, legacy: bool) -> Result<Self, Unreadable> {
         let listener = TcpListener::bind(("127.0.0.1", 0))
             .await
             .map_err(|e| e.to_string())?;
@@ -35,10 +39,12 @@ impl Peer {
             listener.local_addr().map_err(|e| e.to_string())?
         );
         let state = Arc::new(Mutex::new(State {
+            legacy: legacy.then(legacy::State::default),
             spec,
             position: 0,
             initialized: 0,
             discovery: false,
+            tool_call: false,
             requests: vec![],
             problems: vec![],
         }));
@@ -75,8 +81,18 @@ impl Peer {
         })
     }
 
-    pub(super) fn discovery(&self, active: bool) {
-        self.state.lock().unwrap().discovery = active;
+    pub(super) async fn settle_closed(&self) -> Result<(), Unreadable> {
+        legacy::settled(&self.state).await
+    }
+
+    pub(super) fn http(&self, spec: &Value) -> Option<Value> {
+        legacy::observed(&self.state.lock().unwrap(), spec)
+    }
+
+    pub(super) fn operation(&self, discovery: bool, tool_call: bool) {
+        let mut state = self.state.lock().unwrap();
+        state.discovery = discovery;
+        state.tool_call = tool_call;
     }
 
     pub(super) async fn finish(mut self) -> Result<Value, Unreadable> {
@@ -99,6 +115,7 @@ impl Peer {
                 .problems
                 .push("MCP peer has unconsumed initializations".into());
         }
+        legacy::check(&mut state);
         if !state.problems.is_empty() {
             return Err(state.problems.join("; "));
         }
@@ -128,8 +145,8 @@ impl State {
         } else if method == "tools/list" && self.discovery {
             observed["params"] = json!({});
         }
-        if method == "tools/list"
-            && self.discovery
+        if ((method == "tools/list" && self.discovery)
+            || (method == "tools/call" && self.tool_call))
             && let Some(params) = observed["params"].as_object_mut()
             && let Some(meta) = params.get_mut("_meta").and_then(Value::as_object_mut)
             && meta.get("progressToken").is_some_and(Value::is_u64)
@@ -202,6 +219,9 @@ async fn exchange(mut socket: TcpStream, shared: &Arc<Mutex<State>>) -> Result<(
     let Some((head, message)) = request(&mut socket).await? else {
         return Ok(());
     };
+    if shared.lock().unwrap().legacy.is_some() {
+        return legacy::exchange(socket, &head, &message, shared).await;
+    }
     if !head.starts_with("POST ") {
         return send(
             &mut socket,
@@ -291,10 +311,12 @@ mod tests {
 
     fn state(method: &str) -> State {
         State {
+            legacy: None,
             spec: json!({"replies":[{"method":method,"params":{},"result":{}}]}),
             position: 0,
             initialized: 0,
             discovery: false,
+            tool_call: false,
             requests: vec![],
             problems: vec![],
         }
@@ -326,6 +348,27 @@ mod tests {
                 "params":{"_meta":{"progressToken":0}}
             }));
             assert_eq!(state.problems.is_empty(), discovery);
+        }
+    }
+
+    // Python: test_only_public_call_tool_ignores_the_sdks_numeric_progress_token.
+    #[test]
+    fn only_public_call_tool_ignores_numeric_progress_without_changing_user_parameters() {
+        for public_call in [false, true] {
+            for meta in [
+                json!({"progressToken":0}),
+                json!({"progressToken":"caller"}),
+                json!({"progressToken":0,"caller":true}),
+            ] {
+                let mut state = state("tools/call");
+                state.tool_call = public_call;
+                state.spec["replies"][0]["params"] = json!({"name":"echo","arguments":{}});
+                let _reply = state.reply(&json!({"id":1,"method":"tools/call", "params":{"name":"echo","arguments":{},"_meta":meta}}));
+                assert_eq!(
+                    state.problems.is_empty(),
+                    public_call && meta == json!({"progressToken":0})
+                );
+            }
         }
     }
 

@@ -458,7 +458,18 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
 
 fn base_arguments(call: &str) -> Option<&'static [&'static str]> {
     if call == "mcp_session" {
-        return Some(&["peer", "operations", "discover", "tool_filter"]);
+        return Some(&[
+            "peer",
+            "operations",
+            "discover",
+            "tool_filter",
+            "constructor",
+            "transport",
+            "headers",
+            "headers_after_construction",
+            "label",
+            "connect_timeout_ms",
+        ]);
     }
     Some(match call {
         "close"

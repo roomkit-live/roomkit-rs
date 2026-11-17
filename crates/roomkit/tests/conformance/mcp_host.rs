@@ -1,14 +1,17 @@
 //! Public MCP host operations against a bounded, scripted loopback peer.
 
+#[path = "mcp_host/construction.rs"]
+mod construction;
 #[path = "mcp_host/peer.rs"]
 mod peer;
 #[path = "mcp_host/shape.rs"]
 mod shape;
 
-use std::sync::Arc;
 use std::time::Duration;
 
-use roomkit_mcp::{FromUrlOptions, McpError, McpToolProvider, ReadResourceOptions, RequestOptions};
+use roomkit_mcp::{
+    CallToolOptions, McpError, McpToolProvider, ReadResourceOptions, RequestOptions,
+};
 use serde_json::{Value, json};
 
 use crate::calls::Unreadable;
@@ -20,31 +23,25 @@ pub(crate) async fn session(spec: &Value) -> Result<Value, Unreadable> {
     if !problems.is_empty() {
         return Err(problems.join("; "));
     }
-    let peer = peer::Peer::start(spec["peer"].clone()).await?;
-    let selected = spec.get("tool_filter").cloned();
+    let peer = peer::Peer::start(spec["peer"].clone(), spec["transport"] == "sse").await?;
     let discover = spec["discover"].as_bool().unwrap_or(true);
-    let mut options = FromUrlOptions {
-        discover,
-        ..Default::default()
-    };
-    if let Some(names) = selected {
-        options.tool_filter = Some(Arc::new(move |name: &str| {
-            names
-                .as_array()
-                .is_some_and(|names| names.iter().any(|n| n == name))
-        }));
-    }
-    let provider =
-        McpToolProvider::from_url(&peer.url, options).map_err(|error| error.to_string())?;
+    let provider = construction::construct(&peer.url, spec)?;
     let results = observations(&provider, &peer, spec, discover).await;
     provider.close().await;
+    peer.settle_closed().await?;
+    let http = peer.http(spec);
     let requests = peer.finish().await?;
     let results = results?;
-    Ok(json!({
+    let mut observed = json!({
         "results_json": canonical(&Value::Array(results.clone())),
         "requests_json": canonical(&requests),
         "results": results, "requests": requests,
-    }))
+    });
+    if let Some(http) = http {
+        observed["http_json"] = json!(canonical(&http));
+        observed["http"] = http;
+    }
+    Ok(observed)
 }
 
 async fn observations(
@@ -55,8 +52,14 @@ async fn observations(
 ) -> Result<Vec<Value>, Unreadable> {
     let mut results = Vec::new();
     for operation in spec["operations"].as_array().unwrap() {
-        peer.discovery(operation["method"] == "connect" && discover);
+        peer.operation(
+            operation["method"] == "connect" && discover,
+            operation["method"] == "call_tool",
+        );
         results.push(observed(provider, operation).await?);
+        if !provider.connected() {
+            peer.settle_closed().await?;
+        }
     }
     Ok(results)
 }
@@ -70,7 +73,14 @@ async fn observed(provider: &McpToolProvider, op: &Value) -> Result<Value, Unrea
             json!({"result": value})
         }
         Err(McpError::NotConnected) => json!({"error":"not_connected"}),
-        Err(McpError::CallTimeout { .. }) => json!({"error":"timeout"}),
+        Err(McpError::AlreadyConnected) => json!({"error":"already_connected"}),
+        Err(
+            McpError::Http {
+                reason: "connection timed out",
+                ..
+            }
+            | McpError::CallTimeout { .. },
+        ) => json!({"error":"timeout"}),
         Err(McpError::Validation { .. }) => json!({"error":"validation_error"}),
         Err(McpError::Call { message }) => json!({"error":"mcp_error","message":message}),
         Err(error) => return Err(format!("unexpected MCP host error: {error}")),
@@ -129,6 +139,17 @@ async fn operation(provider: &McpToolProvider, op: &Value) -> Result<Value, McpE
                     op["uri"].as_str().unwrap(),
                     ReadResourceOptions {
                         timeout: timeout.unwrap_or_else(|| ReadResourceOptions::default().timeout)
+                    },
+                )
+                .await?
+        ),
+        "call_tool" => json!(
+            provider
+                .call_tool(
+                    op["name"].as_str().unwrap(),
+                    op["arguments"].as_object().cloned().unwrap_or_default(),
+                    CallToolOptions {
+                        timeout: timeout.unwrap_or_else(|| CallToolOptions::default().timeout)
                     },
                 )
                 .await?

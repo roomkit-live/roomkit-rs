@@ -66,6 +66,7 @@ fn peer(value: &Value, path: &str, found: &mut Vec<String>) {
             "replies",
             "framing",
             "initializations",
+            "endpoint_on_connections",
         ],
         path,
         found,
@@ -96,6 +97,15 @@ fn peer(value: &Value, path: &str, found: &mut Vec<String>) {
         }
     }
     replies(&value["replies"], path, found);
+    if value.get("endpoint_on_connections").is_some_and(|values| {
+        values
+            .as_array()
+            .is_none_or(|values| values.is_empty() || values.iter().any(|v| !v.is_boolean()))
+    }) {
+        found.push(format!(
+            "{path}: expected nonempty boolean endpoint announcements"
+        ));
+    }
 }
 
 fn operation(op: &Value, path: &str, found: &mut Vec<String>) {
@@ -106,6 +116,7 @@ fn operation(op: &Value, path: &str, found: &mut Vec<String>) {
         Some("tool_meta" | "server_info" | "server_extensions") => &["method", "mutate"],
         Some("request") => &["method", "name", "params", "timeout_ms"],
         Some("read_resource") => &["method", "uri", "timeout_ms"],
+        Some("call_tool") => &["method", "name", "arguments", "timeout_ms"],
         _ => {
             found.push(format!("{path}: unknown MCP operation"));
             return;
@@ -115,11 +126,12 @@ fn operation(op: &Value, path: &str, found: &mut Vec<String>) {
         return;
     }
     let required = match op["method"].as_str() {
-        Some("request") => Some("name"),
+        Some("request" | "call_tool") => Some("name"),
         Some("read_resource") => Some("uri"),
         _ => None,
     };
     if required.is_some_and(|key| !op[key].is_string())
+        || op.get("arguments").is_some_and(|v| !v.is_object())
         || op
             .get("params")
             .is_some_and(|v| !v.is_null() && !v.is_object())
@@ -142,6 +154,7 @@ fn operation(op: &Value, path: &str, found: &mut Vec<String>) {
 
 pub(crate) fn validate(spec: &Value, path: &str, found: &mut Vec<String>) {
     peer(&spec["peer"], path, found);
+    construction(spec, path, found);
     if let Some(ops) = spec["operations"].as_array().filter(|v| !v.is_empty()) {
         for op in ops {
             operation(op, path, found);
@@ -157,6 +170,42 @@ pub(crate) fn validate(spec: &Value, path: &str, found: &mut Vec<String>) {
             .is_none_or(|a| a.iter().any(|v| !v.is_string()))
     }) {
         found.push(format!("{path}: expected string tool filter list"));
+    }
+}
+
+fn construction(spec: &Value, path: &str, found: &mut Vec<String>) {
+    for (field, choices) in [
+        ("constructor", ["direct", "from_url"]),
+        ("transport", ["sse", "streamable_http"]),
+    ] {
+        if spec
+            .get(field)
+            .is_some_and(|value| value.as_str().is_none_or(|value| !choices.contains(&value)))
+        {
+            found.push(format!("{path}.{field}: unknown choice"));
+        }
+    }
+    if spec.get("label").is_some_and(|value| !value.is_string())
+        || spec
+            .get("connect_timeout_ms")
+            .is_some_and(|value| value.as_u64().is_none_or(|value| value == 0))
+    {
+        found.push(format!("{path}: invalid constructor settings"));
+    }
+    for field in ["headers", "headers_after_construction"] {
+        if spec.get(field).is_some_and(|value| {
+            value
+                .as_object()
+                .is_none_or(|map| map.values().any(|value| !value.is_string()))
+        }) {
+            found.push(format!("{path}.{field}: expected a string mapping"));
+        }
+    }
+    if spec.get("headers_after_construction").is_some() && spec.get("headers").is_none() {
+        found.push(format!("{path}: headers are required for their mutation"));
+    }
+    if spec["peer"].get("endpoint_on_connections").is_some() && spec["transport"] != "sse" {
+        found.push(format!("{path}: endpoint announcements require legacy SSE"));
     }
 }
 
@@ -188,6 +237,21 @@ mod tests {
             json!({"operations":[{"method":"tool_meta","mutate":{"path":[],"value":null}}]}),
             json!({"discover":null}),
             json!({"tool_filter":"all"}),
+            json!({"constructor":"later"}),
+            json!({"constructor":[]}),
+            json!({"transport":"legacy"}),
+            json!({"label":1}),
+            json!({"connect_timeout_ms":0}),
+            json!({"connect_timeout_ms":true}),
+            json!({"headers":null}),
+            json!({"headers":{"X-Test":1}}),
+            json!({"headers_after_construction":{}}),
+            json!({"headers":{},"headers_after_construction":[]}),
+            json!({"peer":{"replies":[],"endpoint_on_connections":[]},"transport":"sse"}),
+            json!({"peer":{"replies":[],"endpoint_on_connections":[1]},"transport":"sse"}),
+            json!({"peer":{"replies":[],"endpoint_on_connections":[true]}}),
+            json!({"operations":[{"method":"call_tool"}]}),
+            json!({"operations":[{"method":"call_tool","name":"echo","arguments":[]}]}),
         ] {
             let mut spec = json!({"peer":{"replies":[]},"operations":[{"method":"connect"}]});
             spec.as_object_mut()
