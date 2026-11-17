@@ -733,6 +733,28 @@ impl Channel for ScriptedChannel {
         let dumped = side_effects(&output, &room_id, channel_id.as_str());
         Ok(serde_json::from_value(dumped)?)
     }
+
+    /// Records the end of a stream cut from outside, the row it is handed.
+    fn deliver_cut(
+        &self,
+        _event: RoomEvent,
+        row: Option<RoomEvent>,
+        binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<(), ChannelError>> + Send {
+        if let Some(run) = self.run.upgrade() {
+            let row = row.map_or(Value::Null, |row| {
+                serde_json::to_value(&row).unwrap_or_default()
+            });
+            let room_id = binding.room_id.to_string();
+            run.record_streamed(
+                &room_id,
+                &self.declaration.channel_id,
+                json!({ "cut": row }),
+            );
+        }
+        std::future::ready(Ok(()))
+    }
 }
 
 /// The handler of a scripted hook: it records its call, then reacts.

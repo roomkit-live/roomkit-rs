@@ -460,8 +460,9 @@ impl Run {
     }
 
     /// One item a streaming channel's `deliver_stream` read, as the scenario
-    /// reads it: `{"text": ...}`, `{"row": event}`, or `{"failed": true}`
-    /// where the stream raised.
+    /// reads it: `{"text": ...}`, `{"row": event}`, `{"failed": true}`
+    /// where the stream raised, or `{"cut": event}` for the end of a stream
+    /// cut from outside.
     pub(crate) fn record_streamed(&self, room_id: &str, channel_id: &ChannelId, item: Value) {
         if !self.recording.load(Ordering::SeqCst) {
             return;

@@ -601,6 +601,32 @@ pub trait Channel: Send + Sync + 'static {
         }
     }
 
+    /// Takes the end of a stream cut from outside while this channel read
+    /// it (RFC §12.2 step 13s): a delivery cancelled, a held task cut or the
+    /// kit's close ended its [`deliver_stream`](Channel::deliver_stream)'s
+    /// stream. Once the text it was handed is stored, marked `cancelled`, the
+    /// kit calls this with `event`, the event that stream was delivered
+    /// under, and `row`, that stored row, or `None` when no row is the
+    /// channel's (a blank text, a hook's refusal, a row kept out or narrowed
+    /// away from it). The row is not delivered to the channel otherwise: it
+    /// was handed every token of it. It comes once `deliver_stream` returned,
+    /// unless the kit's close or a held task's cut left that to end alone. An
+    /// error it returns is logged.
+    ///
+    /// The default does nothing, as for a channel that rendered what it was
+    /// handed (a voice already spoke it). Python's
+    /// `Channel.deliver_cut(event, row, binding, context)`.
+    fn deliver_cut(
+        &self,
+        event: RoomEvent,
+        row: Option<RoomEvent>,
+        binding: ChannelBinding,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<(), ChannelError>> + Send {
+        drop((event, row, binding, context));
+        async { Ok(()) }
+    }
+
     /// Run a per-room verb (RFC §10.6.3). The default refuses every verb,
     /// as Python's `Channel.channel_call(room_id, verb, arguments)`.
     fn channel_call(
@@ -821,6 +847,14 @@ pub(crate) trait DynChannel: Send + Sync {
         context: RoomContext,
     ) -> BoxFuture<'_, Result<ChannelOutput, ChannelError>>;
 
+    fn deliver_cut(
+        &self,
+        event: RoomEvent,
+        row: Option<RoomEvent>,
+        binding: ChannelBinding,
+        context: RoomContext,
+    ) -> BoxFuture<'_, Result<(), ChannelError>>;
+
     fn channel_call(
         &self,
         room_id: RoomId,
@@ -974,6 +1008,16 @@ impl<C: Channel> DynChannel for C {
             binding,
             context,
         ))
+    }
+
+    fn deliver_cut(
+        &self,
+        event: RoomEvent,
+        row: Option<RoomEvent>,
+        binding: ChannelBinding,
+        context: RoomContext,
+    ) -> BoxFuture<'_, Result<(), ChannelError>> {
+        Box::pin(Channel::deliver_cut(self, event, row, binding, context))
     }
 
     fn channel_call(

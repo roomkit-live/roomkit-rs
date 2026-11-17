@@ -247,8 +247,10 @@ pub(super) async fn read_kept<S: ConversationStore>(
         precounted: false,
         keeper: instruction_keeper(inner),
         loop_end: None,
+        cut_end: None,
     };
     let placeholder = producer.segments.placeholder();
+    let streamed_under = placeholder.clone();
     let reader_marks = Marks::current().with(producer.reader_unit);
     let (done, reader_done) = oneshot::channel::<()>();
     let reader = async move {
@@ -271,6 +273,10 @@ pub(super) async fn read_kept<S: ConversationStore>(
     let room_id = producer.room_id.clone();
     let handling = handling_of(target.as_ref(), &responder.channel_id, &room_id);
     let mut output = producer.finish(read, handling, inner).await;
+    if let Some(end) = producer.cut_end.take() {
+        // Once the text the cut leaves is stored, at the cut or by `finish`.
+        deliver_cut(inner, target.as_ref(), streamed_under, end.row).await;
+    }
     // The turn's record reaches the operation once its stream is read, how
     // it ended under the caller's `turns`, as Python's `_add_turn` puts it
     // there (RFC §6.4); a `turns` the turn wrote is not its caller's, nor
@@ -293,6 +299,44 @@ pub(super) async fn read_kept<S: ConversationStore>(
     producer.write_owed_record(inner).await;
     output.response_events = producer.rewritten.take().into_iter().collect();
     (output, None)
+}
+
+/// Hands the target a stream cut from outside while it read it, once the
+/// text the cut leaves is stored: `row`, that row, when the target is handed
+/// it, which its stream can no longer carry (RFC §12.2 step 13s). What the
+/// channel returns is its own, logged: the cut goes on. Python's
+/// `_deliver_cut`.
+async fn deliver_cut<S: ConversationStore>(
+    inner: &Arc<Inner<S>>,
+    target: Option<&StreamTarget>,
+    event: RoomEvent,
+    row: Option<RoomEvent>,
+) {
+    let Some(target) = target else {
+        return;
+    };
+    let Some(channel) = inner.channel(&target.binding.channel_id) else {
+        return;
+    };
+    let room_id = event.room_id.clone();
+    let delivered = channel
+        .deliver_cut(
+            event,
+            row,
+            target.binding.clone(),
+            (*target.context).clone(),
+        )
+        .await;
+    if let Err(error) = delivered {
+        tracing::warn!(
+            target: "roomkit::driver",
+            channel_id = %target.binding.channel_id,
+            room_id = %room_id,
+            %error,
+            "streaming channel {} ending a cut stream in room {room_id}",
+            target.binding.channel_id
+        );
+    }
 }
 
 /// What a first pass gave: its answer only when its turn completed, the
@@ -706,6 +750,16 @@ struct Producer {
     /// The loop's end as its marker told it, handed to the target as the
     /// stream's last item (RFC §6.4, Python's `SegmentWriter._end_marker`).
     loop_end: Option<LoopEndMarker>,
+    /// The end owed to a target a cut from outside found reading the
+    /// stream, `deliver_cut` (RFC §12.2 step 13s).
+    cut_end: Option<CutEnd>,
+}
+
+/// The end of a stream a cut from outside ended while its target read it.
+struct CutEnd {
+    /// The row of the text the cut leaves, when the target is handed it,
+    /// which its stream, ended, can no longer carry.
+    row: Option<RoomEvent>,
 }
 
 impl Producer {
@@ -750,6 +804,7 @@ impl Producer {
         }
         drop(pulls);
         if self.cut.is_some() {
+            self.cut_end = Some(CutEnd { row: None });
             // A reader that ends with its stream's end leaves nothing to wait
             // for: its read settles as any reader's that ended.
             tokio::select! {
@@ -1232,7 +1287,10 @@ impl Producer {
             self.segments.stopped();
         }
         if let Some(row) = self.segments.last_text(true) {
-            self.commit(row).await;
+            let handed = self.commit(row).await;
+            if let Some(end) = self.cut_end.as_mut() {
+                end.row = handed;
+            }
         }
     }
 
@@ -1344,15 +1402,15 @@ impl Producer {
 
     /// Hands `row` to the operation, which commits it; the target reads it
     /// in the stream, while it reads the stream.
-    async fn commit(&mut self, row: RoomEvent) {
+    async fn commit(&mut self, row: RoomEvent) -> Option<RoomEvent> {
         let streamed = self.reads == Reads::Target;
-        self.commit_as(row, streamed).await;
+        self.commit_as(row, streamed).await
     }
 
     /// Hands `row` to the operation, which commits it; `streamed`, its
     /// delivery skips the target, which is handed it once stored, if it
-    /// still reads.
-    async fn commit_as(&mut self, row: RoomEvent, streamed: bool) {
+    /// still reads. Returns the row the target is handed, if any.
+    async fn commit_as(&mut self, row: RoomEvent, streamed: bool) -> Option<RoomEvent> {
         if let Some(kept_out) = self.kept_out.as_mut()
             && row.r#type == EventType::Message
         {
@@ -1360,7 +1418,7 @@ impl Producer {
             if let EventContent::Text(text) = &row.content {
                 text.body.clone_into(kept_out);
             }
-            return;
+            return None;
         }
         let entry = Entry::Row {
             room_id: self.room_id.clone(),
@@ -1371,7 +1429,8 @@ impl Producer {
             Settled::Stored(stored) => {
                 self.segments.stored(&stored);
                 if streamed {
-                    self.ready.push_back(Ok(StreamItem::Row(stored)));
+                    self.ready.push_back(Ok(StreamItem::Row(stored.clone())));
+                    return Some(*stored);
                 }
             }
             Settled::Hidden(stored) => self.segments.stored(&stored),
@@ -1386,6 +1445,7 @@ impl Producer {
             }
             Settled::Nothing => {}
         }
+        None
     }
 }
 
