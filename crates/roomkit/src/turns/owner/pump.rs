@@ -229,7 +229,7 @@ impl Pump {
                 name,
                 arguments,
                 context,
-            } => self.serve_tool(call_id, name, arguments, &context),
+            } => self.serve_tool(call_id, name, arguments, context),
             Frame::CallCancel { call_id } => {
                 if let Some(call) = self.calls.remove(&call_id)
                     && !self.kit.is_close_caller(call.task.id(), call.unit)
@@ -343,7 +343,7 @@ impl Pump {
         call_id: String,
         name: String,
         arguments: Metadata,
-        context: &CallContext,
+        context: CallContext,
     ) {
         let waiting = lock(&self.state.waiting)
             .clone()
@@ -351,17 +351,9 @@ impl Pump {
         let state = Arc::clone(&self.state);
         let kit = Arc::clone(&self.kit);
         let floor = context.chain_depth.max(state.facts.response_depth);
-        let call = crate::turn::OwnerCall {
-            room_id: state.facts.room_id.clone(),
-            room_metadata: Arc::clone(&state.facts.room_metadata),
-            channel_id: state.facts.channel_id.clone(),
-            tool_call_id: context.tool_call_id.clone(),
-            arguments,
-            requester: context.requester.clone(),
-        };
         let answering = call_id.clone();
         let task = async move {
-            let served = kit.serve_owner_tool(name, call);
+            let served = call_context::serve_tool(&kit, &state.facts, name, arguments, &context);
             let answered = waiting.at_least(floor).scope(served).await;
             answer_tool(&state, answering, answered);
         };
@@ -373,7 +365,7 @@ impl Pump {
                 kind: "backend_closed".to_owned(),
                 message: "the kit is shut down".to_owned(),
             };
-            answer_tool(&self.state, call_id, refused);
+            answer_tool(&self.state, call_id, refused.into());
         }
     }
 
@@ -512,14 +504,14 @@ fn answer(state: &OwnerState, call_id: String, answered: call_context::HostAnswe
 /// Answers the tool call `call_id` with what its handler made, while the
 /// turn is the owner's, as a `tool_result`: served, the answer under
 /// `value` as Python's codec writes it.
-fn answer_tool(state: &OwnerState, call_id: String, answered: crate::turn::OwnerToolAnswer) {
+fn answer_tool(state: &OwnerState, call_id: String, answered: call_context::ToolAnswer) {
     use crate::turn::OwnerToolAnswer;
     use crate::turns::wire::ToolOutcome;
     if *state.over.borrow() {
         return;
     }
     let failure = |kind: &str, message: String| Some(one(kind, message));
-    let (outcome, result, error) = match answered {
+    let (outcome, result, error) = match answered.outcome {
         OwnerToolAnswer::Served(value) => (
             ToolOutcome::Served,
             Some(serde_json::json!({ "value": value })),
@@ -544,7 +536,8 @@ fn answer_tool(state: &OwnerState, call_id: String, answered: crate::turn::Owner
         outcome,
         result,
         error,
-        structured_content: None,
+        structured_content: answered.structured_content,
+        record_changes: answered.record_changes,
     };
     drop(state.turn.controls.put(&control));
 }

@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Owner-served tools receive the full call context, return their structured copy, and merge independent response-record changes before every outcome, including concurrent calls (RFC §10.6.5).
+
 - Add `SpeakQueueChange::TurnSkipped`, serialized as `"turn_skipped"`; exhaustive matches must handle the new variant. This mirrors the public marker, without enabling offline-executor turn skipping.
 
 - **BREAKING:** `RealtimeBackend::publish` and `publish_to_room` return `RealtimeFuture<Result<(), ChannelError>>`. Return `Ok(())` on success and the original error on failure. Explicit publications return `RoomKitError::Realtime`; text notifications continue after logging, and local presence retries failed publications until close.

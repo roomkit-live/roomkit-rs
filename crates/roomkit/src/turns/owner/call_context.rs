@@ -1,4 +1,4 @@
-//! A host callback's independent owner-side tool scope and response record.
+//! An owner callback's independent tool scope and response record.
 
 use std::sync::Arc;
 
@@ -7,12 +7,12 @@ use serde_json::Value;
 
 use super::{Facts, verbs};
 use crate::error::repr;
-use crate::turn::TurnKit;
+use crate::turn::{OwnerCall, OwnerToolAnswer, TurnKit};
 use crate::turns::DeclaredVerb;
 use crate::turns::error::{channel_error, kit_error, one};
 use crate::turns::wire::{CallContext, RecordChanges, WireError};
 use crate::{
-    OwnerToolContext, OwnerToolIdentity, OwnerToolScope, RoomKitError, TurnRecord,
+    OwnerToolContext, OwnerToolIdentity, OwnerToolScope, RoomKitError, ToolCallScope, TurnRecord,
     within_tool_call_scope, within_tool_turn_depth,
 };
 
@@ -46,26 +46,94 @@ pub(super) async fn serve(
     if let Some(error) = invalid_context(facts, context) {
         return HostAnswer::failed(error);
     }
+    let served = scoped(
+        facts,
+        context,
+        verbs::serve(kit, facts, verb, arguments, context),
+    )
+    .await;
+    HostAnswer {
+        outcome: served.outcome,
+        record_changes: served.record_changes,
+    }
+}
+
+pub(super) struct ToolAnswer {
+    pub(super) outcome: OwnerToolAnswer,
+    pub(super) structured_content: Option<Metadata>,
+    pub(super) record_changes: Option<RecordChanges>,
+}
+
+impl From<OwnerToolAnswer> for ToolAnswer {
+    fn from(outcome: OwnerToolAnswer) -> Self {
+        Self {
+            outcome,
+            structured_content: None,
+            record_changes: None,
+        }
+    }
+}
+
+pub(super) async fn serve_tool(
+    kit: &Arc<dyn TurnKit>,
+    facts: &Facts,
+    name: String,
+    arguments: Metadata,
+    context: &CallContext,
+) -> ToolAnswer {
+    if let Some(error) = invalid_context(facts, context) {
+        return OwnerToolAnswer::Unserved(error.message).into();
+    }
+    let call = OwnerCall {
+        room_id: facts.room_id.clone(),
+        room_metadata: Arc::clone(&facts.room_metadata),
+        channel_id: facts.channel_id.clone(),
+        tool_call_id: context.tool_call_id.clone(),
+        arguments,
+        requester: context.requester.clone(),
+    };
+    let served = scoped(facts, context, kit.serve_owner_tool(name, call)).await;
+    let structured_content = matches!(served.outcome, OwnerToolAnswer::Served(_))
+        .then_some(served.structured_content)
+        .flatten();
+    ToolAnswer {
+        outcome: served.outcome,
+        structured_content,
+        record_changes: served.record_changes,
+    }
+}
+
+struct Served<T> {
+    outcome: T,
+    record_changes: Option<RecordChanges>,
+    structured_content: Option<Metadata>,
+}
+
+async fn scoped<T>(
+    facts: &Facts,
+    context: &CallContext,
+    work: impl Future<Output = T>,
+) -> Served<T> {
     let scope = Arc::new(OwnerToolScope::new(owner_context(facts, context)));
     let record = context
         .response_metadata
         .clone()
         .map(ResponseMetadata::from);
-    let work = async {
-        let served = Box::pin(verbs::serve(kit, facts, verb, arguments, context));
+    let served = async {
+        let work = Box::pin(work);
         match record.as_ref() {
             Some(record) => {
                 let held = TurnRecord::default();
                 held.adopt(record.clone());
-                held.scope(served).await
+                held.scope(work).await
             }
-            None => crate::turn_record::without_turn_record(served).await,
+            None => crate::turn_record::without_turn_record(work).await,
         }
     };
     let depth = context.chain_depth.max(facts.response_depth);
     let outcome = crate::turn::without_turn_host(within_tool_call_scope(
-        scope,
-        within_tool_turn_depth(depth, work),
+        Arc::<OwnerToolScope>::clone(&scope),
+        within_tool_turn_depth(depth, served),
     ))
     .await;
     let record_changes =
@@ -78,9 +146,10 @@ pub(super) async fn serve(
                 (!written.is_empty() || !removed.is_empty())
                     .then_some(RecordChanges { written, removed })
             });
-    HostAnswer {
+    Served {
         outcome,
         record_changes,
+        structured_content: scope.structured_content(),
     }
 }
 

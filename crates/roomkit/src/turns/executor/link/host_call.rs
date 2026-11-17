@@ -1,8 +1,9 @@
-//! Snapshot one host call, then merge its answer before returning or raising.
+//! Snapshot one owner call, then merge its answer before returning or raising.
 
 use roomkit_core::model::Metadata;
 use serde_json::Value;
 
+use crate::turn::OwnerToolAnswer;
 use crate::turns::error::rebuild_kit_error;
 use crate::turns::wire::{CallContext, RecordChanges, WireError};
 use crate::{RoomKitError, current_tool_call_scope, current_turn_record};
@@ -42,16 +43,48 @@ pub(super) struct HostReply {
 
 impl HostReply {
     pub(super) fn finish(self, carried: Option<&Metadata>) -> Result<Value, RoomKitError> {
-        // Read the live record at resumption: a hook may have replaced the
-        // turn's record while this call waited for its owner.
-        if let (Some(carried), Some(changes), Some(record)) =
-            (carried, self.record_changes, current_turn_record())
-        {
-            record.apply_call_changes(carried, &changes.written, &changes.removed);
-        }
+        take_changes(carried, self.record_changes);
         match self.error {
             Some(error) => Err(rebuild_kit_error(&error)),
             None => Ok(self.result),
         }
+    }
+}
+
+/// The wire fields kept until the waiting executor call resumes in its own scope.
+pub(super) struct ToolReply {
+    pub(super) outcome: OwnerToolAnswer,
+    pub(super) structured_content: Option<Metadata>,
+    pub(super) record_changes: Option<RecordChanges>,
+}
+
+impl From<OwnerToolAnswer> for ToolReply {
+    fn from(outcome: OwnerToolAnswer) -> Self {
+        Self {
+            outcome,
+            structured_content: None,
+            record_changes: None,
+        }
+    }
+}
+
+impl ToolReply {
+    pub(super) fn finish(self, carried: Option<&Metadata>) -> OwnerToolAnswer {
+        take_changes(carried, self.record_changes);
+        if matches!(self.outcome, OwnerToolAnswer::Served(_))
+            && let (Some(copy), Some(scope)) = (self.structured_content, current_tool_call_scope())
+        {
+            scope.set_structured_content(copy);
+        }
+        self.outcome
+    }
+}
+
+fn take_changes(carried: Option<&Metadata>, changes: Option<RecordChanges>) {
+    // Read the live record at resumption: a hook may have replaced the
+    // turn's record while this call waited for its owner.
+    if let (Some(carried), Some(changes), Some(record)) = (carried, changes, current_turn_record())
+    {
+        record.apply_call_changes(carried, &changes.written, &changes.removed);
     }
 }

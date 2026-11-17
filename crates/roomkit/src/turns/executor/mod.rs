@@ -534,9 +534,17 @@ fn apply(
             outcome,
             result,
             error,
-            ..
+            structured_content,
+            record_changes,
         } => {
-            link.resolve_tool(&call_id, outcome, result, error.as_ref());
+            link.resolve_tool(
+                &call_id,
+                outcome,
+                result,
+                error.as_ref(),
+                structured_content,
+                record_changes,
+            );
             None
         }
         Control::InputAnswer {

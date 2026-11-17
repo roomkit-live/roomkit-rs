@@ -32,6 +32,21 @@ impl ToolCallScope for Scope {
             }),
         }
     }
+
+    fn structured_content(&self) -> Option<roomkit::model::Metadata> {
+        self.turn
+            .call
+            .as_ref()?
+            .structured_content
+            .get()
+            .map(|record| record.to_metadata())
+    }
+
+    fn set_structured_content(&self, value: roomkit::model::Metadata) {
+        if let Some(call) = &self.turn.call {
+            call.structured_content.replace(Some(value.into()));
+        }
+    }
 }
 
 pub(super) fn current() -> Option<Arc<Scope>> {
@@ -42,6 +57,7 @@ pub(super) fn current() -> Option<Arc<Scope>> {
             .downcast::<OwnerToolScope>()
             .ok()?
             .adapter(|context| Arc::new(adapt(context)))
+            .into_any()
             .downcast::<Scope>()
             .ok(),
     }
@@ -165,5 +181,38 @@ mod tests {
         .await;
         assert!(current_tool_call().is_none());
         assert!(current_tool_actor_id().is_none());
+    }
+
+    #[tokio::test]
+    async fn structured_copy_survives_owner_scope_exit_and_reaches_public_accessors() {
+        let context = OwnerToolContext {
+            call: Some(OwnerToolIdentity::default()),
+            ..OwnerToolContext::default()
+        };
+        let owner = Arc::new(OwnerToolScope::new(context.clone()));
+        let held = roomkit::within_tool_call_scope(Arc::<OwnerToolScope>::clone(&owner), async {
+            let copy = ResponseMetadata::new();
+            copy.insert("rows", serde_json::json!({"count": 2}));
+            current_tool_call()
+                .expect("owner call")
+                .structured_content
+                .replace(Some(copy.clone()));
+            copy
+        })
+        .await;
+        let copied = owner.structured_content().expect("copy after scope exit");
+        held.with_value("rows", |value| value["count"] = 9.into());
+        assert_eq!(copied.get("rows"), Some(&serde_json::json!({"count": 2})));
+        let executor = Arc::new(adapt(&context));
+        executor.set_structured_content(copied);
+        roomkit::within_tool_call_scope(executor, async {
+            let copy = current_tool_call()
+                .expect("executor call")
+                .structured_content
+                .get()
+                .expect("restored copy");
+            assert_eq!(copy.get("rows"), Some(serde_json::json!({"count": 2})));
+        })
+        .await;
     }
 }

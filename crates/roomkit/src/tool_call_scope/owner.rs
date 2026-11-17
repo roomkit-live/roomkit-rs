@@ -4,7 +4,7 @@ use std::any::Any;
 use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 
-use roomkit_core::model::{ChannelId, Room, RoomId};
+use roomkit_core::model::{ChannelId, Metadata, Room, RoomId};
 
 /// Internal tool identity, copied when a call leaves its executor.
 #[doc(hidden)]
@@ -34,6 +34,14 @@ pub struct OwnerToolContext {
 pub trait ToolCallScope: Any + Send + Sync {
     fn into_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync>;
     fn owner_context(&self) -> OwnerToolContext;
+
+    /// Snapshot the structured copy a handler wrote on this call.
+    fn structured_content(&self) -> Option<Metadata> {
+        None
+    }
+
+    /// Restore the structured copy returned by the owner onto this call.
+    fn set_structured_content(&self, _value: Metadata) {}
 }
 
 /// One owner callback's fresh scope. A channel's adapter is constructed
@@ -41,7 +49,7 @@ pub trait ToolCallScope: Any + Send + Sync {
 #[doc(hidden)]
 pub struct OwnerToolScope {
     context: OwnerToolContext,
-    adapter: OnceLock<Arc<dyn Any + Send + Sync>>,
+    adapter: OnceLock<Arc<dyn ToolCallScope>>,
 }
 
 impl std::fmt::Debug for OwnerToolScope {
@@ -63,8 +71,8 @@ impl OwnerToolScope {
 
     pub fn adapter(
         &self,
-        build: impl FnOnce(&OwnerToolContext) -> Arc<dyn Any + Send + Sync>,
-    ) -> Arc<dyn Any + Send + Sync> {
+        build: impl FnOnce(&OwnerToolContext) -> Arc<dyn ToolCallScope>,
+    ) -> Arc<dyn ToolCallScope> {
         Arc::clone(self.adapter.get_or_init(|| build(&self.context)))
     }
 }
@@ -76,5 +84,17 @@ impl ToolCallScope for OwnerToolScope {
 
     fn owner_context(&self) -> OwnerToolContext {
         self.context.clone()
+    }
+
+    fn structured_content(&self) -> Option<Metadata> {
+        self.adapter
+            .get()
+            .and_then(|scope| scope.structured_content())
+    }
+
+    fn set_structured_content(&self, value: Metadata) {
+        if let Some(scope) = self.adapter.get() {
+            scope.set_structured_content(value);
+        }
     }
 }

@@ -441,7 +441,9 @@ pub(crate) enum Control {
         #[serde(default)]
         error: Option<WireError>,
         #[serde(default)]
-        structured_content: Option<Value>,
+        structured_content: Option<Metadata>,
+        #[serde(default)]
+        record_changes: Option<RecordChanges>,
     },
     /// The outcome the owner recorded for an `input_request` (RFC
     /// §10.6.5): answered with its `value`, or rejected with its `reason`.

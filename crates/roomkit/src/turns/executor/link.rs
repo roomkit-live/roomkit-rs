@@ -8,7 +8,7 @@
 
 mod host_call;
 
-use self::host_call::{HostReply, call_context};
+use self::host_call::{HostReply, ToolReply, call_context};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -25,7 +25,7 @@ use crate::turns::codec::{encode_end, encode_end_item, encode_start};
 use crate::turns::error::TurnError;
 use crate::turns::pipe::Uncarried;
 use crate::turns::wire::{
-    CallContext, Frame, Item, OwnerMessage, OwnerTool, RecordChanges, ToolOutcome, WireError,
+    Frame, Item, OwnerMessage, OwnerTool, RecordChanges, ToolOutcome, WireError,
 };
 use crate::turns::{MemoryTurn, Turns, lock};
 
@@ -262,7 +262,7 @@ pub(crate) struct TurnFacts {
 /// owner serves.
 enum Answer {
     Verb(oneshot::Sender<Result<HostReply, RoomKitError>>),
-    Tool(oneshot::Sender<OwnerToolAnswer>),
+    Tool(oneshot::Sender<ToolReply>),
 }
 
 impl Answer {
@@ -270,10 +270,15 @@ impl Answer {
     fn fail(self, error: &TurnError) {
         match self {
             Self::Verb(answer) => drop(answer.send(Err(error.clone().into_kit_error()))),
-            Self::Tool(answer) => drop(answer.send(OwnerToolAnswer::Failed {
-                kind: error.kind.clone(),
-                message: error.message.clone(),
-            })),
+            Self::Tool(answer) => drop(
+                answer.send(
+                    OwnerToolAnswer::Failed {
+                        kind: error.kind.clone(),
+                        message: error.message.clone(),
+                    }
+                    .into(),
+                ),
+            ),
         }
     }
 }
@@ -385,18 +390,15 @@ impl HostLink {
             }
             pending.insert(call_id.clone(), Answer::Tool(answer));
         }
+        let mut context = call_context(floor);
+        context.tool_call_id = tool_call_id.to_owned();
+        context.requester = requester;
+        let carried = context.response_metadata.clone();
         let frame = Frame::ToolCall {
             call_id: call_id.clone(),
             name: name.to_owned(),
             arguments,
-            context: CallContext {
-                tool_call_id: tool_call_id.to_owned(),
-                room_id: self.facts.room.as_str().to_owned(),
-                channel_id: self.facts.channel.as_str().to_owned(),
-                chain_depth: floor,
-                requester,
-                ..CallContext::default()
-            },
+            context,
         };
         if let Err(Uncarried(why)) = self.sender.send(&frame) {
             self.withdraw(&call_id, false);
@@ -414,10 +416,15 @@ impl HostLink {
         };
         let result = answered.await;
         withdrawn.disarm();
-        result.unwrap_or_else(|_gone| OwnerToolAnswer::Failed {
-            kind: "owner_lost".to_owned(),
-            message: "the turn ended before the tool's call was answered".to_owned(),
-        })
+        result
+            .unwrap_or_else(|_gone| {
+                OwnerToolAnswer::Failed {
+                    kind: "owner_lost".to_owned(),
+                    message: "the turn ended before the tool's call was answered".to_owned(),
+                }
+                .into()
+            })
+            .finish(carried.as_ref())
     }
 
     /// Whether the turn it serves still runs.
@@ -531,10 +538,16 @@ impl HostLink {
                     record_changes,
                 })));
             }
-            Answer::Tool(answer) => drop(answer.send(OwnerToolAnswer::Failed {
-                kind: "RuntimeError".to_owned(),
-                message: "The room owner answered a tool call with a verb's result".to_owned(),
-            })),
+            Answer::Tool(answer) => drop(
+                answer.send(
+                    OwnerToolAnswer::Failed {
+                        kind: "RuntimeError".to_owned(),
+                        message: "The room owner answered a tool call with a verb's result"
+                            .to_owned(),
+                    }
+                    .into(),
+                ),
+            ),
         }
         self.settled.notify_waiters();
     }
@@ -547,13 +560,19 @@ impl HostLink {
         outcome: ToolOutcome,
         result: Option<Value>,
         error: Option<&WireError>,
+        structured_content: Option<Metadata>,
+        record_changes: Option<RecordChanges>,
     ) {
         let Some(answer) = lock(&self.pending).remove(call_id) else {
             return;
         };
         let answered = tool_answer(outcome, result, error);
         match answer {
-            Answer::Tool(answer) => drop(answer.send(answered)),
+            Answer::Tool(answer) => drop(answer.send(ToolReply {
+                outcome: answered,
+                structured_content,
+                record_changes,
+            })),
             Answer::Verb(answer) => drop(answer.send(Err(RoomKitError::Internal(
                 "The room owner answered a verb with a tool's result".to_owned(),
             )))),
