@@ -413,8 +413,8 @@ fn constructor_probe() -> Value {
     })
 }
 
-/// Rust's environment iterator omits an empty key; inspect the OS inputs
-/// instead, which a Python subprocess exposes through os.environ[""].
+/// Read the empty key as a Python subprocess would with `os.environ[""]`.
+/// Rust's environment iterator omits that entry.
 fn empty_environment_value() -> Option<String> {
     #[cfg(target_os = "linux")]
     {
