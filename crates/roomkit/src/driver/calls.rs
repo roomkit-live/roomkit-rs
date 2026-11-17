@@ -2,6 +2,8 @@
 //! the store's, a channel's, hooks' and the router's, each within its
 //! execution context; and the notices it performs without answering.
 
+mod detached;
+
 use std::convert::Infallible;
 use std::mem;
 use std::sync::Arc;
@@ -553,7 +555,7 @@ pub(super) async fn channel<S: ConversationStore>(
             channel_ids,
         } => streams_in(inner, &room_id, channel_ids),
         ChannelRequest::RoomAttached { binding } => room_attached(inner, binding).await,
-        ChannelRequest::RoomDetached { binding } => room_detached(inner, binding).await,
+        ChannelRequest::RoomDetached { binding } => detached::tell(inner, binding).await,
         ChannelRequest::BindingUpdated { binding } => binding_updated(inner, &binding),
         ChannelRequest::NamedCorrespondent { binding } => named_binding(inner, binding),
         ChannelRequest::RoutedRecipient { binding } => routed_recipient(inner, &binding),
@@ -1037,40 +1039,6 @@ async fn room_attached<S>(inner: &Inner<S>, binding: ChannelBinding) -> Outcome 
             .on_room_attached(binding.room_id.clone(), binding)
             .await,
     )
-}
-
-/// Tells `binding`'s channel of its detach (RFC §6.1 `on_room_detached`):
-/// an intelligence channel through the turn backend, whose executor logs
-/// what it raises (RFC §10.6.3); any other directly, what it raises
-/// failing the detach once announced. A channel no longer registered is
-/// not told.
-async fn room_detached<S: ConversationStore>(
-    inner: &Arc<Inner<S>>,
-    binding: ChannelBinding,
-) -> Outcome {
-    let channel = inner.channel(&binding.channel_id);
-    if binding.category == ChannelCategory::Intelligence {
-        let (channel_id, room_id) = (&binding.channel_id, &binding.room_id);
-        let cleanup = match crate::kit::channel_detach::DetachCleanup::begin(
-            inner, channel_id, room_id,
-        )
-        .await
-        {
-            Ok(cleanup) => cleanup,
-            Err(error) => {
-                return Outcome::Failed(ErrorRecord::new("StoreError", error.to_string()));
-            }
-        };
-        inner.turns.detached(channel_id, room_id, channel).await;
-        if let Err(error) = cleanup.finish().await {
-            return Outcome::Failed(ErrorRecord::new("StoreError", error.to_string()));
-        }
-        return ChannelOutcome::Told.into();
-    }
-    let Some(channel) = channel else {
-        return ChannelOutcome::Told.into();
-    };
-    told(channel.on_room_detached(binding.room_id).await)
 }
 
 /// Push the stored gate to a live channel, regardless of its category.

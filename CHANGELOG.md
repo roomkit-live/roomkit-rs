@@ -9,6 +9,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **BREAKING:** `RealtimeBackend::publish` and `publish_to_room` return `RealtimeFuture<Result<(), ChannelError>>`. Return `Ok(())` on success and the original error on failure. Explicit publications return `RoomKitError::Realtime`; text notifications continue after logging, and local presence retries failed publications until close.
 
 - Add fresh `TurnHost::room_context` reads, preserving store failure causes across the host link, and local executor presence readers and change notifications (RFC §10.6.5–§10.6.7).
+- Preserve the original failure message and known class when detached-channel state cleanup fails, instead of replacing them with a generic store error.
 
 - **A delegated agent's turn ends once its result tool's call is served**, as Python's (RFC §23.3, RMK-357). After `submit_result`, `submit_verdict` or `submit_review`, the turn asked its model once more, and re-prompted it when it said nothing: a supervised review cost three calls where one does. Nothing is asked after the served call now; a call an `ON_TOOL_CALL` hook blocks is no result and the turn goes on. A turn request's owner tool carries `ends_turn` to the executor.
 

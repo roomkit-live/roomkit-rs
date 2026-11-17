@@ -167,12 +167,19 @@ async fn several_workers_detach_waits_for_an_earlier_presence_then_reattach_publ
 // Python: test_a_failed_detach_state_cleanup_still_forgets_the_presence_claim.
 #[tokio::test]
 async fn a_failed_detach_state_cleanup_still_forgets_the_presence_claim() {
+    for named in [false, true] {
+        failed_detach_state_cleanup(named).await;
+    }
+}
+
+async fn failed_detach_state_cleanup(named: bool) {
     use roomkit::ConversationStore;
     use roomkit::store::PatchRoomMetadataOptions;
     use serde_json::json;
     let backend = Arc::new(HeldPresence::default());
     backend.calls.store(1, std::sync::atomic::Ordering::SeqCst);
-    let mut options = RoomKitOptions::with_store(store::FailedCleanupStore::default());
+    let mut options =
+        RoomKitOptions::with_store(store::FailedCleanupStore::with_named_failure(named));
     let store = Arc::clone(&options.store);
     options.realtime = Some(Arc::<HeldPresence>::clone(&backend));
     let kit = RoomKit::new(options);
@@ -208,10 +215,7 @@ async fn a_failed_detach_state_cleanup_still_forgets_the_presence_claim() {
         .detach_channel(&room, &channel, DetachChannelOptions::default())
         .await
         .unwrap_err();
-    assert!(
-        matches!(error, roomkit::RoomKitError::Channel { channel_id, error }
-        if channel_id == channel && error.error_type == "StoreError" && error.message == "the store failed")
-    );
+    assert_cleanup_error(error, &channel, named);
     assert!(store.get_binding(&room, &channel).await.unwrap().is_none());
     kit.attach_channel(&room, &channel, AttachChannelOptions::default())
         .await
@@ -223,6 +227,23 @@ async fn a_failed_detach_state_cleanup_still_forgets_the_presence_claim() {
             (EphemeralEventType::PresenceOnline, "helper".into()),
             (EphemeralEventType::PresenceOnline, "helper".into()),
         ]
+    );
+}
+
+#[expect(clippy::panic, reason = "an unexpected error variant fails the assertion")]
+fn assert_cleanup_error(
+    error: roomkit::RoomKitError,
+    channel: &roomkit::model::ChannelId,
+    named: bool,
+) {
+    let roomkit::RoomKitError::Channel { channel_id, error } = error else {
+        panic!("expected a recorded detach failure, got {error:?}");
+    };
+    assert_eq!(&channel_id, channel);
+    assert_eq!(error.message, "state cleanup failed");
+    assert_eq!(
+        error.error_type,
+        if named { "OSError" } else { "ChannelError" }
     );
 }
 

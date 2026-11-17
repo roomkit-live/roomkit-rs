@@ -10,6 +10,27 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub(super) struct FailedCleanupStore {
     store: InMemoryStore,
     pub(super) fault: AtomicBool,
+    named: bool,
+}
+
+impl FailedCleanupStore {
+    pub(super) fn with_named_failure(named: bool) -> Self {
+        Self {
+            named,
+            ..Self::default()
+        }
+    }
+
+    fn failure(&self) -> StoreError {
+        if self.named {
+            StoreError::unavailable(roomkit::ClassedError::new(
+                "OSError",
+                std::io::Error::other("state cleanup failed"),
+            ))
+        } else {
+            StoreError::unavailable("state cleanup failed")
+        }
+    }
 }
 
 macro_rules! forward {
@@ -35,7 +56,7 @@ impl ConversationStore for FailedCleanupStore {
                 .iter()
                 .any(|name| name == "roomkit:channel_state:helper")
         {
-            return Err(StoreError::Unavailable("state cleanup failed".into()));
+            return Err(self.failure());
         }
         self.store
             .patch_room_metadata(room_id, patch, options)
