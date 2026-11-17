@@ -677,6 +677,8 @@ impl Loop {
         let interrupted = interrupted && unanswered.is_none();
         let error = unanswered.unwrap_or(error);
         spent.segments.push(delivered);
+        // A generation that failed is never whole (RFC §6.4).
+        spent.complete = false;
         for report in &reports {
             add_usage(&mut spent.usage, report);
         }

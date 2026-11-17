@@ -35,7 +35,7 @@ use roomkit::{
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
     AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, ProviderError, ProviderStream,
-    StreamDone, StreamEvent, StreamTextDelta,
+    StreamDone, StreamEvent, StreamTextDelta, StreamUsage,
 };
 use serde_json::json;
 use tokio::sync::Notify;
@@ -98,6 +98,49 @@ impl AiProvider for Gated {
         Box::pin(Waiting {
             opened: Box::pin(async move { gate.notified().await }),
             over: 0,
+        })
+    }
+}
+
+/// A model that tells its input as its stream starts, signals it, then
+/// waits for ever.
+struct TellsThenWaits(Arc<Notify>);
+
+struct Telling {
+    told: bool,
+    reached: Arc<Notify>,
+}
+
+impl Stream for Telling {
+    type Item = Result<StreamEvent, ProviderError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if !self.told {
+            self.told = true;
+            let usage = serde_json::from_value(json!({ "input_tokens": 40 })).unwrap();
+            return Poll::Ready(Some(Ok(StreamEvent::Usage(StreamUsage { usage }))));
+        }
+        self.reached.notify_one();
+        Poll::Pending
+    }
+}
+
+impl AiProvider for TellsThenWaits {
+    fn model_name(&self) -> &'static str {
+        "telling"
+    }
+
+    fn generate<'a>(
+        &'a self,
+        _context: &'a AiContext,
+    ) -> impl Future<Output = Result<AiResponse, ProviderError>> + Send + 'a {
+        ready(Err("this model only streams".into()))
+    }
+
+    fn generate_structured_stream<'a>(&'a self, _context: &'a AiContext) -> ProviderStream<'a> {
+        Box::pin(Telling {
+            told: false,
+            reached: Arc::clone(&self.0),
         })
     }
 }
@@ -353,6 +396,34 @@ async fn a_delivery_cancelled_before_its_commit_reads_cancelled_never_its_reason
     let tail = named(&mock.completed_spans(), "framework.detached");
     assert_eq!(tail.status, "error");
     assert_eq!(tail.error_message.as_deref(), Some("cancelled"));
+    kit.close().await.unwrap();
+}
+
+// Python: tests/test_turn_that_did_not_complete.py::test_a_barge_in_keeps_what_the_rounds_used_on_the_span[_TellsItsInput-1040]:
+// a turn cut while its generation is in flight counts on its span the input
+// that generation told (RFC §6.4, RMK-369).
+#[tokio::test]
+async fn a_turn_cut_mid_generation_keeps_the_input_it_told_on_its_span() {
+    let reached = Arc::new(Notify::new());
+    let (kit, mock) = kit_with(TellsThenWaits(Arc::clone(&reached))).await;
+    let delivery = say(&kit, true).await.delivery.unwrap();
+    tokio::time::timeout(BOUND, reached.notified())
+        .await
+        .unwrap();
+    tokio::time::timeout(BOUND, delivery.cancel(CancelOptions::default()))
+        .await
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(BOUND, delivery.wait())
+        .await
+        .unwrap()
+        .unwrap();
+    roomkit::testing::idle(&kit).await;
+    let span = named(&mock.completed_spans(), "llm.generate");
+    assert_eq!(
+        (span.status.as_str(), &span.attributes["llm.input_tokens"]),
+        ("cancelled", &json!(40))
+    );
     kit.close().await.unwrap();
 }
 

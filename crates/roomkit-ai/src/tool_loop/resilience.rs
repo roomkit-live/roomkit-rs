@@ -137,6 +137,7 @@ impl Loop {
                 held: context.response_schema.is_some(),
                 served_by: self.served_by(),
                 told: &mut told,
+                span: self.turn_span.as_ref(),
             };
             let failure = match Generation::read(stream, reading, asked).await {
                 Ok(generation) => return Ok(generation),
@@ -186,7 +187,8 @@ impl Loop {
             return Err(last);
         };
         let reading = (steering, out, prefix, window, limits, provider_calls);
-        let generation = rerouted(&*other, &context, (last, &mut told), reading).await?;
+        let span = self.turn_span.as_ref();
+        let generation = rerouted(&*other, &context, (last, &mut told, span), reading).await?;
         // It served the generation: the turn's later rounds stay on it.
         self.provider = other;
         Ok(generation)
@@ -214,7 +216,11 @@ impl Loop {
 async fn rerouted(
     provider: &dyn DynAiProvider,
     context: &AiContext,
-    (spent, told): (Failed, &mut roomkit::model::Metadata),
+    (spent, told, span): (
+        Failed,
+        &mut roomkit::model::Metadata,
+        Option<&super::spans::TurnSpan>,
+    ),
     reading: Reading<'_>,
 ) -> Result<Generation, Failed> {
     tracing::warn!(target: "roomkit::ai", error = %spent.error, provider = provider.dyn_name(), "retries spent: the router hands the generation over");
@@ -224,6 +230,7 @@ async fn rerouted(
         held: context.response_schema.is_some(),
         served_by: (provider.dyn_model_name(), provider.dyn_name()),
         told,
+        span,
     };
     let (steering, out, prefix, window, limits, provider_calls) = reading;
     let read = Generation::read(
@@ -236,9 +243,12 @@ async fn rerouted(
         Err(failure) if !failure.streamed => {
             window.thinking.drop_reasoning();
             tracing::error!(target: "roomkit::ai", error = %failure.error, "the provider the router handed the generation to failed");
+            // What the round's tries told counts, the fallback's included
+            // (RFC §6.4).
             Err(Failed {
                 error: spent.error.with_source(failure.error),
                 received: spent.received || failure.received,
+                reports: failure.reports,
                 ..spent
             })
         }

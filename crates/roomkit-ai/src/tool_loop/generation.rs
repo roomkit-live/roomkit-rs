@@ -118,6 +118,9 @@ pub(super) struct Attempt<'a> {
     pub(super) held: bool,
     pub(super) served_by: (&'a str, &'a str),
     pub(super) told: &'a mut Metadata,
+    /// The turn's span, which keeps what the generation told until it is
+    /// counted.
+    pub(super) span: Option<&'a super::spans::TurnSpan>,
 }
 
 /// Why a call never runs, whatever its tool.
@@ -167,7 +170,8 @@ impl Generation {
         (steering, out, prefix, window, limits, provider_calls): Reading<'_>,
         attempt: Attempt<'_>,
     ) -> Result<Self, Failed> {
-        let (held, served_by, told) = (attempt.held, attempt.served_by, attempt.told);
+        let (held, told) = (attempt.held, attempt.told);
+        let told_to = (attempt.served_by, attempt.span);
         let mut transcript = RoundTranscript::new();
         let mut delivered = String::new();
         let mut replayed = Replayed::new(prefix);
@@ -232,7 +236,7 @@ impl Generation {
                         break;
                     }
                 }
-                StreamEvent::Usage(now) => tell(now.usage, (&mut *told, served_by), out).await,
+                StreamEvent::Usage(now) => tell(now.usage, (&mut *told, told_to), out).await,
                 // A delta with a signature or redacted data alone reaches no
                 // reader; the round replays it all the same (RFC §6.4).
                 StreamEvent::ThinkingDelta(delta) => {
@@ -341,16 +345,23 @@ fn count_told(done: &mut StreamDone, reports: &mut Vec<Metadata>, told: &Metadat
     false
 }
 
+/// Who serves a generation, and the turn's span, which what it tells
+/// reaches.
+type ToldTo<'a> = ((&'a str, &'a str), Option<&'a super::spans::TurnSpan>);
+
 /// Keeps what a generation told it used before its end as the round's
-/// `told`, and hands it to the reader as a partial marker under the model
-/// and the provider that serve it, which the generation's own replaces
-/// (RFC §6.4).
+/// `told` and on the turn's span, and hands it to the reader as a partial
+/// marker under the model and the provider that serve it, which the
+/// generation's own replaces (RFC §6.4).
 async fn tell(
     usage: Metadata,
-    (told, (model, provider)): (&mut Metadata, (&str, &str)),
+    (told, ((model, provider), span)): (&mut Metadata, ToldTo<'_>),
     out: &Yielder<Result<TurnItem, ProviderError>>,
 ) {
     told.clone_from(&usage);
+    if let Some(span) = span {
+        span.told(&usage);
+    }
     let marker = UsageMarker {
         usage,
         model: Some(model.to_owned()),

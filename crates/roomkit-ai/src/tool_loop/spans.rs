@@ -71,6 +71,7 @@ impl TurnTelemetry {
             channel_id: channel_id.to_string(),
             sensitive: self.sensitive,
             used: Mutex::default(),
+            told: Mutex::default(),
             ended: AtomicBool::new(false),
         })
     }
@@ -85,6 +86,9 @@ pub(crate) struct TurnSpan {
     sensitive: bool,
     /// What its rounds used so far, which its end reports whenever it comes.
     used: Mutex<Used>,
+    /// What the generation in flight told it used before its end, counted
+    /// if the turn is dropped before that generation is (RFC §6.4).
+    told: Mutex<Option<Metadata>>,
     ended: AtomicBool,
 }
 
@@ -107,8 +111,19 @@ impl TurnSpan {
         used.calls = used.calls.saturating_add(calls);
     }
 
-    /// Records what a generation used, Python's `roomkit.llm.<counter>`.
+    /// Keeps what the generation in flight told it used before its end.
+    pub(super) fn told(&self, usage: &Metadata) {
+        *self.told_slot() = Some(usage.clone());
+    }
+
+    fn told_slot(&self) -> MutexGuard<'_, Option<Metadata>> {
+        self.told.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Records what a generation used, Python's `roomkit.llm.<counter>`:
+    /// that generation is counted, what it told no longer pending.
     pub(super) fn generation_used(&self, usage: &Metadata) {
+        self.told_slot().take();
         {
             let token = |counter: &str| usage.get(counter).and_then(Value::as_u64).unwrap_or(0);
             let mut used = self.used();
@@ -207,7 +222,16 @@ impl TurnSpan {
 }
 
 impl Drop for TurnSpan {
+    /// Its reader stopped, or the turn was cut from outside: what the
+    /// generation in flight told counts, as Python's round counts it as its
+    /// stream closes (RFC §6.4).
     fn drop(&mut self) {
+        let told = self.told_slot().take();
+        if let Some(told) = told
+            && !self.ended.load(Ordering::Acquire)
+        {
+            self.generation_used(&told);
+        }
         self.finish("cancelled", None);
     }
 }
@@ -312,6 +336,31 @@ mod tests {
         assert_eq!(span.attributes[Attr::LLM_INPUT_TOKENS], json!(10));
         assert_eq!(span.attributes[Attr::LLM_OUTPUT_TOKENS], json!(5));
         assert_eq!(span.attributes[Attr::LLM_TOOL_COUNT], json!(1));
+    }
+
+    /// What the generation in flight told counts on a span dropped before it
+    /// was counted, once: a generation counted since does not count it again.
+    // Python: tests/test_turn_that_did_not_complete.py::test_a_barge_in_keeps_what_the_rounds_used_on_the_span[_TellsItsInput-1040]
+    #[test]
+    fn a_turn_cut_short_keeps_what_its_generation_told_on_its_span() {
+        let mock = Arc::new(MockTelemetryProvider::default());
+        let mut told = Metadata::new();
+        told.insert("input_tokens".to_owned(), json!(40));
+        let mut whole = told.clone();
+        whole.insert("output_tokens".to_owned(), json!(7));
+        let cut = started(&mock);
+        cut.told(&told);
+        drop(cut);
+        let counted = started(&mock);
+        counted.told(&told);
+        counted.generation_used(&whole);
+        drop(counted);
+        let inputs: Vec<_> = mock
+            .get_spans(SpanKind::LlmGenerate)
+            .into_iter()
+            .map(|span| span.attributes[Attr::LLM_INPUT_TOKENS].clone())
+            .collect();
+        assert_eq!(inputs, [json!(40), json!(40)]);
     }
 
     // A call cut with its turn ends cancelled.

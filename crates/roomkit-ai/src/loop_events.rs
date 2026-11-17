@@ -324,9 +324,10 @@ pub struct AiResponseEvent {
     /// first declaration order, one entry per name.
     pub declared_tools: Vec<DeclaredTool>,
     /// Whether [`usage`](Self::usage) counts every generation of the turn
-    /// whole: false when one reported no counters, or was cut before its
-    /// end, which counts only what its provider told as its stream started
-    /// (RFC §6.4).
+    /// whole: false when one reported no counters, failed, or was cut before
+    /// its end, which counts only what its provider told as its stream
+    /// started (RFC §6.4). An external agent's turn (ACP) keeps the default:
+    /// its counters are relayed as the agent reports them.
     pub usage_complete: bool,
 }
 
