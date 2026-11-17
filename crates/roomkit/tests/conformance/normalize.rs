@@ -73,6 +73,7 @@ pub(crate) struct Observed {
     /// What each scripted ACP agent received, by its channel.
     pub(crate) acp_wire: BTreeMap<String, Vec<Value>>,
     pub(crate) acp_handlers: BTreeMap<String, Vec<Value>>,
+    pub(crate) external_handlers: BTreeMap<String, Vec<Value>>,
     pub(crate) acp_permissions: BTreeMap<String, Vec<Value>>,
     pub(crate) acp_prompts: BTreeMap<String, Vec<Value>>,
     pub(crate) acp_mcp_requests: BTreeMap<String, Vec<Value>>,

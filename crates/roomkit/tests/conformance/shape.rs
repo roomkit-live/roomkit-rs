@@ -111,6 +111,7 @@ const CHANNEL: &[&str] = &[
     "max_tool_rounds",
     "max_empty_retries",
     "continuation",
+    "external_tool_handler",
     "max_context_events",
     "tool_timeout_ms",
     "tool_timeouts_ms",
@@ -412,6 +413,7 @@ const EXPECT: &[&str] = &[
     "lifecycle",
     "models",
     "continuations",
+    "external_handlers",
     "script_executors",
     "acp_wire",
     "acp_permissions",
@@ -875,6 +877,7 @@ fn binding_update(channel: &Value, path: &str, found: &mut Vec<String>) {
 
 fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
     crate::continuation::check(channel, path, found);
+    crate::acp_agents::handler::validate(channel, path, found);
     if let Some(verbs) = channel["verbs"].as_object() {
         for (name, verb) in verbs {
             members(
