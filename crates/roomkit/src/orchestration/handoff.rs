@@ -386,6 +386,7 @@ impl<S: ConversationStore> HandoffHandler<S> {
                 })
             }),
             waits: false,
+            ends_turn: false,
             owner,
         }
     }

@@ -487,6 +487,7 @@ impl<S: ConversationStore> DelegateHandler<S> {
             serve,
             definition,
             waits: true,
+            ends_turn: false,
             owner: None,
         };
         kit.register_owner_tools(channel, vec![entry])

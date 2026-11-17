@@ -478,6 +478,15 @@ impl TurnHost {
         self.shared.link.owner_tools_waiting()
     }
 
+    /// The names of the tools the room's owner serves this turn whose
+    /// served call ends the turn, a delegation's result tool (RFC §23.3):
+    /// the model is asked nothing after the round that made it. For an AI
+    /// channel's turn, not a public verb.
+    #[doc(hidden)]
+    pub fn owner_tools_ending_turn(&self) -> Vec<String> {
+        self.shared.link.owner_tools_ending_turn()
+    }
+
     /// Runs the call `tool_call_id` of the owner's tool `name` with
     /// `arguments` on the room's owner, at least as deep as the turn's
     /// response (RFC §10.6.5), its handler told who asked (`requester`,

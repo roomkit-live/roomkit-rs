@@ -108,6 +108,7 @@ pub(super) fn entries<S: ConversationStore>(server: &Arc<PerWorker>) -> Vec<Owne
                     Box::pin(async move { serve(&kit, &server, &worker_id, call).await })
                 }),
                 waits: true,
+                ends_turn: false,
                 owner: None,
             }
         })

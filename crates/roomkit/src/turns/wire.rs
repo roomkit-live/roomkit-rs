@@ -27,12 +27,15 @@ use serde_json::Value;
 use crate::steering::SteeringDirective;
 
 /// A tool the owner serves a turn (RFC §10.6.5): its definition as its
-/// JSON, and whether its call waits by design.
+/// JSON, whether its call waits by design, and whether its served call
+/// ends the turn, a delegation's result tool (RFC §23.3).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct OwnerTool {
     pub(crate) tool: Value,
     #[serde(default)]
     pub(crate) waits_by_design: bool,
+    #[serde(default)]
+    pub(crate) ends_turn: bool,
 }
 
 /// The room's previous turn of the channel (RFC §10.6.2).

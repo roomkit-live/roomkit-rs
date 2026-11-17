@@ -176,6 +176,7 @@ async fn a_close_from_an_owner_served_tool_spares_its_turn() {
             })
         }),
         waits: false,
+        ends_turn: false,
         owner: None,
     };
     kit.inner

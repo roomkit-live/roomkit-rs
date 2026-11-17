@@ -34,6 +34,10 @@ pub(crate) struct OwnerToolEntry<S> {
     /// applying to it (RFC §21.6): a strategy's tool, Python's
     /// `orchestration_tool(..., waits=True)`.
     pub(crate) waits: bool,
+    /// Whether its served call ends the turn: the model is asked nothing
+    /// after the round that made it, a delegation's result tool (RFC
+    /// §23.3), Python's `orchestration_tool(..., ends_turn=True)`.
+    pub(crate) ends_turn: bool,
     /// The install that set it up for a room, by its address: the same
     /// install setting it up again replaces its own (Python's registry's
     /// `owner`).
@@ -303,6 +307,7 @@ impl<S> OwnerToolStore<S> {
                 .map(|entry| OwnerTool {
                     tool: entry.definition.clone(),
                     waits_by_design: entry.waits,
+                    ends_turn: entry.ends_turn,
                 })
                 .collect()
         };
@@ -361,6 +366,7 @@ mod tests {
             definition: json!({ "name": name }),
             serve: Arc::new(|_, _| Box::pin(async { OwnerToolAnswer::Served(json!("ok")) })),
             waits: false,
+            ends_turn: false,
             owner: None,
         }
     }

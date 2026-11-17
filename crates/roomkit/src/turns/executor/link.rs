@@ -349,6 +349,16 @@ impl HostLink {
             .collect()
     }
 
+    /// The names of the owner's tools whose served call ends the turn, a
+    /// delegation's result tool (RFC §23.3).
+    pub(crate) fn owner_tools_ending_turn(&self) -> Vec<String> {
+        self.owner_tools
+            .iter()
+            .filter(|owned| owned.ends_turn)
+            .filter_map(|owned| owned.tool.get("name")?.as_str().map(str::to_owned))
+            .collect()
+    }
+
     /// Runs the call `tool_call_id` of the owner's tool `name` with
     /// `arguments` on the owner, the turn's work at least `floor` deep
     /// (RFC §10.6.5), with who asked (`requester`): the handler's answer,

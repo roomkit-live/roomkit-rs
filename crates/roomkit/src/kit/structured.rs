@@ -244,6 +244,7 @@ impl<'kit, S: ConversationStore> ServedResult<'kit, S> {
                 Box::pin(async { OwnerToolAnswer::Served(Value::String(received())) })
             }),
             waits: false,
+            ends_turn: true,
             owner: None,
         };
         kit.inner

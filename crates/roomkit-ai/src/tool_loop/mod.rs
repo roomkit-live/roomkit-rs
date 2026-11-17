@@ -467,12 +467,13 @@ impl Loop {
             // A round counts once its calls ran (Python's `_run_announced_calls`).
             self.count_calls(&mut spent, ran.calls.len());
             tool_rounds += u32::from(!ran.calls.is_empty());
-            self.between_rounds(round, ran, &mut messages, &usage).await;
-            if steering.read(&mut messages, &mut system_prompt) {
+            let read = (&mut messages, &usage);
+            let ended = self
+                .after_calls(round, ran, read, (&steering, &mut system_prompt))
+                .await;
+            if let Some(reason) = ended {
                 let ending = (&limits, &steering, &out);
-                return self
-                    .end(LoopEndReason::Cancelled, tool_rounds, spent, ending)
-                    .await;
+                return self.end(reason, tool_rounds, spent, ending).await;
             }
         }
         // The round bound passed, a try in the last round's place included.

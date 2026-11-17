@@ -117,6 +117,7 @@ impl<S: ConversationStore> RoomKit<S> {
             definition: background_definition(),
             serve: serve_with(work_in_background),
             waits: false,
+            ends_turn: false,
             owner: None,
         };
         self.register_owner_tools(agent, vec![entry])?;
@@ -152,12 +153,14 @@ impl<S: ConversationStore> RoomKit<S> {
                 definition: task_status_definition(),
                 serve: serve_with(task_status),
                 waits: false,
+                ends_turn: false,
                 owner: None,
             },
             OwnerToolEntry {
                 definition: cancel_task_definition(),
                 serve: serve_with(cancel_task),
                 waits: false,
+                ends_turn: false,
                 owner: None,
             },
         ];

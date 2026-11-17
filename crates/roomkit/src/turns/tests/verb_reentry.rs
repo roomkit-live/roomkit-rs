@@ -218,6 +218,7 @@ fn serve_tool(kit: &RoomKit) {
             })
         }),
         waits: false,
+        ends_turn: false,
         owner: None,
     };
     kit.register_owner_tools(&channel("ai"), vec![entry])

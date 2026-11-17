@@ -8,7 +8,8 @@
 //! requests: the input whole, the long results of the turn's earlier
 //! rounds stored for re-reading, the last round's whole.
 
-use roomkit::model::Metadata;
+use roomkit::TurnHost;
+use roomkit::model::{LoopEndReason, Metadata};
 use roomkit_core::rules::transcript::Message;
 
 use super::Loop;
@@ -16,15 +17,47 @@ use super::compaction::with_results_stored;
 use super::hooks::Ran;
 use crate::memory::{CompactOptions, after_memory, runtime_or_cleaned};
 use crate::provider::{AiMessage, AiRole};
+use crate::steering::Steering;
 use crate::tool_eviction::ToolEviction;
 
 impl Loop {
+    /// What follows round `round_index` once its calls `ran`, as
+    /// [`between_rounds`](Self::between_rounds) says, then why the loop
+    /// ends there, if it does: a call that served the turn's result tool
+    /// ends it, nothing asked after it (RFC §23.3); a cancel `steering`
+    /// reads, with the messages steered in, cancels it (RFC §21.3).
+    pub(super) async fn after_calls(
+        &mut self,
+        round_index: u32,
+        ran: Ran,
+        (messages, usage): (&mut Vec<Message>, &Metadata),
+        (steering, system_prompt): (&Steering, &mut Option<String>),
+    ) -> Option<LoopEndReason> {
+        let submitted = ran.submitted(&self.ending_turn());
+        self.between_rounds(round_index, ran, messages, usage).await;
+        if submitted {
+            return Some(LoopEndReason::Completed);
+        }
+        steering
+            .read(messages, system_prompt)
+            .then_some(LoopEndReason::Cancelled)
+    }
+
+    /// The names of the tools the room's owner serves the turn whose
+    /// served call ends it, a delegation's result tool (RFC §23.3).
+    fn ending_turn(&self) -> Vec<String> {
+        self.turn
+            .as_ref()
+            .map(TurnHost::owner_tools_ending_turn)
+            .unwrap_or_default()
+    }
+
     /// What follows round `round_index` once its calls `ran`, `messages`
     /// the conversation and `usage` what the round's generation measured:
     /// `AFTER_TOOL_ROUND`, its messages read after the results, then the
     /// memory's compaction of the history; nothing for a round that ran no
     /// call (Python's `_run_announced_calls`).
-    pub(super) async fn between_rounds(
+    async fn between_rounds(
         &mut self,
         round_index: u32,
         ran: Ran,

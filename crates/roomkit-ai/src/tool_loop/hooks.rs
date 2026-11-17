@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use roomkit::model::{
     ChannelCapabilities, ChannelMediaType, LoopEndReason, Metadata, RoomContext, RoomEvent,
+    ToolCallOutcome,
 };
 use roomkit_core::rules::transcript::{Message, Role, without_mark_copies};
 use serde_json::Value;
@@ -77,6 +78,15 @@ pub(super) struct Ran {
 impl Ran {
     pub(super) fn replayed_results(&self) -> Vec<AiToolResultPart> {
         self.answered.iter().chain(&self.results).cloned().collect()
+    }
+
+    /// Whether one of the round's calls served a tool named in `ending`,
+    /// whose served call ends the turn: a delegation's result tool, once
+    /// `ON_TOOL_CALL` let it stand (RFC §23.3), Python's `turn.submitted`.
+    pub(super) fn submitted(&self, ending: &[String]) -> bool {
+        self.results.iter().any(|part| {
+            part.outcome == Some(ToolCallOutcome::Served) && ending.contains(&part.name)
+        })
     }
 }
 

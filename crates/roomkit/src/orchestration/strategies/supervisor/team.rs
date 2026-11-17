@@ -109,6 +109,7 @@ pub(super) fn entry<S: ConversationStore>(
             Box::pin(async move { server.serve(&kit, call).await })
         }),
         waits: true,
+        ends_turn: false,
         owner: None,
     }
 }
