@@ -230,7 +230,10 @@ async fn failed_detach_state_cleanup(named: bool) {
     );
 }
 
-#[expect(clippy::panic, reason = "an unexpected error variant fails the assertion")]
+#[expect(
+    clippy::panic,
+    reason = "an unexpected error variant fails the assertion"
+)]
 fn assert_cleanup_error(
     error: roomkit::RoomKitError,
     channel: &roomkit::model::ChannelId,
