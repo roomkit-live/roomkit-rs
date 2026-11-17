@@ -395,8 +395,7 @@ pub(crate) fn scripted_agent_of(
     }
     options.continuation = crate::continuation::policy(spec, run)?;
     options.external_tool_handler =
-        crate::acp_agents::handler::build_observed(spec, id.as_str(), run, &run.external_handlers)
-            .map_err(|error| error.to_string())?;
+        crate::acp_agents::handler::build_observed(spec, id.as_str(), run, &run.external_handlers)?;
     bounds(spec, &mut options)?;
     agent_settings(spec, &mut options)?;
     run.skills.script_executor(spec, &mut options)?;
