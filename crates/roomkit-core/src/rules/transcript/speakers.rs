@@ -262,8 +262,8 @@ fn next_free(label: &str, taken: &mut BTreeSet<String>) -> String {
 /// people or more do, those who have not spoken yet included, so that the
 /// agent knows who is there before each has spoken (RFC §6.4); `None`
 /// otherwise. Each name is quoted: a participant may choose theirs, and it
-/// must not read as the runtime's words. It names [`PEOPLE_NOTE_LIMIT`]
-/// people at most: those whose turns the reader reads (`spoken`, their
+/// must not read as the runtime's words. It names twenty people at most
+/// (`PEOPLE_NOTE_LIMIT`): those whose turns the reader reads (`spoken`, their
 /// labels) first, then the silent ones, each in the order they joined, and
 /// counts the others. Python's `people_note`.
 pub fn people_note(people: &[String], spoken: &[String]) -> Option<String> {
