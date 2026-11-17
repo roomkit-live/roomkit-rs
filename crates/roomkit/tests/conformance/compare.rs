@@ -312,6 +312,7 @@ impl Comparison<'_> {
         }
         self.external_handlers();
         self.continuations();
+        self.speaking();
         self.acp();
     }
 
@@ -332,6 +333,18 @@ impl Comparison<'_> {
                 actual.as_ref(),
                 &format!("external_handlers.{channel}"),
             );
+        }
+    }
+
+    fn speaking(&mut self) {
+        for (kind, entries) in [
+            ("speak_turns", &self.observed.speak_turns),
+            ("thinker_calls", &self.observed.thinker_calls),
+        ] {
+            for (channel, expected) in self.expect[kind].as_object().into_iter().flatten() {
+                let actual = entries.get(channel).cloned().map(Value::Array);
+                self.check(expected, actual.as_ref(), &format!("{kind}.{channel}"));
+            }
         }
     }
 

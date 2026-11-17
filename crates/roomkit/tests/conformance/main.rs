@@ -58,6 +58,7 @@ mod served_call_tests;
 mod shape;
 mod skill_registry;
 mod skills;
+mod speaking;
 mod store_calls;
 mod strategy_calls;
 mod subscription_calls;

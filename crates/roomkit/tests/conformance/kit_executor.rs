@@ -130,6 +130,18 @@ fn register(
             hook,
             turn_hook_handler::<AiResponseEvent>(hook, run),
         ),
+        HookTrigger::OnSpeakDecision => given(
+            run,
+            name,
+            hook,
+            turn_hook_handler::<roomkit_ai::SpeakDecisionEvent>(hook, run),
+        ),
+        HookTrigger::OnThought => given(
+            run,
+            name,
+            hook,
+            turn_hook_handler::<roomkit_ai::ThoughtEvent>(hook, run),
+        ),
         HookTrigger::OnPlanUpdated => given(
             run,
             name,

@@ -402,6 +402,7 @@ pub(crate) fn scripted_agent_with_skills(
     options.continuation = crate::continuation::policy(spec, run)?;
     options.external_tool_handler =
         crate::acp_agents::handler::build_observed(spec, id.as_str(), run, &run.external_handlers)?;
+    crate::speaking::install(spec, run, &mut options)?;
     bounds(spec, &mut options)?;
     agent_settings(spec, &mut options)?;
     run.skills.script_executor(spec, &mut options)?;

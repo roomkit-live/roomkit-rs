@@ -929,6 +929,8 @@ fn add_room_hook(
     let response = turn_hook_handler::<AiResponseEvent>(hook, run);
     let thinking = turn_hook_handler::<ThinkingEvent>(hook, run);
     let plan = turn_hook_handler::<PlanUpdatedEvent>(hook, run);
+    let speak = turn_hook_handler::<roomkit_ai::SpeakDecisionEvent>(hook, run);
+    let thought = turn_hook_handler::<roomkit_ai::ThoughtEvent>(hook, run);
     let speak_queue = turn_hook_handler::<roomkit::SpeakQueueEvent>(hook, run);
     let decision = turn_hook_handler::<roomkit::DispatchDecisionEvent>(hook, run);
     Ok(async move {
@@ -963,6 +965,14 @@ fn add_room_hook(
             }
             (None, HookTrigger::OnAiResponse) => {
                 kit.add_room_hook(&room, trigger, execution, response, options)
+                    .await
+            }
+            (None, HookTrigger::OnSpeakDecision) => {
+                kit.add_room_hook(&room, trigger, execution, speak, options)
+                    .await
+            }
+            (None, HookTrigger::OnThought) => {
+                kit.add_room_hook(&room, trigger, execution, thought, options)
                     .await
             }
             (None, HookTrigger::OnPlanUpdated) => {
@@ -1044,6 +1054,12 @@ pub(crate) fn register_hook(
         kit.hook(trigger, handler, options)
     } else if trigger == HookTrigger::OnDispatchDecision {
         let handler = turn_hook_handler::<roomkit::DispatchDecisionEvent>(hook, run);
+        kit.hook(trigger, handler, options)
+    } else if trigger == HookTrigger::OnSpeakDecision {
+        let handler = turn_hook_handler::<roomkit_ai::SpeakDecisionEvent>(hook, run);
+        kit.hook(trigger, handler, options)
+    } else if trigger == HookTrigger::OnThought {
+        let handler = turn_hook_handler::<roomkit_ai::ThoughtEvent>(hook, run);
         kit.hook(trigger, handler, options)
     } else if trigger == HookTrigger::OnPlanUpdated {
         let handler = turn_hook_handler::<PlanUpdatedEvent>(hook, run);

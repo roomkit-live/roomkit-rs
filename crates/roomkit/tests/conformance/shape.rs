@@ -133,6 +133,10 @@ const CHANNEL: &[&str] = &[
     "enable_planning",
     "thinking_coalesce_ms",
     "thinking_coalesce_chars",
+    "speak_policy",
+    "speak_timeout_ms",
+    "thinker",
+    "think_wait_ms",
     "publish_thinking_text",
     "publish_tool_call_text",
     "text_coalesce_ms",
@@ -417,6 +421,8 @@ const EXPECT: &[&str] = &[
     "lifecycle",
     "models",
     "continuations",
+    "speak_turns",
+    "thinker_calls",
     "external_handlers",
     "script_executors",
     "sandbox_executors",
@@ -902,6 +908,7 @@ fn planning(channel: &Value, path: &str, found: &mut Vec<String>) {
 
 fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
     crate::continuation::check(channel, path, found);
+    crate::speaking::check(channel, path, found);
     crate::acp_agents::handler::validate(channel, path, found);
     if let Some(verbs) = channel["verbs"].as_object() {
         for (name, verb) in verbs {
@@ -1142,6 +1149,7 @@ fn room_hook(hook: &Value, path: &str, found: &mut Vec<String>) {
 }
 
 fn hook_of(hook: &Value, known: &[&str], path: &str, found: &mut Vec<String>) {
+    crate::speaking::hook(hook, path, found);
     members(hook, known, path, found);
     for (index, reaction) in items(&hook["reactions"]) {
         let permitted = hook["trigger"] == "before_broadcast"
