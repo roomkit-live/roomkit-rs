@@ -54,6 +54,7 @@ pub(super) struct Tools {
     room_id: RoomId,
     channel_id: ChannelId,
     reports: Reports,
+    publishes_text: bool,
 }
 
 impl Tools {
@@ -62,6 +63,7 @@ impl Tools {
         room_id: RoomId,
         channel_id: ChannelId,
         answers_room: bool,
+        publishes_text: bool,
         handler: Option<std::sync::Arc<dyn roomkit_ai::ExternalToolHandler>>,
     ) -> Self {
         let reports = Reports::new(host.clone(), handler, room_id.clone());
@@ -71,6 +73,7 @@ impl Tools {
             room_id,
             channel_id,
             reports,
+            publishes_text,
         }
     }
 
@@ -132,16 +135,36 @@ impl Tools {
     }
 
     fn publish_start(&self, call: &Call) {
-        self.publish(EphemeralEventType::ToolCallStart, json!({
-            "tool_calls": [{"id": call.request.id, "name": call.request.name, "arguments": call.request.arguments}], "round": 0
-        }));
+        let mut entry = serde_json::Map::from_iter([
+            ("id".to_owned(), json!(call.request.id)),
+            ("name".to_owned(), json!(call.request.name)),
+        ]);
+        if self.publishes_text {
+            entry.insert("arguments".to_owned(), json!(call.request.arguments));
+        }
+        self.publish(
+            EphemeralEventType::ToolCallStart,
+            json!({
+                "tool_calls": [entry], "round": 0
+            }),
+        );
     }
 
     fn announce(&self, end: End) -> Pending {
-        self.publish(EphemeralEventType::ToolCallEnd, json!({
-            "tool_calls": [{"id": end.row.tool_id, "name": end.row.tool_name,
-                "result": end.preview, "status": end.row.status}], "round": 0, "duration_ms": end.row.duration_ms
-        }));
+        let mut entry = serde_json::Map::from_iter([
+            ("id".to_owned(), json!(end.row.tool_id)),
+            ("name".to_owned(), json!(end.row.tool_name)),
+            ("status".to_owned(), json!(end.row.status)),
+        ]);
+        if self.publishes_text {
+            entry.insert("result".to_owned(), json!(end.preview));
+        }
+        self.publish(
+            EphemeralEventType::ToolCallEnd,
+            json!({
+                "tool_calls": [entry], "round": 0, "duration_ms": end.row.duration_ms
+            }),
+        );
         self.reports.send(end.report, end.observe_only)
     }
 

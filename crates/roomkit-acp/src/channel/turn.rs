@@ -102,6 +102,7 @@ impl<T: AcpTransport> TurnStream<T> {
             room_id.clone(),
             channel_id.clone(),
             ask.answers_room,
+            shared.connector.publication.publishes_tool_text,
             shared.connector.handler.handler.clone(),
         ));
         let scope = super::publication::Scope::new(host.clone(), ask.answers_room);

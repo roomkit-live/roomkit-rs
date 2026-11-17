@@ -2,6 +2,7 @@
 
 mod foreign_scope;
 mod idle;
+mod tool_text;
 
 use std::sync::{Arc, Mutex, atomic::Ordering};
 

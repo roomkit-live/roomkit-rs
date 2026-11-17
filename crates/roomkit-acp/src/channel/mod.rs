@@ -69,6 +69,11 @@ pub struct AcpChannelOptions<T = StdioAcpTransport> {
     pub mcp_servers: Option<McpServers>,
     /// Publish a bounded thought preview to room subscribers; false by default.
     pub publish_thinking_text: bool,
+    /// Publish tool arguments, result previews, and full intermediate progress
+    /// updates to room subscribers (RFC §8.4).
+    /// Ephemeral events bypass `BEFORE_BROADCAST`; false keeps their structural
+    /// fields without changing the stored rows, hooks or reports.
+    pub publish_tool_call_text: bool,
     /// Optional permission and report handler; absent rejects every permission.
     pub external_tool_handler: Option<Arc<dyn roomkit_ai::ExternalToolHandler>>,
     /// Missed room messages carried into a prompt; 20 by default, zero disables it.
@@ -104,6 +109,7 @@ impl<T> Default for AcpChannelOptions<T> {
             additional_directories: None,
             mcp_servers: None,
             publish_thinking_text: false,
+            publish_tool_call_text: false,
             external_tool_handler: None,
             room_history: ROOM_HISTORY,
             context_contributor: None,
@@ -141,6 +147,7 @@ impl<T> fmt::Debug for AcpChannelOptions<T> {
             .field("description", &self.description.is_some())
             .field("instructions", &self.instructions.is_some())
             .field("publish_thinking_text", &self.publish_thinking_text)
+            .field("publish_tool_call_text", &self.publish_tool_call_text)
             .field(
                 "additional_directories",
                 &self.additional_directories.as_ref().map(Vec::len),
@@ -268,6 +275,7 @@ impl<T: AcpTransport> AcpChannel<T> {
             additional_directories,
             mcp_servers,
             publish_thinking_text,
+            publish_tool_call_text,
             external_tool_handler,
             room_history,
             context_contributor,
@@ -328,7 +336,11 @@ impl<T: AcpTransport> AcpChannel<T> {
                 connector: Arc::new(Connector::new(
                     transport,
                     authentication_method,
-                    publication::Publisher::new(channel_id.clone(), publish_thinking_text),
+                    publication::Publisher::new(
+                        channel_id.clone(),
+                        publish_thinking_text,
+                        publish_tool_call_text,
+                    ),
                     setup,
                     additional_directories,
                     mcp_servers,

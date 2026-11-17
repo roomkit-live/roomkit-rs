@@ -789,6 +789,7 @@ fn scripted_acp(acp: &Value, path: &str, found: &mut Vec<String>) {
     crate::acp_agents::context::validate(acp, path, found);
     crate::acp_agents::handler::validate(acp, path, found);
     crate::acp_agents::thinking::validate(acp, path, found);
+    crate::acp_agents::tool_text::validate(acp, path, found);
     let transport = &acp["transport"];
     optional(
         transport,

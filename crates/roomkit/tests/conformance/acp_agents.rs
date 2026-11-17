@@ -10,6 +10,8 @@ pub(crate) mod control;
 
 #[path = "acp_agents/thinking.rs"]
 pub(crate) mod thinking;
+#[path = "acp_agents/tool_text.rs"]
+pub(crate) mod tool_text;
 
 #[path = "acp_agents/mcp.rs"]
 pub(crate) mod mcp;
@@ -46,6 +48,7 @@ pub(crate) const ACP: &[&str] = &[
     "additional_directories",
     "mcp_servers",
     "publish_thinking_text",
+    "publish_tool_call_text",
     "external_tool_handler",
     "room_history",
     "context_contributor",
@@ -124,6 +127,7 @@ pub(crate) fn scripted_acp_channel(
         additional_directories: directories(spec)?,
         mcp_servers: mcp::servers(spec, id.as_str(), run)?,
         publish_thinking_text: thinking::publishes(spec)?,
+        publish_tool_call_text: tool_text::publishes(spec)?,
         external_tool_handler: handler::build(spec, id.as_str(), run)?,
         room_history: context::history(spec)?,
         context_contributor: context::build(spec, id.as_str(), run)?,

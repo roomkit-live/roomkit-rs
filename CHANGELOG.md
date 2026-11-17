@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **BREAKING** (RMK-1747). The `publish_tool_call_text` channel option enables ACP tool arguments, result previews and full intermediate progress for room subscribers. The default publishes structural fields only.
+
 - Expose `BACKGROUND_TOOL`, `TASK_STATUS_TOOL` and `CANCEL_TASK_TOOL` in `roomkit::tasks` for hosts that identify registered task tools.
 
 - Expose `received_events` for callers filtering blocked rows from an event history.

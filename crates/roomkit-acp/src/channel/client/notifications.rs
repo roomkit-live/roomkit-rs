@@ -100,7 +100,7 @@ impl ChannelClient {
         .await;
     }
 
-    pub(super) async fn progress(&self, session: &str, wire: Value) {
+    pub(super) async fn progress(&self, session: &str, mut wire: Value) {
         let tool = wire
             .get("toolCallId")
             .and_then(Value::as_str)
@@ -111,6 +111,17 @@ impl ChannelClient {
                 Some("completed" | "failed")
             )
         {
+            if !self.publication.publishes_tool_text {
+                let Some(fields) = wire.as_object_mut() else {
+                    return;
+                };
+                fields.retain(|key, _| {
+                    matches!(
+                        key.as_str(),
+                        "sessionUpdate" | "toolCallId" | "status" | "kind"
+                    )
+                });
+            }
             self.publish(
                 session,
                 EphemeralEventType::Custom,

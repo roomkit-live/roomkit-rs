@@ -41,6 +41,8 @@ fn acp_channel_options_defaults_as_python() {
     assert!(defaults.mcp_servers.is_none());
     // roomkit.ACPChannel.__init__(publish_thinking_text) = False
     assert!(!defaults.publish_thinking_text);
+    // roomkit.ACPChannel.__init__(publish_tool_call_text) = False
+    assert!(!defaults.publish_tool_call_text);
     // roomkit.ACPChannel.__init__(env) = None
     assert!(defaults.env.is_none());
     // roomkit.ACPChannel.__init__(inherit_env) = None

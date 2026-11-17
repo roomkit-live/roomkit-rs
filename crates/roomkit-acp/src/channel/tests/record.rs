@@ -4,6 +4,7 @@ mod abandoned;
 mod external_handler;
 mod scoped_publications;
 mod streaming;
+mod tool_text;
 mod usage_publication;
 
 use super::{Agent, PATIENCE, channel};

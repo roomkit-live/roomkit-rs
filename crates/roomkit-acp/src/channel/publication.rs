@@ -13,14 +13,20 @@ pub(super) struct Publisher {
     pub(super) bridge: ChannelPublication,
     pub(super) channel_id: ChannelId,
     pub(super) publishes_text: bool,
+    pub(super) publishes_tool_text: bool,
 }
 
 impl Publisher {
-    pub(super) fn new(channel_id: ChannelId, publishes_text: bool) -> Self {
+    pub(super) fn new(
+        channel_id: ChannelId,
+        publishes_text: bool,
+        publishes_tool_text: bool,
+    ) -> Self {
         Self {
             bridge: ChannelPublication::default(),
             channel_id,
             publishes_text,
+            publishes_tool_text,
         }
     }
 }

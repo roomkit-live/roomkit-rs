@@ -143,6 +143,16 @@ fn channel() -> (
     mpsc::UnboundedReceiver<DuplexStream>,
     Arc<AtomicUsize>,
 ) {
+    channel_with_options(AcpChannelOptions::default())
+}
+
+fn channel_with_options(
+    mut options: AcpChannelOptions<Piped>,
+) -> (
+    AcpChannel<Piped>,
+    mpsc::UnboundedReceiver<DuplexStream>,
+    Arc<AtomicUsize>,
+) {
     let (agents, opened) = mpsc::unbounded_channel();
     let closed = Arc::new(AtomicUsize::new(0));
     let transport = Piped {
@@ -150,10 +160,7 @@ fn channel() -> (
         closed: Arc::clone(&closed),
         log: Arc::default(),
     };
-    let options = AcpChannelOptions {
-        transport: Some(transport),
-        ..AcpChannelOptions::default()
-    };
+    options.transport = Some(transport);
     let channel = AcpChannel::new(ChannelId::new("claude").unwrap(), "/srv", options).unwrap();
     (channel, opened, closed)
 }
