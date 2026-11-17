@@ -165,9 +165,10 @@ pub enum HookTrigger {
     /// A handoff moved the room's phase (RFC §19.6): its payload is as
     /// `OnHandoff`'s; a phase saved by other means fires it not.
     OnPhaseTransition,
-    /// An AI channel's model began to reason (RFC §6.7, §9.2): its payload
-    /// is a `ThinkingEvent`, observed. A turn fires it, on the turn executor
-    /// hosting the channel.
+    /// A block of an AI channel's model's reasoning closed (RFC §6.7, §8.4,
+    /// §9.2): once per block, its payload a `ThinkingEvent` with the block's
+    /// text, observed. A turn fires it, on the turn executor hosting the
+    /// channel.
     OnAiThinking,
     /// A room's speak queue changed (RFC §19.7.5): its payload is a
     /// `SpeakQueueEvent`, observed.

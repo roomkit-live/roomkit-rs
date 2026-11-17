@@ -92,8 +92,7 @@ async fn close_at_end(cut: bool) {
         Arc::clone(&reached),
         cut.then(|| Arc::clone(&release)),
     ));
-    let agent =
-        AiChannel::new(channel("agent"), model.clone(), AiChannelOptions::default()).unwrap();
+    let agent = AiChannel::new(channel("agent"), model.clone(), call_text()).unwrap();
     kit.register_channel(ws).unwrap();
     kit.register_channel(agent).unwrap();
     kit.create_room(CreateRoomOptions {
@@ -182,4 +181,13 @@ async fn close_at_end(cut: bool) {
         }))
     );
     assert_eq!(event.contains_key("duration_ms"), !cut);
+}
+
+/// The agent's options: the end's result is the point, its preview is
+/// published only for a channel that publishes its calls' text (RFC §8.4).
+fn call_text() -> AiChannelOptions {
+    AiChannelOptions {
+        publish_tool_call_text: true,
+        ..AiChannelOptions::default()
+    }
 }

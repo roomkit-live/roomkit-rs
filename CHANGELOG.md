@@ -6,6 +6,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **BREAKING: a tool call's arguments and its result reach a room's realtime subscribers only for a channel that publishes them**, as Python's (RFC §8.4, RMK-970): `TOOL_CALL_START` carries each call's id, tool and intent, `TOOL_CALL_END` each call's id, tool, status and intent and the round's `duration_ms`; `AiChannelOptions::publish_tool_call_text` adds the arguments and the 500-character result preview.
+
+- **BREAKING: `ON_AI_THINKING` fires once per reasoning block, as the block closes, with the block's text**, as Python's (RFC §8.4, §9.2, RMK-817); it fired as the block opened, `ThinkingEvent::thinking` always empty; a host that used it to learn that the model began to reason reads the `THINKING_START` ephemeral instead.
+
 - Expose `roomkit::tools::named_blocks` and `FENCED_TAGS`, preserving Python's default tags and supplied tag order (RFC §6.4).
 
 - The first and last lines of an ACP agent's room context (`[Room context — …`, `[End of room context]`) are runtime marks, short ones, as Python's: a participant's copy in a missed message or in the request is replaced, the block roomkit-acp writes around them kept (RFC §6.4, RMK-1736).

@@ -320,7 +320,10 @@ impl Loop {
                     self.turn.as_ref(),
                     ids,
                     round,
-                    self.thinking_publication.answers_room,
+                    (
+                        self.thinking_publication.answers_room,
+                        self.thinking_publication.publishes_tool_call_text,
+                    ),
                 ),
                 self.thinking_publication,
             ),
@@ -806,7 +809,8 @@ impl Loop {
         // calls, as Python's ends before it executes them.
         let ids = (&self.context.room_id, &self.context.channel_id);
         let answers_room = self.thinking_publication.answers_room && !unrun;
-        let events = ToolEvents::new(self.turn.as_ref(), ids, round, answers_room);
+        let text = self.thinking_publication.publishes_tool_call_text;
+        let events = ToolEvents::new(self.turn.as_ref(), ids, round, (answers_room, text));
         let made = generation.calls.iter().map(|called| &called.call);
         let mut running = Running::start(events, made);
         let started = Instant::now();

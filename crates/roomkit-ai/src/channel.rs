@@ -127,6 +127,13 @@ pub struct AiChannelOptions {
     /// by default they read its length and its round alone. Python's
     /// `publish_thinking_text`.
     pub publish_thinking_text: bool,
+    /// Whether a room's realtime subscribers read each tool call's arguments
+    /// (`TOOL_CALL_START`) and its result's preview (`TOOL_CALL_END`). No
+    /// hook judges an ephemeral, so what a `BEFORE_BROADCAST` hook blocks on
+    /// the call's rows would reach them in clear: by default they read each
+    /// call's id, tool, status and intent alone (RFC §8.4). Python's
+    /// `publish_tool_call_text`.
+    pub publish_tool_call_text: bool,
     /// The window of the default memory: how many of the room's latest
     /// events a turn reads, its own among them (RFC §20.3).
     pub max_context_events: usize,
@@ -324,6 +331,7 @@ impl Default for AiChannelOptions {
             text_coalesce_chars: 256,
             publish_text_deltas: false,
             publish_thinking_text: false,
+            publish_tool_call_text: false,
             max_context_events: 50,
             memory: None,
             tool_handler: None,
@@ -454,6 +462,7 @@ pub struct AiChannel<P> {
     /// `publish_text_deltas` asks for its text.
     text_deltas: Option<(f64, usize)>,
     publish_thinking_text: bool,
+    publish_tool_call_text: bool,
     reasoning_effort: Option<String>,
     response_schema: Option<Map<String, Value>>,
     /// What configures each turn (RFC Appendix A.9).
@@ -577,6 +586,7 @@ impl<P> Clone for AiChannel<P> {
             thinking_coalesce: self.thinking_coalesce,
             text_deltas: self.text_deltas,
             publish_thinking_text: self.publish_thinking_text,
+            publish_tool_call_text: self.publish_tool_call_text,
             reasoning_effort: self.reasoning_effort.clone(),
             response_schema: self.response_schema.clone(),
             turn_configs: self.turn_configs.clone(),
@@ -758,6 +768,7 @@ impl<P: AiProvider> AiChannel<P> {
                 .publish_text_deltas
                 .then_some((options.text_coalesce_ms, options.text_coalesce_chars)),
             publish_thinking_text: options.publish_thinking_text,
+            publish_tool_call_text: options.publish_tool_call_text,
             reasoning_effort: options.reasoning_effort,
             response_schema: options.response_schema,
             turn_configs: TurnConfigs::new(options.config_provider),
@@ -1067,6 +1078,7 @@ impl<P: AiProvider> AiChannel<P> {
             coalesce_ms: self.thinking_coalesce.0,
             coalesce_chars: self.thinking_coalesce.1,
             publishes_text: self.publish_thinking_text,
+            publishes_tool_call_text: self.publish_tool_call_text,
             answers_room: event
                 .response_visibility
                 .as_ref()

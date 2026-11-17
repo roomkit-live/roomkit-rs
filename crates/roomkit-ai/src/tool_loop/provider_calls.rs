@@ -31,7 +31,10 @@ impl Loop {
                 self.turn.as_ref(),
                 (&self.context.room_id, &self.context.channel_id),
                 round,
-                self.thinking_publication.answers_room,
+                (
+                    self.thinking_publication.answers_room,
+                    self.thinking_publication.publishes_tool_call_text,
+                ),
             ),
             eviction: Arc::clone(&self.eviction),
             room_id: self.context.room_id.clone(),

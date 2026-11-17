@@ -85,6 +85,9 @@ pub(crate) struct ThinkingPublication {
     pub(crate) coalesce_chars: usize,
     /// Whether they read the reasoning's text.
     pub(crate) publishes_text: bool,
+    /// Whether they read each tool call's arguments and result's preview
+    /// (RFC §8.4).
+    pub(crate) publishes_tool_call_text: bool,
     /// Whether the turn's trigger scopes its answers nowhere: only then may
     /// it publish anything to them (RFC §8.4).
     pub(crate) answers_room: bool,
@@ -174,8 +177,8 @@ impl ThinkingWindow {
         }
     }
 
-    /// Adds a piece of reasoning, its window opening: `ON_AI_THINKING` and
-    /// `THINKING_START`, then its deltas as the coalescer lets them go.
+    /// Adds a piece of reasoning, its window opening: `THINKING_START`,
+    /// then its deltas as the coalescer lets them go.
     pub(super) fn add(&mut self, thinking: &str) {
         self.chunks.push(thinking.to_owned());
         let Some(observers) = self.observers.as_ref() else {
@@ -183,11 +186,6 @@ impl ThinkingWindow {
         };
         if !self.started {
             self.started = true;
-            let event = ThinkingEvent {
-                round_index: self.round,
-                ..ThinkingEvent::new(observers.room_id.clone(), observers.channel_id.clone(), "")
-            };
-            observers.turn.observe_turn(&event, || {});
             observers.publish(EphemeralEventType::ThinkingStart, "", self.round);
         }
         for delta in self.coalescer.add(thinking) {
@@ -196,7 +194,8 @@ impl ThinkingWindow {
     }
 
     /// Closes the window: what the coalescer holds, then `THINKING_END`
-    /// with its block. Nothing when none is open.
+    /// with its block, and `ON_AI_THINKING` with the block's whole text,
+    /// once per block (RFC §8.4, §9.2). Nothing when none is open.
     pub(super) fn end(&mut self) {
         if !self.started || self.chunks.is_empty() {
             return;
@@ -215,6 +214,15 @@ impl ThinkingWindow {
             observers.publish(EphemeralEventType::ThinkingDelta, &delta, self.round);
         }
         observers.publish(EphemeralEventType::ThinkingEnd, &block, self.round);
+        let event = ThinkingEvent {
+            round_index: self.round,
+            ..ThinkingEvent::new(
+                observers.room_id.clone(),
+                observers.channel_id.clone(),
+                block,
+            )
+        };
+        observers.turn.observe_turn(&event, || {});
     }
 
     /// Closes the window of a try that showed reasoning alone before it

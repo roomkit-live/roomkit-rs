@@ -351,9 +351,10 @@ impl TurnPayload for AiResponseEvent {
     const TRIGGER: HookTrigger = HookTrigger::OnAiResponse;
 }
 
-/// An AI channel's model began to reason (RFC §6.7, §9.2): what
-/// `ON_AI_THINKING` hands, Python's `ThinkingEvent(room_id, channel_id,
-/// thinking, round_index=0, timestamp=<factory>)`. The same reasoning goes
+/// A block of an AI channel's model's reasoning, as it closed (RFC §6.7,
+/// §8.4, §9.2): what `ON_AI_THINKING` hands, once per block, Python's
+/// `ThinkingEvent(room_id, channel_id, thinking, round_index=0,
+/// timestamp=<factory>)`. The same reasoning goes
 /// out as ephemeral events for live screens; the hook observes it with no
 /// realtime backend.
 #[derive(Clone, Debug, PartialEq)]
@@ -362,7 +363,7 @@ pub struct ThinkingEvent {
     pub room_id: RoomId,
     /// The channel doing the reasoning.
     pub channel_id: ChannelId,
-    /// The reasoning text; empty when the model only began.
+    /// The block's whole reasoning text.
     pub thinking: String,
     /// The tool-loop round this reasoning belongs to.
     pub round_index: u32,

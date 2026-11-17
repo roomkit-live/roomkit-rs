@@ -232,6 +232,7 @@ async fn wire_composition_reaches_the_bus_before_execution() {
         |config| config,
         |options| roomkit_ai::AiChannelOptions {
             thinking_coalesce_ms: 0.0,
+            publish_tool_call_text: true,
             ..options
         },
     )

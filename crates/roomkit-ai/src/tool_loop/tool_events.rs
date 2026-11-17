@@ -13,7 +13,7 @@
 use roomkit::TurnHost;
 use roomkit::model::{ChannelId, Metadata, RoomId, ToolCall};
 use roomkit::realtime::{EphemeralEvent, EphemeralEventType};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 /// The characters of a result a `TOOL_CALL_END` previews: Python's
 /// `_RESULT_PREVIEW`.
@@ -51,6 +51,9 @@ pub(super) struct ToolEvents {
     room_id: RoomId,
     channel_id: ChannelId,
     round: u32,
+    /// Whether each call's arguments and result's preview go out
+    /// (`publish_tool_call_text`, RFC §8.4).
+    text: bool,
 }
 
 impl ToolEvents {
@@ -61,12 +64,13 @@ impl ToolEvents {
     }
 
     /// Round `round`'s publisher, none outside a kit or for a turn whose
-    /// trigger scopes its answers (`answers_room` false, RFC §8.4).
+    /// trigger scopes its answers (`answers_room` false, RFC §8.4); `text`
+    /// whether its events carry each call's arguments and result.
     pub(super) fn new(
         turn: Option<&TurnHost>,
         (room_id, channel_id): (&RoomId, &ChannelId),
         round: u32,
-        answers_room: bool,
+        (answers_room, text): (bool, bool),
     ) -> Option<Self> {
         let turn = turn.filter(|_| answers_room)?;
         Some(Self {
@@ -74,46 +78,50 @@ impl ToolEvents {
             room_id: room_id.clone(),
             channel_id: channel_id.clone(),
             round,
+            text,
         })
     }
 
     /// `TOOL_CALL_START`: each of `calls` with its id, its tool, its
-    /// arguments, and its intent when it has one.
+    /// arguments for a channel that publishes its calls' text, and its
+    /// intent when it has one.
     pub(super) fn started<'a>(&self, calls: impl IntoIterator<Item = &'a ToolCall>) {
         let calls = calls
             .into_iter()
             .map(|call| {
-                with_intent(
-                    json!({
-                        "id": call.id,
-                        "name": call.name,
-                        "arguments": Value::Object(call.arguments.clone()),
-                    }),
-                    call,
-                )
+                let mut started = Map::new();
+                started.insert("id".to_owned(), json!(call.id));
+                started.insert("name".to_owned(), json!(call.name));
+                if self.text {
+                    started.insert(
+                        "arguments".to_owned(),
+                        Value::Object(call.arguments.clone()),
+                    );
+                }
+                with_intent(Value::Object(started), call)
             })
             .collect();
         self.publish(EphemeralEventType::ToolCallStart, calls, None);
     }
 
-    /// `TOOL_CALL_END`: each of `ends` with its result's first
-    /// [`RESULT_PREVIEW`] characters and its status, and its intent when its
-    /// call has one; `duration_ms` the round's, once its calls ran.
+    /// `TOOL_CALL_END`: each of `ends` with its status, its result's first
+    /// [`RESULT_PREVIEW`] characters for a channel that publishes its calls'
+    /// text, and its intent when its call has one; `duration_ms` the
+    /// round's, once its calls ran.
     pub(super) fn ended(&self, ends: &[Ended], duration_ms: Option<u64>) {
         let calls = ends
             .iter()
             .map(|end| {
-                let preview: String = end.result.chars().take(RESULT_PREVIEW).collect();
                 let status = if end.failed { "failed" } else { "completed" };
-                with_intent(
-                    json!({
-                        "id": end.call.id,
-                        "name": end.call.name,
-                        "result": preview,
-                        "status": status,
-                    }),
-                    &end.call,
-                )
+                let mut ended = Map::new();
+                ended.insert("id".to_owned(), json!(end.call.id));
+                ended.insert("name".to_owned(), json!(end.call.name));
+                if self.text {
+                    let preview: String = end.result.chars().take(RESULT_PREVIEW).collect();
+                    ended.insert("result".to_owned(), Value::from(preview));
+                }
+                ended.insert("status".to_owned(), Value::from(status));
+                with_intent(Value::Object(ended), &end.call)
             })
             .collect();
         self.publish(EphemeralEventType::ToolCallEnd, calls, duration_ms);
