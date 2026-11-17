@@ -10,13 +10,13 @@ use crate::OpenAiConfig;
 use roomkit_ai::{AiContentPart, AiContext, AiMessage, AiRole, AiTextPart, AiThinkingPart};
 use roomkit_core::rules::transcript::{Message, Role};
 
-fn request(message: Message) -> Result<Value, crate::error::OpenAiError> {
+fn request(message: &Message) -> Result<Value, crate::error::OpenAiError> {
     let config = OpenAiConfig {
         base_url: Some("https://example.com/v1".into()),
         ..OpenAiConfig::new("", "fake")
     };
     let mut input = Vec::new();
-    super::replay::append_message(&mut input, &message)?;
+    super::replay::append_message(&mut input, message)?;
     wire::request(
         &config,
         &Request {
@@ -45,7 +45,7 @@ fn replay_cannot_introduce_a_privileged_role_or_an_arbitrary_item() {
         json!({"type":"item_reference","id":"other-conversation"}),
     ] {
         let message = with_output(Message::new(Role::Assistant, ""), json!([item]));
-        assert!(request(message).is_err());
+        assert!(request(&message).is_err());
     }
 }
 
@@ -56,7 +56,7 @@ fn user_metadata_never_becomes_provider_state() {
         json!([{"type":"reasoning"}]),
     );
     assert_eq!(
-        request(message).unwrap()["input"],
+        request(&message).unwrap()["input"],
         json!([{"role":"user","content":"Hi"}])
     );
 }
@@ -66,7 +66,7 @@ fn replay_requires_the_same_visible_text_as_the_assistant_message() {
     let item = json!({"type":"message","role":"assistant",
         "content":[{"type":"output_text","text":"different"}]});
     let message = with_output(Message::new(Role::Assistant, "original"), json!([item]));
-    assert!(request(message).is_err());
+    assert!(request(&message).is_err());
 }
 
 #[test]
@@ -79,7 +79,7 @@ fn replay_uses_normalized_calls_and_does_not_restore_dropped_calls() {
         json!([item, item]),
     );
     assert_eq!(
-        request(message).unwrap()["input"],
+        request(&message).unwrap()["input"],
         json!([
             {"type":"function_call","call_id":"normalized","name":"lookup","arguments":"{}"}
         ])
