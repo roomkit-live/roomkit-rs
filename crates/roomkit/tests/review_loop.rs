@@ -13,7 +13,9 @@ use roomkit::model::{
     ChannelId, ChannelType, EventContent, InboundMessage, Metadata, RoomId, TextContent,
 };
 use roomkit::orchestration::{LoopOptions, StrategyAgent};
-use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
+use roomkit::testing::{
+    EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
+};
 use roomkit::{
     AttachChannelOptions, CreateRoomOptions, GetTimelineOptions, Loop, Orchestration,
     ProcessInboundOptions, RoomKit, RoomKitOptions,
@@ -148,6 +150,47 @@ async fn a_loop_of_live_agents_revises_until_its_reviewer_approves() {
     // The reviewer is the kit's, never the room's.
     assert!(kit.get_channel(&id("editor")).is_some());
     kit.close().await.unwrap();
+}
+
+// Python: tests/test_declared_strategies.py::test_a_reviewer_whose_turns_take_no_owner_tools_approves_nothing
+#[tokio::test]
+async fn a_reviewer_whose_turns_take_no_owner_tools_approves_nothing() {
+    // An echo agent takes no tool of the owner: never given `submit_review`,
+    // its text is no verdict, even a verdict's JSON (RMK-597, RFC §19.7.4).
+    for words in ["APPROVED", r#"{"approved": true, "feedback": ""}"#] {
+        let writer = agent("writer", "Writer", &["Draft one.", "Draft two."]);
+        let editor = EchoAgent::new(id("editor"), words, EchoAgentOptions::default());
+        let options = LoopOptions {
+            reviewer: Some(StrategyAgent::channel(editor)),
+            max_iterations: 2,
+            ..LoopOptions::default()
+        };
+        let review = Arc::new(Loop::new(StrategyAgent::channel(writer), options).unwrap());
+        let kit = room(Arc::clone(&review)).await;
+        Orchestration::install(review.as_ref(), &kit, &RoomId::new("r1").unwrap())
+            .await
+            .unwrap();
+
+        let message = InboundMessage::new(id("sms"), "u1", TextContent::new("Write it."));
+        kit.process_inbound(message, ProcessInboundOptions::default())
+            .await
+            .unwrap();
+
+        let timeline = kit
+            .get_timeline(&RoomId::new("r1").unwrap(), GetTimelineOptions::default())
+            .await
+            .unwrap();
+        let answers: Vec<_> = timeline
+            .iter()
+            .filter(|event| event.source.channel_id == id("writer"))
+            .map(|event| {
+                let field = |name: &str| event.metadata.get(name).cloned();
+                (field("approved"), field("iteration"))
+            })
+            .collect();
+        assert_eq!(answers, [(Some(json!(false)), Some(json!(2)))], "{words:?}");
+        kit.close().await.unwrap();
+    }
 }
 
 // Python: tests/orchestration/test_strategy_loop.py::TestLoopInstall::test_skips_already_registered_reviewer
