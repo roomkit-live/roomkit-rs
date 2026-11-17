@@ -1,6 +1,5 @@
 //! The AI loop's per-occurrence right, carried through runtime cancellation.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use super::{ToolCall, TurnHost};
@@ -8,7 +7,7 @@ use super::{ToolCall, TurnHost};
 #[derive(Clone)]
 pub(super) struct ReportClaim {
     right: Arc<dyn Fn() -> bool + Send + Sync>,
-    scope: Option<Arc<dyn Any + Send + Sync>>,
+    scope: Option<Arc<dyn crate::ToolCallScope>>,
 }
 
 impl std::fmt::Debug for ReportClaim {

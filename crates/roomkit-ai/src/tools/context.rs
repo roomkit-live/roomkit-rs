@@ -1,6 +1,7 @@
 //! A caller-described tool turn, scoped across asynchronous suspension.
 
 mod catalogue;
+mod owner;
 mod reports;
 
 use reports::Reports;
@@ -232,7 +233,7 @@ pub(crate) fn continue_ai_turn<F: Future>(
 }
 
 fn current() -> Option<Arc<Scope>> {
-    roomkit::current_tool_call_scope()?.downcast::<Scope>().ok()
+    owner::current()
 }
 
 pub(crate) fn current_tool_room_metadata() -> Option<Arc<Metadata>> {
@@ -315,7 +316,7 @@ pub(crate) async fn within_call<T>(
 pub(crate) fn closing_context() -> ClosingContext {
     let mut closing = ClosingContext::default();
     for scope in roomkit::current_tool_call_scopes() {
-        if let Ok(scope) = scope.downcast::<Scope>() {
+        if let Ok(scope) = scope.into_any().downcast::<Scope>() {
             closing.extend(&scope.closing);
         }
     }

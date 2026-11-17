@@ -24,6 +24,8 @@ use serde_json::Value;
 
 use super::Metadata;
 
+mod changes;
+
 /// Turn-level metadata merged into every message event the turn produces:
 /// each message carries the record as it stands when the message is created
 /// (RFC §6.7). Python's `ResponseMetadata`; a clone is the same record, as

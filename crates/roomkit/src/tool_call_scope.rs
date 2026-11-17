@@ -4,12 +4,14 @@
 //! copies. The call is an AI channel's (`roomkit_ai::current_tool_call`);
 //! the kit only carries it, as it carries its own context.
 
-use std::any::Any;
 use std::future::Future;
 use std::sync::{Arc, Mutex, PoisonError};
 
+mod owner;
+pub use owner::{OwnerToolContext, OwnerToolIdentity, OwnerToolScope, ToolCallScope};
+
 /// The call a handler runs within, as its channel's crate scopes it.
-type Call = Arc<dyn Any + Send + Sync>;
+type Call = Arc<dyn ToolCallScope>;
 
 tokio::task_local! {
     static TOOL_CALL: Call;
@@ -19,7 +21,7 @@ tokio::task_local! {
 /// The tool call the current task runs within, as its channel scoped it;
 /// `None` outside one. For `roomkit_ai::current_tool_call`.
 #[doc(hidden)]
-pub fn current_tool_call_scope() -> Option<Arc<dyn Any + Send + Sync>> {
+pub fn current_tool_call_scope() -> Option<Arc<dyn ToolCallScope>> {
     TOOL_CALL.try_with(Arc::clone).ok()
 }
 
@@ -27,7 +29,7 @@ pub fn current_tool_call_scope() -> Option<Arc<dyn Any + Send + Sync>> {
 /// Internal channel teardown reads their identities without installing any
 /// caller's tool, actor or turn context on the shutdown task (RFC §12.10.4).
 #[doc(hidden)]
-pub fn current_tool_call_scopes() -> Vec<Arc<dyn Any + Send + Sync>> {
+pub fn current_tool_call_scopes() -> Vec<Arc<dyn ToolCallScope>> {
     let mut scopes: Vec<_> = current_tool_call_scope().into_iter().collect();
     if let Ok(callers) = CLOSING_CALLERS.try_with(|callers| callers.snapshot()) {
         scopes.extend(callers);
@@ -73,10 +75,7 @@ impl CallerScopes {
 
 /// Runs `work` within the tool call `call`. For `roomkit_ai`'s handlers.
 #[doc(hidden)]
-pub async fn within_tool_call_scope<F: Future>(
-    call: Arc<dyn Any + Send + Sync>,
-    work: F,
-) -> F::Output {
+pub async fn within_tool_call_scope<F: Future>(call: Arc<dyn ToolCallScope>, work: F) -> F::Output {
     TOOL_CALL.scope(call, work).await
 }
 
