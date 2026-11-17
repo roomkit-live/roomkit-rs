@@ -10,7 +10,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use super::LifecycleError;
-use super::change::{self, Decision, SectionChange, Telling};
+use super::change::{self, Decision, Notification, SectionChange, Telling};
 use super::{record, report};
 use crate::model::{ChannelId, ErrorRecord, Room, RoomContext, RoomId};
 use crate::ops::io::Io;
@@ -30,8 +30,8 @@ pub(crate) enum SectionError<R> {
     Store(ErrorRecord),
     Lock(ErrorRecord),
     Refused(R),
-    /// The channel the change told refused it, which is undone (RFC §6.1
-    /// `on_room_attached`).
+    /// A room callback refused the change. Attach restores its prior binding;
+    /// a binding notification leaves storage and prevents records and hooks.
     Channel {
         channel_id: ChannelId,
         error: ErrorRecord,
@@ -206,6 +206,7 @@ struct Told<D> {
     room_id: RoomId,
     records: Vec<Record>,
     undo: Option<VecDeque<StoreRequest>>,
+    notification: Notification,
 }
 
 /// The room's read a change waits for once the channel it told answered,
@@ -278,7 +279,7 @@ impl<C: SectionChange> Changing<C> {
                 binding,
                 records,
                 undo,
-                ..
+                notification,
             } = telling;
             self.told = Some(Told {
                 effect,
@@ -287,6 +288,7 @@ impl<C: SectionChange> Changing<C> {
                 room_id: binding.room_id,
                 records,
                 undo,
+                notification,
             });
             return Progress::Waiting;
         }
@@ -336,6 +338,9 @@ impl<C: SectionChange> Changing<C> {
         told: Told<C::Done>,
         outcome: Outcome,
     ) -> Progress<SectionResult<C>> {
+        if told.notification == Notification::BindingUpdated {
+            return self.on_binding_updated(cx, told, outcome);
+        }
         let Told {
             mut decision,
             channel_id,
@@ -368,6 +373,27 @@ impl<C: SectionChange> Changing<C> {
             records,
         });
         Progress::Waiting
+    }
+
+    /// The synchronous binding callback cannot await writes into its room.
+    /// Keep the decided context, and never record or announce a refusal.
+    fn on_binding_updated(
+        &mut self,
+        cx: &mut Cx<'_>,
+        told: Told<C::Done>,
+        outcome: Outcome,
+    ) -> Progress<SectionResult<C>> {
+        if let Outcome::Failed(error) = outcome {
+            return Progress::Done(Err(SectionError::Channel {
+                channel_id: told.channel_id,
+                error,
+            }));
+        }
+        let mut decision = told.decision;
+        if let Some(context) = C::told_context(&mut decision.done) {
+            change::write_records(cx, &mut decision.writes, context, &told.records);
+        }
+        self.write_next(cx, *decision)
     }
 
     /// Goes on once the room is read again after its channel answered: the

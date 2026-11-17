@@ -620,6 +620,15 @@ pub enum ChannelRequest {
         /// The binding, as the lock finds it.
         binding: ChannelBinding,
     },
+    /// Call the channel's synchronous `update_binding` after a gate update,
+    /// including an unchanged one, under the room lock before lifecycle
+    /// records and hooks. Answer [`ChannelOutcome::Told`] if it succeeds or
+    /// the channel is no longer held. [`Outcome::Failed`] leaves the binding
+    /// stored and prevents records and hooks.
+    BindingUpdated {
+        /// The binding as stored, including fields the update did not change.
+        binding: ChannelBinding,
+    },
 }
 
 /// The channel that reads a turn's response as it is written (RFC §6.1
@@ -926,9 +935,10 @@ pub enum ChannelOutcome {
     /// [`ChannelRequest::OnEvent`], and of [`ChannelRequest::ReadStream`]
     /// for a turn that raised once its stream was read.
     Raised(Box<Raised>),
-    /// The channel was told of its room's attach or detach, or holds
-    /// nothing to be told: an answer of [`ChannelRequest::RoomAttached`] and
-    /// [`ChannelRequest::RoomDetached`].
+    /// The channel was told of its room's attach, detach or gate update, or
+    /// holds nothing to be told: an answer of [`ChannelRequest::RoomAttached`],
+    /// [`ChannelRequest::RoomDetached`] or
+    /// [`ChannelRequest::BindingUpdated`].
     Told,
     /// The binding with its addresses in the channel's form: the answer of
     /// [`ChannelRequest::NamedCorrespondent`].

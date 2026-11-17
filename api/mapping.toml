@@ -692,12 +692,6 @@ reason = "decision 12: Python's class attributes channel_type, category and dire
 
 [[missing]]
 python = "roomkit.Channel"
-members = ["update_binding"]
-scope = "text"
-reason = "not in 0.x: the binding a framework call stored (lot 4's list)"
-
-[[missing]]
-python = "roomkit.Channel"
 members = ["connect_session", "disconnect_session"]
 scope = "media"
 reason = "not in 0.x: the long-lived session an inbound message carries, a voice or video one (lot 4's list)"

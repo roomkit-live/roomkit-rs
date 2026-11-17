@@ -1194,6 +1194,9 @@ impl Sim {
             Request::Channel(ChannelRequest::RoomDetached { binding }) => {
                 format!("on_room_detached {}", binding.channel_id)
             }
+            Request::Channel(ChannelRequest::BindingUpdated { binding }) => {
+                format!("update_binding {}", binding.channel_id)
+            }
             Request::Channel(ChannelRequest::RoutedRecipient { binding }) => {
                 format!("routed recipient {}", binding.channel_id)
             }
@@ -1211,6 +1214,10 @@ impl Sim {
 
     /// Executes `request`, the current run's `effect`; `None` for a lock, a
     /// lane or a ticket's turn another run holds, which waits.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "a dispatch: one arm per request the simulated driver answers"
+    )]
     fn execute(
         &mut self,
         effect: EffectId,
@@ -1276,6 +1283,9 @@ impl Sim {
             Request::Channel(
                 ChannelRequest::RoomAttached { .. } | ChannelRequest::RoomDetached { .. },
             ) => Outcome::Channel(ChannelOutcome::Told),
+            Request::Channel(ChannelRequest::BindingUpdated { binding }) => {
+                self.binding_updated(&binding)
+            }
             // No scripted channel overrides its recipient: routing reads the key.
             Request::Channel(ChannelRequest::RoutedRecipient { .. }) => {
                 Outcome::Channel(ChannelOutcome::Recipient(None))
@@ -1323,6 +1333,21 @@ impl Sim {
             }
         };
         Some(outcome)
+    }
+
+    /// A gate notification carries exactly the binding already stored.
+    fn binding_updated(&mut self, binding: &ChannelBinding) -> Outcome {
+        self.on_room(&binding.room_id, |sim| {
+            assert_eq!(
+                sim.bindings
+                    .iter()
+                    .find(|entry| entry.channel_id == binding.channel_id),
+                Some(binding)
+            );
+            sim.trace
+                .push(format!("update_binding {}", binding.channel_id));
+            Outcome::Channel(ChannelOutcome::Told)
+        })
     }
 
     /// The event `event_id`, whichever room holds it (RFC §14.1 `get_event`).
@@ -1490,6 +1515,10 @@ impl Sim {
             ),
             Request::Channel(ChannelRequest::RoomDetached { binding }) => (
                 format!("on_room_detached {}", binding.channel_id),
+                ErrorRecord::new("ChannelError", "the outside world said no"),
+            ),
+            Request::Channel(ChannelRequest::BindingUpdated { binding }) => (
+                format!("update_binding {}", binding.channel_id),
                 ErrorRecord::new("ChannelError", "the outside world said no"),
             ),
             Request::Store(StoreRequest::GetEvent { event_id }) => {

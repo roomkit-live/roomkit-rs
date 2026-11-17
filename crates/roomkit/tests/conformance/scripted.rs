@@ -247,6 +247,7 @@ pub(crate) struct ScriptedChannel {
     deliver_stream: Reactions,
     on_room_attached: Reactions,
     on_room_detached: Reactions,
+    binding_update: Option<Value>,
     verbs: crate::channel_verbs::Verbs,
     /// What its own address methods answer: the defaults when `None`.
     addresses: Option<Value>,
@@ -304,6 +305,7 @@ impl ScriptedChannel {
             deliver_stream: Reactions::new(spec.get("deliver_stream")),
             on_room_attached: Reactions::new(spec.get("on_room_attached")),
             on_room_detached: Reactions::new(spec.get("on_room_detached")),
+            binding_update: spec.get("update_binding").cloned(),
             verbs: crate::channel_verbs::Verbs::new(spec["verbs"].clone()),
             addresses: spec.get("addresses").cloned(),
             streams_in: spec
@@ -577,6 +579,28 @@ impl Channel for ScriptedChannel {
 
     fn room_state(&self, room_id: &RoomId) -> Result<Metadata, ChannelError> {
         Ok(self.verbs.state(room_id))
+    }
+
+    fn update_binding(
+        &self,
+        room_id: &RoomId,
+        binding: &ChannelBinding,
+    ) -> Result<(), ChannelError> {
+        let Some(control) = &self.binding_update else {
+            return Ok(());
+        };
+        if let Some(run) = self.run.upgrade() {
+            run.record_room_callback(
+                room_id.as_str(),
+                &self.declaration.channel_id,
+                "update_binding",
+                Some(binding),
+            );
+        }
+        if let Some(message) = control["fail"].as_str() {
+            return Err(Box::new(ScriptedFailure(message.to_owned())));
+        }
+        Ok(())
     }
 
     fn restore_room_state(&self, room_id: &RoomId, state: Metadata) -> Result<(), ChannelError> {

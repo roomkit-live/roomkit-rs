@@ -9,6 +9,7 @@
 
 mod answering;
 mod authors;
+mod binding_notifications;
 mod budget;
 mod edits;
 mod inbound;

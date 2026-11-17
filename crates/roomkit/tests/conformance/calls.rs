@@ -636,6 +636,7 @@ fn binding_options(spec: &Value) -> Result<AttachChannelOptions, Unreadable> {
         options.access = access;
     }
     options.muted = optional(spec, "muted")?.unwrap_or_default();
+    options.output_muted = optional(spec, "output_muted")?.unwrap_or_default();
     if let Some(visibility) = optional::<Visibility>(spec, "visibility")? {
         options.visibility = visibility;
     }

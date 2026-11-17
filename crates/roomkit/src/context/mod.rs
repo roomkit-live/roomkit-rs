@@ -255,6 +255,7 @@ impl Work {
                 | ChannelRequest::StreamsIn { .. }
                 | ChannelRequest::RoomAttached { .. }
                 | ChannelRequest::RoomDetached { .. }
+                | ChannelRequest::BindingUpdated { .. }
                 | ChannelRequest::NamedCorrespondent { .. }
                 | ChannelRequest::RoutedRecipient { .. },
             )

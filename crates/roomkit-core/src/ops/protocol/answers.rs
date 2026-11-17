@@ -75,7 +75,9 @@ impl Request {
             ) => RequestKind::ChannelCall,
             Self::Channel(ChannelRequest::StreamsIn { .. }) => RequestKind::StreamsIn,
             Self::Channel(
-                ChannelRequest::RoomAttached { .. } | ChannelRequest::RoomDetached { .. },
+                ChannelRequest::RoomAttached { .. }
+                | ChannelRequest::RoomDetached { .. }
+                | ChannelRequest::BindingUpdated { .. },
             ) => RequestKind::RoomCallback,
             Self::Channel(ChannelRequest::NamedCorrespondent { .. }) => {
                 RequestKind::NamedCorrespondent

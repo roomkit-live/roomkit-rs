@@ -502,6 +502,24 @@ pub trait Channel: Send + Sync + 'static {
         async { Ok(()) }
     }
 
+    /// Receives the binding after mute, unmute, output mute, output unmute
+    /// or access updates, including an update that changes nothing. The
+    /// callback runs synchronously under the room lock, after storage and
+    /// before lifecycle records or hooks. An error leaves the binding stored
+    /// and prevents those records and hooks. Visibility and metadata updates
+    /// do not call it. The default does nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns the channel's refusal, reported as [`RoomKitError::Channel`](crate::RoomKitError::Channel).
+    fn update_binding(
+        &self,
+        _room_id: &RoomId,
+        _binding: &ChannelBinding,
+    ) -> Result<(), ChannelError> {
+        Ok(())
+    }
+
     /// Takes `event`, committed in `room_id`, as a message the channel's
     /// memory is handed without a turn: a discussion's (RFC §19.7.5 rule 3),
     /// through the turn backend, whose executor logs what it raises (RFC
@@ -812,6 +830,12 @@ pub(crate) trait DynChannel: Send + Sync {
 
     fn room_state(&self, room_id: &RoomId) -> Result<Metadata, ChannelError>;
 
+    fn update_binding(
+        &self,
+        room_id: &RoomId,
+        binding: &ChannelBinding,
+    ) -> Result<(), ChannelError>;
+
     fn restore_room_state(&self, room_id: &RoomId, state: Metadata) -> Result<(), ChannelError>;
 
     fn close(&self) -> BoxFuture<'_, ()>;
@@ -822,6 +846,14 @@ pub(crate) trait DynChannel: Send + Sync {
 }
 
 impl<C: Channel> DynChannel for C {
+    fn update_binding(
+        &self,
+        room_id: &RoomId,
+        binding: &ChannelBinding,
+    ) -> Result<(), ChannelError> {
+        Channel::update_binding(self, room_id, binding)
+    }
+
     fn name(&self) -> Option<String> {
         Channel::name(self)
     }

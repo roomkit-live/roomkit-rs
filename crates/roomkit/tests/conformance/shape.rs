@@ -102,6 +102,7 @@ const CHANNEL: &[&str] = &[
     "deliver_stream",
     "on_room_attached",
     "on_room_detached",
+    "update_binding",
     "model",
     "acp",
     "mcp_servers",
@@ -311,6 +312,7 @@ const BINDING: &[&str] = &[
     "category",
     "access",
     "muted",
+    "output_muted",
     "visibility",
     "metadata",
     "participant_id",
@@ -479,6 +481,7 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
             "access",
             "visibility",
             "muted",
+            "output_muted",
             "metadata",
             "participant_id",
         ],
@@ -841,6 +844,21 @@ fn mcp_servers(servers: &Value, path: &str, found: &mut Vec<String>) {
     }
 }
 
+fn binding_update(channel: &Value, path: &str, found: &mut Vec<String>) {
+    let Some(control) = channel.get("update_binding") else {
+        return;
+    };
+    let path = format!("{path}.update_binding");
+    if !control.is_object() {
+        found.push(format!("{path}: expected an object"));
+        return;
+    }
+    members(control, &["fail"], &path, found);
+    if control.get("fail").is_some_and(|value| !value.is_string()) {
+        found.push(format!("{path}.fail: expected a string"));
+    }
+}
+
 fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
     if let Some(verbs) = channel["verbs"].as_object() {
         for (name, verb) in verbs {
@@ -862,6 +880,7 @@ fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
     }
 
     members(channel, CHANNEL, path, found);
+    binding_update(channel, path, found);
     let human = &channel["human_input"];
     optional(human, HUMAN_INPUT, &format!("{path}.human_input"), found);
     for (index, tool) in items(&human["tools"]) {
@@ -1403,6 +1422,22 @@ fn model_call(call: &Value, path: &str, found: &mut Vec<String>) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // Python: tests/conformance/test_binding_fixture.py::test_binding_callback_controls_are_synchronous_and_explicit
+    #[test]
+    fn binding_callback_controls_are_synchronous_and_explicit() {
+        for control in [
+            Value::Null,
+            json!([]),
+            json!({"fail": false}),
+            json!({"gate": "wait"}),
+        ] {
+            let scenario = json!({"setup":{"channels":[{"id":"sms","type":"sms",
+                "update_binding":control
+            }]}});
+            assert_ne!(unknown_members(&scenario), Vec::<String>::new());
+        }
+    }
 
     // Python: tests/conformance/test_memory_fixture.py::test_memory_metadata_requires_an_object
     #[test]

@@ -551,6 +551,7 @@ pub(super) async fn channel<S: ConversationStore>(
         } => streams_in(inner, &room_id, channel_ids),
         ChannelRequest::RoomAttached { binding } => room_attached(inner, binding).await,
         ChannelRequest::RoomDetached { binding } => room_detached(inner, binding).await,
+        ChannelRequest::BindingUpdated { binding } => binding_updated(inner, &binding),
         ChannelRequest::NamedCorrespondent { binding } => named_binding(inner, binding),
         ChannelRequest::RoutedRecipient { binding } => routed_recipient(inner, &binding),
         ChannelRequest::HandleInbound {
@@ -1009,6 +1010,7 @@ fn refused_once_sealed(request: &ChannelRequest) -> ErrorRecord {
         | ChannelRequest::StreamsIn { .. }
         | ChannelRequest::RoomAttached { .. }
         | ChannelRequest::RoomDetached { .. }
+        | ChannelRequest::BindingUpdated { .. }
         | ChannelRequest::NamedCorrespondent { .. }
         | ChannelRequest::RoutedRecipient { .. } => cut_by_close(),
     }
@@ -1066,6 +1068,14 @@ async fn room_detached<S: ConversationStore>(
         return ChannelOutcome::Told.into();
     };
     told(channel.on_room_detached(binding.room_id).await)
+}
+
+/// Push the stored gate to a live channel, regardless of its category.
+fn binding_updated<S>(inner: &Inner<S>, binding: &ChannelBinding) -> Outcome {
+    let Some(channel) = inner.channel(&binding.channel_id) else {
+        return ChannelOutcome::Told.into();
+    };
+    told(channel.update_binding(&binding.room_id, binding))
 }
 
 /// A room callback's answer: told, or failed with what the channel raised.

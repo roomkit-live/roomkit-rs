@@ -586,6 +586,7 @@ mod update_binding {
                 "lock room_1",
                 "load_context room_1",
                 "store binding ai",
+                "update_binding ai",
                 "commit #0 system delivered \"Channel ai muted\"",
                 "release room_1",
             ]
@@ -627,7 +628,17 @@ mod update_binding {
         update(&mut sim, BindingUpdate::mute()).unwrap();
         assert_eq!(
             (sim.async_triggers(), sim.trace),
-            (Vec::new(), read_only_section())
+            (
+                Vec::new(),
+                [
+                    "lock room_1",
+                    "load_context room_1",
+                    "update_binding ai",
+                    "release room_1",
+                ]
+                .map(str::to_owned)
+                .to_vec()
+            )
         );
     }
 
@@ -745,6 +756,7 @@ mod update_binding {
                     "lock room_1",
                     "load_context room_1",
                     "store binding ai",
+                    "update_binding ai",
                     "release room_1"
                 ]
                 .map(str::to_owned)

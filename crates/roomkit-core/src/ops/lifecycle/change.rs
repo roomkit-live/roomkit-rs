@@ -97,15 +97,15 @@ pub(crate) struct Decision<D> {
 
 /// A channel told of the change under the room's lock once the change's
 /// writes are stored, and what follows its answer (RFC §6.1
-/// `on_room_attached`, `on_room_detached`): the room read again, then its
-/// records committed on it.
+/// `on_room_attached`, `on_room_detached`, `update_binding`). Async callbacks
+/// reread the room; a synchronous binding callback keeps its decided context.
 #[derive(Debug)]
 pub(crate) struct Telling {
     /// The binding the change stored or removed, which names the channel
     /// told and its room.
     pub(crate) binding: ChannelBinding,
-    /// Whether the channel is told of its attach, else of its detach.
-    pub(crate) attach: bool,
+    /// Which synchronous or asynchronous callback receives the binding.
+    pub(crate) notification: Notification,
     /// The lifecycle records committed once the channel answered, on the
     /// room as it left it: an attach's, stamped after what the channel
     /// wrote into the room, as the Python implementation emits it after
@@ -113,10 +113,20 @@ pub(crate) struct Telling {
     pub(crate) records: Vec<Record>,
     /// What the channel's refusal does: undoes the change with these
     /// writes, which put back the binding the change replaced, or remove
-    /// it, and fails it; `None`, the change stands, then fails once
-    /// reported. As the Python implementation's `_undo_refused_binding`,
+    /// it, and fails it. A detach with `None` stands and reports before
+    /// failing; a binding update with `None` fails before its records and
+    /// report. As the Python implementation's `_undo_refused_binding`,
     /// an attach's undo leaves the channel's revocation cleared.
     pub(crate) undo: Option<VecDeque<StoreRequest>>,
+}
+
+/// Which room callback follows a change's writes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Notification {
+    Attached,
+    Detached,
+    /// Synchronous: a refusal keeps storage and prevents records and hooks.
+    BindingUpdated,
 }
 
 impl Telling {
@@ -124,10 +134,10 @@ impl Telling {
     /// lock, as the Python implementation awaits it under the lock.
     pub(crate) fn issue(&self, cx: &mut Cx<'_>) -> EffectId {
         let binding = self.binding.clone();
-        let request = if self.attach {
-            ChannelRequest::RoomAttached { binding }
-        } else {
-            ChannelRequest::RoomDetached { binding }
+        let request = match self.notification {
+            Notification::Attached => ChannelRequest::RoomAttached { binding },
+            Notification::Detached => ChannelRequest::RoomDetached { binding },
+            Notification::BindingUpdated => ChannelRequest::BindingUpdated { binding },
         };
         cx.io.issue_locked(request, self.binding.room_id.clone())
     }
@@ -299,7 +309,7 @@ pub(crate) fn told_of_attach(
     };
     Telling {
         binding: binding.clone(),
-        attach: true,
+        notification: Notification::Attached,
         records: vec![Record::attached(binding)],
         undo: Some(VecDeque::from([undo])),
     }
@@ -338,7 +348,7 @@ impl SectionChange for DetachChange {
         write_records(cx, &mut writes, &mut context, &[record]);
         let telling = Telling {
             binding: binding.clone(),
-            attach: false,
+            notification: Notification::Detached,
             records: Vec::new(),
             undo: None,
         };
@@ -385,6 +395,37 @@ pub(crate) enum Naming {
     Answered(Box<ChannelBinding>),
 }
 
+impl UpdateChange {
+    /// Gate updates notify the channel before records, even when unchanged;
+    /// metadata and visibility updates only write their records.
+    fn finish(
+        &self,
+        mut decision: Decision<Updated>,
+        records: Vec<Record>,
+        cx: &Cx<'_>,
+    ) -> Decision<Updated> {
+        if self.update.muted.is_some()
+            || self.update.output_muted.is_some()
+            || self.update.access.is_some()
+        {
+            decision.telling = Some(Telling {
+                binding: (*decision.done.binding).clone(),
+                notification: Notification::BindingUpdated,
+                records,
+                undo: None,
+            });
+        } else {
+            write_records(
+                cx,
+                &mut decision.writes,
+                &mut decision.done.context,
+                &records,
+            );
+        }
+        decision
+    }
+}
+
 impl SectionChange for UpdateChange {
     type Done = Updated;
     type Refusal = LifecycleError;
@@ -420,11 +461,12 @@ impl SectionChange for UpdateChange {
             Naming::Kept | Naming::Asked => self.update.apply(&current),
         };
         if updated == current {
-            return Ok(Decision::unwritten(Updated {
+            let decision = Decision::unwritten(Updated {
                 binding: Box::new(current),
                 muted: None,
                 context,
-            }));
+            });
+            return Ok(self.finish(decision, Vec::new(), cx));
         }
         let mut records = Record::of_update(&current, &updated, &self.update.metadata);
         // A metadata update whose naming changed the binding alone is
@@ -436,14 +478,16 @@ impl SectionChange for UpdateChange {
                 keys: self.update.metadata.keys().cloned().collect(),
             });
         }
-        let mut decision = store_updated(&current, updated, context);
-        let Decision { writes, done, .. } = &mut decision;
-        write_records(cx, writes, &mut done.context, &records);
-        Ok(decision)
+        let decision = store_updated(&current, updated, context);
+        Ok(self.finish(decision, records, cx))
     }
 
     fn reported(done: &Updated) -> Option<(Reported<'_>, &RoomContext)> {
         done.reported()
+    }
+
+    fn told_context(done: &mut Updated) -> Option<&mut Box<RoomContext>> {
+        Some(&mut done.context)
     }
 }
 
