@@ -1,17 +1,19 @@
 //! The host's skills, discovered in its directories (RFC §24.3, §24.5).
 
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use super::availability::Marks;
 use super::error::SkillError;
 use super::files::{self, OpenFailure, ReadFailure, SKILL_FILE_MAX};
 use super::frontmatter;
 use super::model::{DiscoverOptions, Skill, SkillMetadata};
+use super::served::catalog::Catalog;
 use super::validation::{invalid, memory_errors};
-use super::{CopyOptions, RequiresMatch, SkillRegistryOptions};
+use super::{CopyOptions, LoadedSkill, McpSkill, RequiresMatch, SkillRegistryOptions};
 
 /// The most characters the manifest takes: every system prompt carries it.
 pub(crate) const MANIFEST_MAX: usize = 64 * 1024;
@@ -53,14 +55,65 @@ pub(crate) const MANIFEST_MAX: usize = 64 * 1024;
 /// assert!(error.to_string().starts_with("Skill directory not found"));
 /// assert!(!skills.has_entries());
 /// ```
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default)]
 pub struct SkillRegistry {
     /// The host's reading of a prerequisite against offered tool names.
     pub requires_match: RequiresMatch,
-    /// Its skills, shared by its clones: a turn's reads one for its turn alone.
-    pub(super) skills: Arc<Vec<Skill>>,
-    pub(super) marks: Marks,
+    pub(super) state: Mutex<RegistryState>,
+    pub(super) catalog: Arc<Mutex<Catalog>>,
 }
+
+#[derive(Clone, Debug, Default)]
+pub(super) struct RegistryState {
+    // Served placeholders hold metadata only; they are never returned as local skills.
+    pub(super) skills: Vec<Skill>,
+    pub(super) marks: Marks,
+    pub(super) loaded: HashMap<String, Arc<Mutex<McpSkill>>>,
+    pub(super) owned_labels: HashSet<String>,
+    pub(super) withheld: HashSet<String>,
+}
+
+pub(super) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+impl Clone for SkillRegistry {
+    fn clone(&self) -> Self {
+        Self {
+            requires_match: self.requires_match.clone(),
+            state: Mutex::new(lock(&self.state).clone()),
+            catalog: Arc::clone(&self.catalog),
+        }
+    }
+}
+impl PartialEq for SkillRegistry {
+    fn eq(&self, other: &Self) -> bool {
+        let a = lock(&self.state).clone();
+        let b = lock(&other.state).clone();
+        let catalogs_match = Arc::ptr_eq(&self.catalog, &other.catalog) || {
+            let a_empty = !lock(&self.catalog).has_servers();
+            let b_empty = !lock(&other.catalog).has_servers();
+            a_empty && b_empty
+        };
+        self.requires_match == other.requires_match
+            && a.skills == b.skills
+            && a.marks == b.marks
+            && a.owned_labels == b.owned_labels
+            && a.withheld == b.withheld
+            && a.loaded.len() == b.loaded.len()
+            && a.loaded.iter().all(|(name, skill)| {
+                b.loaded.get(name).is_some_and(|other| {
+                    let first = lock(skill).clone();
+                    let second = lock(other).clone();
+                    first == second
+                })
+            })
+            && catalogs_match
+    }
+}
+impl Eq for SkillRegistry {}
 
 impl SkillRegistry {
     /// A registry with no skill.
@@ -94,7 +147,7 @@ impl SkillRegistry {
     /// let _found = SkillRegistry::default().discover(&directory, DiscoverOptions::default());
     /// ```
     pub fn discover<P: AsRef<Path>>(
-        &mut self,
+        &self,
         directories: &[P],
         options: DiscoverOptions,
     ) -> Result<usize, SkillError> {
@@ -126,7 +179,7 @@ impl SkillRegistry {
     /// [`SkillError::Validation`] for metadata that does not validate, and
     /// [`SkillError::ManifestTooLarge`] past the manifest's bound. The
     /// registry is then as it was.
-    pub fn register(&mut self, skill_dir: impl AsRef<Path>) -> Result<SkillMetadata, SkillError> {
+    pub fn register(&self, skill_dir: impl AsRef<Path>) -> Result<SkillMetadata, SkillError> {
         let skill_dir = skill_dir.as_ref();
         let resolved = skill_dir.canonicalize().map_err(|error| {
             SkillError::parse(
@@ -148,7 +201,7 @@ impl SkillRegistry {
     /// Returns [`SkillError::Validation`] for a name containing `:` (reserved for
     /// served skills) or a bracketed tool pattern, and [`SkillError::ManifestTooLarge`]
     /// past the manifest bound. A rejected addition leaves the registry unchanged.
-    pub fn add(&mut self, skill: Skill) -> Result<(), SkillError> {
+    pub fn add(&self, skill: Skill) -> Result<(), SkillError> {
         let reasons = memory_errors(&skill.metadata);
         if !reasons.is_empty() {
             return Err(SkillError::Validation {
@@ -160,34 +213,58 @@ impl SkillRegistry {
         Ok(())
     }
 
-    /// The metadata of the skill `name`.
-    pub fn get_metadata(&self, name: &str) -> Option<&SkillMetadata> {
-        self.get_skill(name).map(|skill| &skill.metadata)
+    /// An owned metadata snapshot, with no network or catalog-following read.
+    pub fn get_metadata(&self, name: &str) -> Option<SkillMetadata> {
+        lock(&self.state)
+            .skills
+            .iter()
+            .find(|skill| skill.name() == name)
+            .map(|skill| skill.metadata.clone())
     }
 
-    /// The skill `name` whole, with its instructions.
-    pub fn get_skill(&self, name: &str) -> Option<&Skill> {
-        self.skills.iter().find(|skill| skill.name() == name)
+    /// An owned skill snapshot; served content is available only after loading.
+    ///
+    /// # Errors
+    /// A shared catalog refusal that cannot fit the local manifest is returned
+    /// before any cached value, leaving local state unchanged (RFC §24.5).
+    pub fn get_skill(&self, name: &str) -> Result<Option<LoadedSkill>, SkillError> {
+        if self.is_served(name) {
+            self.follow_catalog(name)?;
+            let loaded = lock(&self.state).loaded.get(name).cloned();
+            return Ok(loaded.map(|skill| LoadedSkill::Served(lock(&skill).clone())));
+        }
+        Ok(lock(&self.state)
+            .skills
+            .iter()
+            .find(|skill| skill.name() == name)
+            .cloned()
+            .map(LoadedSkill::Local))
     }
 
-    /// The metadata of its skills, in the order they were registered.
-    pub fn all_metadata(&self) -> Vec<&SkillMetadata> {
-        self.skills.iter().map(|skill| &skill.metadata).collect()
+    /// Owned metadata snapshots in registration order.
+    pub fn all_metadata(&self) -> Vec<SkillMetadata> {
+        lock(&self.state)
+            .skills
+            .iter()
+            .map(|skill| skill.metadata.clone())
+            .collect()
     }
-
-    /// The names of its skills, in the order they were registered.
-    pub fn skill_names(&self) -> Vec<&str> {
-        self.skills.iter().map(Skill::name).collect()
+    /// Owned names in registration order.
+    pub fn skill_names(&self) -> Vec<String> {
+        lock(&self.state)
+            .skills
+            .iter()
+            .map(|skill| skill.name().to_owned())
+            .collect()
     }
-
-    /// How many skills it holds.
+    /// The number of available metadata entries.
     pub fn skill_count(&self) -> usize {
-        self.skills.len()
+        lock(&self.state).skills.len()
     }
-
-    /// Whether the model has an available skill or an unavailable reason to read.
+    /// Whether the model has an available skill or unavailable reason to read.
     pub fn has_entries(&self) -> bool {
-        !self.skills.is_empty() || self.marks.has_entries()
+        let state = lock(&self.state);
+        !state.skills.is_empty() || state.marks.has_entries()
     }
 
     /// Copies the registry, optionally narrowed to `names` (RFC §24.3).
@@ -200,22 +277,51 @@ impl SkillRegistry {
     /// Returns [`SkillError::ManifestTooLarge`] if the copied manifest would
     /// exceed 65,536 characters, including skills made listed by dropping marks.
     pub fn copy(&self, names: Option<&[String]>, options: CopyOptions) -> Result<Self, SkillError> {
-        let skills: Vec<Skill> = self
+        let state = lock(&self.state);
+        let wanted = |name: &str| names.is_none_or(|names| names.iter().any(|held| held == name));
+        let skills: Vec<Skill> = state
             .skills
             .iter()
-            .filter(|skill| names.is_none_or(|names| names.iter().any(|name| name == skill.name())))
+            .filter(|skill| wanted(skill.name()))
             .cloned()
             .collect();
         let marks = if options.marks {
-            self.marks.subset(names, &skills)
+            state.marks.subset(names, &skills)
         } else {
             Marks::default()
         };
         marks.check_manifest(&skills)?;
-        Ok(Self {
-            skills: Arc::new(skills),
+        let mut withheld = state.withheld.clone();
+        if !options.marks {
+            withheld.extend(
+                state
+                    .marks
+                    .unavailable
+                    .iter()
+                    .filter(|(name, _)| name.contains(':'))
+                    .map(|(name, _)| name.clone()),
+            );
+        }
+        let next = RegistryState {
+            skills,
             marks,
+            loaded: state
+                .loaded
+                .iter()
+                .filter(|(name, _)| wanted(name))
+                .map(|(name, skill)| (name.clone(), Arc::clone(skill)))
+                .collect(),
+            owned_labels: if names.is_none() {
+                state.owned_labels.clone()
+            } else {
+                HashSet::new()
+            },
+            withheld,
+        };
+        Ok(Self {
             requires_match: self.requires_match.clone(),
+            state: Mutex::new(next),
+            catalog: Arc::clone(&self.catalog),
         })
     }
 
@@ -236,13 +342,17 @@ impl SkillRegistry {
     /// with its description, license and compatibility, their text escaped
     /// so that none reads as markup; empty with no skill.
     pub fn to_prompt_xml(&self) -> String {
-        self.marks.manifest(&self.skills)
+        {
+            let state = lock(&self.state);
+            state.marks.manifest(&state.skills)
+        }
     }
 
     /// Takes `skills`, each replacing the one of its name, when the
     /// manifest stays within its bound; returns how many it took.
-    fn commit(&mut self, skills: Vec<Skill>) -> Result<usize, SkillError> {
-        let mut next = Vec::clone(&self.skills);
+    fn commit(&self, skills: Vec<Skill>) -> Result<usize, SkillError> {
+        let mut state = lock(&self.state);
+        let mut next = state.skills.clone();
         let mut names: Vec<String> = Vec::new();
         for skill in skills {
             if !names.iter().any(|name| name == skill.name()) {
@@ -253,13 +363,13 @@ impl SkillRegistry {
                 None => next.push(skill),
             }
         }
-        let mut marks = self.marks.clone();
+        let mut marks = state.marks.clone();
         for name in &names {
             marks.clear(name);
         }
         marks.check_manifest(&next)?;
-        self.skills = Arc::new(next);
-        self.marks = marks;
+        state.skills = next;
+        state.marks = marks;
         Ok(names.len())
     }
 }

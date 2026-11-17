@@ -17,7 +17,7 @@ const LIMIT: usize = 65_536;
 // Python: tests/skills/test_manifest_bound.py::test_a_refused_reason_update_preserves_order_and_closed_gates
 #[test]
 fn an_oversized_reason_cannot_change_the_manifest() {
-    let mut registry = SkillRegistry::default();
+    let registry = SkillRegistry::default();
     registry.mark_unavailable("held", "short").unwrap();
     let before = registry.to_prompt_xml();
     assert!(matches!(
@@ -32,7 +32,7 @@ fn an_oversized_reason_cannot_change_the_manifest() {
 #[test]
 fn an_unavailable_reason_counts_escaped_characters_at_the_boundary() {
     for prefix in ["", "<&\"'😀"] {
-        let mut registry = SkillRegistry::default();
+        let registry = SkillRegistry::default();
         let name = "missing<&\"";
         registry.mark_unavailable(name, prefix).unwrap();
         let reason = format!(
@@ -59,7 +59,10 @@ fn an_unavailable_reason_counts_escaped_characters_at_the_boundary() {
         );
         assert_eq!(registry, before);
         registry.mark_unavailable(name, "short").unwrap();
-        assert_eq!(registry.get_unavailable_reason(name), Some("short"));
+        assert_eq!(
+            registry.get_unavailable_reason(name).as_deref(),
+            Some("short")
+        );
     }
 }
 
@@ -73,7 +76,7 @@ fn a_refused_mark_preserves_the_available_skill_and_its_gates() {
         &skill_md("cal", "d", "allowed_tools: calendar_*\n"),
     );
     for unlisted in [false, true] {
-        let mut registry = SkillRegistry::default();
+        let registry = SkillRegistry::default();
         registry.register(&path).unwrap();
         if unlisted {
             registry.mark_unlisted("cal");
@@ -84,7 +87,7 @@ fn a_refused_mark_preserves_the_available_skill_and_its_gates() {
             Err(SkillError::ManifestTooLarge { .. })
         ));
         assert_eq!(registry, before);
-        assert!(registry.get_skill("cal").is_some());
+        assert!(registry.get_skill("cal").unwrap().is_some());
         assert_eq!(
             registry.gated_tool_names(&HashSet::new()),
             HashSet::from(["calendar_*".into()])
@@ -102,7 +105,7 @@ fn a_refused_reason_update_preserves_order_and_closed_gates() {
         "cal",
         &skill_md("cal", "d", "allowed_tools: calendar_*\n"),
     );
-    let mut registry = SkillRegistry::default();
+    let registry = SkillRegistry::default();
     registry.register(path).unwrap();
     registry.mark_unavailable("cal", "first").unwrap();
     registry.mark_unavailable("other", "second").unwrap();
@@ -126,7 +129,7 @@ fn a_refused_reason_update_preserves_order_and_closed_gates() {
 #[test]
 fn copy_cannot_relist_an_oversized_hidden_catalogue() {
     let tree = TempDir::new();
-    let mut registry = SkillRegistry::default();
+    let registry = SkillRegistry::default();
     for i in 0..70 {
         let name = format!("skill-{i:02}");
         let path = tree.skill_with("skills", &name, &skill_md(&name, &"d".repeat(1024), ""));
@@ -167,7 +170,7 @@ async fn a_rejected_mark_keeps_activation_and_tool_execution_working() {
         "cal",
         &skill_md("cal", "d", "allowed_tools: calendar\n"),
     );
-    let mut registry = SkillRegistry::default();
+    let registry = SkillRegistry::default();
     registry.register(path).unwrap();
     assert!(
         registry

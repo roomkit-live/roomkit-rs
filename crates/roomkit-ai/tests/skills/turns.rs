@@ -54,7 +54,7 @@ fn skills(tree: &TempDir) -> SkillRegistry {
     for n in 2..=6 {
         tree.skill("skills", &format!("extra-{n}"), "Does a thing");
     }
-    let mut skills = SkillRegistry::default();
+    let skills = SkillRegistry::default();
     skills
         .discover(&[tree.path().join("skills")], DiscoverOptions::default())
         .unwrap();
@@ -613,7 +613,7 @@ async fn an_activation_names_only_the_references_a_read_takes() {
     let linked = tree.skill("skills-linked", "linked-refs", "Linked references");
     tree.file("outrefs/x.md", "outside\n");
     link(&tree.path().join("outrefs"), &linked.join("references"));
-    let mut skills = registry;
+    let skills = registry;
     skills.register(&linked).unwrap();
     let model = ScriptedProvider::new([
         ScriptedRound::calling(

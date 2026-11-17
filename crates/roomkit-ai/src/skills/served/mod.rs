@@ -1,10 +1,17 @@
 //! Transport-independent entries and byte verification (RFC §24.7).
 
+pub(super) mod catalog;
 mod entry;
 mod json_tree;
+mod loading;
+mod origin;
 mod parse;
+mod registry;
 mod resource;
 mod server;
+mod skill;
+mod wire;
+mod yaml;
 
 pub use entry::{SkillEntry, SkillEntryKeyError, SkillResources};
 pub use parse::parse_entry;
@@ -17,3 +24,8 @@ pub const SKILLS_EXTENSION: &str = "io.modelcontextprotocol/skills";
 pub const MAX_RESOURCES_PER_SKILL: usize = 512;
 /// The maximum sum of a skill's listed byte lengths (RFC §24.7).
 pub const MAX_TOTAL_SIZE: u64 = 16 * 1024 * 1024;
+
+pub use origin::{AddMcpServerOptions, ApproveExecution, ServedOrigin, SkillExecutionRequest};
+pub use skill::{LoadedSkill, McpSkill, McpSkillOptions};
+
+pub use yaml::verify_frontmatter;

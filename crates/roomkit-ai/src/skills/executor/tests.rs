@@ -32,7 +32,7 @@ async fn a_skill_script_that_raised_raises_on_to_the_channel() {
     );
     std::fs::create_dir_all(directory.0.join("scripts")).unwrap();
     std::fs::write(directory.0.join("scripts/run"), "").unwrap();
-    let mut registry = SkillRegistry::default();
+    let registry = SkillRegistry::default();
     registry
         .add(Skill {
             metadata: SkillMetadata::new("s", ""),

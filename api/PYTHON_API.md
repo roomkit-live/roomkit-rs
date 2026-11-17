@@ -261,6 +261,42 @@ the last registration authoritative, with a warning when its channel changes.
 This language form was approved in HITL 915d07a5-8f40-4b74-8f9f-16087e3b9b92.
 
 
+MCP skills register with `SkillRegistry::add_mcp_server(server, label, options)`.
+`AddMcpServerOptions::default()` keeps dynamic content disabled, no execution
+approval callback and no execution-tool patterns. Listing reads metadata only;
+`load_skill` verifies the held resource digest and bounded safe YAML before
+returning any instructions, and `read_file` verifies supplementary bytes against
+that same entry. A rejected read retires cached content across registry copies.
+The server remains host-owned. Served instructions stay attributed data in text
+turns, never binding rules or activations restored from conversation history.
+Host tools declared as executing code require approval of every active served
+skill; callbacks fail closed, and approvals bind room, exact origin identity,
+name and fingerprint. Dynamic entries are approved for every call.
+
+**Registry migration:** mutation methods take `&self` so other tasks can read or
+modify the registry while network I/O awaits. No registry lock spans an await.
+Metadata, name and reason reads now return owned snapshots.
+`get_skill(name)?` and `load_skill(name).await?` return `Option<LoadedSkill>`:
+match `Local(Skill)` or `Served(McpSkill)`, or use the explicit common getters
+and file helpers. `LoadedSkill` has no `Deref`; served file helpers cannot reach
+local paths. Mutating a returned snapshot changes that value only. Read the
+registry again to see new verified files. `Clone` and `copy` duplicate local
+state while sharing the served catalogue and existing loaded-file caches.
+`origin` returns `Arc<ServedOrigin>`; clones retain identity and a rejected
+relisting keeps the original source. Equality preserves local values and
+matcher identity, and compares nonempty served catalogues by shared identity.
+`SkillError::Changed` carries the name and optional source; discovery and
+verification errors preserve both their sanitized message and concrete cause.
+These ownership forms were approved on 2026-11-17.
+
+Served YAML uses `saphyr-parser` 0.3.3 events with the reference's 65,536-character,
+64-level and alias bounds, without a new node limit. YAML sets normalize to
+arrays sorted by each member's canonical JSON after YAML membership equality.
+Servers publishing old Python set display strings must publish these arrays;
+file bytes, digests and approval fingerprints are unchanged. Existing loaded
+content remains cached until reloaded. The local frontmatter parser keeps its
+existing behavior. Large JSON integers retain the existing explicit deferral.
+
 Skill registries use `SkillRegistryOptions` for Python's constructor keyword
 `requires_match`; `new(SkillRegistryOptions::default())` or `default()`
 selects exact matching. `CopyOptions { marks: true }` is the default for

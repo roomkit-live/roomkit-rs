@@ -46,10 +46,10 @@ fn each_form_keeps_its_public_metadata_type() {
             "research",
             &skill_md("research", "d", frontmatter),
         );
-        let mut registry = SkillRegistry::default();
+        let registry = SkillRegistry::default();
         let metadata = registry.register(&path).unwrap();
         assert_eq!(metadata.allowed_tools, expected, "{frontmatter}");
-        assert_eq!(registry.get_metadata("research"), Some(&metadata));
+        assert_eq!(registry.get_metadata("research"), Some(metadata));
     }
 }
 
@@ -228,7 +228,7 @@ fn a_gate_that_cannot_be_read_whole_refuses_the_skill() {
             "research",
             &skill_md("research", "d", &format!("allowed_tools: {gate}\n")),
         );
-        let mut registry = SkillRegistry::default();
+        let registry = SkillRegistry::default();
         assert!(registry.register(path).is_err(), "accepted {gate:?}");
         assert!(!registry.has_entries());
     }

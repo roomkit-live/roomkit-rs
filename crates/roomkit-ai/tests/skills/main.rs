@@ -17,6 +17,8 @@ mod local_registration;
 mod manifest_bound;
 mod requirements;
 mod script_execution;
+mod served_registry;
+mod served_yaml;
 mod standalone_helpers;
 mod support;
 mod turns;

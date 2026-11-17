@@ -611,3 +611,25 @@ fn role_policy_defaults_as_python() {
         matches!(policy.resolve(None).unwrap(), std::borrow::Cow::Borrowed(value) if std::ptr::eq(value, std::ptr::from_ref(&policy)))
     );
 }
+
+#[test]
+fn served_skill_defaults_as_python() {
+    let server = roomkit_ai::AddMcpServerOptions::default();
+    // roomkit.SkillRegistry.add_mcp_server(allow_dynamic) = False
+    assert!(!server.allow_dynamic);
+    // roomkit.SkillRegistry.add_mcp_server(approve_execution) = None
+    assert!(server.approve_execution.is_none());
+    // roomkit.SkillRegistry.add_mcp_server(execution_tools) = ()
+    assert!(server.execution_tools.is_empty());
+    let skill = roomkit_ai::McpSkillOptions::default();
+    // roomkit.MCPSkill.__init__(origin) = ''
+    assert_eq!(skill.origin, "");
+    // roomkit.MCPSkill.__init__(entry) = None
+    assert!(skill.entry.is_none());
+    // roomkit.MCPSkill.__init__(files) = <factory>
+    assert!(skill.files.is_empty());
+    // roomkit.MCPSkill.__init__(read_total) = 0
+    assert_eq!(skill.read_total, 0);
+    // roomkit.MCPSkill.__init__(retirements) = 0
+    assert_eq!(skill.retirements, 0);
+}

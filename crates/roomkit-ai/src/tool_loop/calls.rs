@@ -511,7 +511,10 @@ impl Loop {
         // handler of the reference implementation never reads it (RFC §6.4).
         let mut handed = call.clone();
         handed.intent = None;
-        let answer = toolset.call(handed, context);
+        let answer = async {
+            self.check_served_execution(&call.name).await?;
+            toolset.call(handed, context).await
+        };
         // A person's answer is bounded by its handler's timeout alone, unless
         // the tool has its own bound.
         let bound = self.bounds.for_call(&call.name, toolset.bounds_itself());

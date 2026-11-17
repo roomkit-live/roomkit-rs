@@ -16,23 +16,23 @@ use super::support::{Room, TempDir, skill_md, tool_results};
 fn an_unavailable_skill_leaves_every_available_view_and_registration_restores_it() {
     let root = TempDir::new();
     let path = root.skill_with("skills", "calendar", &skill_md("calendar", "d", ""));
-    let mut registry = SkillRegistry::default();
+    let registry = SkillRegistry::default();
     registry.register(&path).unwrap();
     registry
         .mark_unavailable("calendar", "not granted")
         .unwrap();
-    assert!(registry.get_skill("calendar").is_none());
+    assert!(registry.get_skill("calendar").unwrap().is_none());
     assert!(registry.get_metadata("calendar").is_none());
-    assert_eq!(registry.skill_names(), Vec::<&str>::new());
+    assert_eq!(registry.skill_names(), Vec::<String>::new());
     assert_eq!(
         registry.all_metadata(),
-        Vec::<&roomkit_ai::SkillMetadata>::new()
+        Vec::<roomkit_ai::SkillMetadata>::new()
     );
     assert_eq!(registry.skill_count(), 0);
     assert!(registry.has_entries());
     assert_eq!(registry.tool_definitions().len(), 2);
     assert_eq!(
-        registry.get_unavailable_reason("calendar"),
+        registry.get_unavailable_reason("calendar").as_deref(),
         Some("not granted")
     );
     let mut snapshot = registry.unavailable_skills();
@@ -45,8 +45,13 @@ fn an_unavailable_skill_leaves_every_available_view_and_registration_restores_it
         Some("not granted")
     );
     registry.register(&path).unwrap();
-    assert!(registry.get_unavailable_reason("calendar").is_none());
-    assert!(registry.get_skill("calendar").is_some());
+    assert!(
+        registry
+            .get_unavailable_reason("calendar")
+            .as_deref()
+            .is_none()
+    );
+    assert!(registry.get_skill("calendar").unwrap().is_some());
     assert_eq!(registry.skill_names(), ["calendar"]);
 }
 
@@ -54,7 +59,7 @@ fn an_unavailable_skill_leaves_every_available_view_and_registration_restores_it
 // and test_to_prompt_xml_unavailable_only.
 #[test]
 fn an_unavailable_only_manifest_escapes_names_and_reasons_and_keeps_order() {
-    let mut registry = SkillRegistry::default();
+    let registry = SkillRegistry::default();
     registry
         .mark_unavailable("a<\"", "Needs <approval> & access")
         .unwrap();
@@ -80,18 +85,23 @@ fn an_unavailable_only_manifest_escapes_names_and_reasons_and_keeps_order() {
 #[test]
 fn unlisted_skills_keep_their_available_reads_and_regain_listing_on_registration() {
     let root = TempDir::new();
-    let mut registry = SkillRegistry::default();
+    let registry = SkillRegistry::default();
     let path = root.skill_with("skills", "quiet", &skill_md("quiet", "d", ""));
     registry.mark_unlisted("ghost");
-    assert_eq!(registry.listed_names(), Vec::<&str>::new());
+    assert_eq!(registry.listed_names(), Vec::<String>::new());
     registry.register(&path).unwrap();
     registry.mark_unlisted("quiet");
-    assert_eq!(registry.listed_names(), Vec::<&str>::new());
+    assert_eq!(registry.listed_names(), Vec::<String>::new());
     assert_eq!(registry.to_prompt_xml(), "");
-    assert!(registry.get_skill("quiet").is_some());
+    assert!(registry.get_skill("quiet").unwrap().is_some());
     assert!(registry.get_metadata("quiet").is_some());
     assert_eq!(registry.skill_names(), ["quiet"]);
-    assert!(registry.get_unavailable_reason("quiet").is_none());
+    assert!(
+        registry
+            .get_unavailable_reason("quiet")
+            .as_deref()
+            .is_none()
+    );
     registry.register(&path).unwrap();
     assert_eq!(registry.listed_names(), ["quiet"]);
 }
@@ -101,7 +111,7 @@ fn unlisted_skills_keep_their_available_reads_and_regain_listing_on_registration
 #[test]
 fn a_subset_copy_preserves_selected_marks_without_mutating_its_source() {
     let root = TempDir::new();
-    let mut source = SkillRegistry::default();
+    let source = SkillRegistry::default();
     for name in ["loud", "quiet", "gone"] {
         let path = root.skill_with("skills", name, &skill_md(name, "d", ""));
         source.register(path).unwrap();
@@ -109,15 +119,18 @@ fn a_subset_copy_preserves_selected_marks_without_mutating_its_source() {
     source.mark_unlisted("quiet");
     source.mark_unavailable("gone", "not here").unwrap();
     let selected = ["quiet".to_owned(), "gone".to_owned()];
-    let mut copied = source
+    let copied = source
         .copy(Some(&selected), roomkit_ai::CopyOptions::default())
         .unwrap();
     assert_eq!(copied.skill_names(), ["quiet"]);
-    assert_eq!(copied.listed_names(), Vec::<&str>::new());
-    assert_eq!(copied.get_unavailable_reason("gone"), Some("not here"));
+    assert_eq!(copied.listed_names(), Vec::<String>::new());
+    assert_eq!(
+        copied.get_unavailable_reason("gone").as_deref(),
+        Some("not here")
+    );
     copied.mark_unavailable("quiet", "only in copy").unwrap();
-    assert!(source.get_skill("quiet").is_some());
-    assert!(source.get_unavailable_reason("quiet").is_none());
+    assert!(source.get_skill("quiet").unwrap().is_some());
+    assert!(source.get_unavailable_reason("quiet").as_deref().is_none());
     assert_eq!(
         source
             .copy(None, roomkit_ai::CopyOptions::default())
@@ -131,7 +144,7 @@ fn a_subset_copy_preserves_selected_marks_without_mutating_its_source() {
 #[tokio::test]
 async fn repeated_marks_and_subset_copies_keep_the_right_tools_closed() {
     let root = TempDir::new();
-    let mut source = SkillRegistry::default();
+    let source = SkillRegistry::default();
     for name in ["a", "b"] {
         let path = root.skill_with(
             "skills",
@@ -224,7 +237,7 @@ fn a_failed_registration_preserves_unavailable_and_unlisted_marks() {
             "skills/held/SKILL.md",
             &skill_md("held", "d", "allowed_tools: held_tool\n"),
         );
-        let mut registry = SkillRegistry::default();
+        let registry = SkillRegistry::default();
         registry.register(&path).unwrap();
         registry.mark_unlisted("held");
         if unavailable {
@@ -253,7 +266,7 @@ fn a_failed_registration_preserves_unavailable_and_unlisted_marks() {
 fn registration_removes_the_old_reason_before_checking_the_manifest_size() {
     let root = TempDir::new();
     let path = root.skill_with("skills", "held", &skill_md("held", "d", ""));
-    let mut registry = SkillRegistry::default();
+    let registry = SkillRegistry::default();
     registry.mark_unavailable("held", "").unwrap();
     let remaining = 65_536 - registry.to_prompt_xml().chars().count();
     registry
@@ -262,7 +275,7 @@ fn registration_removes_the_old_reason_before_checking_the_manifest_size() {
     assert_eq!(registry.to_prompt_xml().chars().count(), 65_536);
     registry.register(path).unwrap();
     assert_eq!(registry.skill_names(), ["held"]);
-    assert!(registry.get_unavailable_reason("held").is_none());
+    assert!(registry.get_unavailable_reason("held").as_deref().is_none());
     assert!(registry.to_prompt_xml().chars().count() < 65_536);
 }
 
@@ -275,7 +288,7 @@ async fn registration_makes_an_unavailable_gate_openable_again() {
         "a",
         &skill_md("a", "d", "allowed_tools: tool_a\n"),
     );
-    let mut registry = SkillRegistry::default();
+    let registry = SkillRegistry::default();
     registry.register(&path).unwrap();
     registry.mark_unavailable("a", "not here").unwrap();
     tree.file(

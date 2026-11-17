@@ -155,7 +155,7 @@ async fn an_offered_required_tool_returns_the_exact_instructions() {
         "cal",
         "---\nname: cal\ndescription: cal skill\nrequires: calendar\n---\nUse calendar.",
     );
-    let mut registry = SkillRegistry::default();
+    let registry = SkillRegistry::default();
     registry.register(path).unwrap();
     let tools = Tools::new().tool(
         AiTool::new("calendar", "Read calendar").unwrap(),

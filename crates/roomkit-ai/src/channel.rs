@@ -1105,10 +1105,10 @@ impl<P: AiProvider> AiChannel<P> {
             }
             return (toolbox, None);
         };
-        let Some(given) = given else {
-            return (toolbox, Some(Arc::clone(own)));
-        };
-        let skills = Arc::new(own.of_turn(given.clone()));
+        let skills = Arc::new(match given {
+            Some(given) => own.of_turn(given.clone()),
+            None => own.for_turn(),
+        });
         let served: Arc<dyn DynToolset> = Arc::<SkillTools>::clone(&skills);
         let with_skills = toolbox.with_skills(served, skills.declared());
         (Arc::new(with_skills), Some(skills))
@@ -1186,7 +1186,7 @@ impl<P: AiProvider> AiChannel<P> {
         context: &RoomContext,
         (stands_alone, searching): (bool, bool),
         policy: &ToolPolicy,
-    ) -> Option<String> {
+    ) -> Result<Option<String>, ChannelError> {
         // An empty one lifts the channel's prompt for the room (RFC
         // Appendix A.9), the turn then sending none.
         let set = binding
@@ -1210,7 +1210,7 @@ impl<P: AiProvider> AiChannel<P> {
                     stands_alone,
                     scripts_allowed: policy.is_allowed("run_skill_script"),
                 };
-                skills.system_prompt(prompt.as_deref(), turn)
+                skills.system_prompt(prompt.as_deref(), turn)?
             }
         };
         let prompt = if searching {
@@ -1219,7 +1219,7 @@ impl<P: AiProvider> AiChannel<P> {
         } else {
             prompt
         };
-        self.with_identity_block(prompt, context)
+        Ok(self.with_identity_block(prompt, context))
     }
 
     /// `prompt`, an [`Agent`](crate::Agent)'s identity block after it, in
@@ -1806,7 +1806,7 @@ impl<P: AiProvider> AiChannel<P> {
             &context,
             (stands_alone, search.active()),
             &policy,
-        );
+        )?;
         let tools = self.tool_context((&event, &context), turn.clone(), stands_alone);
         let mut looped = Loop {
             record: record.clone(),

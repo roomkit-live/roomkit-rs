@@ -200,7 +200,7 @@ async fn close_active(streaming: bool) {
 }
 
 fn script_registry(files: &TempDir) -> SkillRegistry {
-    let mut skills = SkillRegistry::default();
+    let skills = SkillRegistry::default();
     skills
         .add(Skill {
             metadata: SkillMetadata::new("local", "Build"),

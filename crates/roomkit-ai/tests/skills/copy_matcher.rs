@@ -12,7 +12,7 @@ use super::support::{TempDir, skill_md};
 #[test]
 fn a_copy_without_marks_never_restores_an_unavailable_skill() {
     let tree = TempDir::new();
-    let mut source = SkillRegistry::default();
+    let source = SkillRegistry::default();
     for name in ["reports", "invoices", "legacy"] {
         let path = tree.skill_with(
             "skills",
@@ -25,21 +25,27 @@ fn a_copy_without_marks_never_restores_an_unavailable_skill() {
     source.mark_unavailable("legacy", "not here").unwrap();
     let marked = source.copy(None, CopyOptions::default()).unwrap();
     assert_eq!(marked.listed_names(), ["reports"]);
-    assert_eq!(marked.get_unavailable_reason("legacy"), Some("not here"));
+    assert_eq!(
+        marked.get_unavailable_reason("legacy").as_deref(),
+        Some("not here")
+    );
     assert_eq!(
         marked.closed_tool_names(&HashSet::new()),
         HashSet::from(["use_tool".into()])
     );
     for names in [None, Some(["invoices".into(), "legacy".into()].as_slice())] {
         let plain = source.copy(names, CopyOptions { marks: false }).unwrap();
-        assert!(plain.get_skill("legacy").is_none());
-        assert!(plain.get_unavailable_reason("legacy").is_none());
+        assert!(plain.get_skill("legacy").unwrap().is_none());
+        assert!(plain.get_unavailable_reason("legacy").as_deref().is_none());
         assert_eq!(plain.unavailable_skills().len(), 0);
         assert_eq!(plain.closed_tool_names(&HashSet::new()).len(), 0);
         assert_eq!(plain.listed_names(), plain.skill_names());
-        assert!(plain.get_skill("invoices").is_some());
+        assert!(plain.get_skill("invoices").unwrap().is_some());
     }
-    assert_eq!(source.get_unavailable_reason("legacy"), Some("not here"));
+    assert_eq!(
+        source.get_unavailable_reason("legacy").as_deref(),
+        Some("not here")
+    );
     assert_eq!(source.listed_names(), ["reports"]);
 }
 
@@ -92,7 +98,7 @@ fn the_default_is_exact_and_a_callback_error_is_preserved() {
 #[test]
 fn public_gate_views_distinguish_identical_patterns_from_overlapping_ones() {
     let tree = TempDir::new();
-    let mut registry = SkillRegistry::default();
+    let registry = SkillRegistry::default();
     for (name, pattern) in [
         ("closed", "calendar_*"),
         ("same", "calendar_*"),
@@ -137,7 +143,7 @@ fn public_gate_views_distinguish_identical_patterns_from_overlapping_ones() {
 #[test]
 fn all_unavailable_gates_survive_a_copy_unless_marks_are_dropped() {
     let tree = TempDir::new();
-    let mut registry = SkillRegistry::default();
+    let registry = SkillRegistry::default();
     let path = tree.skill_with(
         "skills",
         "cal",

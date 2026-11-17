@@ -23,19 +23,19 @@ fn discovery_registers_each_skill_in_name_order() {
     );
     root.dir("skills/not-a-skill");
     root.file("skills/README.md", "Not a skill.");
-    let mut skills = SkillRegistry::default();
+    let skills = SkillRegistry::default();
     assert_eq!(
         skills.discover(&[root.path().join("skills")], DiscoverOptions::default()),
         Ok(2)
     );
-    let names: Vec<&str> = skills.skill_names();
+    let names: Vec<String> = skills.skill_names();
     assert_eq!(names, ["gift-wrapping", "order-returns"]);
-    let wrapping = skills.get_skill("gift-wrapping").unwrap();
+    let wrapping = skills.get_skill("gift-wrapping").unwrap().unwrap();
     assert_eq!(
         (
-            &wrapping.metadata,
-            wrapping.instructions.as_str(),
-            wrapping.path.as_path(),
+            wrapping.metadata(),
+            wrapping.instructions(),
+            wrapping.path(),
         ),
         (
             &SkillMetadata {
@@ -67,7 +67,7 @@ fn a_malformed_skill_fails_discovery_names_itself_and_leaves_the_registry_as_it_
         "bad-skill",
         "---\nname: bad-skill\n---\nNo description.\n",
     );
-    let mut skills = SkillRegistry::default();
+    let skills = SkillRegistry::default();
     skills
         .discover(&[root.path().join("before")], DiscoverOptions::default())
         .unwrap();
@@ -124,7 +124,7 @@ fn each_validation_rule_reads_as_the_reference_implementation_s() {
     for (directory, text, words) in cases {
         let root = TempDir::new();
         root.skill_with("skills", directory, &text);
-        let mut skills = SkillRegistry::default();
+        let skills = SkillRegistry::default();
         let failed = skills
             .discover(&[root.path().join("skills")], DiscoverOptions::default())
             .unwrap_err();
@@ -174,7 +174,7 @@ fn each_parse_failure_names_the_skill() {
     for (directory, text, words) in cases {
         let root = TempDir::new();
         root.skill_with("skills", directory, &text);
-        let mut skills = SkillRegistry::default();
+        let skills = SkillRegistry::default();
         let failed = skills
             .discover(&[root.path().join("skills")], DiscoverOptions::default())
             .unwrap_err();
@@ -238,7 +238,7 @@ fn a_discovery_not_strict_skips_what_it_cannot_load_and_registers_the_rest() {
         "---\nname: bad-skill\n---\nNo description.\n",
     );
     root.skill_with("skills", "not-gamma", &skill_md("gamma", "Gamma", ""));
-    let mut skills = SkillRegistry::default();
+    let skills = SkillRegistry::default();
     let found = skills.discover(
         &[root.path().join("skills"), root.path().join("nowhere")],
         DiscoverOptions { strict: false },
@@ -288,7 +288,7 @@ fn skills_taking_the_manifest_past_its_bound_are_refused() {
     for n in 0..70 {
         root.skill("many", &format!("skill-{n:02}"), &"d".repeat(1000));
     }
-    let mut skills = SkillRegistry::default();
+    let skills = SkillRegistry::default();
     for strict in [true, false] {
         let failed = skills
             .discover(&[root.path().join("many")], DiscoverOptions { strict })
@@ -312,7 +312,7 @@ fn the_manifest_escapes_what_the_skills_say() {
         "doc-helper",
         &skill_md("doc-helper", &format!("{forged:?}"), "license: MIT\n"),
     );
-    let mut skills = SkillRegistry::default();
+    let skills = SkillRegistry::default();
     skills
         .discover(&[root.path().join("skills")], DiscoverOptions::default())
         .unwrap();
@@ -331,15 +331,15 @@ fn a_skill_registered_again_replaces_the_one_of_its_name_in_place() {
     root.skill("first", "alpha", "Alpha one");
     root.skill("first", "beta", "Beta");
     root.skill("second", "alpha", "Alpha two");
-    let mut skills = SkillRegistry::default();
+    let skills = SkillRegistry::default();
     skills
         .discover(&[root.path().join("first")], DiscoverOptions::default())
         .unwrap();
     let registered = skills.register(root.path().join("second/alpha")).unwrap();
     assert_eq!(registered.description, "Alpha two");
-    let read: Vec<(&str, &str)> = skills
-        .all_metadata()
-        .into_iter()
+    let metadata = skills.all_metadata();
+    let read: Vec<(&str, &str)> = metadata
+        .iter()
         .map(|metadata| (metadata.name.as_str(), metadata.description.as_str()))
         .collect();
     assert_eq!(read, [("alpha", "Alpha two"), ("beta", "Beta")]);
@@ -361,12 +361,15 @@ mod linked_directories {
         let root = TempDir::new();
         let real = root.skill("inner", "real-skill", "Real");
         link(&real, &root.path().join("inner/alias-skill"));
-        let mut skills = SkillRegistry::default();
+        let skills = SkillRegistry::default();
         assert_eq!(
             skills.discover(&[root.path().join("inner")], DiscoverOptions::default()),
             Ok(1)
         );
-        assert_eq!(skills.get_skill("real-skill").unwrap().path, real);
+        assert_eq!(
+            skills.get_skill("real-skill").unwrap().unwrap().path(),
+            real
+        );
     }
 
     #[test]
@@ -380,7 +383,7 @@ mod linked_directories {
             DiscoverOptions { strict: false },
         );
         assert_eq!(lax, Ok(0));
-        let mut skills = SkillRegistry::default();
+        let skills = SkillRegistry::default();
         let failed = skills
             .discover(&[root.path().join("linked")], DiscoverOptions::default())
             .unwrap_err();
@@ -399,16 +402,17 @@ mod linked_directories {
         let root = TempDir::new();
         let far = root.skill("elsewhere", "far-skill", "Far");
         link(&far, &root.path().join("other-name"));
-        let mut skills = SkillRegistry::default();
+        let skills = SkillRegistry::default();
         let registered = skills.register(root.path().join("other-name")).unwrap();
         assert_eq!(
             (
                 registered.name.as_str(),
                 skills
                     .get_skill("far-skill")
-                    .map(|skill| skill.path.as_path())
+                    .unwrap()
+                    .map(|skill| skill.path().to_path_buf())
             ),
-            ("far-skill", Some(far.as_path()))
+            ("far-skill", Some(far))
         );
     }
 
@@ -438,7 +442,7 @@ mod linked_directories {
         };
         let (mut inside, mut out) = (0, 0);
         for _ in 0..3_000 {
-            let mut skills = SkillRegistry::default();
+            let skills = SkillRegistry::default();
             match skills.register(&skill).map(|metadata| metadata.description) {
                 Ok(description) if description == "Outside" => out += 1,
                 Ok(_) => inside += 1,
@@ -473,7 +477,7 @@ fn a_copy_limits_availability_without_rereading_or_mutating_the_source() {
     let root = TempDir::new();
     root.skill("skills", "alpha", "First");
     root.skill("skills", "beta", "Second");
-    let mut source = SkillRegistry::default();
+    let source = SkillRegistry::default();
     source
         .discover(&[root.path().join("skills")], DiscoverOptions::default())
         .unwrap();
@@ -518,7 +522,7 @@ fn an_agent_skills_key_is_kept_as_extra_metadata() {
             "allowed-tools: Bash(git:*) Read\n",
         ),
     );
-    let mut registry = SkillRegistry::default();
+    let registry = SkillRegistry::default();
     let found = registry
         .discover(&[root.path().join("skills")], DiscoverOptions::default())
         .unwrap();

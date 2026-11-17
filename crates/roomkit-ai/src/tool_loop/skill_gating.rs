@@ -7,7 +7,7 @@ use roomkit::model::{ToolCall, ToolCallOutcome};
 
 use super::Loop;
 use crate::skills::tools::SkillTools;
-use crate::tools::{AiTool, ToolContext};
+use crate::tools::{AiTool, ToolContext, ToolError};
 
 /// The selected registry and activations owned by this turn, together.
 pub(crate) struct SkillGates {
@@ -54,7 +54,31 @@ impl Loop {
             .activated
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+            .iter()
+            .filter(|name| {
+                !self
+                    .skill_gates
+                    .skills
+                    .as_ref()
+                    .is_some_and(|skills| skills.is_retired(name))
+            })
+            .cloned()
+            .collect()
+    }
+
+    pub(super) async fn check_served_execution(&self, name: &str) -> Result<(), ToolError> {
+        let Some(skills) = &self.skill_gates.skills else {
+            return Ok(());
+        };
+        let active = self.skill_activated();
+        let refusal = skills
+            .execution_refusal(name, &self.context, &active)
+            .await
+            .map_err(|error| ToolError::raised(&error))?;
+        if let Some(refusal) = refusal {
+            return Err(ToolError::Refused(crate::texts::error_envelope(&refusal)));
+        }
+        Ok(())
     }
 
     /// Ordinary schemas, search and hints all read the same reachable set.

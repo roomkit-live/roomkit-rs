@@ -3,7 +3,7 @@
 //! and so escape the tool policy (RFC §21.1), and what each turn's system
 //! prompt carries of the skills (RFC §6.4, §24.3, §24.4).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use roomkit::model::{ChannelId, RoomEvent, RoomId, ToolCall, ToolCallOutcome};
@@ -11,6 +11,10 @@ use serde_json::{Value, json};
 
 use super::activation::{self, Activations};
 use super::files;
+use super::{LoadedSkill, SkillError};
+
+mod execution;
+mod served;
 use super::registry::SkillRegistry;
 use super::texts::{
     self, ACTIVATE_DESCRIPTION, ACTIVATE_SKILL, ACTIVE_HEADING, ALREADY_ACTIVE, NO_SCRIPTS_NOTE,
@@ -23,8 +27,10 @@ use crate::tools::{AiTool, BoxFuture, DynToolset, ToolContext, ToolError, ToolRe
 /// are active in each room, a record its turns share whichever registry each
 /// reads (RFC §24.3, §24.4).
 pub(crate) struct SkillTools {
-    registry: SkillRegistry,
-    manifest: String,
+    registry: Arc<SkillRegistry>,
+    pending: Mutex<HashMap<String, String>>,
+    retired: Mutex<HashSet<String>>,
+    execution: Arc<execution::ExecutionGate>,
     /// Whether the system prompt lists the skills (Python's
     /// `skills_in_prompt`).
     listed: bool,
@@ -68,11 +74,13 @@ impl SkillTools {
         executor: Option<Arc<dyn ScriptExecutor>>,
     ) -> Self {
         Self {
-            manifest: registry.to_prompt_xml(),
-            registry,
+            registry: Arc::new(registry),
+            pending: Mutex::default(),
+            retired: Mutex::default(),
             listed,
             executor,
             activations: Arc::default(),
+            execution: Arc::default(),
         }
     }
 
@@ -80,11 +88,26 @@ impl SkillTools {
     /// these (RFC §24.3), the record of each room's active skills the same.
     pub(crate) fn of_turn(&self, registry: SkillRegistry) -> Self {
         Self {
-            manifest: registry.to_prompt_xml(),
-            registry,
+            registry: Arc::new(registry),
+            pending: Mutex::default(),
+            retired: Mutex::default(),
             listed: self.listed,
             executor: self.executor.clone(),
             activations: Arc::clone(&self.activations),
+            execution: Arc::clone(&self.execution),
+        }
+    }
+
+    /// A fresh turn shares the live registry and room activations, not pending calls.
+    pub(crate) fn for_turn(&self) -> Self {
+        Self {
+            registry: Arc::clone(&self.registry),
+            pending: Mutex::default(),
+            retired: Mutex::default(),
+            listed: self.listed,
+            executor: self.executor.clone(),
+            activations: Arc::clone(&self.activations),
+            execution: Arc::clone(&self.execution),
         }
     }
 
@@ -138,13 +161,16 @@ impl SkillTools {
         outcome: ToolCallOutcome,
         context: &ToolContext,
     ) -> Option<String> {
-        if call.name != ACTIVATE_SKILL || outcome != ToolCallOutcome::Served {
+        if call.name != ACTIVATE_SKILL {
             return None;
         }
-        let name = argument(call, "name");
-        self.registry.get_skill(name)?;
-        self.lock().activate(&context.room_id, name);
-        Some(name.to_owned())
+        let name = super::registry::lock(&self.pending).remove(&call.id)?;
+        if outcome != ToolCallOutcome::Served {
+            return None;
+        }
+        super::registry::lock(&self.retired).remove(&name);
+        self.lock().activate(&context.room_id, &name);
+        Some(name)
     }
 
     /// The names a channel given skills keeps for its own tools, as
@@ -190,11 +216,15 @@ impl SkillTools {
     /// turn reads; a registry with no skill adds nothing and leaves the room's
     /// record as it is, and a turn that stands alone carries no active skill.
     /// Python's `_hydrate_room_memories` and `_add_skills`.
-    pub(crate) fn system_prompt(&self, base: Option<&str>, turn: SkillTurn<'_>) -> Option<String> {
+    pub(crate) fn system_prompt(
+        &self,
+        base: Option<&str>,
+        turn: SkillTurn<'_>,
+    ) -> Result<Option<String>, SkillError> {
         self.read_stored(turn);
         let mut prompt = base.map(str::to_owned);
         if !self.registry.has_entries() {
-            return prompt;
+            return Ok(prompt);
         }
         if self.listed {
             let before = prompt.unwrap_or_default();
@@ -203,45 +233,72 @@ impl SkillTools {
             } else {
                 NO_SCRIPTS_NOTE
             };
-            prompt = Some(format!("{before}\n\n{PREAMBLE}{note}\n\n{}", self.manifest));
+            let served = if self.registry.has_served() {
+                served::PREAMBLE
+            } else {
+                ""
+            };
+            prompt = Some(format!(
+                "{before}\n\n{PREAMBLE}{note}{served}\n\n{}",
+                self.registry.to_prompt_xml()
+            ));
         }
         if turn.stands_alone {
-            return prompt;
+            return Ok(prompt);
         }
-        match self.instructions(&self.active_in(turn.room)) {
+        Ok(match self.instructions(turn.room)? {
             Some(active) => Some(format!("{}\n\n{active}", prompt.unwrap_or_default())),
             None => prompt,
-        }
+        })
     }
 
     /// Reads `turn`'s room's stored rows, when this process has not yet.
     fn read_stored(&self, turn: SkillTurn<'_>) {
         let mut activations = self.lock();
         if activations.needs_hydration(turn.room) {
-            let names = activation::activated_in(turn.history, turn.agent);
+            let names = activation::activated_in(turn.history, turn.agent)
+                .into_iter()
+                .filter(|name| !self.registry.is_served(name))
+                .collect::<Vec<_>>();
             activations.hydrate(turn.room, &names);
         }
     }
 
-    /// The skills active in `room`. A skill this registry does not hold leaves
-    /// them: its instructions are not in this prompt, so its next activation
-    /// delivers them (RFC §24.3, §24.4).
-    fn active_in(&self, room: &RoomId) -> Vec<String> {
-        let mut activations = self.lock();
-        activations.retain(room, |name| self.registry.get_skill(name).is_some());
-        activations.active(room)
+    /// Missing skills retire; registry failures propagate before a model reads a prompt.
+    fn instructions(&self, room: &RoomId) -> Result<Option<String>, SkillError> {
+        let mut local = Vec::new();
+        let mut remote = Vec::new();
+        for name in self.active_names(room) {
+            let Some(skill) = self.registry.get_skill(&name)? else {
+                self.retire(room, &name);
+                continue;
+            };
+            let body = skill.instructions().trim();
+            if body.is_empty() {
+                continue;
+            }
+            match &skill {
+                LoadedSkill::Local(_) => local.push(format!("## Skill: {name}\n{body}")),
+                LoadedSkill::Served(skill) => remote.push(served::section(skill, body)?),
+            }
+        }
+        let mut blocks = Vec::new();
+        if !local.is_empty() {
+            blocks.push(format!("{ACTIVE_HEADING}\n\n{}", local.join("\n\n")));
+        }
+        if !remote.is_empty() {
+            blocks.push(served::block(&remote));
+        }
+        Ok((!blocks.is_empty()).then(|| blocks.join("\n\n")))
     }
 
-    /// The instructions of the skills `active`, under their heading; none
-    /// when no active skill has any.
-    fn instructions(&self, active: &[String]) -> Option<String> {
-        let sections: Vec<String> = active
-            .iter()
-            .filter_map(|name| self.registry.get_skill(name))
-            .filter(|skill| !skill.instructions.trim().is_empty())
-            .map(|skill| format!("## Skill: {}\n{}", skill.name(), skill.instructions.trim()))
-            .collect();
-        (!sections.is_empty()).then(|| format!("{ACTIVE_HEADING}\n\n{}", sections.join("\n\n")))
+    pub(crate) fn is_retired(&self, name: &str) -> bool {
+        super::registry::lock(&self.retired).contains(name)
+    }
+
+    fn retire(&self, room: &RoomId, name: &str) {
+        super::registry::lock(&self.retired).insert(name.to_owned());
+        self.lock().retain(room, |active| active != name);
     }
 
     /// `activate_skill`: the skill's instructions and references the first
@@ -256,37 +313,57 @@ impl SkillTools {
         context: &ToolContext,
     ) -> Result<ToolResult, ToolError> {
         let name = argument(call, "name");
-        let Some(skill) = self.registry.get_skill(name) else {
-            if let Some(reason) = self.registry.get_unavailable_reason(name) {
+        let loaded = self.registry.load_skill(name).await;
+        let skill = match loaded {
+            Ok(Some(skill)) => skill,
+            failed => {
+                if self.registry.is_served(name) {
+                    self.retire(&context.room_id, name);
+                }
+                let error = match failed {
+                    Err(error) => error.to_string(),
+                    _ => match self.registry.get_unavailable_reason(name) {
+                        Some(reason) => unavailable(name, &reason),
+                        None => {
+                            return not_a_skill(call, name, &self.registry.skill_names(), context);
+                        }
+                    },
+                };
                 return Err(ToolError::Refused(texts::object(&[
-                    ("error", json!(unavailable(name, reason))),
+                    ("error", json!(error)),
                     ("available_skills", json!(self.registry.skill_names())),
                 ])));
             }
-            return not_a_skill(call, name, &self.registry.skill_names(), context);
         };
-        self.check_requires(&skill.metadata, context)?;
+        self.check_requires(skill.metadata(), context)?;
         let active = !context.stands_alone && self.lock().is_active(&context.room_id, name);
-        let path = skill.path.clone();
-        let references = blocking(move || files::list_references(&path)).await;
-        let mut answer = if active {
-            vec![
-                ("ok", json!(true)),
-                ("name", json!(skill.name())),
-                ("_note", json!(ALREADY_ACTIVE)),
-                ("already_active", json!(true)),
-            ]
-        } else {
-            vec![
-                ("name", json!(skill.name())),
-                ("description", json!(skill.description())),
-                ("instructions", json!(skill.instructions)),
-            ]
+        let answer = match skill {
+            LoadedSkill::Served(skill) => served::activation(&skill, active)?,
+            LoadedSkill::Local(skill) => {
+                let path = skill.path.clone();
+                let references = blocking(move || files::list_references(&path)).await;
+                let mut answer = if active {
+                    vec![
+                        ("ok", json!(true)),
+                        ("name", json!(skill.name())),
+                        ("_note", json!(ALREADY_ACTIVE)),
+                        ("already_active", json!(true)),
+                    ]
+                } else {
+                    vec![
+                        ("name", json!(skill.name())),
+                        ("description", json!(skill.description())),
+                        ("instructions", json!(skill.instructions)),
+                    ]
+                };
+                if let Some(references) = references.filter(|names| !names.is_empty()) {
+                    answer.push(("references", json!(references)));
+                }
+                texts::object(&answer)
+            }
         };
-        if let Some(references) = references.filter(|names| !names.is_empty()) {
-            answer.push(("references", json!(references)));
-        }
-        Ok(ToolResult::Text(texts::object(&answer)))
+        super::registry::lock(&self.pending).insert(call.id.clone(), name.to_owned());
+        Ok(ToolResult::Text(answer))
     }
 
     fn check_requires(
@@ -304,22 +381,33 @@ impl SkillTools {
 
     /// `read_skill_reference`: a reference of a skill the registry holds, or
     /// what the model reads of why it cannot be read (RFC §24.6).
-    async fn read(&self, call: &ToolCall) -> Result<ToolResult, ToolError> {
+    async fn read(
+        &self,
+        call: &ToolCall,
+        invocation: &ToolContext,
+    ) -> Result<ToolResult, ToolError> {
         let (skill_name, filename) = (argument(call, "skill_name"), argument(call, "filename"));
-        let Some(skill) = self.registry.get_skill(skill_name) else {
+        if self.registry.is_served(skill_name) {
+            return self.read_served(skill_name, filename, invocation).await;
+        }
+        let Some(skill) = self
+            .registry
+            .get_skill(skill_name)
+            .map_err(|error| ToolError::raised(&error))?
+        else {
             let error = self
                 .registry
                 .get_unavailable_reason(skill_name)
                 .map_or_else(
                     || format!("Skill {} not found", quoted_name(skill_name)),
-                    |reason| unavailable(skill_name, reason),
+                    |reason| unavailable(skill_name, &reason),
                 );
             return Err(ToolError::Refused(texts::object(&[(
                 "error",
                 json!(error),
             )])));
         };
-        let (path, name) = (skill.path.clone(), filename.to_owned());
+        let (path, name) = (skill.path().to_path_buf(), filename.to_owned());
         let read = blocking(move || files::read_reference(&path, &name))
             .await
             .unwrap_or_else(|| Err(format!("Reference cannot be read: {filename}")));
@@ -342,6 +430,7 @@ impl SkillTools {
     /// from its stored rows (RFC §10.6.3).
     pub(crate) fn forget(&self, room: &RoomId) {
         self.lock().forget(room);
+        self.execution.forget(room.as_str());
     }
 
     fn lock(&self) -> MutexGuard<'_, Activations> {
@@ -373,7 +462,7 @@ impl DynToolset for SkillTools {
             } else if call.name == RUN_SKILL_SCRIPT {
                 self.run_script(&call).await
             } else {
-                self.read(&call).await
+                self.read(&call, &context).await
             }
         })
     }
@@ -392,7 +481,7 @@ const HINT_MAX_NAMES: usize = 8;
 fn not_a_skill(
     call: &ToolCall,
     name: &str,
-    skills: &[&str],
+    skills: &[String],
     context: &ToolContext,
 ) -> Result<ToolResult, ToolError> {
     let mut answer = vec![

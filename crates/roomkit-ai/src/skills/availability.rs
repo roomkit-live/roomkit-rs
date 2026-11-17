@@ -1,22 +1,30 @@
 //! Registry visibility and unavailable skills' retained gates (RFC §24.3).
 
+use super::registry::lock;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
 use super::error::SkillError;
-use super::model::{Skill, SkillMetadata};
+use super::model::Skill;
 use super::registry::{MANIFEST_MAX, SkillRegistry};
 use super::texts::escaped;
 
 /// Marks preserve insertion order in the model-facing manifest.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct Marks {
-    unavailable: Vec<(String, String)>,
-    closed: HashMap<String, Vec<String>>,
-    unlisted: HashSet<String>,
+    pub(super) unavailable: Vec<(String, String)>,
+    pub(super) closed: HashMap<String, Vec<String>>,
+    pub(super) unlisted: HashSet<String>,
 }
 
 impl Marks {
+    pub(super) fn set_unavailable(&mut self, name: &str, reason: &str) {
+        if let Some((_, held)) = self.unavailable.iter_mut().find(|(held, _)| held == name) {
+            reason.clone_into(held);
+        } else {
+            self.unavailable.push((name.to_owned(), reason.to_owned()));
+        }
+    }
+
     pub(super) fn clear(&mut self, name: &str) {
         self.unavailable.retain(|(held, _)| held != name);
         self.closed.remove(name);
@@ -90,7 +98,15 @@ impl Marks {
 
 fn available_lines(lines: &mut Vec<String>, skill: &Skill) {
     let metadata = &skill.metadata;
-    lines.push(format!("  <skill name=\"{}\">", escaped(&metadata.name)));
+    let origin = metadata.name.split_once(':').map(|(label, _)| label);
+    lines.push(match origin {
+        Some(label) => format!(
+            "  <skill name=\"{}\" origin=\"{}\">",
+            escaped(&metadata.name),
+            escaped(label)
+        ),
+        None => format!("  <skill name=\"{}\">", escaped(&metadata.name)),
+    });
     let fields = [
         ("description", Some(metadata.description.as_str())),
         ("license", metadata.license.as_deref()),
@@ -98,7 +114,12 @@ fn available_lines(lines: &mut Vec<String>, skill: &Skill) {
     ];
     for (tag, value) in fields {
         if let Some(value) = value.filter(|value| !value.is_empty()) {
-            lines.push(format!("    <{tag}>{}</{tag}>", escaped(value)));
+            let text = if origin.is_some() {
+                crate::skills::served::catalog::quoted(value)
+            } else {
+                escaped(value)
+            };
+            lines.push(format!("    <{tag}>{text}</{tag}>"));
         }
     }
     lines.push("  </skill>".to_owned());
@@ -112,9 +133,10 @@ impl SkillRegistry {
             .all_metadata()
             .into_iter()
             .filter(|metadata| activated.contains(&metadata.name))
-            .flat_map(SkillMetadata::gated_tool_names)
+            .flat_map(|metadata| metadata.gated_tool_names())
             .collect();
-        self.marks
+        lock(&self.state)
+            .marks
             .closed
             .values()
             .flatten()
@@ -131,14 +153,14 @@ impl SkillRegistry {
             self.all_metadata()
                 .into_iter()
                 .filter(|metadata| !activated.contains(&metadata.name))
-                .flat_map(SkillMetadata::gated_tool_names),
+                .flat_map(|metadata| metadata.gated_tool_names()),
         );
         patterns
     }
 
     /// Closed patterns no available skill could open (RFC §24.2).
     pub fn unopenable_tool_names(&self) -> HashSet<String> {
-        self.closed_tool_names(&self.skill_names().into_iter().map(str::to_owned).collect())
+        self.closed_tool_names(&self.skill_names().into_iter().collect())
     }
 
     /// Remove a skill from available reads while retaining its reason and
@@ -147,59 +169,59 @@ impl SkillRegistry {
     /// # Errors
     /// Returns [`SkillError::ManifestTooLarge`] if the final escaped manifest
     /// would exceed 65,536 characters. The registry stays unchanged.
-    pub fn mark_unavailable(&mut self, name: &str, reason: &str) -> Result<(), SkillError> {
-        let mut next = self.clone();
-        if let Some(metadata) = next.get_metadata(name) {
-            let gates = metadata.gated_tool_names();
+    pub fn mark_unavailable(&self, name: &str, reason: &str) -> Result<(), SkillError> {
+        let mut held = lock(&self.state);
+        let mut next = held.clone();
+        if let Some(skill) = next.skills.iter().find(|skill| skill.name() == name) {
+            let gates = skill.metadata.gated_tool_names();
             if !gates.is_empty() {
                 next.marks.closed.insert(name.to_owned(), gates);
             }
         }
-        Arc::make_mut(&mut next.skills).retain(|skill| skill.name() != name);
-        if let Some((_, held)) = next
-            .marks
-            .unavailable
-            .iter_mut()
-            .find(|(held, _)| held == name)
-        {
-            reason.clone_into(held);
-        } else {
-            next.marks
-                .unavailable
-                .push((name.to_owned(), reason.to_owned()));
-        }
+        next.skills.retain(|skill| skill.name() != name);
+        next.loaded.remove(name);
+        next.marks.set_unavailable(name, reason);
         next.marks.check_manifest(&next.skills)?;
-        *self = next;
+        *held = next;
         Ok(())
     }
 
     /// Hide a registered skill from the manifest, preserving activation
     /// and all ordinary skill reads; ignore unknown names (RFC §24.3).
-    pub fn mark_unlisted(&mut self, name: &str) {
+    pub fn mark_unlisted(&self, name: &str) {
         if self.get_metadata(name).is_some() {
-            self.marks.unlisted.insert(name.to_owned());
+            lock(&self.state).marks.unlisted.insert(name.to_owned());
         }
     }
 
     /// Available skills advertised in the manifest, in registration order.
-    pub fn listed_names(&self) -> Vec<&str> {
-        self.skill_names()
-            .into_iter()
-            .filter(|name| !self.marks.unlisted.contains(*name))
+    pub fn listed_names(&self) -> Vec<String> {
+        let state = lock(&self.state);
+        state
+            .skills
+            .iter()
+            .filter(|skill| !state.marks.unlisted.contains(skill.name()))
+            .map(|skill| skill.name().to_owned())
             .collect()
     }
 
     /// The reason a skill is unavailable here (RFC §24.3).
-    pub fn get_unavailable_reason(&self, name: &str) -> Option<&str> {
-        self.marks
+    pub fn get_unavailable_reason(&self, name: &str) -> Option<String> {
+        lock(&self.state)
+            .marks
             .unavailable
             .iter()
             .find(|(held, _)| held == name)
-            .map(|(_, reason)| reason.as_str())
+            .map(|(_, reason)| reason.clone())
     }
 
     /// A detached name-to-reason snapshot of unavailable skills (RFC §24.3).
     pub fn unavailable_skills(&self) -> HashMap<String, String> {
-        self.marks.unavailable.iter().cloned().collect()
+        lock(&self.state)
+            .marks
+            .unavailable
+            .iter()
+            .cloned()
+            .collect()
     }
 }

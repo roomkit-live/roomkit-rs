@@ -27,6 +27,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Add host continuation policies to AI channels, sharing retry limits and preserving callback failures.
 
 - Apply `AiChannelTurnConfig::tool_timeouts` only to its own turn, over the channel's per-tool bounds. Missing names retain their defaults, named `None` removes a bound, and zero fails before generation.
+- Add MCP skill registration and verified loading, shared catalogue/file caches, attributed text activation and host execution approvals (RFC §24.7). Registry reads return owned snapshots; `get_skill` now returns `Result<Option<LoadedSkill>, SkillError>` and mutations take `&self`. See `api/PYTHON_API.md` for migration and YAML set normalization.
 
 - **A supervisor's per-worker tool is named as every built-in provider accepts**, as Python's (RFC §19.7.3, RMK-521). A host that names its agent channels `agent:<uuid>` declared `delegate_to_agent:<uuid>`, which Anthropic, OpenAI and DeepSeek refuse, and the supervisor never answered. An id that makes no such name has each character outside `[A-Za-z0-9_-]` replaced by `_`; a replaced name that meets another worker's, or passes 128 characters, ends with `_` and 8 hex digits of the id's SHA-256. An id that already makes such a name keeps `delegate_to_<id>`.
 

@@ -6,7 +6,7 @@ use roomkit::model::{Metadata, ToolCall};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::{Skill, SkillFileError, SkillRegistry, texts};
+use super::{LoadedSkill, Skill, SkillFileError, SkillRegistry, texts};
 use crate::tools::{AiTool, BoxFuture, ToolError, ToolResult};
 
 #[cfg(test)]
@@ -98,10 +98,13 @@ pub(super) async fn run(
 ) -> Result<ToolResult, ToolError> {
     let name = argument(call, "skill_name");
     let script_name = argument(call, "script_name");
-    let Some(skill) = registry.get_skill(name) else {
+    let Some(skill) = registry
+        .get_skill(name)
+        .map_err(|error| ToolError::raised(&error))?
+    else {
         let message = registry.get_unavailable_reason(name).map_or_else(
             || format!("Skill {} not found", texts::quoted_name(name)),
-            |reason| super::tools::unavailable(name, reason),
+            |reason| super::tools::unavailable(name, &reason),
         );
         return Err(ToolError::Refused(texts::object(&[(
             "error",
@@ -120,7 +123,12 @@ pub(super) async fn run(
         .arguments
         .get("arguments")
         .and_then(serde_json::Value::as_object);
-    let result = executor.execute(skill, script_name, arguments).await?;
+    let LoadedSkill::Local(skill) = skill else {
+        return Err(ToolError::Refused(
+            "A served skill runs no local script".to_owned(),
+        ));
+    };
+    let result = executor.execute(&skill, script_name, arguments).await?;
     serde_json::to_string(&result)
         .map(ToolResult::Text)
         .map_err(|error| ToolError::raised(&error))
