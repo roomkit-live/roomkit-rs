@@ -122,10 +122,11 @@ impl AiProvider for Paced {
         self.streaming
     }
 
-    async fn close(&self) {
+    fn close(&self) -> impl Future<Output = ()> + Send {
         if let Some(closed) = &self.closed {
             closed.store(true, Ordering::Release);
         }
+        std::future::ready(())
     }
 
     /// The round's events, under a response schema refused before the
