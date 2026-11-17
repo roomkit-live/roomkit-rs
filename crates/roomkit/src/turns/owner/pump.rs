@@ -174,7 +174,9 @@ impl Pump {
                 }
             }
         };
-        let ending = if matches!(ending, Ending::Ended) {
+        let cancelling =
+            self.state.cancel.borrow().is_some() && !self.state.steer_cut.load(Ordering::Acquire);
+        let ending = if cancelling && matches!(ending, Ending::Ended) {
             self.end_calls().await
         } else {
             ending

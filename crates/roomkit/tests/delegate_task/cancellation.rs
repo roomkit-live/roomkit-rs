@@ -164,3 +164,57 @@ async fn cancelling_twice_does_not_renew_the_inline_completion_deadline() {
     assert_eq!(child_status(&kit).await, json!("cancelled"));
     kit.close().await.unwrap();
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_normal_turn_does_not_join_a_withdrawn_inline_completion() {
+    for streaming in [false, true] {
+        let (warnings, _capture) = warnings::Warnings::capture();
+        let started = Arc::new(Notify::new());
+        let kit = RoomKit::new(RoomKitOptions::with_store(CompletionGateStore::default()));
+        let (kit, _) = super::kit_delegating_configured(
+            kit,
+            digger(Arc::clone(&started)),
+            DelegateHandlerOptions {
+                wait_in_task_rooms: true,
+                ..Default::default()
+            },
+            roomkit_ai::AgentOptions {
+                ai: AiChannelOptions {
+                    tool_timeouts: [("delegate_task".to_owned(), Some(Duration::from_secs(1)))]
+                        .into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            streaming,
+        );
+        let room = conversation(&kit).await;
+        let task = kit
+            .delegate(
+                &room,
+                &id("researcher"),
+                "Look it up.",
+                DelegateOptions::default(),
+            )
+            .await
+            .unwrap();
+        started.notified().await;
+        kit.store().reached.notified().await;
+        let ended = timeout(Duration::from_millis(50), task.wait(WaitOptions::default())).await;
+        let child_before = child_status(&kit).await;
+        kit.store().release.notify_one();
+        task.wait(WaitOptions::default()).await.unwrap();
+        roomkit::testing::idle(&kit).await;
+        kit.close().await.unwrap();
+        assert!(
+            ended.is_ok(),
+            "streaming={streaming}: normal turn waited for withdrawn child cleanup"
+        );
+        assert_eq!(ended.unwrap().unwrap().status, TaskStatus::Completed);
+        assert_eq!(child_before, json!("pending"));
+        assert_eq!(
+            warnings.containing("drainage incomplete"),
+            Vec::<String>::new()
+        );
+    }
+}

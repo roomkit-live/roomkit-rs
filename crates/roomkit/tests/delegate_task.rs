@@ -380,12 +380,23 @@ fn kit_delegating_with_store<S: ConversationStore>(
     digger: impl roomkit::Channel + 'static,
     options: DelegateHandlerOptions<S>,
 ) -> (RoomKit<S>, MockAiProvider) {
+    kit_delegating_configured(kit, digger, options, AgentOptions::default(), false)
+}
+
+fn kit_delegating_configured<S: ConversationStore>(
+    kit: RoomKit<S>,
+    digger: impl roomkit::Channel + 'static,
+    options: DelegateHandlerOptions<S>,
+    agent_options: AgentOptions,
+    streaming: bool,
+) -> (RoomKit<S>, MockAiProvider) {
     let mut call = AiToolCall::new("c", "delegate_task");
     call.arguments = Metadata::from_iter([
         ("agent".to_owned(), json!("digger")),
         ("task".to_owned(), json!("Dig.")),
     ]);
     let model = MockAiProvider::new(MockAiProviderOptions {
+        streaming,
         ai_responses: Some(vec![
             AiResponse {
                 finish_reason: Some("tool_calls".to_owned()),
@@ -396,7 +407,7 @@ fn kit_delegating_with_store<S: ConversationStore>(
         ]),
         ..MockAiProviderOptions::default()
     });
-    let researcher = Agent::new(id("researcher"), model.clone(), AgentOptions::default()).unwrap();
+    let researcher = Agent::new(id("researcher"), model.clone(), agent_options).unwrap();
     kit.register_channel(researcher).unwrap();
     kit.register_channel(digger).unwrap();
     let handler = DelegateHandler::new(&kit, options);
