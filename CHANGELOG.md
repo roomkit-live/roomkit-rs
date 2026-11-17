@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Add process-wide content logging controls and bounded, opt-in DEBUG tool payloads; preserve source diagnostic levels without logging private unserved-tool messages.
+
 - **BREAKING** (RMK-1747). The `publish_tool_call_text` channel option enables ACP tool arguments, result previews and full intermediate progress for room subscribers. The default publishes structural fields only.
 
 - Expose `BACKGROUND_TOOL`, `TASK_STATUS_TOOL` and `CANCEL_TASK_TOOL` in `roomkit::tasks` for hosts that identify registered task tools.

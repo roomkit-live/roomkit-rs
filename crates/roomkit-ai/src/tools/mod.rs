@@ -187,7 +187,7 @@ pub enum ToolError {
     /// `UnservedToolCallError`: nothing served it, and a SYNC `ON_TOOL_CALL`
     /// hook may serve it; when none does, the call fails and the model reads
     /// `{"error": "No handler for tool x"}` (RFC §9.3, §21.4). The message
-    /// goes to the log alone.
+    /// is not included in ordinary content logs.
     #[error("{0}")]
     UnservedToolCall(String),
     /// The tool raised an error of `kind`, saying `message`.

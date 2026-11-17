@@ -69,3 +69,9 @@ opentelemetry_sdk = { workspace = true, features = ["testing"] }
 
 [lints]
 workspace = true
+
+# Each subprocess has its own initial environment and process-wide switch.
+[[test]]
+name = "content_logging"
+path = "tests/content_logging.rs"
+harness = false

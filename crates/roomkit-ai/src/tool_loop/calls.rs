@@ -12,7 +12,7 @@ use serde_json::Value;
 use tokio::time::Instant;
 
 use super::generation::{Called, Partial};
-use super::{Loop, ToolEnd};
+use super::{Loop, ToolEnd, logs};
 use crate::provider::ProviderError;
 use crate::rows::end_row;
 use crate::skills::ACTIVATE_SKILL;
@@ -134,6 +134,9 @@ impl Loop {
         ran: &mut ToolCall,
     ) -> Result<ToolEnd, ProviderError> {
         let started = Instant::now();
+        if !called.duplicate {
+            logs::calling(&called.call);
+        }
         let mut span = None;
         let (ended, asked, invalid_arguments) = match self.gate(called).await {
             Gated::CatalogueFailed(error) => {
@@ -177,7 +180,6 @@ impl Loop {
         let served = outcome == ToolCallOutcome::Served && own.as_ref() == Some(&ended.result);
         let shown = self.model_copy(called, &ended.call, &result, served);
         let reported = ended.ended(outcome, result.clone().into_value());
-        log_failure(&reported);
         let result = if let Some((asked, ran_with)) = asked {
             self.search
                 .settle(&reported.call.id, &reported.call.name, outcome);
@@ -230,7 +232,10 @@ impl Loop {
     /// as a repeat of the arguments it would run with (RFC §6.4).
     async fn guarded(&self, call: ToolCall) -> ToolCallReport {
         match self.repeat_refusal(&call.name, &call.arguments) {
-            Some(words) => ended(call, ToolCallOutcome::Refused, words),
+            Some(words) => {
+                logs::refused(&call.name, &words);
+                ended(call, ToolCallOutcome::Refused, words)
+            }
             None => self.execute(call).await,
         }
     }
@@ -382,6 +387,7 @@ impl Loop {
             return refuse(texts::call_id_in_flight(&model_call.id));
         }
         if let Some(partial) = called.partial {
+            logs::partial(model_call, matches!(partial, Partial::Unreadable));
             return refuse(match partial {
                 Partial::Cut => texts::cut(&model_call.name),
                 Partial::Unreadable => texts::unreadable(&model_call.name),
@@ -390,12 +396,14 @@ impl Loop {
         // A tool withdrawn for the turn is gone, the channel's own
         // included (RFC §6.4).
         if self.adopted.withdrawn.contains(&model_call.name) {
+            logs::withdrawn(&model_call.name);
             return refuse(texts::not_available(&model_call.name));
         }
         if let Err(error) = self.toolbox.live_sandbox(&model_call.name) {
             return Gated::CatalogueFailed(error);
         }
         let Some((tool, _)) = self.toolbox.find(&model_call.name) else {
+            logs::undeclared(&model_call.name);
             // While a catalogue is hidden, a name no tool carries may be a
             // tool the model misspelled: it can search (RFC §21.1).
             return refuse(if self.search.active() {
@@ -405,9 +413,11 @@ impl Loop {
             });
         };
         if !self.toolbox.permits(&self.policy, &model_call.name) {
+            logs::policy(&model_call.name);
             return refuse(texts::not_permitted(&model_call.name));
         }
         if self.skill_gated(&model_call.name) {
+            logs::skill(&model_call.name);
             let reason = if self.skill_unopenable(&model_call.name) {
                 "gated by a skill that is not available here."
             } else {
@@ -437,6 +447,7 @@ impl Loop {
         let arguments = match turn.before_tool_use(&call).await {
             ToolGate::Allowed(arguments) => arguments,
             ToolGate::Refused { text, error_detail } => {
+                logs::before_refusal(&call.name);
                 let refused = ended(call, ToolCallOutcome::Refused, text);
                 return Gated::Refused(match error_detail {
                     Some(detail) => refused.with_error_detail(detail),
@@ -451,6 +462,7 @@ impl Loop {
             gated.arguments = arguments;
             if let Some(why) = schema::mismatch(&tool.parameters, &gated.arguments) {
                 let text = texts::invalid_rewritten_arguments(&call.name, &why);
+                logs::rewritten(&call.name, &why);
                 return Gated::Refused(ended(gated, ToolCallOutcome::Refused, text));
             }
         }
@@ -547,17 +559,37 @@ impl Loop {
             &call.name,
             toolset.bounds_itself() || self.toolbox.sandbox_waits(&call.name),
         );
+        let started = Instant::now();
         let answered = match bound {
             Some(bound) => tokio::time::timeout(bound, answer)
                 .await
                 .map_err(|_elapsed| bound),
             None => Ok(answer.await),
         };
-        match answered {
-            Ok(Ok(output)) => served(call, output.with_parts_read(), &structured),
-            Ok(Err(error)) => failure(call, error),
-            Err(bound) => timed_out(call, bound),
+        read_answer(call, answered, &structured, started.elapsed())
+    }
+}
+
+/// The handler answer and its diagnostic, before the tool-result hooks.
+fn read_answer(
+    call: ToolCall,
+    answered: Result<Result<ToolResult, ToolError>, Duration>,
+    structured: &ToolStructuredContent,
+    elapsed: Duration,
+) -> ToolCallReport {
+    match answered {
+        Ok(Ok(output)) => {
+            let output = output.with_parts_read();
+            logs::answered(&call.name, &output, elapsed);
+            served(call, output, structured)
         }
+        Ok(Err(error)) => {
+            if matches!(error, ToolError::UnservedToolCall(_)) {
+                logs::declined(&call.name, elapsed);
+            }
+            failure(call, error)
+        }
+        Err(bound) => timed_out(call, bound),
     }
 }
 
@@ -594,10 +626,10 @@ fn served(
 /// as they are, a raised error by its kind, its message for the
 /// observers (RFC §9.3).
 fn failure(call: ToolCall, error: ToolError) -> ToolCallReport {
+    logs::failed(&call.name, &error);
     match error {
         ToolError::Refused(words) => ended(call, ToolCallOutcome::Refused, words),
-        ToolError::UnservedToolCall(message) => {
-            tracing::debug!(target: "roomkit::ai", tool = %call.name, %message, "a tool declined a call");
+        ToolError::UnservedToolCall(_) => {
             let text = texts::unserved(&call.name);
             ended(call, ToolCallOutcome::Unserved, text)
         }
@@ -620,6 +652,7 @@ fn timed_out(call: ToolCall, bound: Duration) -> ToolCallReport {
         call.name,
         bound.as_secs_f64()
     );
+    logs::timed_out(&call.name, &detail);
     let text = texts::failed(&call.name, TIMED_OUT);
     ended(call, ToolCallOutcome::Failed, text).with_error_detail(detail)
 }
@@ -627,22 +660,6 @@ fn timed_out(call: ToolCall, bound: Duration) -> ToolCallReport {
 /// `call`, ended with `outcome`, the model reading `text`.
 fn ended(call: ToolCall, outcome: ToolCallOutcome, text: String) -> ToolCallReport {
     ToolCallReport::new(call).ended(outcome, Value::String(text))
-}
-
-/// Logs a call that did not serve, with what failed (RFC §9.3: the
-/// message goes to the log and the observers).
-fn log_failure(report: &ToolCallReport) {
-    if report.outcome == Some(ToolCallOutcome::Served) {
-        return;
-    }
-    tracing::info!(
-        target: "roomkit::ai",
-        tool = %report.call.name,
-        call = %report.call.id,
-        outcome = ?report.outcome,
-        detail = report.error_detail.as_deref().unwrap_or_default(),
-        "a tool call did not serve"
-    );
 }
 
 #[cfg(test)]

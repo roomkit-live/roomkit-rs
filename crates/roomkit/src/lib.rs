@@ -51,6 +51,7 @@ mod channel;
 #[doc(hidden)]
 pub mod channel_publication;
 mod classed;
+mod content_logging;
 mod context;
 mod cursors;
 mod deadline;
@@ -164,6 +165,7 @@ pub use self::channel::{
 // provider errors' Python class with it, which the kit cannot see.
 #[doc(hidden)]
 pub use self::classed::ClassedError;
+pub use self::content_logging::{content_logging_enabled, set_content_logging};
 // Outside the public API: what an AI channel reads of a discussion's turn.
 pub use self::context::keep_context;
 pub use self::delivery::backend::{

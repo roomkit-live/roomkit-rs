@@ -32,6 +32,7 @@ mod compaction;
 mod composition;
 mod continuation;
 mod deferred;
+mod logs;
 pub(crate) use deferred::DeferredTools;
 mod footprint;
 mod generation;
