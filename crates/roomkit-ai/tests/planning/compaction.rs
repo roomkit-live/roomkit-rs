@@ -103,7 +103,10 @@ async fn compact(streaming: bool) {
     kit.hook(
         HookTrigger::BeforeAiGeneration,
         move |event: AiGenerationEvent, _: RoomContext| {
-            saving.lock().unwrap().push(input(&event.ai_context));
+            saving
+                .lock()
+                .unwrap()
+                .push(input(&event.ai_context.snapshot()));
             async {}
         },
         HookOptions::default(),

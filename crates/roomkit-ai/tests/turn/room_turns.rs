@@ -689,7 +689,7 @@ async fn a_muted_agent_still_reads_each_message_at_once() {
             move |event: roomkit_ai::AiGenerationEvent, _context: RoomContext| {
                 let reads = Arc::clone(&reads);
                 async move {
-                    if let Some(message) = event.ai_context.messages.last() {
+                    if let Some(message) = event.ai_context.snapshot().messages.last() {
                         reads.lock().unwrap().push(format!("{:?}", message.content));
                     }
                     roomkit::model::HookResult::allow(roomkit::model::hook::AllowOptions::default())

@@ -148,7 +148,8 @@ pub fn person_label(event: &RoomEvent, context: &RoomContext) -> String {
 /// the `(a participant)` an agent-like name does: `ALICE (2)` gives `ALICE`.
 /// No name holds a parenthesis, so the tail is the runtime's. Python's
 /// `label_name`.
-fn label_name(label: &str) -> &str {
+#[doc(hidden)]
+pub fn label_name(label: &str) -> &str {
     let label = label.strip_suffix(A_PARTICIPANT).unwrap_or(label);
     let label = without_rank(label);
     label.strip_suffix(A_PARTICIPANT).unwrap_or(label)

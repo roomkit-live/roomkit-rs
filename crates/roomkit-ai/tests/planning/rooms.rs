@@ -22,7 +22,7 @@ async fn real_messages_and_generation_hooks_keep_room_plans_apart() {
         kit.hook(
             HookTrigger::BeforeAiGeneration,
             move |event: AiGenerationEvent, _: RoomContext| {
-                keeping.lock().unwrap().push(event.ai_context);
+                keeping.lock().unwrap().push(event.ai_context.snapshot());
                 async { HookResult::allow(roomkit::model::hook::AllowOptions::default()) }
             },
             HookOptions::default(),

@@ -19,7 +19,8 @@ const NAME_EXTRA: &str = " .-_#'\u{2019}";
 /// within 64 characters; empty when nothing is left. Composed first, so an
 /// accent written apart rides its letter; every other character, a letter
 /// that reads as a colon or a quote among them, becomes a space.
-pub(crate) fn person_name(value: &str) -> String {
+#[doc(hidden)]
+pub fn person_name(value: &str) -> String {
     let kept: String = unicode::nfc(value)
         .chars()
         .map(|c| {

@@ -169,12 +169,14 @@ async fn full_room_and_target_fields_reach_every_round_after_the_hook() {
         room.kit
             .hook(
                 HookTrigger::BeforeAiGeneration,
-                move |mut event: AiGenerationEvent, _: RoomContext| {
-                    assert!(event.ai_context.room.is_some());
+                move |event: AiGenerationEvent, _: RoomContext| {
+                    assert!(event.ai_context.snapshot().room.is_some());
                     counted.fetch_add(1, Ordering::SeqCst);
-                    event.ai_context.room = Some(captured.clone());
-                    event.ai_context.target_capabilities = Some(captured_caps.clone());
-                    event.ai_context.target_media_types = vec![ChannelMediaType::Audio];
+                    event.ai_context.update(|context| {
+                        context.room = Some(captured.clone());
+                        context.target_capabilities = Some(captured_caps.clone());
+                        context.target_media_types = vec![ChannelMediaType::Audio];
+                    });
                     async move { HookResult::modify(event, ModifyOptions::default()) }
                 },
                 HookOptions {

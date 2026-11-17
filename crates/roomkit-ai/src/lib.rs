@@ -74,6 +74,7 @@
 mod agent;
 mod author_images;
 mod channel;
+pub mod classifiers;
 mod continuation;
 mod error;
 mod human_input;
@@ -93,8 +94,11 @@ mod handoff;
 mod rows;
 pub mod sandbox;
 mod server_instructions;
+mod shared;
+mod shared_context;
 mod shutdown;
 mod skills;
+pub mod speaking;
 mod steering;
 mod stream;
 #[doc(hidden)]
@@ -113,6 +117,10 @@ mod turn_settings;
 
 pub use self::agent::{Agent, AgentOptions, BuildIdentityBlockOptions};
 pub use self::channel::{AiChannel, AiChannelOptions};
+pub use self::classifiers::{
+    Answers, ChoiceAnswer, ChoiceQuestion, Classifier, ClassifierError, ScoreAnswer, ScoreQuestion,
+    YesNoAnswer, YesNoQuestion,
+};
 pub use self::continuation::ContinuationPolicy;
 pub use self::error::AiError;
 pub use self::handoff::{SetupHandoffOptions, setup_handoff};
@@ -146,6 +154,7 @@ pub use self::provider::{check_schema_answer, checked_stream, schema_for_generat
 pub use self::router::{
     AiRouter, AiRouterFuture, FallbackRouter, RouteReason, RouteRequest, Routed,
 };
+pub use self::shared_context::SharedAiContext;
 #[doc(hidden)]
 pub use self::skills::dumps;
 pub use self::skills::{
@@ -157,6 +166,11 @@ pub use self::skills::{
     SkillRegistryOptions, SkillResource, SkillResourceSize, SkillResources, SkillToolNames,
     missing_required_tools, parse_entry, parse_tool_names, safe_join_filename, serves_exactly,
     verify_frontmatter, verify_skill_resource,
+};
+pub use self::speaking::{
+    AlwaysSpeak, AnswerOnly, CutReply, MockSpeakPolicy, MockSpeakPolicyOptions, MockThinker,
+    MockThinkerOptions, SpeakDecision, SpeakDecisionEvent, SpeakDecisionOptions, SpeakPolicy,
+    SpeakTurn, Thinker, Thought, ThoughtEvent,
 };
 pub use self::steering::SteerOptions;
 pub use self::tool_search::{TOOL_FIND_TOOLS, TOOL_LIST_TOOLS, TOOL_SEARCH_INFRA_TOOL_NAMES};

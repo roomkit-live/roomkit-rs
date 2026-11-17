@@ -196,7 +196,7 @@ pub struct ToolCallContext {
 /// The record of the turn the caller runs within (RFC §6.7): Python's
 /// `current_response_metadata()`. The one record a memory writing it while
 /// the context is built, a generation hook writing
-/// `event.ai_context.response_metadata`, and a tool handler or a
+/// `event.ai_context.snapshot().response_metadata`, and a tool handler or a
 /// `BEFORE_TOOL_USE` hook writing here all reach, the one
 /// `InboundResult::response_metadata` gives the caller, the turn answered or
 /// failed. A tool handler is the case this exists for: a document it read

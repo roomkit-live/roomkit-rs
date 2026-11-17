@@ -139,10 +139,12 @@ async fn editing_a_follower_does_not_choose_an_earlier_identical_question() {
     let (kit, room) = setup(agent, &mark).await;
     kit.hook(
         HookTrigger::BeforeAiGeneration,
-        |mut event: AiGenerationEvent, _context: RoomContext| async move {
+        |event: AiGenerationEvent, _context: RoomContext| async move {
             // Keep both identical questions exactly where they were. Change only the last message.
-            let last = event.ai_context.messages.last_mut().unwrap();
-            last.content = AiMessageContent::Text(format!("{} [checked]", last.content.text()));
+            event.ai_context.update(|context| {
+                let last = context.messages.last_mut().unwrap();
+                last.content = AiMessageContent::Text(format!("{} [checked]", last.content.text()));
+            });
             HookResult::modify(event, ModifyOptions::default())
         },
         HookOptions::default(),
@@ -251,10 +253,12 @@ async fn ambiguous_input_protects_old_tools_and_shortens_only_new_results() {
     let replacement = left.clone();
     kit.hook(
         HookTrigger::BeforeAiGeneration,
-        move |mut event: AiGenerationEvent, _context: RoomContext| {
+        move |event: AiGenerationEvent, _context: RoomContext| {
             let replacement = replacement.clone();
             async move {
-                event.ai_context.messages = replacement;
+                event
+                    .ai_context
+                    .update(|context| context.messages = replacement);
                 HookResult::modify(event, ModifyOptions::default())
             }
         },

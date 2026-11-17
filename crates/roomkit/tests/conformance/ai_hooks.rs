@@ -73,17 +73,18 @@ impl Scripted for AiGenerationEvent {
     const MEMBER: &'static str = "generation";
 
     fn record(&self) -> Value {
+        let context = self.ai_context.snapshot();
         json!({
             "channel_id": self.channel_id.as_str(),
             "provider_name": self.provider_name,
             "purpose": self.purpose,
             "trigger": self.trigger.as_ref().map(|event| event.id.as_str()),
-            "system_prompt": self.ai_context.system_prompt,
-            "room": self.ai_context.room,
-            "target_capabilities": self.ai_context.target_capabilities,
-            "target_media_types": self.ai_context.target_media_types,
-            "messages": crate::agents::messages(&self.ai_context),
-            "tools": self.ai_context.tools.iter().map(|tool| tool.name.as_str()).collect::<Vec<_>>(),
+            "system_prompt": context.system_prompt,
+            "room": context.room,
+            "target_capabilities": context.target_capabilities,
+            "target_media_types": context.target_media_types,
+            "messages": crate::agents::messages(&context),
+            "tools": context.tools.iter().map(|tool| tool.name.as_str()).collect::<Vec<_>>(),
         })
     }
 
@@ -93,13 +94,16 @@ impl Scripted for AiGenerationEvent {
     /// them.
     fn write_record(&self, reaction: &Value) {
         if let Some(keys) = reaction.get("writes_record").and_then(Value::as_object) {
-            self.ai_context.response_metadata.update(keys.clone());
+            self.ai_context
+                .snapshot()
+                .response_metadata
+                .update(keys.clone());
         }
     }
 
     fn patched(mut self, patch: &Value) -> Result<Self, String> {
+        let mut context = self.ai_context.snapshot();
         for (member, value) in patch.as_object().into_iter().flatten() {
-            let context = &mut self.ai_context;
             match member.as_str() {
                 "response_metadata" => {
                     let keys = value.as_object().ok_or("a record is a mapping")?;
@@ -141,12 +145,13 @@ impl Scripted for AiGenerationEvent {
                 )
                 .map_err(|e| e.to_string())?
             };
-            let tools = &mut self.ai_context.tools;
+            let tools = &mut context.tools;
             match tools.iter_mut().find(|own| own.name == tool.name) {
                 Some(own) => *own = tool,
                 None => tools.push(tool),
             }
         }
+        self.ai_context = context.into();
         Ok(self)
     }
 }

@@ -122,8 +122,8 @@ async fn withdrawal_refuses_before_the_live_catalogue_is_read() {
         let reports = observe(&kit);
         kit.hook(
             HookTrigger::BeforeAiGeneration,
-            |mut event: AiGenerationEvent, _: RoomContext| {
-                event.ai_context.tools.clear();
+            |event: AiGenerationEvent, _: RoomContext| {
+                event.ai_context.update(|context| context.tools.clear());
                 ready(HookResult::modify(event, ModifyOptions::default()))
             },
             HookOptions::default(),

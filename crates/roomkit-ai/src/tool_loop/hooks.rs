@@ -143,7 +143,7 @@ impl Loop {
         }
         // Counted as the provider reads them: a round's results are one message.
         let conversation = self.shown(messages).len();
-        self.adopt(&built, chain.payload.ai_context, conversation);
+        self.adopt(&built, chain.payload.ai_context.snapshot(), conversation);
         true
     }
 

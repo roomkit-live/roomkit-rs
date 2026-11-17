@@ -42,12 +42,14 @@ async fn a_hook_s_schema_outside_the_subset_refuses_no_image() {
     room.kit
         .hook(
             HookTrigger::BeforeAiGeneration,
-            move |mut event: AiGenerationEvent, _context: RoomContext| {
+            move |event: AiGenerationEvent, _context: RoomContext| {
                 let first = counted.fetch_add(1, Ordering::SeqCst) == 0;
                 async move {
                     if first && let serde_json::Value::Object(schema) = json!({ "type": "string" })
                     {
-                        event.ai_context.response_schema = Some(schema);
+                        event
+                            .ai_context
+                            .update(|context| context.response_schema = Some(schema));
                     }
                     HookResult::modify(event, ModifyOptions::default())
                 }

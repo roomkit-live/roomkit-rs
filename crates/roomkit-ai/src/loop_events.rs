@@ -18,8 +18,10 @@
 //! let kit = RoomKit::new(Default::default());
 //! kit.hook(
 //!     HookTrigger::BeforeAiGeneration,
-//!     |mut event: AiGenerationEvent, _context: RoomContext| async move {
-//!         event.ai_context.system_prompt = Some("You answer in French.".into());
+//!     |event: AiGenerationEvent, _context: RoomContext| async move {
+//!         event.ai_context.update(|context| {
+//!             context.system_prompt = Some("You answer in French.".into());
+//!         });
 //!         HookResult::modify(event, ModifyOptions::default())
 //!     },
 //!     HookOptions::default(),
@@ -44,7 +46,8 @@ use roomkit_core::rules::transcript::is_blank;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::provider::{AiContext, AiToolCall, AiToolResultPart};
+use crate::SharedAiContext;
+use crate::provider::{AiToolCall, AiToolResultPart};
 use crate::tools::AiTool;
 
 /// What separates two segments of a turn in
@@ -101,7 +104,7 @@ pub enum GenerationPurpose {
 pub struct AiGenerationEvent {
     /// The context the turn starts from: its messages, its system prompt,
     /// and its `tools`, the turn's toolset as the tool policy leaves it.
-    pub ai_context: AiContext,
+    pub ai_context: SharedAiContext,
     /// The AI channel about to generate.
     pub channel_id: ChannelId,
     /// The room the turn runs in.
@@ -119,9 +122,9 @@ pub struct AiGenerationEvent {
 impl AiGenerationEvent {
     /// The generation of `channel_id` on `ai_context`, now by the system
     /// clock, with Python's defaults for the rest.
-    pub fn new(ai_context: AiContext, channel_id: ChannelId) -> Self {
+    pub fn new(ai_context: impl Into<SharedAiContext>, channel_id: ChannelId) -> Self {
         Self {
-            ai_context,
+            ai_context: ai_context.into(),
             channel_id,
             room_id: None,
             provider_name: None,
@@ -429,7 +432,7 @@ mod tests {
     #[test]
     fn an_event_built_with_its_required_members_keeps_python_s_defaults() {
         let channel = ChannelId::new("ai1").unwrap();
-        let event = AiGenerationEvent::new(AiContext::default(), channel);
+        let event = AiGenerationEvent::new(crate::AiContext::default(), channel);
         assert_eq!(
             (
                 event.room_id,
