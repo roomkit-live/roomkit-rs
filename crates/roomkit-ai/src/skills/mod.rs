@@ -40,6 +40,7 @@ mod validation;
 pub use self::error::SkillError;
 pub use self::executor::{ScriptExecutor, ScriptResult};
 pub use self::file_error::{SkillFileError, SkillPathError};
+pub use self::frontmatter::parse_frontmatter;
 pub use self::matcher::{CopyOptions, RequiresMatch, SkillRegistryOptions, serves_exactly};
 pub use self::model::{DiscoverOptions, Skill, SkillMetadata};
 pub use self::paths::safe_join_filename;

@@ -167,8 +167,8 @@ pub use self::skills::{
     ScriptExecutor, ScriptResult, ServedOrigin, Skill, SkillEntry, SkillEntryKeyError, SkillError,
     SkillExecutionRequest, SkillFileError, SkillMetadata, SkillPathError, SkillRegistry,
     SkillRegistryOptions, SkillResource, SkillResourceSize, SkillResources, SkillToolNames,
-    missing_required_tools, parse_entry, parse_tool_names, safe_join_filename, serves_exactly,
-    verify_frontmatter, verify_skill_resource,
+    missing_required_tools, parse_entry, parse_frontmatter, parse_tool_names, safe_join_filename,
+    serves_exactly, verify_frontmatter, verify_skill_resource,
 };
 #[doc(inline)]
 pub use self::speaking::{

@@ -349,6 +349,12 @@ reason = "An owned Metadata map inside a frozen outer entry: exclusive mutable a
 
 [[exception]]
 rust = "roomkit_ai::SkillError"
+members = ["Frontmatter"]
+approved = "2026-11-17"
+reason = "A standalone SkillParseError carries only the parse message. Its text has no skill directory prefix (HITL 67f7ce27)."
+
+[[exception]]
+rust = "roomkit_ai::SkillError"
 members = ["EntryValidation"]
 approved = "2026-11-16"
 reason = "A second representation of SkillValidationError for served entries: its exact message has no local-skill Validation prefix or reasons list (HITL 450fa510, RMK-1709)"

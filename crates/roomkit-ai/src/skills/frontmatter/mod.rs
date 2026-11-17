@@ -23,14 +23,18 @@
 //!   (`\r` alone, U+0085, U+2028, U+2029), and any other control
 //!   character but the tab.
 
+mod fallback;
 mod gates;
+mod output;
 mod scalars;
 
 #[cfg(test)]
 mod differential;
 
-use crate::skills::SkillToolNames;
+use crate::skills::{SkillError, SkillToolNames};
 use gates::Gates;
+use output::Output;
+use roomkit::model::Metadata;
 
 use self::scalars::{
     BlockHeader, Item, NULLS, block_header, block_text, flow_list, list_item, not_a_plain_text,
@@ -118,6 +122,41 @@ pub(crate) fn split(content: &str) -> Result<(&str, &str), String> {
 ///
 /// Says why the frontmatter cannot be read whole (see the module).
 pub(crate) fn read(text: &str) -> Result<Fields, String> {
+    let mut fields = read_into::<Fields>(text)?;
+    if let Some(value) = &fields.requires {
+        let text = match value {
+            SkillToolNames::Text(text) => text.clone(),
+            SkillToolNames::List(items) => items.join(", "),
+        };
+        fields.record_extra("requires", Some(text));
+    }
+    Ok(fields)
+}
+
+/// Read a local skill manifest supplied as text, such as a document held in a database.
+///
+/// The returned mapping preserves the input key order and contains strings and lists
+/// of strings. The body is trimmed. This bounded line reader handles plain and
+/// quoted text, block scalars and simple lists. In a flow list, each comma
+/// separates entries. Nested mappings and full YAML 1.1 scalar coercions are
+/// outside its supported grammar.
+///
+/// # Errors
+/// Returns [`SkillError::Frontmatter`] when delimiters are missing, the frontmatter
+/// exceeds its bounds, or a field cannot be read by the local reader.
+pub fn parse_frontmatter(content: &str) -> Result<(Metadata, String), SkillError> {
+    let invalid = |message| SkillError::Frontmatter { message };
+    let (text, body) = split(content).map_err(invalid)?;
+    let mut fields = read_into::<Metadata>(text).map_err(invalid)?;
+    if fallback::needed(text) {
+        fields = fallback::read(text).map_err(invalid)?;
+    } else {
+        fields.retain(|_, value| !value.is_null());
+    }
+    Ok((fields, body.to_owned()))
+}
+
+fn read_into<D: Output>(text: &str) -> Result<D, String> {
     if text.chars().count() > FRONTMATTER_MAX {
         return Err(format!(
             "the frontmatter is past {FRONTMATTER_MAX} characters"
@@ -132,18 +171,11 @@ pub(crate) fn read(text: &str) -> Result<Fields, String> {
             u32::from(unread)
         ));
     }
-    let mut reader = Reader::default();
+    let mut reader = Reader::<D>::default();
     for (number, line) in text.lines().enumerate() {
         reader.line(number + 1, line)?;
     }
     reader.continued(|reader| reader.finish(true))?;
-    if let Some(value) = &reader.fields.requires {
-        let text = match value {
-            SkillToolNames::Text(text) => text.clone(),
-            SkillToolNames::List(items) => items.join(", "),
-        };
-        reader.fields.record_extra("requires", Some(text));
-    }
     Ok(reader.fields)
 }
 
@@ -197,7 +229,7 @@ enum Open {
     /// A field whose value ended on its line.
     Ended {
         field: usize,
-        text: Option<String>,
+        value: Option<SkillToolNames>,
     },
     /// A field alone on its line: `- item` lines may follow.
     Items {
@@ -234,15 +266,15 @@ impl Open {
 }
 
 #[derive(Debug, Default)]
-struct Reader {
-    fields: Fields,
+struct Reader<D> {
+    fields: D,
     open: Open,
     /// The other keys, each field past [`FIELDS`] naming its own:
     /// `extra[field - FIELDS.len()]`.
     extra: Vec<String>,
 }
 
-impl Reader {
+impl<D: Output> Reader<D> {
     /// Reads `line`, the line `number` of the frontmatter.
     fn line(&mut self, number: usize, line: &str) -> Result<(), String> {
         if line.trim().is_empty() {
@@ -271,7 +303,7 @@ impl Reader {
     ) -> Result<(), String> {
         let extra = self.open.field().is_some_and(|field| field >= FIELDS.len());
         match step(self) {
-            Err(_unread) if extra => {
+            Err(_unread) if extra && D::REGISTRY => {
                 self.open = Open::Skipped;
                 Ok(())
             }
@@ -377,10 +409,12 @@ impl Reader {
             self.open = Open::Gates(Gates::read(key, value)?);
             return Ok(());
         }
-        if matches!(
-            key,
-            "disable-model-invocation" | "user-invocable" | "context" | "agent"
-        ) {
+        if D::REGISTRY
+            && matches!(
+                key,
+                "disable-model-invocation" | "user-invocable" | "context" | "agent"
+            )
+        {
             return Err(format!(
                 "the frontmatter declares unsupported invocation policy: {key}"
             ));
@@ -394,7 +428,10 @@ impl Reader {
         let Some(field) = FIELDS.iter().position(|field| *field == key) else {
             let field = FIELDS.len() + self.extra.len();
             self.extra.push(key.to_owned());
-            self.open = open_value(field, value).unwrap_or(Open::Skipped);
+            self.open = match open_value(field, value) {
+                Err(_) if D::REGISTRY => Open::Skipped,
+                result => result?,
+            };
             return Ok(());
         };
         self.open = open_value(field, value)?;
@@ -406,38 +443,37 @@ impl Reader {
     fn finish(&mut self, at_end: bool) -> Result<(), String> {
         let (field, value) = match std::mem::take(&mut self.open) {
             Open::Gates(gates) => {
-                let held = if gates.key == "requires" {
-                    &mut self.fields.requires
-                } else {
-                    &mut self.fields.allowed_tools
-                };
-                gates.finish(held);
+                self.fields.gate(gates);
                 return Ok(());
             }
             Open::Closed | Open::Skipped => return Ok(()),
-            Open::Ended { field, text } => (field, text),
-            Open::Items { field, items, .. } => {
-                (field, (!items.is_empty()).then(|| items.join(", ")))
-            }
-            Open::Plain { field, text, .. } => {
-                (field, (!NULLS.contains(&text.as_str())).then_some(text))
-            }
+            Open::Ended { field, value } => (field, value),
+            Open::Items {
+                field,
+                items,
+                indent,
+            } => (field, indent.map(|_| SkillToolNames::List(items))),
+            Open::Plain { field, text, .. } => (
+                field,
+                (!NULLS.contains(&text.as_str())).then_some(SkillToolNames::Text(text)),
+            ),
             Open::Block {
                 field,
                 header,
                 lines,
             } => {
                 let text = block_text(header, lines, at_end).ok_or_else(|| unread(field))?;
-                (field, Some(text))
+                (field, Some(SkillToolNames::Text(text)))
             }
         };
-        if let Some(slot) = self.fields.slot(field) {
-            *slot = value;
-        } else if let Some(key) = field
-            .checked_sub(FIELDS.len())
-            .and_then(|at| self.extra.get(at))
-        {
-            self.fields.record_extra(key, value);
+        let key = FIELDS.get(field).copied().or_else(|| {
+            field
+                .checked_sub(FIELDS.len())
+                .and_then(|index| self.extra.get(index))
+                .map(String::as_str)
+        });
+        if let Some(key) = key {
+            self.fields.field(field, key, value);
         }
         Ok(())
     }
@@ -445,8 +481,10 @@ impl Reader {
 
 /// The refusal of a field this reading cannot read whole.
 fn unread(field: usize) -> String {
-    let name = FIELDS.get(field).copied().unwrap_or_default();
-    format!("the frontmatter's {name} cannot be read line by line")
+    FIELDS.get(field).map_or_else(
+        || "the frontmatter field cannot be read line by line".to_owned(),
+        |name| format!("the frontmatter's {name} cannot be read line by line"),
+    )
 }
 
 /// Whether `line` is a YAML block sequence's item: `-` alone or before a
@@ -505,8 +543,10 @@ fn open_value(field: usize, value: &str) -> Result<Open, String> {
     }
     if value.starts_with('[') {
         let items = flow_list(plain).ok_or_else(refused)?;
-        let text = (!items.is_empty()).then(|| items.join(", "));
-        return Ok(text_value(field, text));
+        return Ok(Open::Ended {
+            field,
+            value: Some(SkillToolNames::List(items)),
+        });
     }
     if not_a_plain_text(value) {
         return Err(refused());
@@ -522,7 +562,10 @@ fn open_value(field: usize, value: &str) -> Result<Open, String> {
 
 /// A field whose value ended on its line.
 fn text_value(field: usize, text: Option<String>) -> Open {
-    Open::Ended { field, text }
+    Open::Ended {
+        field,
+        value: text.map(SkillToolNames::Text),
+    }
 }
 
 /// A plain text's line `next`, indented under it, folded into `text` as

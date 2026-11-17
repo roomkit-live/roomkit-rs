@@ -8,7 +8,7 @@ use crate::skills::SkillToolNames;
 #[derive(Debug)]
 pub(super) struct Gates {
     pub(super) key: &'static str,
-    value: Option<SkillToolNames>,
+    pub(super) value: Option<SkillToolNames>,
     open: bool,
     indent: Option<usize>,
 }

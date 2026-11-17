@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Expose `parse_frontmatter` to read a local manifest and its body directly from text, preserving field order and simple lists.
+
 - Export the immutable `ToolCallVerdict` model with shared result lists and structured dictionaries.
 
 - Expose standalone outbound URL validation in `roomkit-provider-http` with configurable schemes and DNS checks.

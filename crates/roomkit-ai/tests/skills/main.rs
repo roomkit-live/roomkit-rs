@@ -8,6 +8,7 @@
 
 mod availability;
 mod copy_matcher;
+mod database_frontmatter;
 mod discovery;
 mod file_boundaries;
 mod gating;

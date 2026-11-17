@@ -24,6 +24,11 @@ pub enum SkillError {
         /// Why.
         reason: String,
     },
+    /// A standalone frontmatter document could not be read.
+    Frontmatter {
+        /// The parsing error, without a skill directory prefix.
+        message: String,
+    },
     /// A skill's metadata does not validate.
     Validation {
         /// The skill, by its directory's name.
@@ -157,6 +162,7 @@ impl PartialEq for SkillError {
                 },
             ) => a == c && Arc::ptr_eq(b, d),
             (Self::ServerUnavailable { message: a }, Self::ServerUnavailable { message: b })
+            | (Self::Frontmatter { message: a }, Self::Frontmatter { message: b })
             | (Self::EntryValidation { message: a }, Self::EntryValidation { message: b })
             | (Self::Verification { message: a }, Self::Verification { message: b })
             | (Self::Changed { name: a, .. }, Self::Changed { name: b, .. })
@@ -193,6 +199,7 @@ impl std::fmt::Display for SkillError {
             Self::ServerDiscovery { message, .. }
             | Self::VerificationCaused { message, .. }
             | Self::ServerUnavailable { message }
+            | Self::Frontmatter { message }
             | Self::EntryValidation { message }
             | Self::Verification { message } => f.write_str(message),
             Self::Changed { name, .. } => write!(
@@ -224,6 +231,7 @@ impl Error for SkillError {
             | Self::ManifestTooLarge { .. }
             | Self::ServerUnavailable { .. }
             | Self::NotFound { .. }
+            | Self::Frontmatter { .. }
             | Self::EntryValidation { .. }
             | Self::Verification { .. } => None,
         }
