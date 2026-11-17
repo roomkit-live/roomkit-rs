@@ -6,7 +6,6 @@ use std::future::Future;
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
-use deadpool_postgres::Pool;
 use roomkit::RoomFilter;
 use roomkit::model::{
     ChannelBinding, ChannelId, ChannelType, EventId, Identity, IdentityId, Metadata, Observation,
@@ -23,7 +22,6 @@ use roomkit::store::{
 use roomkit::telemetry::TelemetryProvider;
 use roomkit::{ConversationStore, StoreError, written};
 
-use crate::connect::Tls;
 use crate::error::{Failure, NoConnection};
 use crate::lent::{Lent, cancellable};
 use crate::options::{
@@ -35,6 +33,9 @@ use crate::{
     events, identities, lookups, markers, members, pool, rooms, rows, schema, side_effects,
     timeline, verifications,
 };
+
+mod generation;
+use generation::PoolGeneration;
 
 /// The budget for acquisition and, separately, for release: Python's `_acquire_timeout`.
 pub(crate) const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -57,11 +58,8 @@ pub struct PostgresStore {
 
 pub(crate) struct Shared {
     dsn: Option<String>,
-    pool: RwLock<Option<Pool>>,
-    /// What a cancel request connects with, for a pool the store opened.
-    tls: RwLock<Option<Tls>>,
+    pool: RwLock<Option<PoolGeneration>>,
     owns_pool: bool,
-    cancel_query: Option<crate::PostgresCancelQuery>,
     telemetry: QuerySpans,
 }
 
@@ -89,9 +87,7 @@ impl PostgresStore {
             shared: Arc::new(Shared {
                 dsn,
                 owns_pool: pool.is_none(),
-                cancel_query,
-                pool: RwLock::new(pool),
-                tls: RwLock::new(None),
+                pool: RwLock::new(pool.map(|pool| PoolGeneration::external(pool, cancel_query))),
                 telemetry: QuerySpans::default(),
             }),
         }
@@ -134,18 +130,14 @@ impl PostgresStore {
                     options.max_size,
                 )
                 .await?;
-                *self
-                    .shared
-                    .tls
-                    .write()
-                    .unwrap_or_else(PoisonError::into_inner) = tls;
                 // Kept before the schema is read, as Python keeps it: a schema
                 // `init` refuses is one `migrate` moves, on this pool.
                 *self
                     .shared
                     .pool
                     .write()
-                    .unwrap_or_else(PoisonError::into_inner) = Some(pool);
+                    .unwrap_or_else(PoisonError::into_inner) =
+                    Some(PoolGeneration::owned(pool, tls));
             }
             let mut client = self.client().await?;
             Ok(schema::prepare(&mut client).await?)
@@ -215,7 +207,7 @@ impl PostgresStore {
     }
 
     /// The pool, if the store holds one.
-    fn pool(&self) -> Option<Pool> {
+    fn pool(&self) -> Option<PoolGeneration> {
         self.shared
             .pool
             .read()
@@ -244,51 +236,13 @@ impl PostgresStore {
         if let Some(bound) = crate::connection::current(&self.shared) {
             return bound.client().await;
         }
-        let (client, tls) = self.checkout().await?;
-        Ok(Lent::new(client, tls))
+        let generation = self.initialized_pool()?;
+        Ok(Lent::new(generation.checkout().await?, generation.tls))
     }
 
-    fn cancel_capability(&self) -> Result<crate::PostgresCancelQuery, StoreError> {
-        if !self.shared.owns_pool {
-            return self.shared.cancel_query.clone().ok_or_else(|| {
-                StoreError::Value(
-                    "PostgresStore.connection() requires cancel_query for an external pool"
-                        .to_owned(),
-                )
-            });
-        }
-        let tls = self
-            .shared
-            .tls
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        Ok(Arc::new(move |token| {
-            let tls = tls.clone();
-            Box::pin(async move {
-                match tls {
-                    Some(tls) => token.cancel_query(tls).await,
-                    None => token.cancel_query(tokio_postgres::NoTls).await,
-                }
-                .map_err(StoreError::unavailable)
-            })
-        }))
-    }
-
-    async fn checkout(&self) -> Result<(deadpool_postgres::Object, Option<Tls>), StoreError> {
-        let Some(pool) = self.pool() else {
-            return Err(StoreError::unavailable(NoConnection::NotInitialized));
-        };
-        let tls = self
-            .shared
-            .tls
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        match tokio::time::timeout(ACQUIRE_TIMEOUT, pool.get()).await {
-            Ok(client) => Ok((client.map_err(StoreError::unavailable)?, tls)),
-            Err(_) => Err(StoreError::unavailable(NoConnection::TimedOut)),
-        }
+    fn initialized_pool(&self) -> Result<PoolGeneration, StoreError> {
+        self.pool()
+            .ok_or_else(|| StoreError::unavailable(NoConnection::NotInitialized))
     }
 }
 
@@ -331,9 +285,12 @@ impl ConversationStore for PostgresStore {
             if crate::connection::current(&self.shared).is_some() {
                 return work.await;
             }
-            let cancel = self.cancel_capability()?;
+            // Validate supplied pools before acquisition, even outside a Tokio runtime.
+            let scope = self.pool().map(PoolGeneration::for_scope).transpose()?;
             let runtime = tokio::runtime::Handle::try_current().map_err(StoreError::unavailable)?;
-            let (client, _) = self.checkout().await?;
+            let (generation, cancel) =
+                scope.ok_or_else(|| StoreError::unavailable(NoConnection::NotInitialized))?;
+            let client = generation.checkout().await?;
             crate::connection::Bound::run(Arc::clone(&self.shared), client, cancel, runtime, work)
                 .await
         })
@@ -1130,8 +1087,11 @@ impl ConversationStore for PostgresStore {
             .write()
             .unwrap_or_else(PoisonError::into_inner)
             .take();
-        if let Some(pool) = pool {
-            pool::close_own_pool(&pool, CLOSE_TIMEOUT, "PostgresStore").await;
+        if let Some(generation) = pool {
+            pool::close_own_pool(&generation.pool, CLOSE_TIMEOUT, "PostgresStore").await;
         }
     }
 }
+
+#[cfg(test)]
+mod generation_tests;

@@ -6,7 +6,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-- Add `ConversationStore::connection(work)` for sequential store calls, with PostgreSQL retaining one connection through nested scopes and acknowledged cancellation. Supplied standard pools must provide `PostgresStoreOptions::cancel_query`; cancellation-safe reuse requires a driver release that waits for the cancellation socket to close. A five-second release timeout discards a connection whose cleanup stalls after its owning scope exits.
+- Add `ConversationStore::connection(work)` for sequential store calls, with PostgreSQL retaining one connection through nested scopes and acknowledged cancellation. Supplied standard pools must provide `PostgresStoreOptions::cancel_query`; cancellation-safe reuse requires a driver release that waits for the cancellation socket to close. A five-second release timeout discards a connection whose cleanup stalls after its owning scope exits. Reopening a store with rotated TLS trust keeps each checkout and its cancellation connector on the same pool.
 
 - PostgreSQL store initialization reads index uniqueness in its own schema, so concurrent DDL in another schema can proceed independently. Index repair also handles quoted names and predicates containing `UNIQUE`.
 
