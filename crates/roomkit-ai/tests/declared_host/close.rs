@@ -1,4 +1,4 @@
-//! Python's test_declared_host_close: close returns, while a send through a
+//! Python's `test_declared_host_close`: close returns, while a send through a
 //! closing hook then fails against the sealed kit. Cleanup still runs.
 
 use std::sync::{Arc, Mutex};
@@ -66,17 +66,16 @@ async fn check(streaming: bool, through_hook: bool) {
                         SendEventOptions::default(),
                     )
                     .await;
-                match result {
-                    Err(RoomKitError::KitClosed) => {
-                        stages
-                            .lock()
-                            .unwrap()
-                            .push("send_event raised KitClosedError");
-                        let error: ChannelError = Box::new(RoomKitError::KitClosed);
-                        return Err(error);
-                    }
-                    other => panic!("send_event after close: {other:?}"),
-                }
+                assert!(
+                    matches!(&result, Err(RoomKitError::KitClosed)),
+                    "send_event after close: {result:?}"
+                );
+                stages
+                    .lock()
+                    .unwrap()
+                    .push("send_event raised KitClosedError");
+                let error: ChannelError = Box::new(RoomKitError::KitClosed);
+                return Err(error);
             }
             kit.close().await?;
             stages.lock().unwrap().push("close returned");
