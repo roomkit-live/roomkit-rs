@@ -802,6 +802,13 @@ impl Caller {
         }
     }
 
+    /// Whether the call returns at its decision, its delivery deferred
+    /// (`defer_delivery`): a code reply's attempt then goes on apart
+    /// (RFC §11.7.4).
+    pub(super) fn defers(&self) -> bool {
+        self.defer
+    }
+
     /// Reads what the operation told its spans of the call's own cascade.
     pub(super) fn noted(&self, note: &SpanNote) {
         let mut tail = self.record.tail();

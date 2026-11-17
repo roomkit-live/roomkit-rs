@@ -160,7 +160,8 @@ impl Verifying {
     }
 
     /// The sender's verification is read: a code reply is attempted, any
-    /// other message labelled (Python's `_consume_code`, before the label).
+    /// other message labelled (Python's `_code_reply` and `_attempt_code`,
+    /// before the label).
     fn on_read(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Verified {
         let state = match outcome.into_verification() {
             Ok(state) => state,

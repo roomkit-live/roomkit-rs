@@ -1,7 +1,7 @@
 //! What the inbound pipeline's step 5b asks the kit (RFC §10.1 step 5b,
 //! §11.7.3, §11.7.4): the sender's verification as it stands, and the
-//! attempt of a code reply, Python's `verification_of` and
-//! `_consume_code`. The driver carries both out for the core, which reads
+//! attempt of a code reply, Python's `verification_of`, `_code_reply` and
+//! `_attempt_code`. The driver carries both out for the core, which reads
 //! and writes nothing itself.
 
 use std::sync::Arc;
@@ -13,6 +13,7 @@ use super::{CompleteVerificationOptions, METHOD_CODE, VerificationOfOptions};
 use crate::error::RoomKitError;
 use crate::kit::{Inner, RoomKit};
 use crate::store::ConversationStore;
+use crate::tasks::Kind;
 
 /// The class of a failure step 5b's requests report: the kit's error, by
 /// its message.
@@ -38,14 +39,17 @@ pub(crate) async fn read<S: ConversationStore>(
 
 /// Attempts `code` against the request `request_id` when it is an open
 /// code request of `room_id`, and answers whether it was (Python's
-/// `_consume_code`): a wrong code counts as an attempt and is consumed all
-/// the same, the refusal kept from the message. A store that fails it
-/// fails the message.
+/// `_code_reply` and `_attempt_code`): a wrong code counts as an attempt
+/// and is consumed all the same, the refusal kept from the message. A
+/// store that fails it fails the message. A `deferred` call's attempt goes
+/// on apart, as a call of the kit's whose failure is logged: the answer
+/// comes once the reply is known for one (RFC §11.7.4).
 pub(crate) async fn try_code<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
     request_id: &str,
     room_id: &RoomId,
     code: &str,
+    deferred: bool,
 ) -> Outcome {
     let kit = RoomKit {
         inner: Arc::clone(inner),
@@ -65,6 +69,23 @@ pub(crate) async fn try_code<S: ConversationStore>(
         method: None,
         organization_id: request.organization_id.clone(),
     };
+    if deferred {
+        let code = code.to_owned();
+        let attempt = async move {
+            match kit.complete_verification(&request.id, &code, options).await {
+                Ok(_) | Err(RoomKitError::VerificationRefused { .. }) => {}
+                Err(error) => tracing::error!(
+                    target: "roomkit::framework",
+                    %error,
+                    "A deferred code reply's attempt failed"
+                ),
+            }
+        };
+        // Within no work but its own: it outlives the call (Python's task in
+        // a context of its own), and the kit's close gives it its grace.
+        drop(inner.tasks.spawn_alone(Kind::Call, attempt));
+        return IdentityAnswer::CodeTried(true).into();
+    }
     match kit.complete_verification(&request.id, code, options).await {
         Ok(_) | Err(RoomKitError::VerificationRefused { .. }) => {
             IdentityAnswer::CodeTried(true).into()

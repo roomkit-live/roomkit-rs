@@ -175,7 +175,7 @@ mod tests {
         );
     }
 
-    // Python: core/mixins/verification.py::_consume_code, `text.isdigit()`
+    // Python: core/mixins/verification.py::_code_reply, `text.isdigit()`
     // and `len(text) != code_length`.
     #[test]
     fn a_code_reply_is_its_length_of_digits_python_reads() {

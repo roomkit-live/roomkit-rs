@@ -1253,9 +1253,12 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             Request::Discussion(request) => self.spawn(id, work, deadline, None, async move {
                 calls::discussion(&inner, request).await
             }),
-            Request::Identity(request) => self.spawn(id, work, deadline, None, async move {
-                calls::identity(&inner, request).await
-            }),
+            Request::Identity(request) => {
+                let deferred = self.caller.as_ref().is_some_and(|caller| caller.defers());
+                self.spawn(id, work, deadline, None, async move {
+                    calls::identity(&inner, request, deferred).await
+                });
+            }
         }
         None
     }

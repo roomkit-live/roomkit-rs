@@ -201,9 +201,12 @@ pub(super) async fn store<S: ConversationStore>(store: &S, request: StoreRequest
 
 /// Carries out identity resolution's request (RFC §10.1 step 5, §11): the
 /// kit's resolver asked within its timeout, or its identity hooks run.
+/// `deferred` is the call's `defer_delivery`: a code reply's attempt then
+/// goes on apart from it (RFC §11.7.4).
 pub(super) async fn identity<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
     request: IdentityRequest,
+    deferred: bool,
 ) -> Outcome {
     match request {
         IdentityRequest::Resolve {
@@ -228,7 +231,7 @@ pub(super) async fn identity<S: ConversationStore>(
             request_id,
             room_id,
             code,
-        } => verification::try_code(inner, &request_id, &room_id, &code).await,
+        } => verification::try_code(inner, &request_id, &room_id, &code, deferred).await,
     }
 }
 
