@@ -120,7 +120,10 @@ pub(crate) type Kit = RoomKit<PostgresStore>;
 pub(crate) type Store = PostgresStore;
 
 /// Shared fixture checks have the same service requirement as scenarios.
-#[expect(clippy::print_stderr, reason = "report a skipped external-service test")]
+#[expect(
+    clippy::print_stderr,
+    reason = "report a skipped external-service test"
+)]
 pub(crate) fn backend_available() -> bool {
     if support::dsn().is_some() {
         return true;
