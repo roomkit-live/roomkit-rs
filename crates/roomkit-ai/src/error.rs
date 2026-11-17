@@ -5,6 +5,14 @@
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum AiError {
+    /// A raw schema or tool object's definition cannot be read as an `AITool`.
+    #[error("invalid tool definition field {field}: {reason}")]
+    ToolDefinition {
+        /// The invalid or missing field.
+        field: &'static str,
+        /// Why its value cannot form a definition.
+        reason: String,
+    },
     /// The explicit tool turn names two different rooms.
     #[error("room {room:?} and room_id {room_id:?} name different rooms")]
     ToolTurnRoomConflict {

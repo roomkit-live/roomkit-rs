@@ -12,6 +12,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Preserve provider-served tool outcomes, reports, replay order and reader-stop or cancellation behavior through the text tool loop.
 
+- Expose `extract_tools` with mixed definitions, tool objects and raw schemas; exhaustive `ToolEntry` matches must handle the new `Schema` variant.
+
 - AI provider contexts carry the room snapshot and outgoing target capabilities, preserving hook replacements across tool rounds.
 
 - AI responses carry tasks and observations; tool results carry structured copies within a turn and typed outcomes through history, as in Python.

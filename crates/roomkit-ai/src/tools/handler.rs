@@ -14,7 +14,7 @@ use serde_json::Value;
 use roomkit::model::ToolCall;
 
 use super::context::within_call;
-use super::{AiTool, BoxFuture, DynToolset, ToolContext, ToolError, ToolResult};
+use super::{AiTool, BoxFuture, DynToolset, ToolContext, ToolError, ToolResult, extract_tools};
 use crate::error::AiError;
 
 /// What a tool handler's call is: a future of its answer.
@@ -73,14 +73,16 @@ pub trait Tool: Send + Sync + 'static {
     fn handler(&self, name: String, arguments: Metadata) -> ToolFuture;
 }
 
-/// One of the tools an AI channel declares: Python's `AITool | Tool`, a
-/// definition its tool handler serves, or a tool that serves itself.
+/// One of the tools an AI channel declares: Python's `AITool | Tool | dict`,
+/// a definition or raw schema its tool handler serves, or a tool serving itself.
 #[derive(Clone)]
 pub enum ToolEntry {
     /// A definition, which the channel's tool handler serves.
     Definition(AiTool),
     /// A tool serving its own calls.
     Tool(Arc<dyn Tool>),
+    /// A raw schema, converted as Python's `extract_tools` converts a dict.
+    Schema(Metadata),
 }
 
 impl From<AiTool> for ToolEntry {
@@ -95,6 +97,12 @@ impl From<Arc<dyn Tool>> for ToolEntry {
     }
 }
 
+impl From<Metadata> for ToolEntry {
+    fn from(schema: Metadata) -> Self {
+        Self::Schema(schema)
+    }
+}
+
 impl std::fmt::Debug for ToolEntry {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -106,6 +114,7 @@ impl std::fmt::Debug for ToolEntry {
                 .debug_tuple("Tool")
                 .field(&tool.definition())
                 .finish(),
+            Self::Schema(schema) => formatter.debug_tuple("Schema").field(schema).finish(),
         }
     }
 }
@@ -209,19 +218,8 @@ pub(crate) fn served_by(
     tool_handler: Option<ToolHandler>,
     tools: Vec<ToolEntry>,
 ) -> Result<Option<Served>, AiError> {
-    let mut definitions = Vec::with_capacity(tools.len());
-    let mut handlers: Vec<ToolHandler> = tool_handler.into_iter().collect();
-    for entry in tools {
-        match entry {
-            ToolEntry::Definition(definition) => definitions.push(definition),
-            ToolEntry::Tool(tool) => {
-                definitions.push(tool.definition());
-                handlers.push(ToolHandler::new(move |name, arguments| {
-                    tool.handler(name, arguments)
-                }));
-            }
-        }
-    }
+    let (definitions, extracted) = extract_tools(tools)?;
+    let mut handlers: Vec<ToolHandler> = tool_handler.into_iter().chain(extracted).collect();
     for definition in &definitions {
         AiTool::checked(&definition.name)?;
     }

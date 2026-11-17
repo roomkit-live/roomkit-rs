@@ -1562,7 +1562,7 @@ fn refuse_tool_names(tools: &[ToolEntry]) -> Result<(), AiError> {
         ToolEntry::Definition(definition) => AiTool::checked(&definition.name),
         // Python reads a `Tool`'s definition in its constructor's tool
         // surface, as `served_by` does here.
-        ToolEntry::Tool(_) => Ok(()),
+        ToolEntry::Tool(_) | ToolEntry::Schema(_) => Ok(()),
     })
 }
 

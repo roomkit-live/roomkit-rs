@@ -483,7 +483,7 @@ fn within_i64(whole: i128, value: &Value) -> Result<i64, Refusal> {
 
 /// `value` as pydantic's lax mode reads a `bool`: a boolean, 0 or 1 as a
 /// number, or one of its words for either, whatever their case.
-fn lax_bool(value: &Value) -> Result<bool, Refusal> {
+pub(crate) fn lax_bool(value: &Value) -> Result<bool, Refusal> {
     const UNREAD: &str = "Input should be a valid boolean, unable to interpret input";
     let unread = || Refusal::new("bool_parsing", UNREAD, value);
     match value {

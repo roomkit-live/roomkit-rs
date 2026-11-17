@@ -1057,8 +1057,8 @@ reason = "Explicit native author image capability (architecture: Author images)"
 
 [[exception]]
 rust = "roomkit_ai::ToolEntry"
-approved = "2026-11-01"
-reason = "Python's `tools` takes `AITool | Tool` in one list: a Rust list of a union is an enum (architecture: Tools)"
+approved = "2026-11-17"
+reason = "Python's tools and extract_tools take AITool | Tool | dict in one list: Rust uses Definition, Tool and Schema(Metadata) in the existing union; invalid schemas return AiError"
 
 [[exception]]
 rust = "roomkit_ai::ToolResult"

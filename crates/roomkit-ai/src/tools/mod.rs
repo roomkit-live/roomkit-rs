@@ -15,8 +15,10 @@
 
 mod builder;
 mod context;
+mod definition;
 mod external;
 mod external_rows;
+mod extract;
 mod handler;
 pub(crate) mod owner;
 mod policy;
@@ -58,6 +60,7 @@ pub use self::external::{
     OnToolResultOptions, PolicyExternalToolHandler, PolicyExternalToolHandlerOptions,
     ProcessToolCallOptions, ToolDecision,
 };
+pub use self::extract::extract_tools;
 pub(crate) use self::handler::served_by;
 pub use self::handler::{
     Tool, ToolCallContext, ToolEntry, ToolFuture, ToolHandler, compose_tool_handlers,
