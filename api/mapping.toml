@@ -201,7 +201,7 @@ roomkit_postgres = ["roomkit.store", "roomkit.knowledge"]
 "roomkit.skills.SkillValidationError" = ["skill", "reasons"]
 "roomkit.skills.SkillManifestTooLargeError" = []
 "roomkit.skills.SkillVerificationError" = ["message"]
-"roomkit.skills.SkillChangedError" = ["name"]
+"roomkit.skills.SkillChangedError" = []
 
 # The architecture table's mappings that a rule gives no name to.
 
@@ -1372,18 +1372,12 @@ approved = "2026-11-17"
 reason = "Language: Python Skill | MCPSkill is an owned Local(Skill) | Served(McpSkill) result. Explicit common getters and six dispatched helpers preserve served-file refusals; no Deref to local Skill."
 
 [[exception]]
-rust = "roomkit_ai::ApproveExecution"
-approved = "2026-11-17"
-reason = "Language: Python's asynchronous Callable is a cloneable Arc callback with new and call; clones retain identity and callback errors retain their concrete cause."
-
-[[exception]]
 rust = "roomkit_ai::SkillError"
 members = ["ServerDiscovery", "ServerUnavailable", "VerificationCaused", "NotFound", "File"]
 approved = "2026-11-17"
 reason = "Language: served discovery and verification preserve sanitized messages and concrete source chains; NotFound carries Python KeyError's name, File carries the existing SkillFileError."
 
 [[exception]]
-rust = "roomkit_ai::SkillError::Changed"
-params = ["source"]
+rust = "roomkit_ai::SkillError::Changed::source"
 approved = "2026-11-17"
 reason = "Language: Python SkillChangedError's chained cause is optional and retained alongside its public name."

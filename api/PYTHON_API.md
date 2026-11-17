@@ -163,6 +163,11 @@ the mapping and its tests. The check does not generate or update this document.
 | `roomkit_ai::SkillResources`, `SkillResourceSize` | Entry resources and resource size | `Listed(Vec<SkillResource>)` / `Dynamic`; integer inputs from i64 through u64's range, including smaller primitives, with exact i128 size/total accessors. No arbitrary-precision JSON expansion (HITL 450fa510). |
 | `roomkit_ai::SkillEntryKeyError` | `KeyError` | Fallible `name`/`description` return Python's string value, or the missing `key`; no validation error or panic for missing keys (HITL 450fa510). |
 | `roomkit_ai::McpSkillServer` | `MCPSkillServer` | Three-method trait with borrowed boxed futures and owned JSON snapshots. Errors retain their concrete cause; a resource result may be any JSON value. The MCP adapter uses the provider's existing 30-second defaults (HITL 766277b2). |
+| `roomkit_ai::LoadedSkill` | `Skill` or `MCPSkill` | Owned `Local`/`Served` snapshots, explicit common getters and six dispatched file helpers; no `Deref` (approved 2026-11-17). |
+| `roomkit_ai::ApproveExecution` | `ApproveExecution` | Cloneable asynchronous callback; clones retain identity and errors retain their concrete cause. |
+| `roomkit_ai::SkillError::{ServerDiscovery,ServerUnavailable,VerificationCaused,NotFound,File}` | Discovery/verification errors, `KeyError`, file errors | Sanitized public messages with concrete causes, missing name and existing typed file error (approved 2026-11-17). |
+| `roomkit_ai::SkillError::Changed::source` | `SkillChangedError.__cause__` | Optional retained cause alongside the public name (approved 2026-11-17). |
+
 | `roomkit_ai::McpSkillServerFuture`, `McpSkillServerError` | Protocol awaitables and exceptions | Boxed `Send` futures borrow one call's inputs; boxed errors retain concrete transport or host errors for downcasting (HITL 766277b2). |
 | `roomkit::RoomKit::start` | — | Whole type |
 | `roomkit::telemetry::SpanGuard` | — | Whole type |
