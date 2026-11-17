@@ -26,7 +26,7 @@ use roomkit::store::{
     AdvanceDeliveredIndexOptions, ListEventsOptions, ListRoomsOptions, ResolveIdentityOptions,
 };
 use roomkit::{ConversationStore, EventFilter};
-use roomkit_postgres::PostgresStore;
+use roomkit_postgres::{POSTGRES_SCHEMA, POSTGRES_SCHEMA_VERSION, PostgresStore};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -293,8 +293,8 @@ async fn an_identity_written_again_keeps_the_key_it_cannot_read() {
     assert_eq!(every_row(&schema).await, before);
 }
 
-/// `schema.sql` is Python's `SCHEMA`, byte for byte, when `ROOMKIT_PYTHON` names
-/// a roomkit checkout's interpreter.
+/// The public schema text and layout version are Python's, byte for byte, when
+/// `ROOMKIT_PYTHON` names a roomkit checkout's interpreter.
 #[test]
 fn the_schema_is_python_s() {
     let Ok(python) = std::env::var("ROOMKIT_PYTHON") else {
@@ -302,7 +302,10 @@ fn the_schema_is_python_s() {
     };
     let output = std::process::Command::new(python)
         .arg("-c")
-        .arg("from roomkit.store.postgres_schema import SCHEMA; import sys; sys.stdout.write(SCHEMA)")
+        .arg(concat!(
+            "from roomkit.store import POSTGRES_SCHEMA, POSTGRES_SCHEMA_VERSION; ",
+            "import json; print(json.dumps([POSTGRES_SCHEMA, POSTGRES_SCHEMA_VERSION]))"
+        ))
         .output()
         .unwrap();
     assert!(
@@ -310,8 +313,9 @@ fn the_schema_is_python_s() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let ours = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/schema.sql"));
-    assert_eq!(String::from_utf8(output.stdout).unwrap(), ours.unwrap());
+    let (schema, version): (String, i32) = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(schema, POSTGRES_SCHEMA);
+    assert_eq!(version, POSTGRES_SCHEMA_VERSION);
 }
 
 /// `schema`'s rows as Python's store reads them.

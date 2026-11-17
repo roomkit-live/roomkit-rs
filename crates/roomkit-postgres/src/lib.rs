@@ -89,4 +89,5 @@ pub use self::options::{
     DedupeEventIndicesOptions, DropLegacyParentIndexOptions, InitOptions, MigrateOptions,
     PostgresAdvisoryLockManagerOptions, PostgresKnowledgeSourceOptions, PostgresStoreOptions,
 };
+pub use self::schema::{SCHEMA as POSTGRES_SCHEMA, SCHEMA_VERSION as POSTGRES_SCHEMA_VERSION};
 pub use self::store::PostgresStore;

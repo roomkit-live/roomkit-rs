@@ -10,10 +10,10 @@ use crate::error::{Failure, PostgresSchemaError};
 use crate::values::{execute, query, query_opt};
 
 /// The additive, idempotent batch, as Python's `SCHEMA` builds it.
-const SCHEMA: &str = include_str!("schema.sql");
+pub const SCHEMA: &str = include_str!("schema.sql");
 
 /// The table layout's generation `migrate` reports.
-const SCHEMA_VERSION: i32 = 2;
+pub const SCHEMA_VERSION: i32 = 2;
 
 /// The advisory lock serializing schema migrations across processes:
 /// Python's `_MIGRATION_LOCK_KEY`, "room" in ASCII, so that processes of both

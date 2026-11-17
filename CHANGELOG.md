@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Export `POSTGRES_SCHEMA` and `POSTGRES_SCHEMA_VERSION` for applications that inspect or manage the store's schema.
+
 - Expose `current_turn_id()` on the crate and in `roomkit::turns`, including in callbacks served by the room owner.
 
 - Expose `roomkit::tasks::room_tasks` to project caller-supplied status entries in posting order.
