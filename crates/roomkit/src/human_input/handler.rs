@@ -467,17 +467,14 @@ impl HumanInputHandler {
             if entry.record.status() != PendingInputStatus::Pending {
                 return;
             }
-            state.turn_of.get(pending_id).map(|inputs| {
-                (
-                    Arc::clone(inputs),
-                    entry.record.tool_name.clone(),
-                    entry.record.arguments.clone(),
-                )
-            })
+            state
+                .turn_of
+                .get(pending_id)
+                .map(|inputs| (Arc::clone(inputs), entry.record.clone()))
         };
-        if let Some((inputs, tool_name, arguments)) = opened {
+        if let Some((inputs, pending)) = opened {
             let settle: Arc<dyn InputSettler> = Arc::new(self.clone());
-            inputs.opened(pending_id, &tool_name, &arguments, settle);
+            inputs.opened(&pending, settle);
         }
     }
 

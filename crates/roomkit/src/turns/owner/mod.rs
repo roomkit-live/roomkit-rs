@@ -15,6 +15,7 @@
 //! This module holds what both share; `reader` is the reader's side,
 //! `pump` the pump.
 
+mod input_request;
 mod pump;
 mod reader;
 mod steering;
@@ -25,7 +26,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use roomkit_core::model::{
-    ChannelBinding, ChannelId, Metadata, Room, RoomEvent, RoomId, ToolCallContent,
+    ChannelBinding, ChannelId, ChannelType, Metadata, Room, RoomEvent, RoomId, Timestamp,
+    ToolCallContent,
 };
 use tokio::sync::{mpsc, watch};
 
@@ -49,6 +51,8 @@ pub(crate) struct Facts {
     /// The room as the turn read it, for tools that name its agents.
     pub(crate) room_metadata: Arc<Metadata>,
     pub(crate) channel_id: ChannelId,
+    pub(crate) channel_type: ChannelType,
+    pub(crate) event_created_at: Timestamp,
     /// The depth of the turn's response (RFC §8.3): what the turn sends is
     /// at least that deep.
     pub(crate) response_depth: u32,
@@ -62,6 +66,8 @@ impl Facts {
             room_id: event.room_id.clone(),
             room_metadata: Arc::new(room.metadata.clone()),
             channel_id: binding.channel_id.clone(),
+            channel_type: binding.channel_type.clone(),
+            event_created_at: event.created_at,
             response_depth: roomkit_core::rules::chain_depth::response_depth(event),
             organization_id: room.organization_id.clone(),
         }

@@ -1763,3 +1763,13 @@ fn channel_call_options_defaults() {
     assert_eq!(options.organization_id, None);
     assert!(options.arguments.is_empty());
 }
+
+#[test]
+fn input_requests_are_not_scoped_to_an_organization_by_default() {
+    // roomkit.RoomKit.input_request(organization_id) = None
+    assert!(
+        roomkit::InputRequestOptions::default()
+            .organization_id
+            .is_none()
+    );
+}

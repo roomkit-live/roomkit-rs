@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Add `RoomKit::input_request` to read owned snapshots of open human-input requests within their owning organization.
+
 - **BREAKING: closing a room takes its strategy back out**, as Python's (RFC §19.7, §5.1, RMK-341). What a strategy set up for a room, its room hooks, the tools and turn runners kept for its agents, the agents it attached and its state, stayed after `close_room`, after the room's timers closed it and after `archive_room` archived it still open, so a kit kept every closed room's install for its life, and a reopened room still ran it. Its close or its archiving now uninstalls it as `uninstall_strategy` does, once the close is written and announced (`room_closed` before the agents' detach events) and before the call that closed it returns, the timeline kept. `install_strategy` refuses a CLOSED or ARCHIVED room with `RoomKitError::RoomClosed`; a reopened room holds no strategy until its host installs one again.
 
 - **BREAKING: a closed AI channel, router or memory leaves open the provider it was handed**, as Python's (RFC §6.4, §10.6.3, §20.3, RMK-1635). `AiChannel::close` closed its provider or its router, `FallbackRouter`'s close both its providers, and `SummarizingMemory` and `CompactingMemory` the provider they summarize with, so a host that handed one provider to every agent lost it for all at the first close. A provider is now its owner's: the kit's close leaves it open, and the host closes it once nothing uses it.

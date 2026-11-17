@@ -2,6 +2,8 @@
 //! conformance suite cannot script, work a tool leaves for after its turn,
 //! a handler the channel was not given, the channel's own bound per call.
 
+mod requests;
+
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -152,6 +154,11 @@ async fn a_request_still_open_when_its_turn_ends_is_withdrawn() {
 
     room.says("Hi").await;
     let pending_id = asked_id.await.unwrap();
+    assert!(
+        room.kit
+            .input_request(&pending_id, Default::default())
+            .is_none()
+    );
 
     // Withdrawn on both sides: the waiter reads it given up, the kit's door
     // answers it no more.
@@ -193,6 +200,11 @@ async fn a_detached_request_a_turn_raised_outlives_the_turn() {
 
     room.says("Hi").await;
     let pending_id = raised.lock().unwrap()[0].clone();
+    assert!(
+        room.kit
+            .input_request(&pending_id, Default::default())
+            .is_none()
+    );
 
     // The owner's record went with the turn; the creator's way answers it.
     assert!(

@@ -14,11 +14,11 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use roomkit_core::model::Metadata;
+use crate::human_input::PendingInput;
 
 use super::link::FrameSender;
 use crate::turns::lock;
-use crate::turns::wire::{Frame, InputOutcome};
+use crate::turns::wire::{Frame, InputOutcome, InputRequest};
 
 /// What settles a request with the outcome its owner recorded: the
 /// human-input handler that opened it.
@@ -86,16 +86,11 @@ impl ExecutorInputs {
         }
     }
 
-    /// The request `pending_id` of the tool `tool_name` asked with
-    /// `arguments` is open: the owner learns it, and answers it through
+    /// The request `pending` is open: preserve its origin and creation
+    /// time before notifying the hook. The owner answers it through
     /// `settle`, an answer it held early included.
-    pub(crate) fn opened(
-        &self,
-        pending_id: &str,
-        tool_name: &str,
-        arguments: &Metadata,
-        settle: Arc<dyn InputSettler>,
-    ) {
+    pub(crate) fn opened(&self, pending: &PendingInput, settle: Arc<dyn InputSettler>) {
+        let pending_id = pending.pending_id.as_str();
         {
             let mut open = lock(&self.state);
             if !open.running {
@@ -104,9 +99,7 @@ impl ExecutorInputs {
             open.requests.insert(pending_id.to_owned(), settle);
         }
         let frame = Frame::InputRequest {
-            request_id: pending_id.to_owned(),
-            tool_name: tool_name.to_owned(),
-            arguments: arguments.clone(),
+            request: Box::new(InputRequest::from(pending)),
         };
         if let Err(uncarried) = self.sender.send(&frame) {
             tracing::warn!(target: "roomkit::turns", request = pending_id, why = %uncarried.0, "a human-input request could not reach its room owner");

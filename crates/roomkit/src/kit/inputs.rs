@@ -19,6 +19,23 @@ use crate::telemetry::within_kit;
 use crate::turn::{InputNotification, TurnKit};
 
 impl<S: ConversationStore> RoomKit<S> {
+    /// Reads an open human-input request of a turn this kit started
+    /// (RFC §10.6.5): Python's `input_request(request_id, organization_id=None)`.
+    /// The owned snapshot preserves the request's creation time and its
+    /// room, channel, tool call and actor. Returns `None` once settled or
+    /// withdrawn, for another owner's id, or outside the requested tenant.
+    #[must_use]
+    pub fn input_request(
+        &self,
+        request_id: &str,
+        options: InputRequestOptions,
+    ) -> Option<PendingInputEvent> {
+        self.inner
+            .turns
+            .inputs
+            .request(request_id, options.organization_id.as_deref())
+    }
+
     /// Answers the human-input request `request_id` of a turn this kit
     /// started, wherever the turn runs (RFC §10.6.5): Python's
     /// `answer_input(request_id, value)`. `true` when the tool waiting on
@@ -56,6 +73,14 @@ impl<S: ConversationStore> RoomKit<S> {
             .reject_input(request_id, &options.reason)
             .await)
     }
+}
+
+/// What [`RoomKit::input_request`] takes beside the request id.
+#[derive(Clone, Debug, Default)]
+pub struct InputRequestOptions {
+    /// Python `organization_id=None`: only read requests of this tenant's
+    /// rooms when given (RFC §17.2).
+    pub organization_id: Option<String>,
 }
 
 /// What [`RoomKit::reject_input`] takes beside the request: Python's

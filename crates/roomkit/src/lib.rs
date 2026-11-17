@@ -221,7 +221,9 @@ pub use self::kit::{
 pub use self::kit::{
     DelegateOptions, DeliverOptions, ProcessDeliveryStatusOptions, ProcessWebhookOptions,
 };
-pub use self::kit::{DisableRoomHookOptions, EnableRoomHookOptions, RejectInputOptions};
+pub use self::kit::{
+    DisableRoomHookOptions, EnableRoomHookOptions, InputRequestOptions, RejectInputOptions,
+};
 pub use self::kit::{
     ListObservationsOptions, ListTasksOptions, SubmitFeedbackOptions, UpdateRoomMetadataOptions,
 };

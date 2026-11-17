@@ -241,9 +241,12 @@ impl Pump {
             Frame::Record { record } => self.hand(Main::Record(record)),
             // The turn's human-input requests, which the owner answers
             // (RFC §10.6.5).
-            Frame::InputRequest { request_id, .. } => {
-                self.turns.inputs.opened(self.input_turn(), &request_id);
-            }
+            Frame::InputRequest { request } => super::input_request::opened(
+                &self.state,
+                &self.turns.inputs,
+                self.input_turn(),
+                *request,
+            ),
             Frame::InputClosed { request_id, .. } => {
                 self.turns.inputs.closed(&self.input_turn(), &request_id);
             }
@@ -552,6 +555,8 @@ mod tests {
             room_id: RoomId::new("r1").unwrap(),
             room_metadata: Arc::default(),
             channel_id: ChannelId::new("ai").unwrap(),
+            channel_type: roomkit_core::model::ChannelType::AI,
+            event_created_at: roomkit_core::model::Timestamp::UNIX_EPOCH,
             response_depth: 3,
             organization_id: None,
         };
@@ -577,6 +582,8 @@ mod tests {
             room_id: RoomId::new("r1").unwrap(),
             room_metadata: Arc::default(),
             channel_id: ChannelId::new("ai").unwrap(),
+            channel_type: roomkit_core::model::ChannelType::AI,
+            event_created_at: roomkit_core::model::Timestamp::UNIX_EPOCH,
             response_depth: 1,
             organization_id: None,
         };

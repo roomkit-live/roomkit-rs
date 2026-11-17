@@ -11,6 +11,9 @@
 //! `room_publication`), but `ephemeral`, which a Python executor sends, is
 //! read so that it can be dropped.
 
+mod input_request;
+pub(crate) use input_request::InputRequest;
+
 use std::collections::BTreeMap;
 
 use roomkit_core::model::{
@@ -362,10 +365,8 @@ pub(crate) enum Frame {
     /// before `ON_USER_INPUT_REQUIRED` fires, so the owner can answer it at
     /// once.
     InputRequest {
-        request_id: String,
-        tool_name: String,
-        #[serde(default)]
-        arguments: Metadata,
+        #[serde(flatten)]
+        request: Box<InputRequest>,
     },
     /// A request settled where its tool waits, by other than the owner's
     /// answer (an answer the handler took, a hook's block, its bound, a

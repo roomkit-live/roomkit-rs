@@ -104,7 +104,7 @@ pub use self::ephemeral::{
 pub use self::greeting::SendGreetingOptions;
 pub use self::identity::IdentityHookOptions;
 pub(crate) use self::identity::run_identity_hooks;
-pub use self::inputs::RejectInputOptions;
+pub use self::inputs::{InputRequestOptions, RejectInputOptions};
 pub use self::local_executor::TurnExecutor;
 pub use self::members::{
     AddMemberOptions, EnsureParticipantOptions, IsMemberOptions, RemoveMemberOptions,

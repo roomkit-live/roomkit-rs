@@ -1312,12 +1312,6 @@ members = ["room_context"]
 scope = "text"
 reason = "not yet in Rust: the room an executor's turn reads, sent by the room owner, Python's RMK-1619, whose lot ports it and takes this entry off"
 
-[[missing]]
-python = "roomkit.RoomKit"
-members = ["input_request"]
-scope = "text"
-reason = "not yet in Rust: the owner reads an open human-input request, Python's RMK-1467, whose lot ports it and takes this entry off (HITL 40019981)"
-
 [[exception]]
 python = "roomkit.PendingInput.__init__"
 params = ["status", "result", "reject_reason"]

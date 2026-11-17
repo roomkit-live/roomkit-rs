@@ -6,11 +6,12 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Weak};
+use std::time::Duration;
 
 use roomkit::human_input::PendingInputEvent;
 use roomkit::model::hook::AllowOptions;
 use roomkit::model::{HookAction, HookResult, RoomContext};
-use roomkit::{HookError, RejectInputOptions};
+use roomkit::{HookError, InputRequestOptions, RejectInputOptions};
 use serde_json::{Value, json};
 
 use crate::calls::{Called, Unreadable, field, finish, optional};
@@ -24,6 +25,7 @@ pub(crate) const INPUT_EVENTS: [&str; 1] = ["user_input_required"];
 /// Each call's arguments, beside `call` and `organization_id`.
 pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
     Some(match call {
+        "input_request" | "await_input_request" => &["request_id"],
         "answer_input" => &["request_id", "value"],
         "reject_input" => &["request_id", "reason"],
         _ => return None,
@@ -41,6 +43,9 @@ pub(crate) async fn call(
     spec: &Value,
 ) -> Result<(Called, Option<String>), Unreadable> {
     let request: String = field(spec, "request_id")?;
+    if matches!(name, "input_request" | "await_input_request") {
+        return read_request(run, name, spec, &request).await;
+    }
     let outcome = match name {
         "answer_input" => {
             let value: String = field(spec, "value")?;
@@ -59,6 +64,37 @@ pub(crate) async fn call(
         finish(run, name, outcome, |taken| Value::Bool(*taken)),
         None,
     ))
+}
+
+/// The owner reader stays synchronous; only the explicit fixture wait polls.
+async fn read_request(
+    run: &Arc<Run>,
+    name: &str,
+    spec: &Value,
+    request: &str,
+) -> Result<(Called, Option<String>), Unreadable> {
+    let kit = run.kit_of(spec)?;
+    let options = InputRequestOptions {
+        organization_id: optional(spec, "organization_id")?,
+    };
+    if name == "await_input_request" {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while kit.input_request(request, options.clone()).is_none() {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .map_err(|_| "owner input request did not arrive".to_owned())?;
+        return Ok((Ok(Value::Bool(true)), None));
+    }
+    let read = kit
+        .input_request(request, options)
+        .map_or(Value::Null, |event| {
+            let mut record = request_record(&event);
+            record["timestamp"] = Value::String(event.timestamp.to_iso_offset());
+            record
+        });
+    Ok((Ok(read), None))
 }
 
 /// What a scripted hook on `on_user_input_required` gives.
