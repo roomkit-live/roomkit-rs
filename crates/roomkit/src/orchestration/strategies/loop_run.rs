@@ -5,7 +5,7 @@
 
 use roomkit_core::model::{
     ChannelId, ChannelOutput, ChannelType, ErrorRecord, EventSource, Metadata, RoomEvent, RoomId,
-    TaskStatus, TextContent,
+    TURNS_KEY, TaskStatus, TextContent,
 };
 use roomkit_core::rules::transcript::fence;
 use serde_json::{Value, json};
@@ -22,9 +22,6 @@ use crate::orchestration::{StatusLevel, get_conversation_state, save_conversatio
 use crate::store::ConversationStore;
 use crate::tasks::handback::worker_block;
 use crate::tasks::{DelegatedTaskResult, task_cut_reason, task_work};
-
-/// The key of each responder's turn entry in a task's metadata (RFC §6.4).
-const TURNS_KEY: &str = "turns";
 
 /// How a loop stopped (RFC §19.7.4).
 const APPROVED: &str = "approved";

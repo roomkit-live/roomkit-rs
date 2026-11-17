@@ -114,10 +114,10 @@ pub mod model {
         Metadata, ModelError, Observation, ObservationId, Participant, ParticipantId,
         ParticipantRole, ParticipantStatus, PersistencePolicy, ProviderResult, RateLimit,
         ResponseMetadata, RetryPolicy, RichContent, RichFormat, Room, RoomContext, RoomEvent,
-        RoomId, RoomStatus, RoomTimers, SystemContent, Task, TaskId, TaskStatus, TemplateContent,
-        TextContent, ThreadSummary, Timestamp, ToolCallContent, ToolCallOutcome, ToolCallStatus,
-        Verification, VerificationPolicy, VerificationRequest, VerificationRequestStatus,
-        VerificationStatus, VideoContent, Visibility,
+        RoomId, RoomStatus, RoomTimers, STANDALONE, SystemContent, TURNS_KEY, Task, TaskId,
+        TaskStatus, TemplateContent, TextContent, ThreadSummary, Timestamp, ToolCallContent,
+        ToolCallOutcome, ToolCallStatus, Verification, VerificationPolicy, VerificationRequest,
+        VerificationRequestStatus, VerificationStatus, VideoContent, Visibility,
     };
 
     pub use crate::delivery::outcome::{DeliveryOutcome, DeliveryOutcomeStatus};
@@ -142,6 +142,7 @@ pub mod model {
     #[doc(hidden)]
     pub use roomkit_core::model::{HOST_CHANNEL_ID, MAX_COMPOSITE_DEPTH, ToolCall};
 }
+pub use roomkit_core::model::SUPERSEDED;
 pub use roomkit_core::rules::addresses::{
     Addressing, ChannelAddressing, ChannelAddressingOptions, CountryCode, InvalidCountryCode,
     NormalizeOptions, addressing_of,

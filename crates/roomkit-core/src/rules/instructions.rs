@@ -14,7 +14,9 @@ use std::fmt::Write as _;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::model::{ChannelId, EventType, Metadata, RoomContext, RoomEvent, Visibility};
+use crate::model::{
+    ChannelId, EventType, Metadata, RoomContext, RoomEvent, STANDALONE, Visibility,
+};
 use crate::rules::transcoding;
 use crate::rules::transcript::RUNTIME_RECORD;
 
@@ -23,10 +25,6 @@ use crate::rules::transcript::RUNTIME_RECORD;
 /// on a response to an instruction and removes it from every other event
 /// (gap G-065).
 pub(crate) const INSTRUCTION: &str = "instruction";
-
-/// The metadata key under which an instruction carries its `standalone`
-/// word, the typed field's (RFC §10.1.1 rules 4 and 7).
-pub(crate) const STANDALONE: &str = "standalone";
 
 /// Why an instruction is refused before anything is written (RFC §10.1.1
 /// rules 1 and 2). The caller's result reports the reason.

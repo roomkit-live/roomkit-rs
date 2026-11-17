@@ -104,7 +104,9 @@ use super::edits::{is_deleted, opens_no_turn};
 use super::instructions::is_standalone;
 use super::lookalike::person_name;
 use super::transcoding::text_of;
-use crate::model::{ChannelId, EventStatus, EventType, RoomContext, RoomEvent, ToolCall};
+use crate::model::{
+    ChannelId, EventStatus, EventType, RoomContext, RoomEvent, SUPERSEDED, ToolCall,
+};
 
 /// Whose a message of the conversation is, as a model's chat reads it; a
 /// reader handles the ones it knows.
@@ -711,10 +713,17 @@ fn place(turns: &mut Vec<Turn>, earlier: Earlier, before: Option<u64>) {
 }
 
 /// Whether `event` is a message of the conversation: a MESSAGE event the
-/// room accepted and has not deleted. An edit is read on the message it
+/// room accepted, still present and not marked as superseded before it was heard. An edit is read on the message it
 /// changed; a lifecycle record, a receipt or a reaction is no turn.
 fn is_conversation(event: &RoomEvent) -> bool {
-    event.r#type == EventType::Message && event.status != EventStatus::Blocked && !is_deleted(event)
+    event.r#type == EventType::Message
+        && event.status != EventStatus::Blocked
+        && !is_deleted(event)
+        && event
+            .metadata
+            .get("cancellation_reason")
+            .and_then(serde_json::Value::as_str)
+            != Some(SUPERSEDED)
 }
 
 /// `turns` with each copy of a runtime mark replaced (RFC §6.4): in each

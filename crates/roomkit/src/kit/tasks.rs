@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use roomkit_core::model::{
     ChannelCategory, ChannelId, ChannelType, ErrorRecord, EventSource, EventStatus, EventType,
-    Metadata, Room, RoomContext, RoomEvent, RoomId, TaskStatus, TextContent, Visibility,
+    Metadata, Room, RoomContext, RoomEvent, RoomId, TURNS_KEY, TaskStatus, TextContent, Visibility,
 };
 use roomkit_core::ops::failure_log::{self, Log};
 use roomkit_core::ops::{DelegatedAnswer, DelegatedTurn};
@@ -57,9 +57,6 @@ const TASK_ACTION: &str = "task";
 
 /// How much of what was asked a hand-back names.
 const TASK_NAME_CHARS: usize = 200;
-
-/// The key of each responder's turn entry in a task's metadata (RFC §6.4).
-const TURNS_KEY: &str = "turns";
 
 /// The class of the failure of a task whose worker's turn ended before its
 /// answer: Python's `TaskCutShortError`.

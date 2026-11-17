@@ -7,6 +7,12 @@ use super::positive::python_float;
 use super::{ChannelId, ErrorRecord, Metadata, Timestamp};
 use crate::rules::python_repr as python_repr_str;
 
+/// Metadata key on an instruction sent without room history (RFC §10.1.1).
+pub const STANDALONE: &str = "standalone";
+
+/// Cancellation reason for a response superseded before it was heard (RFC §12.3.12).
+pub const SUPERSEDED: &str = "superseded";
+
 /// Where a delivery stands (RFC §5.13): the Python implementation's
 /// `Literal["sent", "queued", "failed"]` of `DeliveryResult.status`, named
 /// after its field. Python's `DeliveryStatus` is another model, a

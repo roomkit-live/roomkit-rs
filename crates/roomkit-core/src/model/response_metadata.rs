@@ -27,6 +27,9 @@ use super::Metadata;
 mod cascade;
 mod changes;
 
+/// Metadata key for the per-channel records of a turn (RFC §6.7).
+pub const TURNS_KEY: &str = "turns";
+
 /// Turn-level metadata merged into every message event the turn produces:
 /// each message carries the record as it stands when the message is created
 /// (RFC §6.7). Python's `ResponseMetadata`; a clone is the same record, as

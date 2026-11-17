@@ -55,7 +55,9 @@ pub use content::{
     ToolCallOutcome, ToolCallStatus, VideoContent,
 };
 pub use context::RoomContext;
-pub use delivery::{DeliveryError, DeliveryResult, DeliveryResultStatus, ProviderResult};
+pub use delivery::{
+    DeliveryError, DeliveryResult, DeliveryResultStatus, ProviderResult, STANDALONE, SUPERSEDED,
+};
 pub use delivery_status::DeliveryStatus;
 pub use direct::DirectEvent;
 pub use error::ModelError;
@@ -72,7 +74,7 @@ pub use participant::{
 };
 pub use persistence::PersistencePolicy;
 pub use post::Post;
-pub use response_metadata::ResponseMetadata;
+pub use response_metadata::{ResponseMetadata, TURNS_KEY};
 pub use room::{AgentResponsePolicy, Room, RoomStatus, RoomTimers};
 pub use side_effects::{Confidence, Observation, Task, TaskStatus};
 pub use time::Timestamp;

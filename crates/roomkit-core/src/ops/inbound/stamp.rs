@@ -118,7 +118,7 @@ fn trigger_type(event: &mut RoomEvent, message: &InboundMessage) {
              it stays what the caller sent"
         );
         event.r#type = message.event_type;
-        event.metadata.shift_remove(instructions::STANDALONE);
+        event.metadata.shift_remove(crate::model::STANDALONE);
     }
 }
 

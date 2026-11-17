@@ -483,3 +483,11 @@ fn visibility_serializes_to_python_s_values() {
         ],
     );
 }
+
+/// Python's public metadata keys and delivery cancellation reason.
+#[test]
+fn text_history_markers_match_their_wire_values() {
+    assert_eq!(roomkit::model::STANDALONE, "standalone");
+    assert_eq!(roomkit::model::TURNS_KEY, "turns");
+    assert_eq!(roomkit::SUPERSEDED, "superseded");
+}

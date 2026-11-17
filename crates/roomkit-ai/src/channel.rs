@@ -12,7 +12,7 @@ use roomkit::human_input::CloseOptions;
 use roomkit::model::{
     ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelId, ChannelOutput, ChannelType,
     EventDirection, EventSource, EventType, InboundMessage, Participant, RetryPolicy, RoomContext,
-    RoomEvent, RoomId, SteeringDirective, Visibility,
+    RoomEvent, RoomId, STANDALONE, SteeringDirective, Visibility,
 };
 use roomkit::{
     Channel, ChannelDeclaration, ChannelError, ClassedError, TurnRecord, current_turn_host,
@@ -73,10 +73,6 @@ mod speaking;
 mod targets;
 mod tasks_note;
 mod thinking;
-
-/// The metadata word of an instruction that stands alone (RFC §10.1.1
-/// rule 7), as the pipeline writes it.
-const STANDALONE: &str = "standalone";
 
 /// What [`AiChannel::new`] takes beside its id and its provider, and
 /// [`AiChannel::routed`] beside its id and its router: Python's `AIChannel`

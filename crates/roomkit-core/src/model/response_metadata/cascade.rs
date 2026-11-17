@@ -1,6 +1,6 @@
 //! A cascade's caller record, merged as one synchronous operation.
 
-use super::{Metadata, ResponseMetadata, Value};
+use super::{Metadata, ResponseMetadata, TURNS_KEY, Value};
 
 impl ResponseMetadata {
     /// Internal cascade reporting: Python's `merge_caller_record` (RFC §6.4,
@@ -9,11 +9,11 @@ impl ResponseMetadata {
     #[doc(hidden)]
     pub fn merge_caller_record(&self, record: &Metadata) {
         let mut inner = self.lock();
-        let mut turns = match inner.data.get("turns") {
+        let mut turns = match inner.data.get(TURNS_KEY) {
             Some(Value::Object(turns)) => turns.clone(),
             _ => Metadata::new(),
         };
-        if let Some(Value::Object(ended)) = record.get("turns") {
+        if let Some(Value::Object(ended)) = record.get(TURNS_KEY) {
             turns.extend(ended.clone());
         }
         // A scalar or empty `turns` survives when no channel entries replace
@@ -23,8 +23,8 @@ impl ResponseMetadata {
         inner.data.extend(record.clone());
         if !turns.is_empty() {
             inner.writes += 1;
-            inner.wrote(|key| key == "turns");
-            inner.data.insert("turns".into(), Value::Object(turns));
+            inner.wrote(|key| key == TURNS_KEY);
+            inner.data.insert(TURNS_KEY.into(), Value::Object(turns));
         }
     }
 }
