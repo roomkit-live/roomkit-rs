@@ -37,8 +37,9 @@ pub use self::model_tags::{
     SPEECH_CAPABILITY, TRANSCRIPTION_CAPABILITY, speech_tags, with_speech_tags,
 };
 pub use self::response::{
-    AiResponse, AiToolCall, CallIds, StreamDone, StreamEvent, StreamTextDelta, StreamThinkingDelta,
-    StreamToolCall, StreamToolCallDelta, read_tool_calls, thinking_parts_of, tool_arguments,
+    AiResponse, AiToolCall, CallIds, ServedCall, StreamDone, StreamEvent, StreamTextDelta,
+    StreamThinkingDelta, StreamToolCall, StreamToolCallDelta, read_tool_calls, thinking_parts_of,
+    tool_arguments,
 };
 pub(crate) use self::response::{is_malformed_call, ran_out_of_room, response_events};
 pub use self::response_schema::{

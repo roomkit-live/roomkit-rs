@@ -91,3 +91,6 @@ impl<P: AiProvider> AiChannel<P> {
         })
     }
 }
+
+#[cfg(test)]
+mod served_tests;

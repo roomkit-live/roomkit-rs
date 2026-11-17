@@ -993,18 +993,6 @@ members = ["model_copy"]
 approved = "2026-11-10"
 reason = "language: AiContext is Clone and built by struct update, Python's model_copy(update=...) (architecture: the names table, AIContext.model_copy)"
 
-[[missing]]
-python = "roomkit.providers.ai.AIToolCall.__init__"
-params = ["served"]
-scope = "text"
-reason = "not in 0.x: owner-served tools"
-
-[[missing]]
-python = "roomkit.providers.ai.StreamToolCall.__init__"
-params = ["served"]
-scope = "text"
-reason = "not in 0.x: owner-served tools"
-
 [[exception]]
 python = "roomkit.providers.ai.AITextPart.__init__"
 params = ["type"]

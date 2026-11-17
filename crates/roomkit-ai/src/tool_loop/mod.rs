@@ -36,6 +36,7 @@ mod footprint;
 mod generation;
 mod hooks;
 mod intents;
+mod provider_calls;
 mod repeat_guard;
 mod resilience;
 mod rules;
@@ -300,7 +301,8 @@ impl Loop {
         ),
     ) -> Result<Generation, Failed> {
         let mut windows = self.round_windows(round);
-        let reading = (steering, out, prefix, &mut windows, limits);
+        let provider_calls = self.provider_calls(round);
+        let reading = (steering, out, prefix, &mut windows, limits, &provider_calls);
         let read = self.generate(messages, asked, reading).await;
         read.map(|generation| Generation {
             thinking: windows.thinking.text(),
@@ -449,7 +451,7 @@ impl Loop {
                 .extend(generation.said().map(|said| (messages.len(), said)));
             let usage = generation.done.usage.clone();
             let (read, ran) = self.run_calls(generation, (&steering, round), &out).await;
-            self.keep_round_results(messages.len(), &ran.results);
+            self.keep_round_results(messages.len(), &ran.replayed_results());
             messages.extend(read);
             // A round counts once its calls ran (Python's `_run_announced_calls`).
             self.count_calls(&mut spent, ran.calls.len());
@@ -510,9 +512,12 @@ impl Loop {
         if generation.cancelled || steering.cancelled() {
             return Some(LoopEndReason::Cancelled);
         }
-        self.repeat_guard
-            .force_stopped()
-            .then_some(LoopEndReason::ForceStopped)
+        if self.repeat_guard.force_stopped() {
+            return Some(LoopEndReason::ForceStopped);
+        }
+        generation
+            .provider_only()
+            .then_some(LoopEndReason::Completed)
     }
 
     /// Whether the guard force-stopped the turn before round `round`, so that
@@ -823,18 +828,18 @@ impl Loop {
             let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
             running.calls_ended(ended.collect(), duration_ms);
         }
-        let mut ran = Ran::default();
+        let mut ran = Ran {
+            answered: generation
+                .provider_results
+                .iter()
+                .map(ToolEnd::as_part)
+                .collect(),
+            ..Ran::default()
+        };
         if !unrun {
             ran.calls = generation.calls.iter().map(Called::replayed).collect();
         }
-        let made: Vec<ToolCall> = generation
-            .calls
-            .into_iter()
-            .map(|called| called.call)
-            .collect();
-        let mut assistant = Message::assistant_calls(generation.text, made);
-        assistant.metadata = replayed(generation.done.metadata);
-        let mut read = vec![assistant];
+        let mut read = generation.replay();
         // Before the next round's calls, which may read what these left.
         for end in &ends {
             self.toolbox.settled(&end.call, end.outcome, &self.context);

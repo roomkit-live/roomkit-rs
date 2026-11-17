@@ -49,6 +49,7 @@ mod routing_calls;
 mod run;
 mod scenarios;
 mod scripted;
+mod served_call_tests;
 mod shape;
 mod skills;
 mod store_calls;

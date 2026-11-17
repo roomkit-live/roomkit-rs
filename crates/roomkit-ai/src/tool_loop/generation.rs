@@ -27,6 +27,8 @@ pub(super) struct Generation {
     /// What the room was handed of it: its text less a replayed prefix.
     pub(super) delivered: String,
     pub(super) calls: Vec<Called>,
+    pub(super) provider_calls: Vec<AiToolCall>,
+    pub(super) provider_results: Vec<super::ToolEnd>,
     pub(super) done: StreamDone,
     /// The usage each of its done events reported, those that did, in
     /// order: each one's priced as one response (RFC §6.4).
@@ -132,10 +134,10 @@ impl Generation {
     /// anything before it, and the text the room was handed.
     pub(super) async fn read(
         stream: ProviderStream<'_>,
-        (steering, out, prefix, window, limits): Reading<'_>,
+        (steering, out, prefix, window, limits, provider_calls): Reading<'_>,
         held: bool,
     ) -> Result<Self, Failed> {
-        let reading = (steering, out, prefix, &mut *window, limits);
+        let reading = (steering, out, prefix, &mut *window, limits, provider_calls);
         let result = Self::read_stream(stream, reading, held).await;
         window.text.flush();
         window.composition.close();
@@ -146,7 +148,7 @@ impl Generation {
     /// fallback or execution. Dropping the windows handles a cancelled read.
     async fn read_stream(
         mut stream: ProviderStream<'_>,
-        (steering, out, prefix, window, limits): Reading<'_>,
+        (steering, out, prefix, window, limits, provider_calls): Reading<'_>,
         held: bool,
     ) -> Result<Self, Failed> {
         let mut transcript = RoundTranscript::new();
@@ -154,6 +156,8 @@ impl Generation {
         let mut replayed = Replayed::new(prefix);
         let mut holding = Vec::new();
         let mut calls = Vec::new();
+        let mut served_calls = Vec::new();
+        let mut served_results = Vec::new();
         let mut done = StreamDone::default();
         let mut reports = Vec::new();
         let (mut streamed, mut received) = (false, false);
@@ -201,7 +205,13 @@ impl Generation {
                     read_text(std::mem::take(&mut holding), read, window, out).await;
                     window.text.flush();
                     transcript.add_call(call.id.clone());
-                    calls.push(call);
+                    if let Some(served) = call.served.clone() {
+                        let (call, result) = provider_calls.hand(call, served, out).await;
+                        served_calls.push(call);
+                        served_results.push(result);
+                    } else {
+                        calls.push(call);
+                    }
                 }
                 StreamEvent::Done(ended) => {
                     read_text(std::mem::take(&mut holding), read, window, out).await;
@@ -236,6 +246,8 @@ impl Generation {
             text: transcript.text(),
             delivered,
             calls: read_calls(calls),
+            provider_calls: served_calls,
+            provider_results: served_results,
             done,
             reports,
             cancelled: false,
@@ -257,6 +269,8 @@ impl Generation {
             text: transcript.text(),
             delivered,
             calls: Vec::new(),
+            provider_calls: Vec::new(),
+            provider_results: Vec::new(),
             done,
             reports,
             cancelled: true,
@@ -270,7 +284,12 @@ impl Generation {
     /// order they came (RFC §6.4). `None` for calls it never made, which the
     /// loop's own never are: the round then reads from its text and its calls.
     pub(super) fn said(&self) -> Option<Vec<crate::provider::AiContentPart>> {
-        let calls: Vec<AiToolCall> = self.calls.iter().map(Called::replayed).collect();
+        let calls: Vec<AiToolCall> = self
+            .provider_calls
+            .iter()
+            .cloned()
+            .chain(self.calls.iter().map(Called::replayed))
+            .collect();
         match self.transcript.parts(&calls) {
             Ok(parts) => Some(parts),
             Err(error) => {

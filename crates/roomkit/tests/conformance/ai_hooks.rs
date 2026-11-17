@@ -184,6 +184,11 @@ impl Scripted for ToolRoundEvent {
             "round_index": self.round_index,
             "calls": calls,
             "results": results,
+            "answered": self.answered.iter().map(|result| json!({
+                "tool_call_id": result.tool_call_id,
+                "content": crate::agents::result_content(&result.result),
+                "is_error": result.is_error,
+            })).collect::<Vec<_>>(),
             "tools": self.tools,
         })
     }

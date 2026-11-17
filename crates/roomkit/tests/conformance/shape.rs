@@ -229,7 +229,7 @@ const MODEL_ROUND: &[&str] = &[
     "stream",
     "whole_response",
 ];
-const MODEL_CALL: &[&str] = &["id", "name", "arguments", "cut", "metadata"];
+const MODEL_CALL: &[&str] = &["id", "name", "arguments", "cut", "metadata", "served"];
 const TOOL: &[&str] = &[
     "name",
     "description",
@@ -1249,13 +1249,17 @@ fn scripted_model(model: &Value, path: &str, found: &mut Vec<String>) {
             &format!("{round_path}.refuses"),
             found,
         );
+        for (position, event) in items(&round["stream"]) {
+            if let Some(call) = event.get("call") {
+                model_call(
+                    call,
+                    &format!("{round_path}.stream[{position}].call"),
+                    found,
+                );
+            }
+        }
         for (position, call) in items(&round["calls"]) {
-            members(
-                call,
-                MODEL_CALL,
-                &format!("{round_path}.calls[{position}]"),
-                found,
-            );
+            model_call(call, &format!("{round_path}.calls[{position}]"), found);
         }
     }
 }
@@ -1366,6 +1370,29 @@ fn tool_policy(policy: &Value, path: &str, found: &mut Vec<String>) {
             &format!("{path}.role_overrides.{role}"),
             found,
         );
+    }
+}
+
+/// Validate a call at both model fixture doors, including its provider marker.
+fn model_call(call: &Value, path: &str, found: &mut Vec<String>) {
+    members(call, MODEL_CALL, path, found);
+    let Some(served) = call.get("served").filter(|value| !value.is_null()) else {
+        return;
+    };
+    let at = format!("{path}.served");
+    if !served.is_object() {
+        found.push(format!("{at}: expected an object or null"));
+        return;
+    }
+    members(served, &["result", "is_error"], &at, found);
+    if served.get("result").is_some_and(|value| !value.is_string()) {
+        found.push(format!("{at}.result: expected a string"));
+    }
+    if served
+        .get("is_error")
+        .is_some_and(|value| !value.is_boolean())
+    {
+        found.push(format!("{at}.is_error: expected a boolean"));
     }
 }
 

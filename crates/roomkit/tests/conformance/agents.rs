@@ -26,10 +26,10 @@ use roomkit_ai::{
     AiContext, AiImagePart, AiMessage, AiMessageContent, AiProvider, AiResponse, AiRole, AiRouter,
     AiRouterFuture, AiTextPart, AiThinkingPart, AiTool, AiToolCall, DynAiProvider, FallbackRouter,
     HumanInputToolHandler, HumanInputToolHandlerOptions, ModelInfo, ModelPricing, ProviderError,
-    ProviderStream, RouteReason, RouteRequest, Routed, StreamDone, StreamEvent, StreamTextDelta,
-    StreamThinkingDelta, StreamToolCallDelta, Tool, ToolContext, ToolEntry, ToolError, ToolHandler,
-    ToolPolicy, ToolResult, ToolResultPart, Tools, check_schema_answer, checked_stream,
-    schema_for_generate,
+    ProviderStream, RouteReason, RouteRequest, Routed, ServedCall, StreamDone, StreamEvent,
+    StreamTextDelta, StreamThinkingDelta, StreamToolCallDelta, Tool, ToolContext, ToolEntry,
+    ToolError, ToolHandler, ToolPolicy, ToolResult, ToolResultPart, Tools, check_schema_answer,
+    checked_stream, schema_for_generate,
 };
 use serde_json::{Value, json};
 
@@ -122,13 +122,17 @@ impl AiProvider for Paced {
 impl Paced {
     /// The script's events for `context`, held at its round's gate first.
     fn scripted_stream<'a>(&'a self, context: &'a AiContext) -> ProviderStream<'a> {
-        let (inner, gate) = {
+        let (inner, gate, served) = {
             let mut methods = crate::run::lock(&self.whole.methods);
             let position = self.whole.script.requests().len();
             let gate = self.whole.gates.get(position).cloned().flatten();
             let inner = self.whole.script.generate_structured_stream(context);
             methods.push("generate_structured_stream");
-            (inner, gate)
+            (
+                inner,
+                gate,
+                self.whole.served.get(position).cloned().unwrap_or_default(),
+            )
         };
         let run = Weak::clone(&self.whole.run);
         let holding: Option<Pin<Box<dyn Future<Output = ()> + Send>>> = gate.map(|gate| {
@@ -144,6 +148,7 @@ impl Paced {
             holding,
             held: None,
             after_text: false,
+            served: served.into_iter(),
             run: Weak::clone(&self.whole.run),
         })
     }
@@ -154,6 +159,7 @@ impl Paced {
 struct WholeModel {
     script: ScriptedProvider,
     gates: Vec<Option<String>>,
+    served: Vec<Vec<Option<ServedCall>>>,
     run: Weak<Run>,
     model_name: String,
     provider_name: String,
@@ -171,7 +177,7 @@ impl AiProvider for WholeModel {
     async fn generate(&self, context: &AiContext) -> Result<AiResponse, ProviderError> {
         let (supported, with_tools) = self.schema;
         schema_for_generate(context, supported, with_tools, &self.provider_name)?;
-        let (response, gate) = {
+        let (response, gate, served) = {
             // The script reserves synchronously. Keep that reservation and its
             // gate together, even when several rooms use the same provider.
             let mut methods = crate::run::lock(&self.methods);
@@ -179,14 +185,22 @@ impl AiProvider for WholeModel {
             let gate = self.gates.get(position).cloned().flatten();
             let response = self.script.generate(context);
             methods.push("generate");
-            (response, gate)
+            (
+                response,
+                gate,
+                self.served.get(position).cloned().unwrap_or_default(),
+            )
         };
         if let Some(gate) = gate
             && let Some(run) = self.run.upgrade()
         {
             run.gates.hold(&gate).await;
         }
-        self.checked_response(context, response.await?)
+        let mut response = response.await?;
+        for (call, served) in response.tool_calls.iter_mut().zip(served) {
+            call.served = served;
+        }
+        self.checked_response(context, response)
     }
 }
 
@@ -260,6 +274,7 @@ struct PacedStream<'a> {
     holding: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
     held: Option<Result<StreamEvent, ProviderError>>,
     after_text: bool,
+    served: std::vec::IntoIter<Option<ServedCall>>,
     run: Weak<Run>,
 }
 
@@ -278,6 +293,9 @@ impl Stream for PacedStream<'_> {
         let mut next = ready!(this.inner.as_mut().poll_next(cx));
         if let Some(Ok(StreamEvent::ToolCall(call))) = next.as_mut() {
             labelled(&this.run, &mut call.arguments);
+            if let Some(served) = this.served.next() {
+                call.served = served;
+            }
         }
         let text = matches!(next, Some(Ok(StreamEvent::TextDelta(_))));
         if text && this.after_text {
@@ -695,6 +713,17 @@ pub(crate) fn scripted_model(
 ) -> Result<(ScriptedProvider, Paced), String> {
     let scripted = spec["rounds"].as_array().into_iter().flatten();
     let rounds = scripted.clone().map(round).collect::<Result<Vec<_>, _>>()?;
+    let served = scripted
+        .clone()
+        .map(|round| {
+            round["calls"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|call| served_call(&call["served"]))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let gates = scripted
         .map(|round| round["gate"].as_str().map(str::to_owned))
         .collect();
@@ -709,6 +738,7 @@ pub(crate) fn scripted_model(
         whole: WholeModel {
             script: model.clone(),
             gates,
+            served,
             run: Arc::downgrade(run),
             model_name: spec["name"].as_str().unwrap_or("scripted").to_owned(),
             provider_name: spec["provider"].as_str().unwrap_or("scripted").to_owned(),
@@ -922,8 +952,39 @@ fn tool_call(call: &Value) -> Result<AiToolCall, String> {
         arguments: read("arguments")?,
         metadata: read("metadata")?,
         partial: call["cut"] == true,
+        served: served_call(&call["served"])?,
         ..AiToolCall::new(text("id"), text("name"))
     })
+}
+
+/// The marker is provider data; absence and null both leave a pending call.
+fn served_call(value: &Value) -> Result<Option<ServedCall>, String> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let object = value
+        .as_object()
+        .ok_or("served: expected an object or null")?;
+    if object
+        .keys()
+        .any(|key| key != "result" && key != "is_error")
+    {
+        return Err("served: unknown member".to_owned());
+    }
+    let result = match object.get("result") {
+        None => String::new(),
+        Some(value) => value
+            .as_str()
+            .ok_or("served.result: expected a string")?
+            .to_owned(),
+    };
+    let is_error = match object.get("is_error") {
+        None => false,
+        Some(value) => value
+            .as_bool()
+            .ok_or("served.is_error: expected a boolean")?,
+    };
+    Ok(Some(ServedCall { result, is_error }))
 }
 
 /// How a round ends, `tool_calls` by default when it calls, else `stop`.

@@ -35,6 +35,7 @@ pub(super) type Reading<'a> = (
     &'a str,
     &'a mut RoundWindows,
     &'a Limits,
+    &'a super::provider_calls::ProviderCalls,
 );
 
 /// How a channel's generations recover from their provider's refusals:
@@ -109,7 +110,7 @@ impl Loop {
         (tools, system_prompt): (Vec<AiTool>, Option<String>),
         reading: Reading<'_>,
     ) -> Result<Generation, Failed> {
-        let (steering, out, prefix, window, limits) = reading;
+        let (steering, out, prefix, window, limits, provider_calls) = reading;
         let mut context = AiContext {
             tools,
             ..self.round_context(messages, system_prompt)
@@ -130,7 +131,7 @@ impl Loop {
                 &context,
             );
             let stream = self.provider.dyn_generate_structured_stream(&sending);
-            let reading = (steering, out, prefix, &mut *window, limits);
+            let reading = (steering, out, prefix, &mut *window, limits, provider_calls);
             let held = context.response_schema.is_some();
             let failure = match Generation::read(stream, reading, held).await {
                 Ok(generation) => return Ok(generation),
@@ -179,7 +180,7 @@ impl Loop {
         let Some(other) = self.rerouted(&last.error).await else {
             return Err(last);
         };
-        let reading = (steering, out, prefix, window, limits);
+        let reading = (steering, out, prefix, window, limits, provider_calls);
         let generation = rerouted(&*other, &context, last, reading).await?;
         // It served the generation: the turn's later rounds stay on it.
         self.provider = other;
@@ -215,8 +216,13 @@ async fn rerouted(
     let context = super::deferred::declared_for(provider.dyn_supports_deferred_tools(), context);
     let stream = provider.dyn_generate_structured_stream(&context);
     let held = context.response_schema.is_some();
-    let (steering, out, prefix, window, limits) = reading;
-    let read = Generation::read(stream, (steering, out, prefix, &mut *window, limits), held).await;
+    let (steering, out, prefix, window, limits, provider_calls) = reading;
+    let read = Generation::read(
+        stream,
+        (steering, out, prefix, &mut *window, limits, provider_calls),
+        held,
+    )
+    .await;
     match read {
         Err(failure) if !failure.streamed => {
             window.thinking.drop_reasoning();

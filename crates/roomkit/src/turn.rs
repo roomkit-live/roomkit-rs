@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use roomkit_core::model::{
@@ -45,6 +46,7 @@ mod external_tools;
 mod inputs;
 mod loop_hooks;
 mod media;
+mod provider_reports;
 mod publication_scope;
 mod publish;
 
@@ -117,6 +119,8 @@ struct Shared {
     calls: Mutex<Calls>,
     /// What the turn queued to publish.
     publisher: Arc<publish::Publisher>,
+    /// True unless the owner explicitly closes a stream it stopped reading.
+    stream_cut: AtomicBool,
 }
 
 /// The calls of a turn: those its gate let run, and the ends told early.
@@ -170,6 +174,17 @@ pub enum ToolGate {
 }
 
 impl TurnHost {
+    /// Whether a provider stream is being cut, rather than closed by its reader.
+    /// Internal bridge for the AI provider's terminal tool publication.
+    #[doc(hidden)]
+    pub fn stream_was_cut(&self) -> bool {
+        self.shared.stream_cut.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn mark_stream_closed(&self) {
+        self.shared.stream_cut.store(false, Ordering::Release);
+    }
+
     pub(crate) fn with_room_hooks(mut self, names: Vec<String>) -> Self {
         self.room_hooks = names.into();
         self
@@ -1744,6 +1759,7 @@ pub(crate) fn host(
             response_depth,
             calls: Mutex::new(Calls::default()),
             publisher: Arc::default(),
+            stream_cut: AtomicBool::new(true),
         }),
     }
 }

@@ -34,7 +34,7 @@ pub(super) struct Ended {
 
 impl Ended {
     /// `call` cut while it ran, as Python's `_aborted_results` ends it.
-    fn aborted(call: ToolCall) -> Self {
+    pub(super) fn aborted(call: ToolCall) -> Self {
         Self {
             call,
             result: ABORTED.to_owned(),
@@ -99,7 +99,7 @@ impl ToolEvents {
     /// `TOOL_CALL_END`: each of `ends` with its result's first
     /// [`RESULT_PREVIEW`] characters and its status, and its intent when its
     /// call has one; `duration_ms` the round's, once its calls ran.
-    fn ended(&self, ends: &[Ended], duration_ms: Option<u64>) {
+    pub(super) fn ended(&self, ends: &[Ended], duration_ms: Option<u64>) {
         let calls = ends
             .iter()
             .map(|end| {

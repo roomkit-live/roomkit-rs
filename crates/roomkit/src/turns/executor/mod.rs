@@ -178,7 +178,7 @@ impl Executor {
         ));
         let beating = Beating::start(&self.kit, &self.sender, &self.turn);
         let cut = self
-            .watch(&mut controls, work, &flow, (&link, &mut steering))
+            .watch(&mut controls, work, &flow, (&link, &mut steering, &host))
             .await;
         drop(beating);
         // What the stream's close or cut wrote: no item follows it (RFC
@@ -258,7 +258,7 @@ impl Executor {
         controls: &mut PipeReceiver<Control>,
         work: Pin<Box<dyn Future<Output = ()> + Send>>,
         flow: &Flow,
-        (link, steering): (&HostLink, &mut Steering),
+        (link, steering, host): (&HostLink, &mut Steering, &TurnHost),
     ) -> Option<Cut> {
         let timeouts = self.turn.timeouts;
         let mut beat = Beat::new(&timeouts, true);
@@ -288,7 +288,7 @@ impl Executor {
                 control = controls.get(), if accepts_control => {
                     beat.heard();
                     match control {
-                        Ok((_, control)) => match apply(control, flow, link, steering) {
+                        Ok((_, control)) => match apply(control, flow, link, steering, host) {
                             Some(Cut::Cancelled(_)) if self.kit.acting() || self.running.spared_by_owner() => {
                                 return Some(self.let_go(work.take(), flow, link).await);
                             }
@@ -488,7 +488,13 @@ impl Drop for Panicked {
 
 /// Applies one control message of the owner's; how it cuts the work, when
 /// it does.
-fn apply(control: Control, flow: &Flow, link: &HostLink, steering: &mut Steering) -> Option<Cut> {
+fn apply(
+    control: Control,
+    flow: &Flow,
+    link: &HostLink,
+    steering: &mut Steering,
+    host: &TurnHost,
+) -> Option<Cut> {
     match control {
         Control::Pull { count, read } => {
             if count > 0 {
@@ -498,6 +504,7 @@ fn apply(control: Control, flow: &Flow, link: &HostLink, steering: &mut Steering
             None
         }
         Control::Close => {
+            host.mark_stream_closed();
             let cut_read = lock(&flow.gate).close();
             flow.wake.notify_one();
             // A read ahead of the reader is cut at once; one it asked for (a

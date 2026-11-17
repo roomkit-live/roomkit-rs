@@ -5,6 +5,7 @@
 
 mod access;
 mod cancellation;
+mod provider_served;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
@@ -63,6 +64,8 @@ enum Stop {
     AtACallsStart,
     /// Once handed a call's end row.
     AtACallsEnd,
+    /// Notify after a provider END and either stop or await an external cut.
+    ProviderEnd(Arc<Notify>, Option<Arc<Notify>>),
     /// When the signal comes, wherever it reads.
     OnSignal(Arc<Notify>),
     /// It fails once handed this text.
@@ -180,6 +183,7 @@ impl Channel for Streaming {
                 | Stop::AfterText(_)
                 | Stop::AtACallsStart
                 | Stop::AtACallsEnd
+                | Stop::ProviderEnd(_, _)
                 | Stop::FailsAfter(_) => stream.next().await,
             };
             let Some(item) = item else {
@@ -199,6 +203,7 @@ impl Channel for Streaming {
                         | Stop::AfterText(_)
                         | Stop::AtACallsStart
                         | Stop::AtACallsEnd
+                        | Stop::ProviderEnd(_, _)
                         | Stop::OnSignal(_)
                         | Stop::FailsAfter(_)
                         | Stop::FailsOnSignal(_) => {}
@@ -210,6 +215,15 @@ impl Channel for Streaming {
                     if matches!(self.stop, Stop::AtACallsStart)
                         && row.r#type == EventType::ToolCallStart
                     {
+                        return Ok(ChannelOutput::default());
+                    }
+                    if row.r#type == EventType::ToolCallEnd
+                        && let Stop::ProviderEnd(reached, hold) = &self.stop
+                    {
+                        reached.notify_one();
+                        if let Some(release) = hold {
+                            release.notified().await;
+                        }
                         return Ok(ChannelOutput::default());
                     }
                     if matches!(self.stop, Stop::AtACallsEnd)

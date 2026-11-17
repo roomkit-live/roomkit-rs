@@ -100,13 +100,23 @@ pub fn thinking_parts_of(response: &AiResponse) -> Vec<AiThinkingPart> {
     }]
 }
 
+/// The outcome of a call already executed by the provider (RFC §9.3).
+/// Python's `ServedCall(*, result="", is_error=False)`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ServedCall {
+    /// The original result, reported whole before its model copy is bounded.
+    pub result: String,
+    /// Whether the provider reported a failed call.
+    pub is_error: bool,
+}
+
 /// A call the model made (RFC §6.4 "What a provider hands the loop for a
 /// call"): Python's `AIToolCall(*, id, name, arguments={}, metadata={},
-/// partial=False, garbled=False, intent=None)`.
+/// partial=False, garbled=False, intent=None, served=None)`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AiToolCall {
-    /// The call's id, unique in its response ([`CallIds`]): the loop refuses a
-    /// second call of a round under it (RFC §12.4).
+    /// The wire id. Pending calls use a unique id ([`CallIds`]); provider-served
+    /// calls sharing an id are each reported as their own occurrence (RFC §12.4).
     pub id: String,
     /// The tool called.
     pub name: String,
@@ -123,6 +133,8 @@ pub struct AiToolCall {
     /// What the call does, in the sentence the model wrote for the person
     /// (RFC §6.4); the loop takes it out of the arguments.
     pub intent: Option<String>,
+    /// An outcome the provider already produced; `None` leaves the call pending.
+    pub served: Option<ServedCall>,
 }
 
 impl AiToolCall {
@@ -136,6 +148,7 @@ impl AiToolCall {
             partial: false,
             garbled: false,
             intent: None,
+            served: None,
         }
     }
 
@@ -391,6 +404,8 @@ pub struct StreamToolCall {
     pub garbled: bool,
     /// What the call does, for the person.
     pub intent: Option<String>,
+    /// An outcome the provider already produced; `None` leaves the call pending.
+    pub served: Option<ServedCall>,
 }
 
 impl StreamToolCall {
@@ -410,6 +425,7 @@ impl From<AiToolCall> for StreamToolCall {
             partial,
             garbled,
             intent,
+            served,
         } = call;
         Self {
             id,
@@ -419,6 +435,7 @@ impl From<AiToolCall> for StreamToolCall {
             partial,
             garbled,
             intent,
+            served,
         }
     }
 }
@@ -433,6 +450,7 @@ impl From<StreamToolCall> for AiToolCall {
             partial,
             garbled,
             intent,
+            served,
         } = call;
         Self {
             id,
@@ -442,6 +460,7 @@ impl From<StreamToolCall> for AiToolCall {
             partial,
             garbled,
             intent,
+            served,
         }
     }
 }

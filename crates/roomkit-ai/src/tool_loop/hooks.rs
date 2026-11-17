@@ -71,6 +71,13 @@ impl Adopted {
 pub(super) struct Ran {
     pub(super) calls: Vec<AiToolCall>,
     pub(super) results: Vec<AiToolResultPart>,
+    pub(super) answered: Vec<AiToolResultPart>,
+}
+
+impl Ran {
+    pub(super) fn replayed_results(&self) -> Vec<AiToolResultPart> {
+        self.answered.iter().chain(&self.results).cloned().collect()
+    }
 }
 
 impl Loop {
@@ -192,6 +199,7 @@ impl Loop {
             return Vec::new();
         }
         let event = ToolRoundEvent {
+            answered: ran.answered,
             tools: self
                 .hook_tools()
                 .into_iter()

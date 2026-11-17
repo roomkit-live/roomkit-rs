@@ -78,7 +78,7 @@ impl TurnHost {
             .clone()
     }
 
-    async fn external_call_chain(&self, report: &ToolCallReport) {
+    pub(super) async fn external_call_chain(&self, report: &ToolCallReport) {
         let hooks = self.hooks(HookTrigger::OnToolCall);
         let mut chain = ToolCallChain::new(self.event_of(report));
         for (spec, handler) in hooks
