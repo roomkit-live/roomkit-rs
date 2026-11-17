@@ -35,7 +35,7 @@ async fn interleaved_turns_restore_each_consumer() {
             AiChannelOptions {
                 tools: vec![AiTool::new("owner_tool", "Owner tool").unwrap().into()],
                 tool_search: Some(false),
-                tool_policy: Some(role_policy()),
+                tool_policy: Some(role_policy(&["observer"])),
                 tool_handler: Some(ToolHandler::new(move |_, _| {
                     let gates = Arc::clone(&handlers);
                     async move {
@@ -87,17 +87,21 @@ async fn interleaved_turns_restore_each_consumer() {
     agent.close().await;
 }
 
-fn role_policy() -> ToolPolicy {
+fn role_policy(roles: &[&str]) -> ToolPolicy {
     ToolPolicy::new(ToolPolicyOptions {
-        role_overrides: [(
-            "observer".into(),
-            RoleOverride::new(RoleOverrideOptions {
-                deny: vec!["owner_tool".into()],
-                ..Default::default()
+        role_overrides: roles
+            .iter()
+            .map(|role| {
+                (
+                    (*role).into(),
+                    RoleOverride::new(RoleOverrideOptions {
+                        deny: vec!["owner_tool".into()],
+                        ..Default::default()
+                    })
+                    .unwrap(),
+                )
             })
-            .unwrap(),
-        )]
-        .into(),
+            .collect(),
         ..Default::default()
     })
     .unwrap()
@@ -128,6 +132,7 @@ fn assert_role_tools(room: &str) {
 // Python: test_ai_skill_gating.py::TestRoleBasedPolicy::test_no_participant_match_uses_base_policy
 // The shared inbound path materializes unknown senders; this direct public
 // channel call proves a context whose participant does not name its sender.
+// Every explicit role denies the tool, distinguishing no role from a default member.
 #[tokio::test]
 async fn an_unmatched_sender_keeps_the_base_policy() {
     use roomkit::Channel;
@@ -141,7 +146,9 @@ async fn an_unmatched_sender_keeps_the_base_policy() {
             AiChannelOptions {
                 tools: vec![AiTool::new("owner_tool", "Owner tool").unwrap().into()],
                 tool_search: Some(false),
-                tool_policy: Some(role_policy()),
+                tool_policy: Some(role_policy(&[
+                    "owner", "agent", "member", "observer", "bot",
+                ])),
                 tool_handler: Some(ToolHandler::new(move |_, _| {
                     seen.lock()
                         .unwrap()
