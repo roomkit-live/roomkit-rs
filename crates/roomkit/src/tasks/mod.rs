@@ -32,6 +32,7 @@ mod hosted;
 pub(crate) mod json;
 pub(crate) mod lines;
 mod marks;
+mod progress;
 mod record;
 pub(crate) mod result_tool;
 mod runner;

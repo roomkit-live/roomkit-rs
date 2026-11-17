@@ -112,7 +112,7 @@ impl Channel for Sending {
                 sent.await.is_ok()
             }
             Through::Tool => {
-                let called = host.call_owner_tool(TOOL, Metadata::new(), "call-1");
+                let called = host.call_owner_tool(TOOL, Metadata::new(), "call-1", None);
                 matches!(called.await, OwnerToolAnswer::Served(_))
             }
         };

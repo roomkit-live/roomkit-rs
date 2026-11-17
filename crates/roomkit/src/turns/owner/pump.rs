@@ -336,6 +336,7 @@ impl Pump {
             channel_id: state.facts.channel_id.clone(),
             tool_call_id: context.tool_call_id.clone(),
             arguments,
+            requester: context.requester.clone(),
         };
         let answering = call_id.clone();
         let task = async move {

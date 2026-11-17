@@ -877,6 +877,7 @@ mod tests {
             channel_id: channel("speaker"),
             tool_call_id: "c1".to_owned(),
             arguments,
+            requester: None,
         };
         let answer = work_in_background(kit, call).await.unwrap();
         assert_eq!(answer, error_answer(NESTED));

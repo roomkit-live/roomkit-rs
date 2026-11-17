@@ -51,11 +51,13 @@
 
 use std::collections::BTreeSet;
 
+mod asker;
 mod content;
 mod data_uri;
 mod fence;
 mod images;
 mod kept;
+pub use self::asker::asking_label;
 pub use self::content::{Part, TurnContent};
 pub use self::data_uri::{DataUriError, parse_data_uri, to_data_uri};
 pub use images::{Image, media_type};
@@ -300,9 +302,10 @@ pub struct TurnMemory {
     /// lines, `Alice`, `@sms1`): each counts as a speaker toward labelling
     /// the turns, unless a turn's speaker already has it.
     pub speakers: Vec<String>,
-    /// The runtime's own notes for this turn alone, a discussion's (RFC
-    /// §19.7.5 rule 14): blocks of the turn's notes, after the memory's, a
-    /// copy of a runtime mark in them replaced.
+    /// The channel's own notes for this turn alone, the room's tasks' (RFC
+    /// §23.4) then a discussion's (RFC §19.7.5 rule 14): blocks of the
+    /// turn's notes, after the memory's, a copy of a runtime mark in them
+    /// replaced.
     pub turn_notes: Vec<String>,
     /// A discussion's turn: its event reads at its place in the history,
     /// before what was said after it, rounds of tool calls included, rather
@@ -328,6 +331,12 @@ pub struct TurnConversation {
     /// them into the conversation's first user turns cut where it starts
     /// and dropped where it runs on (RFC §6.4).
     pub ends_on: Vec<String>,
+    /// Who asked: the label the conversation gives the author of the event
+    /// the turn answers when it labels its speakers (RFC §6.4), what a task
+    /// the turn delegates names out of its block (RFC §19.7); `None` in a
+    /// one-to-one conversation and for an instruction. Python's
+    /// `current_tool_requester()` within the turn.
+    pub requester: Option<String>,
 }
 
 /// [`conversation`], with what the turn's memory adds beside its history
@@ -412,6 +421,7 @@ pub fn conversation_with_input(
     };
     let spoken: Vec<String> = read.iter().map(|speaker| speaker.label.clone()).collect();
     let labelled = labels_turns(sources, people.len());
+    let requester = labelled.then(|| asker(&turns)).flatten();
     let (turns, ends_on) = cleaned(turns, labelled, &memory.ends_on);
     let notes = Notes {
         labelled,
@@ -425,7 +435,15 @@ pub fn conversation_with_input(
         messages,
         input,
         ends_on,
+        requester,
     }
+}
+
+/// The label of the author of the event the turn answers, among `turns`:
+/// none for the application's instruction or a runtime's event.
+fn asker(turns: &[Turn]) -> Option<String> {
+    let input = turns.iter().find(|turn| turn.input)?;
+    input.speaker.as_ref().map(|speaker| speaker.label.clone())
 }
 
 /// A turn of the conversation before it is rendered: its role, what its

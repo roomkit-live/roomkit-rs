@@ -288,6 +288,10 @@ pub struct ToolContext {
     /// The participant whose event woke the turn, Python's tool loop
     /// context's `actor_id`, read with [`current_tool_actor_id`].
     pub(crate) actor_id: Option<String>,
+    /// Who asked, by the conversation's label for the turn's author when
+    /// it labels its speakers, read with [`current_tool_requester`] (RFC
+    /// §19.7).
+    pub(crate) requester: Option<String>,
     /// The fresh record retained by the tool loop for this call's result.
     pub(crate) call_record: Option<ToolCallContext>,
     /// What a skill activation's hint may name, when the call asks to
@@ -314,6 +318,7 @@ impl ToolContext {
             turn: None,
             stands_alone: false,
             actor_id: None,
+            requester: None,
             call_record: None,
             hintable: Vec::new(),
             skill_admitted: None,

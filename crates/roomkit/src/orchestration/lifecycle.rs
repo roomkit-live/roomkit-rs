@@ -11,7 +11,7 @@ use crate::store::ConversationStore;
 use crate::tasks::text::bounded_text;
 
 /// The characters of an entry's detail.
-const DETAIL_LIMIT: usize = 200;
+pub(crate) const DETAIL_LIMIT: usize = 200;
 
 /// The characters of a completed entry's whole outcome, kept under
 /// `result` when its detail was cut.

@@ -274,14 +274,17 @@ pub(crate) fn record_tool_declaration(name: &str) {
 /// the response record its turn already holds.
 pub(crate) async fn within_call<T>(
     call: ToolCallContext,
-    actor_id: Option<String>,
+    (actor_id, requester): (Option<String>, Option<String>),
     room_metadata: Option<Arc<Metadata>>,
     work: impl Future<Output = T>,
 ) -> T {
     let scope = match current() {
+        // The turn's scope is installed before its conversation names who
+        // asked: the turn's own requester wins over the scope's.
         Some(parent) => Scope {
             turn: ToolTurnContextOptions {
                 call: Some(call),
+                requester: requester.or_else(|| parent.turn.requester.clone()),
                 ..parent.turn.clone()
             },
             room_metadata: parent.room_metadata.clone(),
@@ -295,6 +298,7 @@ pub(crate) async fn within_call<T>(
                 room_id: call.room_id.clone(),
                 call: Some(call),
                 actor_id,
+                requester,
                 ..Default::default()
             },
             room_metadata,

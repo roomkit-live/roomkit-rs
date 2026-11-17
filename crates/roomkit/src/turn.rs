@@ -474,14 +474,16 @@ impl TurnHost {
 
     /// Runs the call `tool_call_id` of the owner's tool `name` with
     /// `arguments` on the room's owner, at least as deep as the turn's
-    /// response (RFC §10.6.5): the handler's answer, or how it did not
-    /// answer. For an AI channel's turn, not a public verb.
+    /// response (RFC §10.6.5), its handler told who asked (`requester`,
+    /// RFC §19.7): the handler's answer, or how it did not answer. For an
+    /// AI channel's turn, not a public verb.
     #[doc(hidden)]
     pub async fn call_owner_tool(
         &self,
         name: &str,
         arguments: Metadata,
         tool_call_id: &str,
+        requester: Option<String>,
     ) -> OwnerToolAnswer {
         let floor = ExecutionContext::current()
             .turn_depth()
@@ -489,7 +491,7 @@ impl TurnHost {
             .max(self.shared.response_depth);
         self.shared
             .link
-            .call_tool(name, arguments, tool_call_id, floor)
+            .call_tool(name, arguments, (tool_call_id, requester), floor)
             .await
     }
 
@@ -1256,6 +1258,10 @@ pub(crate) struct OwnerCall {
     pub(crate) channel_id: ChannelId,
     pub(crate) tool_call_id: String,
     pub(crate) arguments: Metadata,
+    /// Who asked, the label the turn's conversation gives its author when
+    /// several people take part (RFC §19.7): Python's
+    /// `current_tool_requester()` within the call.
+    pub(crate) requester: Option<String>,
 }
 
 pub(crate) trait TurnKit: Send + Sync {

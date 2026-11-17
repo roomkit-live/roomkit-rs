@@ -262,10 +262,10 @@ impl DynToolset for ServedBy {
         // context before it calls the handler; its answer may decline the
         // call, as Python's `declined_answer` reads it (RFC §21.4).
         let handler = self.handler.clone();
-        let actor_id = context.actor_id.clone();
+        let asked = (context.actor_id.clone(), context.requester.clone());
         Box::pin(within_call(
             within,
-            actor_id,
+            asked,
             context.room_metadata,
             async move {
                 match handler.call(call.name.clone(), call.arguments).await {

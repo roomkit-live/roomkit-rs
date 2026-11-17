@@ -100,6 +100,29 @@ impl Default for TaskStatusToolOptions {
     }
 }
 
+/// From a tool a worker calls in its task's child room: says how far the
+/// task got ("12/20 s", "3 sources of 5"), for the room that delegated it
+/// (RFC §23.3). Python's `post_task_progress(kit, detail)`.
+///
+/// Posts an `info` entry under the worker, action `task`, with the task's
+/// metadata, its detail bounded; it does not end the task. Whether it
+/// posted: a call outside a task's child room posts nothing, outside a
+/// tool call included. The agent's next turn reads it in its notes, and
+/// `task_status` among the room's tasks (RFC §23.4).
+///
+/// # Errors
+///
+/// The store's failure to read the call's room.
+pub async fn post_task_progress<S: ConversationStore>(
+    kit: &RoomKit<S>,
+    detail: &str,
+) -> Result<bool, RoomKitError> {
+    let Some(child_room_id) = crate::tools::current_tool_room_id() else {
+        return Ok(false);
+    };
+    kit.post_task_progress_in(&child_room_id, detail).await
+}
+
 /// `task_status`: the tasks of the room of the call, read from the kit's
 /// [`status_bus`](roomkit::RoomKit::status_bus) (RFC §23.4). Python's
 /// `TaskStatusTool`.

@@ -123,8 +123,8 @@ struct TeamServer {
     /// One lock per room, held while its team runs: another room's call
     /// does not wait on it. A lock lives while a call holds it.
     rooms: Mutex<HashMap<RoomId, Weak<tokio::sync::Mutex<()>>>>,
-    /// Each room's last answer, and when it was given.
-    answers: Mutex<HashMap<RoomId, (String, Instant)>>,
+    /// Each room's last answer, when it was given, and who asked for it.
+    answers: Mutex<HashMap<RoomId, (String, Instant, Option<String>)>>,
     /// The rooms whose team runs in the background, until it ended
     /// (Python's `_running`).
     running: Mutex<HashSet<RoomId>>,
@@ -146,13 +146,14 @@ impl TeamServer {
             .get("task")
             .and_then(Value::as_str)
             .unwrap_or_default();
+        let requester = call.requester.as_deref();
         let lock = self.room_lock(&room_id);
         let _running = lock.lock().await;
-        if let Some(answer) = self.fresh_answer(&room_id) {
+        if let Some(answer) = self.fresh_answer(&room_id, requester) {
             return OwnerToolAnswer::Served(Value::String(answer));
         }
         if self.async_delivery {
-            return match self.dispatch(kit, &room_id, task, &call.channel_id) {
+            return match self.dispatch(kit, (&room_id, requester), task, &call.channel_id) {
                 Ok(answer) => OwnerToolAnswer::Served(Value::String(answer)),
                 Err(error) => OwnerToolAnswer::Failed {
                     kind: error.class_name(),
@@ -160,9 +161,9 @@ impl TeamServer {
                 },
             };
         }
-        match self.run(kit, &room_id, task).await {
+        match self.run(kit, &room_id, task, requester).await {
             Ok(review) => {
-                self.remember(&room_id, &review);
+                self.remember((&room_id, requester), &review);
                 OwnerToolAnswer::Served(Value::String(review))
             }
             Err(error) => {
@@ -182,12 +183,14 @@ impl TeamServer {
         }
     }
 
-    /// Runs the team for `room_id` on `task`: what the supervisor reviews.
+    /// Runs the team for `room_id` on `task`: what the supervisor reviews,
+    /// its task headed by who asked for it (`requester`, RFC §19.7).
     async fn run<S: ConversationStore>(
         &self,
         kit: &RoomKit<S>,
         room_id: &RoomId,
         task: &str,
+        requester: Option<&str>,
     ) -> Result<String, RoomKitError> {
         let team = &self.team;
         if self.strategy == WorkerStrategy::Sequential {
@@ -196,10 +199,16 @@ impl TeamServer {
                 task,
                 &steps,
                 team.max_revisions,
+                requester,
             ));
         }
         let results = run_parallel(kit, room_id, team, task).await?;
-        Ok(format_supervisor_review(task, &results, &team.workers))
+        Ok(format_supervisor_review(
+            task,
+            &results,
+            &team.workers,
+            requester,
+        ))
     }
 
     /// Starts the team for `room_id` in the background and answers at once
@@ -215,7 +224,7 @@ impl TeamServer {
     fn dispatch<S: ConversationStore>(
         self: &Arc<Self>,
         kit: &RoomKit<S>,
-        room_id: &RoomId,
+        (room_id, requester): (&RoomId, Option<&str>),
         task: &str,
         caller: &ChannelId,
     ) -> Result<String, RoomKitError> {
@@ -228,7 +237,7 @@ impl TeamServer {
         let chain_depth = ExecutionContext::current().turn_depth().unwrap_or(0);
         // Remembered before the run starts, which forgets it once it ends.
         let answer = dispatched(&self.team, follows);
-        self.remember(room_id, &answer);
+        self.remember((room_id, requester), &answer);
         let run = self.background_run(kit, room_id, task);
         if let Err(error) = start_background_run(kit, run, chain_depth) {
             self.running().remove(room_id);
@@ -320,20 +329,22 @@ impl TeamServer {
         lock
     }
 
-    /// `room_id`'s last answer, while it is within the window.
-    fn fresh_answer(&self, room_id: &RoomId) -> Option<String> {
+    /// `room_id`'s last answer, while it is within the window, to a call
+    /// `requester` asked for as the last one was (Python's dedup cache).
+    fn fresh_answer(&self, room_id: &RoomId, requester: Option<&str>) -> Option<String> {
         let answers = self.answers.lock().unwrap_or_else(PoisonError::into_inner);
-        let (answer, given) = answers.get(room_id)?;
-        (given.elapsed() < DEDUP_WINDOW).then(|| answer.clone())
+        let (answer, given, asked) = answers.get(room_id)?;
+        (given.elapsed() < DEDUP_WINDOW && asked.as_deref() == requester).then(|| answer.clone())
     }
 
-    /// Serves `answer` again to a repeat in `room_id` within the window,
-    /// dropping the answers past it.
-    fn remember(&self, room_id: &RoomId, answer: &str) {
+    /// Serves `answer` again to a repeat in `room_id` asked for by the same
+    /// `requester` within the window, dropping the answers past it.
+    fn remember(&self, (room_id, requester): (&RoomId, Option<&str>), answer: &str) {
         let now = Instant::now();
         let mut answers = self.answers.lock().unwrap_or_else(PoisonError::into_inner);
-        answers.insert(room_id.clone(), (answer.to_owned(), now));
-        answers.retain(|_, (_, given)| now.duration_since(*given) < DEDUP_WINDOW);
+        let asked = requester.map(str::to_owned);
+        answers.insert(room_id.clone(), (answer.to_owned(), now, asked));
+        answers.retain(|_, (_, given, _)| now.duration_since(*given) < DEDUP_WINDOW);
     }
 }
 
@@ -580,6 +591,7 @@ mod tests {
             channel_id: ChannelId::new("sup").unwrap_or_else(|error| panic!("{error}")),
             tool_call_id: "c1".to_owned(),
             arguments: Metadata::from_iter([("task".to_owned(), json!("Recurse."))]),
+            requester: None,
         };
         let kit = RoomKit::new(RoomKitOptions::default());
         let OwnerToolAnswer::Served(Value::String(answer)) = server.serve(&kit, call).await else {

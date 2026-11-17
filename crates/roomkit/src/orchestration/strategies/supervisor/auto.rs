@@ -16,9 +16,10 @@ use roomkit_core::model::{
     RoomId, TextContent,
 };
 use roomkit_core::rules::edits::opens_no_turn;
-use roomkit_core::rules::transcript::fence;
+use roomkit_core::rules::transcript::{asking_label, fence};
 use serde_json::{Value, json};
 
+use super::prompts::task_heading;
 use super::results::{Presented, present_worker_results};
 use super::supervised::run_supervised_sequential;
 use super::team::run_parallel;
@@ -180,16 +181,25 @@ fn one_pass<S: ConversationStore>(asked: Asked<S>) -> Taken {
         return Taken::Own(Box::new((asked.event, asked.binding, asked.context)));
     }
     Taken::Later(Box::pin(async move {
-        let present = |results: &[Presented]| one_pass_results(&message, results);
+        // The supervisor reads the request under its author's label when
+        // several people speak (RFC §19.7).
+        let asker = asking_label(
+            &asked.event,
+            &asked.context,
+            &asked.team.supervisor.channel_id,
+        );
+        let present = |results: &[Presented]| one_pass_results(&message, results, asker.as_deref());
         asked.answered_from(&message, present).await
     }))
 }
 
 /// What the supervisor presents from in one pass: the message as a `<task>`
-/// block, then each worker's output (Python's `_one_pass_results`).
-fn one_pass_results(message: &str, results: &[Presented]) -> String {
+/// block, headed by its author's label when one is `asked_by`, then each
+/// worker's output (Python's `_one_pass_results`).
+fn one_pass_results(message: &str, results: &[Presented], asked_by: Option<&str>) -> String {
     format!(
-        "{ASKED}\n{}\n\n{}",
+        "{}\n{}\n\n{}",
+        task_heading(ASKED, asked_by, None),
         fence("task", message),
         present_worker_results(results)
     )

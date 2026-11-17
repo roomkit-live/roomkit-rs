@@ -24,12 +24,12 @@ impl DynToolset for OwnerToolset {
     fn call(
         &self,
         call: ToolCall,
-        _context: ToolContext,
+        context: ToolContext,
     ) -> BoxFuture<'_, Result<ToolResult, ToolError>> {
         Box::pin(async move {
             let answer = self
                 .turn
-                .call_owner_tool(&call.name, call.arguments, &call.id)
+                .call_owner_tool(&call.name, call.arguments, &call.id, context.requester)
                 .await;
             match answer {
                 OwnerToolAnswer::Served(serde_json::Value::String(text)) => {

@@ -67,6 +67,7 @@ use crate::turn_settings::{ReasoningLevels, TurnSettings, VALUE_ERROR};
 
 mod context;
 mod targets;
+mod tasks_note;
 use self::context::PreparedAnswer;
 
 /// The metadata word of an instruction that stands alone (RFC §10.1.1
@@ -1844,7 +1845,7 @@ impl<P: AiProvider> AiChannel<P> {
         looped.resolve_tool_catalogue();
         // Measured as the first round sends it, before the memory reads the
         // room (RFC §20).
-        let notes = roomkit::discussion_notes(&event);
+        let notes = own_notes(&event, &context, looped.turn.as_ref(), stands_alone).await;
         let footprint = self.measure_turn(&looped, &context, stands_alone, &notes);
         // The event as the model reads it, the media the application keeps
         // beside its content among its parts, as its history (RFC §6.4).
@@ -1867,6 +1868,8 @@ impl<P: AiProvider> AiChannel<P> {
         });
         let memory = with_discussion_turn(&event, recalled.memory, notes);
         let conversation = self.conversation((&read, &recalled.history), &memory, &images, vision);
+        // Who a task this turn delegates names as having asked (RFC §19.7).
+        looped.context.requester = conversation.requester;
         looped.remembered = with_ending_texts(recalled.messages, conversation.ends_on);
         let (messages, input) = (conversation.messages, conversation.input);
         // The context takes the settings once the conversation is read, as
@@ -1901,8 +1904,22 @@ fn loop_bounds(
     }
 }
 
-/// `memory`, with what a discussion's turn on `event` adds: its notes, and
-/// its event read at its place (RFC §19.7.5). Python's `discussion_notes` and
+/// The notes the channel adds to the turn's input (RFC §6.4): the room's
+/// background tasks (RFC §23.4), then what a discussion's turn on `event`
+/// adds. Python's `_own_notes` and `discussion_notes`.
+async fn own_notes(
+    event: &RoomEvent,
+    context: &RoomContext,
+    turn: Option<&roomkit::TurnHost>,
+    stands_alone: bool,
+) -> Vec<String> {
+    let mut notes = tasks_note::tasks_notes(turn, &context.room.metadata, stands_alone).await;
+    notes.extend(roomkit::discussion_notes(event));
+    notes
+}
+
+/// `memory`, with the channel's own `notes` (RFC §6.4) and a discussion's
+/// turn on `event` read at its place (RFC §19.7.5). Python's `own_notes` and
 /// `_answered_position`.
 fn with_discussion_turn(event: &RoomEvent, memory: TurnMemory, notes: Vec<String>) -> TurnMemory {
     TurnMemory {

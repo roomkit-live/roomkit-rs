@@ -348,13 +348,13 @@ impl HostLink {
 
     /// Runs the call `tool_call_id` of the owner's tool `name` with
     /// `arguments` on the owner, the turn's work at least `floor` deep
-    /// (RFC §10.6.5): the handler's answer, or how it did not answer. A
-    /// call once the turn ended is not sent.
+    /// (RFC §10.6.5), with who asked (`requester`): the handler's answer,
+    /// or how it did not answer. A call once the turn ended is not sent.
     pub(crate) async fn call_tool(
         &self,
         name: &str,
         arguments: Metadata,
-        tool_call_id: &str,
+        (tool_call_id, requester): (&str, Option<String>),
         floor: u32,
     ) -> OwnerToolAnswer {
         let call_id = Uuid::new_v4().simple().to_string();
@@ -381,6 +381,7 @@ impl HostLink {
                 room_id: self.facts.room.as_str().to_owned(),
                 channel_id: self.facts.channel.as_str().to_owned(),
                 chain_depth: floor,
+                requester,
                 ..CallContext::default()
             },
         };

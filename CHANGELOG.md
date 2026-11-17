@@ -6,6 +6,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **An AI channel's turn reads the room's background tasks in its notes, and a worker's tool says how far its task got with `roomkit_ai::tasks::post_task_progress`**, as Python's (RFC §23.3, §23.4, RMK-1215, RMK-1284): the latest six tasks, each with its worker and what was asked, how long a running one has run, its latest progress and that no result came back yet, how an ended one ended; what a worker wrote is quoted as data. A standalone turn carries none
+
+- **A task block names who asked for it when several people take part**, as Python's (RFC §19.7, RMK-1216): `current_tool_requester()` reads the label of the turn's author in its tool calls, an owner's tool among them; a Supervisor's review and digest head the task its supervisor wrote `Requested by Bob, in the delegating agent's words:`, its one pass the message `Bob asked:`, and a team call another person asks for within the window runs the team again
+
 - **A code reply made with `defer_delivery` returns `verification_code` as soon as it is known for one**, with no handle, as Python's (RFC §11.7.4, §11.7.6, RMK-913): it waited for the agents' answer to the released message. The attempt, the release and the answer go on as the kit's own work, a failure of theirs logged; without `defer_delivery` the reply still returns once the answer is in, whatever `process_timeout` or its caller.
 
 - Add `RoomKit::input_request` to read owned snapshots of open human-input requests within their owning organization.

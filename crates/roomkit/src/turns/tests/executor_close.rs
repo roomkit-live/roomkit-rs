@@ -137,7 +137,9 @@ impl Channel for CallsOwner {
         _context: RoomContext,
     ) -> Result<ChannelOutput, ChannelError> {
         let host = crate::current_turn_host().unwrap();
-        let answer = host.call_owner_tool("close", Metadata::new(), "c1").await;
+        let answer = host
+            .call_owner_tool("close", Metadata::new(), "c1", None)
+            .await;
         assert!(matches!(answer, crate::turn::OwnerToolAnswer::Served(_)));
         Ok(ChannelOutput::empty())
     }
