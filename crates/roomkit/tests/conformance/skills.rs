@@ -222,9 +222,9 @@ mod tests {
         let directories = SkillDirectories::default();
         let skills = json!([{"name":"Store Handbook", "description":"Stored", "instructions":"From memory", "in_memory":true, "references":{"notes.md":"Reference"}}]);
         let registry = directories.registry(&skills, &Value::Null).unwrap();
-        let skill = registry.get_skill("Store Handbook").unwrap();
-        assert_eq!(skill.instructions, "From memory");
+        let skill = registry.get_skill("Store Handbook").unwrap().unwrap();
+        assert_eq!(skill.instructions(), "From memory");
         assert_eq!(skill.read_reference("notes.md").unwrap(), "Reference");
-        assert!(!skill.path.join("SKILL.md").exists());
+        assert!(!skill.path().join("SKILL.md").exists());
     }
 }

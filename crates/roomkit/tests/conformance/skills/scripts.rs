@@ -126,9 +126,12 @@ mod tests {
             &json!([{"name": "local", "description": "Scripts", "scripts": {"build.sh": "source text"}}]),
             &Value::Null,
         ).unwrap();
-        let skill = registry.get_skill("local").unwrap();
+        let roomkit_ai::LoadedSkill::Local(skill) = registry.get_skill("local").unwrap().unwrap()
+        else {
+            panic!("expected local fixture");
+        };
         let executor = ScriptedExecutor::new(&json!({})).unwrap();
-        assert!(executor.execute(skill, "../build.sh", None).await.is_err());
+        assert!(executor.execute(&skill, "../build.sh", None).await.is_err());
         assert_eq!(
             executor.snapshot()["calls"],
             json!([
@@ -136,7 +139,7 @@ mod tests {
             ])
         );
         let result = executor
-            .execute(skill, "build.sh", Some(&Metadata::new()))
+            .execute(&skill, "build.sh", Some(&Metadata::new()))
             .await
             .unwrap();
         assert_eq!(result, ScriptResult::new(0));

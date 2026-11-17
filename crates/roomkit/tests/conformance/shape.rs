@@ -445,6 +445,13 @@ const STEPS: &[(&str, &[&str])] = &[
 
 /// Each call's arguments, beside `call` and `organization_id`.
 fn arguments(call: &str) -> Option<&'static [&'static str]> {
+    if call == "skill_registry_session" {
+        return Some(&["servers", "operations"]);
+    }
+    base_arguments(call)
+}
+
+fn base_arguments(call: &str) -> Option<&'static [&'static str]> {
     if call == "mcp_session" {
         return Some(&["peer", "operations", "discover", "tool_filter"]);
     }
@@ -1232,6 +1239,25 @@ fn call(call: &Value, extra: &[&str], path: &str, found: &mut Vec<String>) {
     }
     match name {
         "mcp_session" => crate::mcp_host::validate(call, path, found),
+        "skill_registry_session" => {
+            crate::skill_registry::validate(call, path, found);
+            for (i, operation) in call["operations"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .enumerate()
+            {
+                let at = format!("{path}.operations[{i}]");
+                if operation["method"] == "install_channel" {
+                    channel(&operation["channel"], &format!("{at}.channel"), found);
+                }
+                if operation["method"] == "room_call"
+                    && operation["action"]["call"] != "skill_registry_session"
+                {
+                    self::call(&operation["action"], &[], &format!("{at}.action"), found);
+                }
+            }
+        }
         "create_room" => members(&call["room"], NEW_ROOM, &format!("{path}.room"), found),
         "register_channel" => channel(&call["channel"], &format!("{path}.channel"), found),
         "register_hook" => hook(&call["hook"], &format!("{path}.hook"), found),

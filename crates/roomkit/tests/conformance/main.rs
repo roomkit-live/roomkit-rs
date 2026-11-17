@@ -54,6 +54,7 @@ mod scenarios;
 mod scripted;
 mod served_call_tests;
 mod shape;
+mod skill_registry;
 mod skills;
 mod store_calls;
 mod strategy_calls;

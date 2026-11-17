@@ -359,17 +359,22 @@ pub(crate) type Models = Vec<(String, ScriptedProvider)>;
 
 /// The scripted agent `spec` describes, and its models; its gates are
 /// `run`'s.
-pub(crate) fn scripted_agent(spec: &Value, run: &Arc<Run>) -> Result<(Scripted, Models), String> {
-    scripted_agent_of(spec, run, false)
-}
-
-/// [`scripted_agent`], for another process of the setup when `process`: it
+/// A scripted agent for another process of the setup when `process`: it
 /// answers from the models the run's own agent of its id has (README,
 /// `processes`).
 pub(crate) fn scripted_agent_of(
     spec: &Value,
     run: &Arc<Run>,
     process: bool,
+) -> Result<(Scripted, Models), String> {
+    scripted_agent_with_skills(spec, run, process, None)
+}
+
+pub(crate) fn scripted_agent_with_skills(
+    spec: &Value,
+    run: &Arc<Run>,
+    process: bool,
+    skills: Option<roomkit_ai::SkillRegistry>,
 ) -> Result<(Scripted, Models), String> {
     let id = ChannelId::new(spec["id"].as_str().unwrap_or_default()).map_err(|e| e.to_string())?;
     let shared = |name: &str| {
@@ -386,6 +391,7 @@ pub(crate) fn scripted_agent_of(
     declared.extend(Vec::<ToolEntry>::from(tools(spec, run)));
     let mut options = AiChannelOptions {
         tools: declared,
+        skills,
         serialize_room_turns: spec["serialize_room_turns"] == true,
         steer_room_turns: spec["steer_room_turns"] == true,
         ..AiChannelOptions::default()
