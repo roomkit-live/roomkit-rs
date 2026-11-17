@@ -1575,3 +1575,9 @@ reason = "Named borrowed fallible future or synchronous callback type for the ap
 rust = "roomkit_ai::speaking::SpeakStateRule"
 approved = "2026-11-17"
 reason = "Named borrowed fallible future or synchronous callback type for the approved classifier/speaking protocols; no extra operation."
+
+[[exception]]
+rust = "roomkit::tasks::BackgroundSetup::new"
+params = ["worker", "hand_back"]
+approved = "2026-11-17"
+reason = "Default supplies both Python defaults. The immutable model's validated constructor takes both values explicitly (HITL bb81f9ca)."

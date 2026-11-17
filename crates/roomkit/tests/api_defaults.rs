@@ -1058,6 +1058,15 @@ fn recent_text_options_defaults_as_python() {
 }
 
 #[test]
+fn background_setup_defaults_as_python() {
+    let setup = roomkit::tasks::BackgroundSetup::default();
+    // roomkit.tasks.BackgroundSetup.__init__(worker) = None
+    assert_eq!(setup.worker(), None);
+    // roomkit.tasks.BackgroundSetup.__init__(hand_back) = 'relay'
+    assert_eq!(setup.hand_back(), "relay");
+}
+
+#[test]
 fn setup_background_options_defaults_as_python() {
     let defaults = roomkit::SetupBackgroundOptions::default();
     // roomkit.RoomKit.setup_background(worker) = None

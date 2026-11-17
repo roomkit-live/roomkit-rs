@@ -32,6 +32,7 @@ use crate::orchestration::StatusLevel;
 use crate::orchestration::lifecycle::post_agent_lifecycle;
 use crate::store::ConversationStore;
 use crate::store::{GetConversationOptions, PatchRoomMetadataOptions};
+use crate::tasks::background::validate_hand_back;
 use crate::tasks::brief::{conversation_block, worker_description};
 use crate::tasks::handback::{CALLER_HANDS_BACK, MAX_RESULT_CHARS, bounded_to, hand_back};
 use crate::tasks::text::{bounded_text, identifier, one_line, quoted};
@@ -48,9 +49,6 @@ const CONVERSATION_FLOOR: u64 = 50;
 /// The key of a room's private state holding its register of authors,
 /// which labels the conversation's lines (RFC §6.4).
 const AUTHOR_REGISTER: &str = "author_register";
-
-/// How a background task's result reaches the room (RFC §23.3 step 8).
-const HAND_BACKS: [&str; 2] = ["relay", "post"];
 
 /// The action a task's entries carry on the status bus.
 const TASK_ACTION: &str = "task";
@@ -418,12 +416,7 @@ impl<S: ConversationStore> RoomKit<S> {
         notify: &ChannelId,
         wait: bool,
     ) -> Result<(), RoomKitError> {
-        if !HAND_BACKS.contains(&hand_back) {
-            return Err(RoomKitError::Value(format!(
-                "hand_back must be one of ('relay', 'post'), not {}",
-                repr(hand_back)
-            )));
-        }
+        validate_hand_back(hand_back)?;
         if hand_back != "post" {
             return Ok(());
         }

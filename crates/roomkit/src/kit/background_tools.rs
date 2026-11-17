@@ -19,6 +19,7 @@ use super::RoomKit;
 use super::start_task::StartTaskOptions;
 use crate::error::{RoomKitError, repr};
 use crate::store::ConversationStore;
+use crate::tasks::background::validate_hand_back;
 use crate::tasks::json::{dumps_object, json as write_json, object};
 use crate::tasks::lines::{Line, ROOM_TASKS_WINDOW, room_lines};
 use crate::tasks::text::identifier;
@@ -33,24 +34,6 @@ const TASK_STATUS_LIMIT: usize = 10;
 /// `_NESTED`.
 const NESTED: &str = "You are already working on a task in the background: do the work now \
 with your tools and end with what you found. A task starts no task of its own.";
-
-/// How an agent's background tasks run (RFC §23.4): on `worker`, the agent
-/// itself when `None`, their result relayed or posted. Python's
-/// `BackgroundSetup(worker=None, hand_back='relay')`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct BackgroundSetup {
-    pub(crate) worker: Option<ChannelId>,
-    pub(crate) hand_back: String,
-}
-
-impl Default for BackgroundSetup {
-    fn default() -> Self {
-        Self {
-            worker: None,
-            hand_back: "relay".to_owned(),
-        }
-    }
-}
 
 /// What [`RoomKit::setup_background`] takes beside the agent: Python's
 /// `setup_background(agent, *, worker=None, hand_back='relay')`.
@@ -93,13 +76,7 @@ impl<S: ConversationStore> RoomKit<S> {
         options: SetupBackgroundOptions,
     ) -> Result<(), RoomKitError> {
         self.inner.open()?;
-        let SetupBackgroundOptions { worker, hand_back } = options;
-        if !["relay", "post"].contains(&hand_back.as_str()) {
-            return Err(RoomKitError::Value(format!(
-                "hand_back must be one of ('relay', 'post'), not {}",
-                repr(&hand_back)
-            )));
-        }
+        validate_hand_back(&options.hand_back)?;
         self.registered_agent(agent)?;
         if self.inner.owner_tools.serves(agent, BACKGROUND_TOOL) {
             return Err(already_set_up("setup_background", agent));
@@ -116,7 +93,7 @@ impl<S: ConversationStore> RoomKit<S> {
             .background_setups
             .write()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(agent.clone(), BackgroundSetup { worker, hand_back });
+            .insert(agent.clone(), options);
         Ok(())
     }
 
@@ -244,7 +221,7 @@ impl<S: ConversationStore> RoomKit<S> {
     }
 
     /// How `agent`'s background tasks run: its setup, or the default.
-    pub(crate) fn background_setup(&self, agent: &ChannelId) -> BackgroundSetup {
+    pub(crate) fn background_setup(&self, agent: &ChannelId) -> SetupBackgroundOptions {
         self.inner
             .background_setups
             .read()

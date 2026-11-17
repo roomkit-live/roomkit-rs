@@ -31,6 +31,7 @@
 // they change: it starts, refusing every new call and cutting what has
 // not started; its grace ends, cutting what is left; it seals the kit.
 
+pub(crate) mod background;
 pub(crate) mod brief;
 mod cache;
 mod cut;
@@ -48,6 +49,7 @@ pub(crate) mod result_tool;
 mod runner;
 pub(crate) mod text;
 
+pub use self::background::BackgroundSetup;
 pub use self::cache::{
     CompletedTaskCache, CompletedTaskCacheOptions, GetOptions, PutOptions, RecentContextOptions,
 };

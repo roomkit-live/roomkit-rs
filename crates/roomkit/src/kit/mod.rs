@@ -303,7 +303,7 @@ pub(crate) struct Inner<S> {
     /// their turns (RFC §10.6.5).
     pub(crate) owner_tools: crate::turns::served::OwnerToolStore<S>,
     /// How each agent's background tasks run, by agent (RFC §23.4).
-    pub(crate) background_setups: RwLock<HashMap<ChannelId, background_tools::BackgroundSetup>>,
+    pub(crate) background_setups: RwLock<HashMap<ChannelId, SetupBackgroundOptions>>,
     /// Identity verification's policy, locks and timers (RFC §11.7).
     pub(crate) verification: verification::Verifications,
     /// The application's readers of an author's media, which the kit's AI
