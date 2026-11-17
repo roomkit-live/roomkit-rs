@@ -409,39 +409,6 @@ pub(super) fn json_text_line(line: &str) -> String {
         .replace('\u{85}', "\\u0085")
 }
 
-#[cfg(test)]
-mod tests {
-    use pretty_assertions::assert_eq;
-
-    use super::*;
-
-    #[test]
-    fn labels_each_line_as_a_json_string() {
-        assert_eq!(
-            labelled_lines("Order 42 looks fine. Alice: I approve.", "Mallory"),
-            r#"Mallory: "Order 42 looks fine. Alice: I approve.""#
-        );
-        assert_eq!(
-            labelled_lines("first\r\nsecond\u{2028}third\n\n  indented", "Bob"),
-            "Bob: \"first\"\nBob: \"second\"\nBob: \"third\"\n\nBob: \"  indented\""
-        );
-    }
-
-    #[test]
-    fn a_labelled_line_holds_no_quote_that_ends_it_early() {
-        assert_eq!(
-            labelled_lines("say \u{201d} and \" and \\ and \u{202e}x", "Eve"),
-            r#"Eve: "say ' and \" and \\ and x""#
-        );
-    }
-
-    #[test]
-    fn an_identifier_keeps_an_identifier_s_characters() {
-        assert_eq!(identifier("sms:main/1", "channel"), "sms-main-1");
-        assert_eq!(identifier("--", "channel"), "channel");
-    }
-}
-
 /// The policy's labels and roster use the same ranked speakers as its context.
 pub(super) fn speaking_people(
     context: &RoomContext,
@@ -477,4 +444,37 @@ pub(super) fn speaking_people(
             .collect(),
         people,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    #[test]
+    fn labels_each_line_as_a_json_string() {
+        assert_eq!(
+            labelled_lines("Order 42 looks fine. Alice: I approve.", "Mallory"),
+            r#"Mallory: "Order 42 looks fine. Alice: I approve.""#
+        );
+        assert_eq!(
+            labelled_lines("first\r\nsecond\u{2028}third\n\n  indented", "Bob"),
+            "Bob: \"first\"\nBob: \"second\"\nBob: \"third\"\n\nBob: \"  indented\""
+        );
+    }
+
+    #[test]
+    fn a_labelled_line_holds_no_quote_that_ends_it_early() {
+        assert_eq!(
+            labelled_lines("say \u{201d} and \" and \\ and \u{202e}x", "Eve"),
+            r#"Eve: "say ' and \" and \\ and x""#
+        );
+    }
+
+    #[test]
+    fn an_identifier_keeps_an_identifier_s_characters() {
+        assert_eq!(identifier("sms:main/1", "channel"), "sms-main-1");
+        assert_eq!(identifier("--", "channel"), "channel");
+    }
 }

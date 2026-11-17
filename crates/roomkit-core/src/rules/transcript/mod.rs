@@ -164,8 +164,9 @@ pub struct Message {
     /// The recorded result's outcome (RFC §6.7), independent of its error
     /// status; absent when the row records none and on other messages.
     pub outcome: Option<crate::model::ToolCallOutcome>,
-    /// Provider-owned data carried within the current tool loop (RFC §6.7,
-    /// `AIMessage.metadata`), separate from visible text and room history.
+    /// The context's speaker label and provider-owned data carried within
+    /// the current tool loop (RFC §6.4, §6.7, `AIMessage.metadata`), separate
+    /// from visible text and room history.
     pub metadata: crate::model::Metadata,
 }
 
@@ -945,13 +946,16 @@ fn rendered(turns: Vec<Turn>, notes: &Notes<'_>) -> (Vec<Message>, Option<usize>
         if turn.input {
             input = Some(messages.len());
         }
-        let content = match (&turn.speaker, turn.content) {
+        let speaker = turn
+            .speaker
+            .as_ref()
+            .filter(|_| notes.labelled && turn.role == Role::User && !turn.instruction)
+            .map(|speaker| speaker.label.as_str());
+        let content = match (speaker, turn.content) {
             (_, TurnContent::Text(text)) if turn.instruction => {
                 TurnContent::Text(format!("{INSTRUCTION_MARK}\n{text}"))
             }
-            (Some(speaker), content) if notes.labelled && turn.role == Role::User => {
-                content.labelled(&speaker.label)
-            }
+            (Some(speaker), content) => content.labelled(speaker),
             (_, content) => content,
         };
         let mut rounds = turn.rounds.into_iter().flat_map(|round| round.messages);
@@ -960,7 +964,7 @@ fn rendered(turns: Vec<Turn>, notes: &Notes<'_>) -> (Vec<Message>, Option<usize>
                 // The text, then the calls: the one message its turn sent.
                 messages.extend(rounds.next().map(|calls| Message { text, ..calls }));
             }
-            (_, content) => messages.push(Message::of_content(turn.role, content)),
+            (_, content) => messages.push(turn_message(turn.role, content, speaker)),
         }
         messages.extend(rounds);
     }
@@ -972,6 +976,15 @@ fn rendered(turns: Vec<Turn>, notes: &Notes<'_>) -> (Vec<Message>, Option<usize>
         }
     }
     (messages, input)
+}
+
+/// A label belongs to the context, separately from the words it prefixes.
+fn turn_message(role: Role, content: TurnContent, speaker: Option<&str>) -> Message {
+    let mut message = Message::of_content(role, content);
+    if let Some(speaker) = speaker {
+        message.metadata.insert("speaker".into(), speaker.into());
+    }
+    message
 }
 
 /// The turn's `input` with `notes` after it (RFC §6.4): a text input a

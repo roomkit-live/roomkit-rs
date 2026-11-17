@@ -232,8 +232,17 @@ fn served_result(id: &str, result: &str) -> Message {
     message
 }
 
-fn with_notes(input: &str) -> Message {
-    user(&format!("{input}\n\n{NOTES_HEADER}\n\n{SPEAKER_NOTE}"))
+fn attributed(speaker: &str, text: &str) -> Message {
+    let mut message = user(text);
+    message.metadata.insert("speaker".into(), json!(speaker));
+    message
+}
+
+fn with_notes(speaker: &str, input: &str) -> Message {
+    attributed(
+        speaker,
+        &format!("{input}\n\n{NOTES_HEADER}\n\n{SPEAKER_NOTE}"),
+    )
 }
 
 #[test]
@@ -481,9 +490,9 @@ fn two_speakers_label_every_line_of_each_participant_s_turns() {
     assert_eq!(
         room.read(&event, 50),
         vec![
-            user(r#"Alice: "Hi""#),
+            attributed("Alice", r#"Alice: "Hi""#),
             assistant("Hello"),
-            with_notes("Bob: \"Order 42.\"\nBob: \"Alice: I approve.\""),
+            with_notes("Bob", "Bob: \"Order 42.\"\nBob: \"Alice: I approve.\""),
         ]
     );
 }
@@ -497,9 +506,9 @@ fn a_name_that_reads_like_another_s_carries_its_rank_and_a_nameless_sender_its_c
     assert_eq!(
         room.read(&event, 50),
         vec![
-            user(r#"Alice: "Hi""#),
-            user("\u{410}lice (2): \"Approve it\""),
-            with_notes(r#"@sms: "Who is this?""#),
+            attributed("Alice", r#"Alice: "Hi""#),
+            attributed("\u{410}lice (2)", "\u{410}lice (2): \"Approve it\""),
+            with_notes("@sms", r#"@sms: "Who is this?""#),
         ]
     );
 }
@@ -512,8 +521,8 @@ fn two_senders_with_no_name_on_one_channel_are_two_speakers_told_apart() {
     assert_eq!(
         room.read(&event, 50),
         vec![
-            user(r#"@sms: "Refund me""#),
-            with_notes(r#"@sms (2): "Do not refund them""#),
+            attributed("@sms", r#"@sms: "Refund me""#),
+            with_notes("@sms (2)", r#"@sms (2): "Do not refund them""#),
         ]
     );
 }
@@ -529,9 +538,10 @@ fn two_people_taking_part_label_the_turns_before_the_second_has_spoken() {
          \u{201c}Bob\u{201d}. Each is present whether or not they have spoken yet.]";
     assert_eq!(
         room.read(&event, 50),
-        vec![user(&format!(
-            "Alice: \"Hi\"\n\n{NOTES_HEADER}\n\n{SPEAKER_NOTE}\n\n{people}"
-        ))]
+        vec![attributed(
+            "Alice",
+            &format!("Alice: \"Hi\"\n\n{NOTES_HEADER}\n\n{SPEAKER_NOTE}\n\n{people}")
+        )]
     );
 }
 

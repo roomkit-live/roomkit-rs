@@ -13,6 +13,9 @@ use roomkit_ai::{
 use serde_json::{Value, json};
 use tokio::sync::Notify;
 
+#[path = "llm_thinker/attribution.rs"]
+mod attribution;
+
 #[derive(Clone)]
 struct Model {
     calls: Arc<Mutex<Vec<AiContext>>>,
