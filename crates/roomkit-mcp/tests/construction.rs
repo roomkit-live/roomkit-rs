@@ -215,6 +215,28 @@ fn stdio_construction_is_lazy_and_accepts_empty_http_options() {
     }
 }
 
+// Python: the three accepted HTTP rows of the same empty-options witness.
+#[cfg(feature = "http")]
+#[test]
+fn http_construction_is_lazy_and_accepts_empty_stdio_options() {
+    for options in [
+        McpToolProviderOptions::default(),
+        McpToolProviderOptions {
+            command: Some("".into()),
+            ..Default::default()
+        },
+        McpToolProviderOptions {
+            transport: "sse".into(),
+            headers: Some(McpHeaders::default()),
+            ..Default::default()
+        },
+    ] {
+        let provider = McpToolProvider::new(Some("http://example.test"), options).unwrap();
+        assert!(!provider.connected());
+        assert!(matches!(provider.get_tools(), Err(McpError::NotConnected)));
+    }
+}
+
 // Python: tests/test_mcp_constructor.py::test_factories_check_the_label_before_the_other_options
 #[test]
 fn validation_checks_the_label_before_a_command() {

@@ -119,9 +119,7 @@ impl McpToolProvider {
         let ticket = server.host_capture().ticket();
         let mut request = CustomRequest::new(method, Some(Value::Object(params.clone())));
         request.extensions.insert(ticket.marker(params));
-        let response = server
-            .host_peer()
-            .send_request(ClientRequest::CustomRequest(request));
+        let response = server.host_request(ClientRequest::CustomRequest(request));
         tokio::time::timeout(timeout, response)
             .await
             .map_err(|_| McpError::CallTimeout {

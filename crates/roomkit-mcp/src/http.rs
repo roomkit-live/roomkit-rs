@@ -1,6 +1,6 @@
 //! Optional Streamable HTTP and legacy SSE composition (RFC §21.2).
 mod client;
-mod legacy;
+pub(crate) mod legacy;
 mod session;
 mod sse;
 
@@ -119,7 +119,9 @@ impl McpHttp {
             result = bounded(self.timeout, connecting) => result,
         };
         match connected {
-            Ok((service, tools)) => Ok(McpServer::from_http(service, tools, capture, finished)),
+            Ok((service, tools)) => Ok(McpServer::from_http(
+                service, tools, capture, finished, false,
+            )),
             Err(error) => {
                 stop.cancel();
                 let _finished = finished.await;

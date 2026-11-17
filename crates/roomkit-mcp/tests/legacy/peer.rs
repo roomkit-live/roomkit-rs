@@ -25,6 +25,10 @@ pub(super) enum Mode {
     #[default]
     Normal,
     Endpoint(&'static str),
+    Response(Option<&'static str>),
+    Eof,
+    HeldPost,
+    HeldResponse,
     HoldOpening(&'static str),
     Redirect {
         method: Method,
@@ -45,6 +49,8 @@ pub(super) struct Seen {
 pub(super) struct Shared {
     pub seen: Mutex<Seen>,
     changed: Notify,
+    pub post_held: Notify,
+    pub release_post: Notify,
     mode: Mode,
     origin: String,
 }
@@ -67,6 +73,8 @@ impl Peer {
         let shared = Arc::new(Shared {
             seen: Mutex::new(Seen::default()),
             changed: Notify::new(),
+            post_held: Notify::new(),
+            release_post: Notify::new(),
             mode,
             origin: origin.clone(),
         });
@@ -187,6 +195,19 @@ async fn handle(
     }
     assert_eq!(method, Method::POST);
     let message: Value = serde_json::from_slice(&body).unwrap();
+    let hold = matches!(shared.mode, Mode::HeldPost)
+        && message
+            .get("method")
+            .is_some_and(|value| value == "notifications/initialized");
+    record_message(&shared, message);
+    if hold {
+        shared.post_held.notify_one();
+        shared.release_post.notified().await;
+    }
+    StatusCode::ACCEPTED.into_response()
+}
+
+fn record_message(shared: &Shared, message: Value) {
     let mut seen = shared.seen.lock().unwrap();
     let reply = match message.get("method").and_then(Value::as_str) {
         Some("initialize") => Some(
@@ -201,7 +222,20 @@ async fn handle(
                 )
             }
         }
+        Some("tools/call" | "host/read" | "resources/read")
+            if matches!(shared.mode, Mode::HeldResponse)
+                && (message
+                    .pointer("/params/name")
+                    .is_some_and(|value| value == "sent")
+                    || message
+                        .pointer("/params/uri")
+                        .is_some_and(|value| value == "file:///sent")) =>
+        {
+            None
+        }
         Some("tools/call") => Some(json!({"content":[{"type":"text", "text":"done"}]})),
+        Some("host/read") => Some(json!({"done":true})),
+        Some("resources/read") => Some(json!({"contents":[{"uri":"file:///kept", "text":"done"}]})),
         Some("notifications/initialized" | "notifications/cancelled") => None,
         _ => panic!("unexpected request {message}"),
     };
@@ -215,10 +249,22 @@ async fn handle(
     }
     seen.messages.push(message);
     shared.changed.notify_one();
-    StatusCode::ACCEPTED.into_response()
 }
 
 fn get(shared: Arc<Shared>) -> Response {
+    if matches!(shared.mode, Mode::Eof) {
+        return ([("content-type", "text/event-stream")], "").into_response();
+    }
+    let content_type = match shared.mode {
+        Mode::Response(value) => value,
+        Mode::Normal
+        | Mode::Endpoint(_)
+        | Mode::Eof
+        | Mode::HeldPost
+        | Mode::HeldResponse
+        | Mode::HoldOpening(_)
+        | Mode::Redirect { .. } => Some("text/event-stream"),
+    };
     let (sender, receiver) = mpsc::unbounded_channel();
     let connection = {
         let mut seen = shared.seen.lock().unwrap();
@@ -238,7 +284,14 @@ fn get(shared: Arc<Shared>) -> Response {
             "{}{relative}",
             shared.origin.replace("http://", "http://user@")
         ),
-        Mode::Normal | Mode::Endpoint(_) | Mode::Redirect { .. } | Mode::HoldOpening(_) => relative,
+        Mode::Normal
+        | Mode::Endpoint(_)
+        | Mode::Redirect { .. }
+        | Mode::HoldOpening(_)
+        | Mode::Response(_)
+        | Mode::Eof
+        | Mode::HeldPost
+        | Mode::HeldResponse => relative,
     };
     if !(matches!(shared.mode, Mode::HoldOpening("endpoint")) && connection == 1) {
         sender
@@ -255,9 +308,11 @@ fn get(shared: Arc<Shared>) -> Response {
                 .map(|text| (Ok::<_, Infallible>(text), (received, guard)))
         },
     );
-    (
-        [("content-type", "text/event-stream")],
-        Body::from_stream(stream),
-    )
-        .into_response()
+    let mut response = Body::from_stream(stream).into_response();
+    if let Some(content_type) = content_type {
+        response
+            .headers_mut()
+            .insert("content-type", content_type.parse().unwrap());
+    }
+    response
 }

@@ -18,7 +18,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Add fresh `TurnHost::room_context` reads, preserving store failure causes across the host link, and local executor presence readers and change notifications (RFC §10.6.5–§10.6.7).
 - Preserve the original failure message and known class when detached-channel state cleanup fails, instead of replacing them with a generic store error.
-- MCP mirrors the common constructor and legacy SSE lifecycle. `FromUrlOptions` adds `transport`; its `headers` and `FromCommandOptions.env` now take optional shared handles, preserving host mutations before each connection.
+- **BREAKING:** MCP mirrors the common constructor and legacy SSE lifecycle. `FromUrlOptions` adds `transport`; its `headers` and `FromCommandOptions.env` now take optional shared handles, preserving host mutations before each connection.
 
 - Validate MCP factory labels before command, endpoint and header options, matching Python's refusal order.
 

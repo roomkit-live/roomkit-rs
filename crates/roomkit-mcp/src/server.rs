@@ -1,6 +1,8 @@
 //! A connected MCP server, served to an agent as a toolset (step 4,
 //! decision 7): its process, its connection, its tools, its instructions.
 
+mod requests;
+
 use std::fmt;
 use std::sync::Arc;
 
@@ -57,6 +59,8 @@ pub(crate) struct McpServer {
 
 struct Inner {
     program: String,
+    #[cfg(feature = "http")]
+    legacy: bool,
     peer: Peer<RoleClient>,
     tools: Listed,
     capture: Capture,
@@ -129,6 +133,8 @@ impl McpServer {
         Ok(Self {
             inner: Arc::new(Inner {
                 program,
+                #[cfg(feature = "http")]
+                legacy: false,
                 peer: service.peer().clone(),
                 tools,
                 capture,
@@ -152,6 +158,7 @@ impl McpServer {
         tools: Listed,
         capture: Capture,
         finished: tokio::sync::oneshot::Receiver<()>,
+        legacy: bool,
     ) -> Self {
         let instructions = service
             .peer_info()
@@ -159,6 +166,7 @@ impl McpServer {
         Self {
             inner: Arc::new(Inner {
                 program: "http".into(),
+                legacy,
                 peer: service.peer().clone(),
                 tools,
                 capture,
@@ -322,10 +330,6 @@ impl McpServer {
         &self.inner.capture
     }
 
-    pub(crate) fn host_peer(&self) -> &Peer<RoleClient> {
-        &self.inner.peer
-    }
-
     pub(crate) fn tool_meta(&self) -> std::collections::BTreeMap<String, Metadata> {
         self.inner.tools.metadata.clone()
     }
@@ -343,9 +347,7 @@ impl McpServer {
         arguments: Metadata,
     ) -> Result<CallToolResult, McpError> {
         let params = CallToolRequestParams::new(name.to_owned()).with_arguments(arguments);
-        self.inner
-            .peer
-            .call_tool(params)
+        self.tool_request(params)
             .await
             .map_err(|error| McpError::Call {
                 message: bounded_message(&error.to_string()),

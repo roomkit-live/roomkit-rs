@@ -1,6 +1,7 @@
 //! Legacy SSE has one GET reader and a separately owned sequential POST writer.
 
 mod endpoint;
+pub(crate) mod request;
 mod writer;
 
 use std::sync::Arc;
@@ -62,7 +63,7 @@ pub(super) async fn connect(
     };
     match connected {
         Ok((service, tools)) => Ok(crate::server::McpServer::from_http(
-            service, tools, capture, finished,
+            service, tools, capture, finished, true,
         )),
         Err(error) => {
             let _finished = finished.await;

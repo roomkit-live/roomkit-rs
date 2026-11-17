@@ -57,6 +57,9 @@ impl Writer {
         let messages = self.messages.clone();
         let failure = self.failure.clone();
         async move {
+            if super::request::local_cancellation(&message) {
+                return Ok(());
+            }
             let (accepted, received) = oneshot::channel();
             messages
                 .send(Pending { message, accepted })
@@ -93,7 +96,9 @@ async fn write(
     failure: Failure,
 ) {
     while let Some(pending) = received.recv().await {
-        let _accepted = pending.accepted.send(());
+        if !super::request::accept(&pending.message, pending.accepted) {
+            continue;
+        }
         client.capture.outgoing(&pending.message);
         let Ok(message) = crate::wire::message(&pending.message) else {
             failure.record(None, "invalid MCP request");

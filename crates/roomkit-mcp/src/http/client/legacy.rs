@@ -28,7 +28,12 @@ impl Client {
             .get("content-type")
             .and_then(|value| value.to_str().ok())
             .unwrap_or_default();
-        if content_type.split(';').next().map(str::trim) != Some("text/event-stream") {
+        if !content_type
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .contains("text/event-stream")
+        {
             return Err(self.failure.record(None, "expected an SSE response"));
         }
         Ok(response)
