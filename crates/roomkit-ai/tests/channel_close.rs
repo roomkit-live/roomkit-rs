@@ -135,18 +135,20 @@ async fn external_close(streaming: bool) {
         .unwrap()
         .unwrap();
     let rounds = model.inner.requests().len();
-    assert_eq!(at_close, ["call ended", "provider closed"]);
+    // The call ended before the close returned; the provider the channel
+    // was handed stays open, its owner's (RFC §6.4).
+    assert_eq!(at_close, ["call ended"]);
     assert_eq!(active_at_close, 0);
     assert_eq!(rounds, 1);
 }
 
 // Python: tests/skills/test_script_executor.py::test_a_channel_close_ends_its_script_before_closing_the_executor
 #[tokio::test]
-async fn close_cuts_active_tool_before_provider_plain() {
+async fn close_cuts_the_active_tool_before_it_returns_plain() {
     external_close(false).await;
 }
 #[tokio::test]
-async fn close_cuts_active_tool_before_provider_streaming() {
+async fn close_cuts_the_active_tool_before_it_returns_streaming() {
     external_close(true).await;
 }
 

@@ -503,12 +503,10 @@ impl<P: AiProvider> MemoryProvider for SummarizingMemory<P> {
         })
     }
 
-    /// Closes the inner memory, then the summarizer.
+    /// Closes the inner memory. The summarizer it was handed stays open,
+    /// its owner's (RFC §20.3).
     fn close(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-        Box::pin(async move {
-            self.inner.close().await;
-            self.provider.close().await;
-        })
+        self.inner.close()
     }
 }
 

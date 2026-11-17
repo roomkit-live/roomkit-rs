@@ -316,15 +316,12 @@ impl<P: AiProvider> MemoryProvider for CompactingMemory<P> {
         self.inner.clear(room_id)
     }
 
-    /// Forgets every summary, then closes the inner memory and the
-    /// summarizer.
+    /// Forgets every summary, then closes the inner memory. The summarizer
+    /// it was handed stays open, its owner's (RFC §20.3).
     fn close(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         self.generation.fetch_add(1, Ordering::SeqCst);
         self.cache_lock().clear();
-        Box::pin(async move {
-            self.inner.close().await;
-            self.provider.close().await;
-        })
+        self.inner.close()
     }
 }
 

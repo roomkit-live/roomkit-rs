@@ -221,30 +221,44 @@ async fn a_cost_budget_is_checked_on_the_model_the_router_picks() {
     }
 }
 
-// Python: tests/test_channels/test_ai_router.py::test_the_channel_closes_its_router_and_a_fallback_router_both_providers
+// Python: tests/test_channels/test_ai_router.py::test_a_close_leaves_open_the_provider_or_router_the_channel_was_handed
 #[tokio::test]
-async fn the_channel_closes_its_router_and_a_fallback_router_both_providers() {
+async fn a_close_leaves_open_the_provider_or_router_the_channel_was_handed() {
+    let own = Arc::new(AtomicBool::new(false));
     let router = Picks::naming(None);
     let closed = Arc::clone(&router.closed);
     let (primary, fallback) = (
         Arc::new(AtomicBool::new(false)),
         Arc::new(AtomicBool::new(false)),
     );
-    let both = FallbackRouter::new(
-        Arc::new(Closing(Arc::clone(&primary))),
-        Arc::new(Closing(Arc::clone(&fallback))),
-    );
+    let both = || {
+        FallbackRouter::new(
+            Arc::new(Closing(Arc::clone(&primary))),
+            Arc::new(Closing(Arc::clone(&fallback))),
+        )
+    };
 
+    AiChannel::new(
+        channel("assistant"),
+        Closing(Arc::clone(&own)),
+        AiChannelOptions::default(),
+    )
+    .unwrap()
+    .close()
+    .await;
     routed(router, AiChannelOptions::default()).close().await;
-    routed(both, AiChannelOptions::default()).close().await;
+    routed(both(), AiChannelOptions::default()).close().await;
+    both().close().await;
 
+    // What a channel or a router was handed is its owner's (RFC §6.4).
     assert_eq!(
         (
+            own.load(Ordering::SeqCst),
             closed.load(Ordering::SeqCst),
             primary.load(Ordering::SeqCst),
             fallback.load(Ordering::SeqCst)
         ),
-        (true, true, true)
+        (false, false, false, false)
     );
 }
 

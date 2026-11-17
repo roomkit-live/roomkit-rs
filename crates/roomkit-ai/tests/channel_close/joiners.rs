@@ -166,15 +166,7 @@ async fn joiners(streaming: bool, from_child: bool, abandon_first_wait: bool) {
     kit.close().await.unwrap();
     let mut trace = calls.trace.lock().unwrap().clone();
     trace.sort_unstable();
-    assert_eq!(
-        trace,
-        [
-            "call ended",
-            "first returned",
-            "provider closed",
-            "second returned"
-        ]
-    );
+    assert_eq!(trace, ["call ended", "first returned", "second returned"]);
     assert_eq!(model.inner.requests().len(), 1);
 }
 

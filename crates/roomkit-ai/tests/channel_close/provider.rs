@@ -52,6 +52,8 @@ async fn a_second_close_does_not_wait_again_for_a_turn_the_first_cut() {
     assert_eq!(first, Duration::from_secs(5));
     assert_eq!(second, Duration::ZERO);
     assert_eq!(active, 1);
-    assert_eq!(before_release, ["provider closed", "provider closed"]);
+    // Neither close ended the call, nor closed the provider the channel was
+    // handed, its owner's (RFC §6.4).
+    assert!(before_release.is_empty(), "{before_release:?}");
     assert_eq!(agent.active_turns(), 0);
 }

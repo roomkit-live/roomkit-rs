@@ -435,9 +435,10 @@ impl fmt::Debug for AiChannelOptions {
 /// Built with a router ([`AiChannel::routed`]), each turn runs on the
 /// provider the router picks at its start (RFC §6.4).
 ///
-/// Its close closes its provider ([`AiProvider::close`]), or its router
-/// ([`AiRouter::close`]); the host closes what serves its tools, as
-/// Python's.
+/// Its close leaves open the provider or the router it was handed: each is
+/// its owner's, who may share it with other channels and closes it once
+/// nothing uses it (RFC §6.4); the host also closes what serves its tools,
+/// as Python's.
 ///
 /// It answers a message or an instruction, never its own events, and takes
 /// no inbound message. Cloning it shares its provider, its tools, its
@@ -2073,18 +2074,12 @@ impl<P: AiProvider> Channel for AiChannel<P> {
 
     /// Cuts the running turns' calls and waits up to five seconds for their
     /// loops, sparing the caller's own loop and call (RFC §9.3). Then closes
-    /// the channel's provider ([`AiProvider::close`]) or its router
-    /// ([`AiRouter::close`]), then its memory, as Python's `close()`, and
-    /// settles the requests its person's tools still have open: what serves
-    /// its other tools is the host's to close.
+    /// its memory, as Python's `close()`, and settles the requests its
+    /// person's tools still have open. The provider or the router it was
+    /// handed stays open, its owner's (RFC §6.4), as what serves its other
+    /// tools is the host's to close.
     async fn close(&self) {
         self.loops.end_running_turns().await;
-        if let Some(provider) = &self.provider {
-            provider.close().await;
-        }
-        if let Some(router) = &self.resilience.router {
-            router.close().await;
-        }
         self.memory.close().await;
         if let Some((human, registration)) = &self.human_input {
             let registration = registration.load(Ordering::Acquire);

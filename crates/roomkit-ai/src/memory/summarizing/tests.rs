@@ -318,10 +318,11 @@ fn a_prior_summary_is_told_by_its_provenance_alone() {
 }
 
 // Python: TestDelegation::test_ingest_delegates_to_inner,
-// test_clear_delegates_and_clears_cache, test_close_delegates_to_inner_and_provider
-// and tests/test_memory_wrappers.py (summarizing)
+// test_clear_delegates_and_clears_cache, and tests/test_memory_wrappers.py
+// test_lifecycle_reaches_inner and
+// test_close_leaves_open_the_provider_it_summarizes_with (summarizing)
 #[tokio::test]
-async fn its_lifecycle_reaches_the_inner_memory_and_the_summarizer() {
+async fn its_lifecycle_reaches_the_inner_memory_and_leaves_the_summarizer_open() {
     let inner = Arc::new(MockMemoryProvider::default());
     let summarizer = Summarizer::default();
     let memory = memory(
@@ -348,7 +349,8 @@ async fn its_lifecycle_reaches_the_inner_memory_and_the_summarizer() {
             inner.closed(),
             summarizer.asked.lock().unwrap().closed
         ),
-        (1, vec![room()], 0, true, true)
+        // The summarizer it was handed stays open, its owner's (RFC §20.3).
+        (1, vec![room()], 0, true, false)
     );
 }
 

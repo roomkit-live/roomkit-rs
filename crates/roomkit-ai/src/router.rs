@@ -125,8 +125,9 @@ pub type AiRouterFuture<'a> =
 /// Python's `AIRouter`. The channel holds it as an object, so `route`
 /// returns a boxed future.
 ///
-/// The channel closes its router when it closes; a router closes the
-/// providers it holds.
+/// The channel's close leaves its router open, and a router's close leaves
+/// open the providers it was handed: each is its owner's, who closes it once
+/// nothing uses it (RFC §6.4).
 pub trait AiRouter: Send + Sync + 'static {
     /// The provider for `request`.
     ///
@@ -144,8 +145,8 @@ pub trait AiRouter: Send + Sync + 'static {
         crate::provider::short_type_name::<Self>()
     }
 
-    /// Releases what the router holds, the providers it routes to: Python's
-    /// `close()`. Nothing by default.
+    /// Releases what the router opened itself: Python's `close()`. The
+    /// providers it was handed stay their owner's. Nothing by default.
     fn close(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async {})
     }
@@ -155,7 +156,8 @@ pub trait AiRouter: Send + Sync + 'static {
 /// the other provider: Python's `FallbackRouter(primary, fallback)`.
 ///
 /// A turn the fallback served stays on it, and a generation it then fails is
-/// handed back to the primary. Its close closes both providers.
+/// handed back to the primary. Its close leaves both providers open, their
+/// owner's.
 pub struct FallbackRouter {
     primary: Arc<dyn DynAiProvider>,
     fallback: Arc<dyn DynAiProvider>,
@@ -199,13 +201,6 @@ impl AiRouter for FallbackRouter {
             },
         };
         Box::pin(std::future::ready(Some(Arc::clone(picked))))
-    }
-
-    fn close(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-        Box::pin(async {
-            self.primary.dyn_close().await;
-            self.fallback.dyn_close().await;
-        })
     }
 }
 

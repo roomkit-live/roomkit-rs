@@ -146,10 +146,10 @@ async fn a_summarizer_that_fails_leaves_a_summary_that_says_so() {
     );
 }
 
-// Python: TestCompactingMemory::test_close_closes_both and
-// tests/test_memory_wrappers.py (compacting)
+// Python: tests/test_memory_wrappers.py::test_lifecycle_reaches_inner
+// (compacting) and test_close_leaves_open_the_provider_it_summarizes_with
 #[tokio::test]
-async fn its_lifecycle_reaches_the_inner_memory_and_the_summarizer() {
+async fn its_lifecycle_reaches_the_inner_memory_and_leaves_the_summarizer_open() {
     let inner = Arc::new(MockMemoryProvider::default());
     let summarizer = Summarizer::default();
     let nested = Arc::new(memory(
@@ -177,7 +177,8 @@ async fn its_lifecycle_reaches_the_inner_memory_and_the_summarizer() {
             inner.closed(),
             summarizer.asked.lock().unwrap().closed
         ),
-        (1, vec![room()], true, true)
+        // The summarizer it was handed stays open, its owner's (RFC §20.3).
+        (1, vec![room()], true, false)
     );
 }
 

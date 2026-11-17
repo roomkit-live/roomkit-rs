@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **BREAKING: a closed AI channel, router or memory leaves open the provider it was handed**, as Python's (RFC §6.4, §10.6.3, §20.3, RMK-1635). `AiChannel::close` closed its provider or its router, `FallbackRouter`'s close both its providers, and `SummarizingMemory` and `CompactingMemory` the provider they summarize with, so a host that handed one provider to every agent lost it for all at the first close. A provider is now its owner's: the kit's close leaves it open, and the host closes it once nothing uses it.
+
 - **`DelegateHandlerOptions::wait_in_task_rooms`: a worker's `delegate_task` waits for the task it starts**, as Python's (RFC §23.4, RMK-1621). A worker that delegated in turn got the task's receipt and ended its own task, so the sub-task's result never reached the conversation, and cancelling the worker left the sub-task running. With the option, a call made from a task's room runs its task inline: it answers with the task's status and its result, bounded by `max_result_chars`, and cancelling the worker's task cancels it too. A call from any other room still starts a background task.
 
 - Add host continuation policies to AI channels, sharing retry limits and preserving callback failures.

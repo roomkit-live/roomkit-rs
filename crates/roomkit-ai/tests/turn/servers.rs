@@ -1,7 +1,7 @@
 //! What an agent carries of the MCP servers whose tools it serves (RFC
 //! §21.2, §6.4): their instructions in its system prompt, each under the
-//! host's label in a block it cannot close; and its provider, closed at
-//! the kit's close. The texts are the reference implementation's
+//! host's label in a block it cannot close; and its provider, left open
+//! at the kit's close. The texts are the reference implementation's
 //! (`tasks/probes/step4-m9/py_mcp_m9_probe.out`).
 
 use std::future::Future;
@@ -162,21 +162,23 @@ fn closing_agent(model: Closing) -> AiChannel<Closing> {
     AiChannel::new(channel("assistant"), model, options).unwrap()
 }
 
-/// The kit's close closes the channel, which closes its provider once, a
-/// second close included, as Python's `AIChannel.close` closes its
-/// provider; the host closes what serves its tools.
+/// The kit's close closes the channel, which leaves open the provider it
+/// was handed, a second close included: the provider is its owner's, who
+/// may share it with other channels (RFC §6.4), as the host closes what
+/// serves its tools. Python: `tests/test_channels/test_ai_router.py::
+/// test_a_close_leaves_open_the_provider_or_router_the_channel_was_handed`.
 #[tokio::test]
-async fn the_kit_s_close_closes_the_channel_s_provider_once() {
+async fn the_kit_s_close_leaves_the_channel_s_provider_open() {
     let closing = Closing::default();
     let room = Room::with_agent(closing_agent(closing.clone())).await;
     room.kit.close().await.unwrap();
     room.kit.close().await.unwrap();
-    assert_eq!(closing.closes.load(Ordering::SeqCst), 1);
+    assert_eq!(closing.closes.load(Ordering::SeqCst), 0);
 }
 
 /// The Python implementation's `unregister_channel` hands the channel back
-/// not closed, for its caller to close: its provider closes once the caller
-/// closes it, and the kit's close closes it no more.
+/// not closed, for its caller to close; its close, as the kit's, leaves
+/// its provider open.
 #[tokio::test]
 async fn an_unregistered_agent_is_closed_by_its_caller() {
     let closing = Closing::default();
@@ -186,14 +188,11 @@ async fn an_unregistered_agent_is_closed_by_its_caller() {
         .unregister_channel(&channel("assistant"))
         .unwrap()
         .unwrap();
-    let handed_back = (
-        agent.channel_id().as_str().to_owned(),
-        closing.closes.load(Ordering::SeqCst),
-    );
+    let handed_back = agent.channel_id().as_str().to_owned();
     agent.close().await;
     room.kit.close().await.unwrap();
     assert_eq!(
         (handed_back, closing.closes.load(Ordering::SeqCst)),
-        (("assistant".to_owned(), 0), 1)
+        ("assistant".to_owned(), 0)
     );
 }
