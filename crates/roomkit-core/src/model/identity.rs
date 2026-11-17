@@ -167,7 +167,7 @@ pub struct IdentityHookResult {
     /// The sender, for an identified outcome.
     #[serde(default)]
     pub identity: Option<Identity>,
-    /// A pending sender's name; not read by the framework.
+    /// A pending sender's name, their pending record's (RFC §11.3).
     #[serde(default)]
     pub display_name: Option<String>,
     /// The identities a pending sender may be, read on

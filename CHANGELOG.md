@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **A pending sender's record takes the name an identity hook's `pending()` gives**, as Python's (RFC §11.3, RMK-357). `IdentityHookResult::pending` with a `display_name` created the pending participant without a name, on `ON_IDENTITY_UNKNOWN` and `ON_IDENTITY_AMBIGUOUS` alike; the record now carries it.
+
 - **`Channel::deliver_cut(event, row, binding, context)`: a stream cut from outside ends for the channel that read it**, as Python's (RFC §6.1, §12.2 step 13s, RMK-1756). A cancelled delivery, a held task's cut or the kit's close ended the target's stream, and the cut text's row, stored marked `cancelled`, reached every channel but that one, which learned nothing of it. Once the row is stored, the kit hands it to the target's `deliver_cut`, `None` when no row is the target's; the default does nothing.
 
 - **A shared location and a template read in a model's later history as its turn read them**, as Python's (RFC §6.4, §6.6, RMK-1743). The turn a location started read it as `[Location: Head office (45.5, -73.6)]`, then the turns after dropped it from their history, a template and a composite's location part alike: the history reads the stored event, which no text reader took. They now read by their text form, as the turn did.

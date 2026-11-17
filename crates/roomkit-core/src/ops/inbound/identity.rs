@@ -55,8 +55,12 @@ pub(super) enum Participation {
     /// The sender is this identity: its record is created identified, or
     /// completed.
     Identified(Box<Identity>),
-    /// The sender is left pending, with the resolution's candidates.
-    Pending(Box<IdentityResult>),
+    /// The sender is left pending, with the resolution's candidates and the
+    /// name an identity hook's `pending()` gave (RFC §11.3).
+    Pending {
+        result: Box<IdentityResult>,
+        display_name: Option<String>,
+    },
 }
 
 /// A message resolution holds: refused with `reason`, nothing of it stored,
@@ -332,7 +336,8 @@ impl Identification {
 
     /// `ON_IDENTITY_AMBIGUOUS`'s answer: an identity names the sender, a
     /// challenge or a rejection holds the message, anything else leaves the
-    /// sender pending with the resolver's candidates.
+    /// sender pending with the resolver's candidates, under the name a
+    /// pending answer gives.
     fn on_ambiguous(
         &mut self,
         cx: &mut Cx<'_>,
@@ -340,7 +345,7 @@ impl Identification {
         result: IdentityResult,
     ) -> Progress<Result<Resolved, Stopped>> {
         let Some(answer) = answer else {
-            return self.pending(result);
+            return self.pending(result, None);
         };
         match (answer.status, answer.identity) {
             (IdentificationStatus::Identified, Some(identity)) => {
@@ -353,7 +358,8 @@ impl Identification {
                 let reason = given(answer.reason).unwrap_or_else(|| "identity_rejected".to_owned());
                 self.hold(reason, None)
             }
-            _ => self.pending(result),
+            (IdentificationStatus::Pending, _) => self.pending(result, answer.display_name),
+            _ => self.pending(result, None),
         }
     }
 
@@ -386,7 +392,7 @@ impl Identification {
                 if let Some(candidates) = answer.candidates.filter(|c| !c.is_empty()) {
                     result.candidates = candidates;
                 }
-                self.pending(result)
+                self.pending(result, answer.display_name)
             }
             _ => self.unanswered(result),
         }
@@ -420,7 +426,8 @@ impl Identification {
         self.proceed(Some(Participation::Identified(Box::new(identity))))
     }
 
-    /// The sender is left pending with `result`, the event sent under the
+    /// The sender is left pending with `result`, their record named
+    /// `display_name`, the event sent under the
     /// sender's own record ([`authors::own_record_id`]), or under the room's
     /// record of the id the channel gave when one was reached through the
     /// channel (a member the host added). The pipeline never creates a
@@ -429,9 +436,17 @@ impl Identification {
     /// another participant's, and a pending record under an identity's id
     /// would be completed when the identity is resolved elsewhere, its
     /// impostor then passing for an identified sender (RFC §11.6).
-    fn pending(&mut self, result: IdentityResult) -> Progress<Result<Resolved, Stopped>> {
+    fn pending(
+        &mut self,
+        result: IdentityResult,
+        display_name: Option<String>,
+    ) -> Progress<Result<Resolved, Stopped>> {
+        let participation = Participation::Pending {
+            result: Box::new(result),
+            display_name,
+        };
         if authors::names_its_own_id(&self.event, &self.context.participants) {
-            return self.proceed(Some(Participation::Pending(Box::new(result))));
+            return self.proceed(Some(participation));
         }
         let source = &mut self.event.source;
         if let Some(sender) = &source.participant_id {
@@ -440,7 +455,7 @@ impl Identification {
                 source.participant_id = Some(own);
             }
         }
-        self.proceed(Some(Participation::Pending(Box::new(result))))
+        self.proceed(Some(participation))
     }
 
     fn proceed(
@@ -484,7 +499,10 @@ pub(super) fn writes(
 ) -> VecDeque<StoreRequest> {
     match participation {
         Participation::Identified(identity) => identified_writes(cx, &identity, event, context),
-        Participation::Pending(result) => pending_writes(cx, &result, event, context),
+        Participation::Pending {
+            result,
+            display_name,
+        } => pending_writes(cx, &result, display_name, event, context),
     }
 }
 
@@ -542,6 +560,7 @@ fn identified_writes(
 fn pending_writes(
     cx: &Cx<'_>,
     result: &IdentityResult,
+    display_name: Option<String>,
     event: &RoomEvent,
     context: &mut RoomContext,
 ) -> VecDeque<StoreRequest> {
@@ -571,6 +590,7 @@ fn pending_writes(
         channel_id.clone(),
         cx.env.now(),
     );
+    participant.display_name = display_name;
     participant.identification = IdentificationStatus::Pending;
     participant.candidates = (!result.candidates.is_empty())
         .then(|| result.candidates.iter().map(|c| c.id.clone()).collect());
