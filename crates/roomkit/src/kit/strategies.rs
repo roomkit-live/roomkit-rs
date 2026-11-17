@@ -80,9 +80,47 @@ pub struct RoomStrategyIsCurrentOptions {
 /// A room a run closed or archived, and the strategy it held then.
 pub(crate) type ClosedRoom<S> = (RoomId, Option<Arc<dyn Orchestration<S>>>);
 
+/// The closed rooms a run takes back, each marked taken back once done, or
+/// when the take-back is dropped before it: no install waits for a run gone.
+struct ClosedRooms<'kit, S> {
+    strategies: &'kit RoomStrategies<S>,
+    pending: std::vec::IntoIter<ClosedRoom<S>>,
+}
+
+impl<'kit, S> ClosedRooms<'kit, S> {
+    fn new(strategies: &'kit RoomStrategies<S>, rooms: Vec<ClosedRoom<S>>) -> Self {
+        Self {
+            strategies,
+            pending: rooms.into_iter(),
+        }
+    }
+
+    fn next(&mut self) -> Option<ClosedRoom<S>> {
+        self.pending.next()
+    }
+
+    fn taken_back(&self, room_id: &RoomId) {
+        self.strategies.closed_room_taken_back(room_id);
+    }
+}
+
+impl<S> Drop for ClosedRooms<'_, S> {
+    fn drop(&mut self) {
+        for (room_id, _) in self.pending.by_ref() {
+            self.strategies.closed_room_taken_back(&room_id);
+        }
+    }
+}
+
 /// The strategies installed through the kit, by room.
 pub(crate) struct RoomStrategies<S> {
     rooms: Mutex<HashMap<RoomId, Installed<S>>>,
+    /// The rooms a run closed whose strategy it has not taken back yet, how
+    /// many closes each: an install waits for them, as Python's waits for
+    /// the close's lock.
+    closing: Mutex<HashMap<RoomId, usize>>,
+    /// Told whenever a closed room's take-back ends.
+    closings_ended: Notify,
     /// Told whenever an install ends, whatever its end: what an uninstall
     /// called meanwhile waits for.
     installs_ended: Notify,
@@ -93,6 +131,8 @@ impl<S> Default for RoomStrategies<S> {
         Self {
             rooms: Mutex::new(HashMap::new()),
             installs_ended: Notify::new(),
+            closing: Mutex::new(HashMap::new()),
+            closings_ended: Notify::new(),
         }
     }
 }
@@ -110,12 +150,40 @@ impl<S> RoomStrategies<S> {
         self.rooms.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The strategy recorded for `room_id`, an install under way included:
-    /// what a close takes back out once its run let go of the room's lock.
-    pub(crate) fn held(&self, room_id: &RoomId) -> Option<Arc<dyn Orchestration<S>>> {
+    /// `room_id` was closed by a run, under its lock: the strategy recorded
+    /// for it then, an install under way included, which the run takes
+    /// back out once it let go of the lock. An install waits until it has
+    /// ([`closed_room_taken_back`](Self::closed_room_taken_back)).
+    pub(crate) fn closed(&self, room_id: &RoomId) -> Option<Arc<dyn Orchestration<S>>> {
+        *self
+            .closing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(room_id.clone())
+            .or_default() += 1;
         self.rooms()
             .get(room_id)
             .map(|installed| Arc::clone(&installed.strategy))
+    }
+
+    /// The take-back of one close of `room_id` ended, whatever its end.
+    pub(crate) fn closed_room_taken_back(&self, room_id: &RoomId) {
+        let mut closing = self.closing.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(count) = closing.get_mut(room_id) {
+            *count -= 1;
+            if *count == 0 {
+                closing.remove(room_id);
+            }
+        }
+        drop(closing);
+        self.closings_ended.notify_waiters();
+    }
+
+    fn closing(&self, room_id: &RoomId) -> bool {
+        self.closing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains_key(room_id)
     }
 }
 
@@ -334,8 +402,11 @@ impl<S: ConversationStore> RoomKit<S> {
         rooms: Vec<ClosedRoom<S>>,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
-            for (room_id, held) in rooms {
-                if let Err(error) = self.uninstall_closed_room(&room_id, held).await {
+            let mut rooms = ClosedRooms::new(&self.inner.room_strategies, rooms);
+            while let Some((room_id, held)) = rooms.next() {
+                let taken = self.uninstall_closed_room(&room_id, held).await;
+                rooms.taken_back(&room_id);
+                if let Err(error) = taken {
                     tracing::error!(
                         target: "roomkit::strategies",
                         room_id = %room_id,
@@ -356,23 +427,33 @@ impl<S: ConversationStore> RoomKit<S> {
         room_id: &RoomId,
         held: Option<Arc<dyn Orchestration<S>>>,
     ) -> Result<bool, RoomKitError> {
-        let (running, replaced) = {
-            let rooms = self.inner.room_strategies.rooms();
-            let installed = rooms.get(room_id);
-            (
-                installed.is_some_and(|installed| installed.state == InstallState::Running),
-                match (installed, &held) {
-                    (Some(installed), Some(held)) => !Arc::ptr_eq(&installed.strategy, held),
-                    (Some(_), None) => true,
-                    (None, _) => false,
-                },
-            )
-        };
-        if running || replaced {
-            return Ok(false);
+        // Under the room's lock, as an uninstall a host makes there (§13.5):
+        // what the room holds is read with nothing changing it until the
+        // strategy is taken back.
+        let section = Section::enter(&self.inner.locks, room_id).await?;
+        section
+            .scope(async {
+                let room = self.get_room(room_id, GetRoomOptions::default()).await?;
+                if !self.closed_holds(&room, held.as_ref()) {
+                    return Ok(false);
+                }
+                self.uninstall_room(&room).await
+            })
+            .await
+    }
+
+    /// Whether what `room` holds now is what its close found, `held`, to
+    /// take back: not an install still running, and not one made in its
+    /// place since; a room that held none is taken back only while it is
+    /// still closed (a discussion stored with it by another process).
+    fn closed_holds(&self, room: &Room, held: Option<&Arc<dyn Orchestration<S>>>) -> bool {
+        let rooms = self.inner.room_strategies.rooms();
+        match (rooms.get(&room.id), held) {
+            (Some(installed), _) if installed.state == InstallState::Running => false,
+            (Some(installed), Some(held)) => Arc::ptr_eq(&installed.strategy, held),
+            (Some(_), None) => false,
+            (None, _) => matches!(room.status, RoomStatus::Closed | RoomStatus::Archived),
         }
-        let room = self.get_room(room_id, GetRoomOptions::default()).await?;
-        self.uninstall_room(&room).await
     }
 
     /// [`uninstall_strategy`](Self::uninstall_strategy) for `room`, read in
@@ -540,6 +621,7 @@ impl<S: ConversationStore> RoomKit<S> {
         strategy: Arc<dyn Orchestration<S>>,
         organization_id: Option<String>,
     ) -> Result<(), RoomKitError> {
+        self.closes_over(room_id).await;
         self.claim_install(room_id, &strategy, organization_id)?;
         // An install cut short is taken back as a failed one is (Python's
         // `except BaseException`), once its future is dropped.
@@ -695,6 +777,25 @@ impl<S: ConversationStore> RoomKit<S> {
     /// live lease on the room's lock waits for no install, which waits for
     /// that lock or runs under it (RFC §19.7: neither waits on work that
     /// needs it): nothing is installed yet.
+    /// Waits until the strategy of `room_id` its close found is taken back,
+    /// as Python's install waits for the close's lock, unless the code runs
+    /// under the room's lock (a hook of the closing run): the install then
+    /// reads the room closed and is refused.
+    async fn closes_over(&self, room_id: &RoomId) {
+        if ExecutionContext::current().lease(room_id).is_some() {
+            return;
+        }
+        let strategies = &self.inner.room_strategies;
+        loop {
+            let mut ended = pin!(strategies.closings_ended.notified());
+            ended.as_mut().enable();
+            if !strategies.closing(room_id) {
+                return;
+            }
+            ended.await;
+        }
+    }
+
     async fn install_over(&self, room_id: &RoomId) {
         if ExecutionContext::current().lease(room_id).is_some() {
             return;

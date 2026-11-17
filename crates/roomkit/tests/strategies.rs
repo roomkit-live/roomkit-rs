@@ -13,8 +13,9 @@ use roomkit::model::{
 use roomkit::orchestration::{StrategyAgent, StrategyFuture};
 use roomkit::{
     ArchiveRoomOptions, Channel, ChannelError, CheckRoomTimersOptions, CloseRoomOptions,
-    CreateRoomOptions, ListBindingsOptions, Orchestration, RoomKit, RoomKitOptions,
-    RoomStrategyOptions, SetRoomTimersOptions, UninstallStrategyOptions, default_inbound_event,
+    CreateRoomOptions, ListBindingsOptions, Orchestration, ReopenRoomOptions, RoomKit,
+    RoomKitOptions, RoomStrategyOptions, SetRoomTimersOptions, UninstallStrategyOptions,
+    default_inbound_event,
 };
 
 /// An intelligence channel that answers nothing.
@@ -799,5 +800,68 @@ async fn a_live_agent_under_a_transport_s_id_is_no_agent() {
         .await
         .unwrap();
     assert_eq!(bindings.len(), 0, "nothing is attached");
+    kit.close().await.unwrap();
+}
+
+/// A strategy that sets nothing up, for any store.
+struct Nothing;
+
+impl<S: roomkit::ConversationStore> Orchestration<S> for Nothing {
+    fn agents(&self) -> Vec<StrategyAgent> {
+        Vec::new()
+    }
+
+    fn install<'call>(
+        &'call self,
+        _kit: &'call RoomKit<S>,
+        _room_id: &'call RoomId,
+    ) -> StrategyFuture<'call> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+// Python: core/mixins/room_lifecycle.py::RoomLifecycleMixin._close, which
+// takes the room's strategy back under the lock the close holds: a caller
+// that reopens the room and installs another strategy right after the close
+// finds the first one taken back, never refused by it nor taking its place
+// back out (RFC §19.7).
+#[tokio::test]
+async fn a_strategy_installed_right_after_a_close_stays() {
+    let kit = Arc::new(RoomKit::new(RoomKitOptions::with_store(Faulty::default())));
+    let options = CreateRoomOptions {
+        room_id: Some(r1()),
+        ..Default::default()
+    };
+    kit.create_room(options).await.unwrap();
+    let first: Arc<dyn Orchestration<Faulty>> = Arc::new(Nothing);
+    kit.install_strategy(&r1(), first, InstallStrategyOptions::default())
+        .await
+        .unwrap();
+    kit.store().pause_after_close.store(true, Ordering::SeqCst);
+    let reached = kit.store().room_read_reached.notified();
+
+    let closing = {
+        let kit = Arc::clone(&kit);
+        tokio::spawn(async move { kit.close_room(&r1(), CloseRoomOptions::default()).await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), reached)
+        .await
+        .unwrap();
+    let second: Arc<dyn Orchestration<Faulty>> = Arc::new(Nothing);
+    let installing = {
+        let (kit, second) = (Arc::clone(&kit), Arc::clone(&second));
+        tokio::spawn(async move {
+            kit.reopen_room(&r1(), ReopenRoomOptions::default()).await?;
+            kit.install_strategy(&r1(), second, InstallStrategyOptions::default())
+                .await
+        })
+    };
+    tokio::task::yield_now().await;
+    kit.store().room_read_released.notify_one();
+
+    closing.await.unwrap().unwrap();
+    installing.await.unwrap().unwrap();
+    let held = kit.room_strategy(&r1(), RoomStrategyOptions::default());
+    assert!(held.is_some_and(|held| Arc::ptr_eq(&held, &second)));
     kit.close().await.unwrap();
 }

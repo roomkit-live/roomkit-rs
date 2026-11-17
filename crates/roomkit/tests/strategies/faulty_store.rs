@@ -28,6 +28,13 @@ pub(crate) struct AbstractOnly {
     pub(crate) binding_gate: tokio::sync::RwLock<()>,
     /// Told as an `add_binding` reaches the gate.
     pub(crate) binding_reached: tokio::sync::Notify,
+    /// Once set, the first `get_room` after a write that closes a room
+    /// waits for `room_read_released`, told `room_read_reached` first.
+    pub(crate) pause_after_close: std::sync::atomic::AtomicBool,
+    /// Set by the write that closes a room while `pause_after_close` is.
+    pause_armed: std::sync::atomic::AtomicBool,
+    pub(crate) room_read_reached: tokio::sync::Notify,
+    pub(crate) room_read_released: tokio::sync::Notify,
     pub(crate) store: InMemoryStore,
 }
 
@@ -37,6 +44,14 @@ impl ConversationStore for AbstractOnly {
     }
 
     async fn get_room(&self, room_id: &RoomId) -> Result<Option<Room>, StoreError> {
+        if self
+            .pause_armed
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            let released = self.room_read_released.notified();
+            self.room_read_reached.notify_one();
+            released.await;
+        }
         self.store.get_room(room_id).await
     }
 
@@ -44,7 +59,18 @@ impl ConversationStore for AbstractOnly {
         if self.fail_updates.load(std::sync::atomic::Ordering::SeqCst) {
             return Err(StoreError::Value("update_room fails".into()));
         }
-        self.store.update_room(room).await
+        let closes = room.status == roomkit::model::RoomStatus::Closed;
+        let written = self.store.update_room(room).await;
+        if closes
+            && written.is_ok()
+            && self
+                .pause_after_close
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            self.pause_armed
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        written
     }
 
     async fn delete_room(&self, room_id: &RoomId) -> Result<bool, StoreError> {

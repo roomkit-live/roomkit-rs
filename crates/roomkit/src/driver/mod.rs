@@ -396,6 +396,12 @@ async fn drive<S: ConversationStore, O: Operation>(
     }
     let clocks = Clocks::read(&*environment);
     let closed_rooms: ClosedRooms<S> = Arc::default();
+    // A run dropped before it took its closed rooms back holds no install
+    // waiting on them.
+    let undrained = Undrained {
+        inner: Arc::clone(inner),
+        rooms: Arc::clone(&closed_rooms),
+    };
     if let Some(deadline) = caller.as_ref().and_then(|caller| caller.deadline.0)
         && let Some(at) = clocks.timestamp_of(deadline)
     {
@@ -453,6 +459,7 @@ async fn drive<S: ConversationStore, O: Operation>(
     // once its close is written and announced and the run let go of its
     // lock, before its caller is answered.
     let closed = std::mem::take(&mut *closed_rooms.lock().unwrap_or_else(PoisonError::into_inner));
+    drop(undrained);
     if !closed.is_empty() {
         let kit = crate::RoomKit {
             inner: Arc::clone(inner),
@@ -464,6 +471,22 @@ async fn drive<S: ConversationStore, O: Operation>(
 
 /// The rooms a run closed or archived, each with the strategy it held then.
 type ClosedRooms<S> = Arc<Mutex<Vec<crate::kit::ClosedRoom<S>>>>;
+
+/// The closed rooms of a run not handed to their take-back yet, marked taken
+/// back when the run is dropped first.
+struct Undrained<S> {
+    inner: Arc<Inner<S>>,
+    rooms: ClosedRooms<S>,
+}
+
+impl<S> Drop for Undrained<S> {
+    fn drop(&mut self) {
+        let rooms = std::mem::take(&mut *self.rooms.lock().unwrap_or_else(PoisonError::into_inner));
+        for (room_id, _) in rooms {
+            self.inner.room_strategies.closed_room_taken_back(&room_id);
+        }
+    }
+}
 
 /// One run of an operation: what it holds, waits for and calls, and the
 /// callers of the entries its operation adopted.
@@ -967,7 +990,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                     | FrameworkEvent::RoomArchived { room_id, .. },
                 ) = &notice
                 {
-                    let held = self.inner.room_strategies.held(room_id);
+                    let held = self.inner.room_strategies.closed(room_id);
                     self.closed_rooms
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
