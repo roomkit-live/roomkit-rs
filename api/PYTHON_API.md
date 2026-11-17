@@ -123,6 +123,7 @@ the mapping and its tests. The check does not generate or update this document.
 | `roomkit::orchestration::Swarm::new` | — | `entry` |
 | `roomkit::orchestration::strategies::Swarm::new` | — | `entry` |
 | `roomkit_ai::orchestration::HANDOFF_TOOL` | — | Whole type |
+| `roomkit::SUBMIT_RESULT`, `roomkit::orchestration::SUBMIT_RESULT` | `roomkit.SUBMIT_RESULT`, `roomkit.orchestration.SUBMIT_RESULT` | Both paths share one lazily initialized `ResultTool`. Its tool definition contains owned JSON and its fields contain callbacks. |
 | `roomkit_ai::tasks::DELEGATE_TOOL` | — | Whole type |
 | `roomkit::orchestration::OnHandoffComplete` | — | Whole type |
 | `roomkit::orchestration::DoneFn` | — | Whole type |

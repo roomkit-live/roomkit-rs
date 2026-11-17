@@ -817,6 +817,16 @@ approved = "2026-11-03"
 reason = "Python's constant `HANDOFF_TOOL`, an AITool: a static read at first use, since no `const` builds an AiTool's strings and JSON (HITL 884fc415)"
 
 [[exception]]
+rust = "roomkit::SUBMIT_RESULT"
+approved = "2026-11-17"
+reason = "Python's SUBMIT_RESULT is a constructed ResultTool. Both public paths share one lazy static, as for HANDOFF_TOOL (HITL 884fc415) and the JSON ResultTool (HITL 948aa5ab)."
+
+[[exception]]
+rust = "roomkit::orchestration::SUBMIT_RESULT"
+approved = "2026-11-17"
+reason = "Python's SUBMIT_RESULT is a constructed ResultTool. Both public paths share one lazy static, as for HANDOFF_TOOL (HITL 884fc415) and the JSON ResultTool (HITL 948aa5ab)."
+
+[[exception]]
 rust = "roomkit_ai::tasks::DELEGATE_TOOL"
 approved = "2026-11-04"
 reason = "Python's constant `DELEGATE_TOOL`, an AITool: a static read at first use, since no `const` builds an AiTool's strings and JSON, as `HANDOFF_TOOL` (HITL 0ddbfda4)"

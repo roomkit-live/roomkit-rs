@@ -295,7 +295,8 @@ pub use self::orchestration::{
 };
 #[doc(inline)]
 pub use self::orchestration::{HandoffHandler, HandoffRequest, HandoffResult};
-pub use self::tasks::result_tool::ResultTool;
+#[doc(inline)]
+pub use self::orchestration::{ResultTool, SUBMIT_RESULT};
 #[doc(hidden)]
 pub use self::turn::OwnerToolAnswer;
 #[doc(inline)]

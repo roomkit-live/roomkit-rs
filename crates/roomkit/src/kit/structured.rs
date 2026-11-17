@@ -11,26 +11,18 @@ use roomkit_core::model::{
     ChannelCategory, ChannelId, EventContent, EventType, Metadata, RoomEvent, RoomId,
     ToolCallOutcome, ToolCallStatus,
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::RoomKit;
 use super::background_tools::collision;
 use super::tasks::{TaskEnd, failed, kit_failure, task_outcome};
 use crate::error::RoomKitError;
+use crate::orchestration::SUBMIT_RESULT;
 use crate::store::{ConversationStore, ListEventsOptions};
-use crate::tasks::json::{dumps_object, json as write_json};
+use crate::tasks::json::json as write_json;
 use crate::tasks::{DelegatedTask, ResultTool};
 use crate::turn::OwnerToolAnswer;
 use crate::turns::served::OwnerToolEntry;
-
-/// The result tool a delegation forces by default: Python's
-/// `SUBMIT_RESULT_TOOL_NAME`.
-const SUBMIT_RESULT: &str = "submit_result";
-
-/// What a turn ending without the call is told: Python's
-/// `SUBMIT_RESULT.reminder`.
-const REMINDER: &str = "You did not submit a result. You MUST now call the `submit_result` tool \
-with your final structured result. Do NOT reply with plain text or a question — call submit_result.";
 
 /// How many of the child room's latest events the scan reads, where the
 /// worker's last call lives: Python's `limit=100`.
@@ -57,17 +49,21 @@ impl<S: ConversationStore> RoomKit<S> {
         if !self.takes_owner_tools(&task.agent_id) {
             return Box::pin(self.delegated_turn(task, context)).await;
         }
-        let tool = result_tool.map_or(Forced::SubmitResult, Forced::Given);
+        let tool = result_tool.unwrap_or(&SUBMIT_RESULT);
         let served = ServedResult::serve(self, &task.agent_id, &task.child_room_id, tool);
         let _served = match served {
             Ok(served) => served,
             Err(error) => return failed(kit_failure(&error), context),
         };
-        let mut message = task.description.clone();
         let mut last_output = String::new();
         let mut turns = Metadata::new();
-        for _attempt in 0..=retries {
-            let answers = match Box::pin(self.delegated_answers(task, message)).await {
+        for attempt in 0..=retries {
+            let message = if attempt == 0 {
+                &task.description
+            } else {
+                &tool.reminder
+            };
+            let answers = match Box::pin(self.delegated_answers(task, message.to_owned())).await {
                 Ok(answers) => answers,
                 Err(failure) => return failed(failure, context),
             };
@@ -89,11 +85,14 @@ impl<S: ConversationStore> RoomKit<S> {
             if let Some(text) = outcome.response.filter(|text| !text.is_empty()) {
                 last_output = text;
             }
-            message = String::from(tool.reminder());
         }
         let attempts = retries.saturating_add(1);
         tracing::warn!(target: "roomkit::tasks", task = %task.id, agent = %task.agent_id, attempts, tool = tool.name(), "a delegated agent never called its result tool");
-        let missing = tool.missing(task.agent_id.as_str(), &last_output, attempts);
+        let missing = written((tool.on_missing)(
+            task.agent_id.as_str(),
+            &last_output,
+            attempts,
+        ));
         TaskEnd::finished(Some(missing), None, context, turns)
     }
 
@@ -116,7 +115,7 @@ impl<S: ConversationStore> RoomKit<S> {
         &self,
         room_id: &RoomId,
         worker: &ChannelId,
-        tool: Forced<'_>,
+        tool: &ResultTool,
     ) -> Option<String> {
         let options = ListEventsOptions {
             before_index: Some(LATEST_TAIL_CURSOR),
@@ -134,7 +133,7 @@ impl<S: ConversationStore> RoomKit<S> {
 /// The payload `event` carries, written, when it is `worker`'s call of
 /// `tool` that ended served; a row written before outcomes existed says it
 /// by its status (Python's `_served`).
-fn submitted_by(event: &RoomEvent, worker: &ChannelId, tool: Forced<'_>) -> Option<String> {
+fn submitted_by(event: &RoomEvent, worker: &ChannelId, tool: &ResultTool) -> Option<String> {
     if event.r#type != EventType::ToolCallEnd || &event.source.channel_id != worker {
         return None;
     }
@@ -145,62 +144,7 @@ fn submitted_by(event: &RoomEvent, worker: &ChannelId, tool: Forced<'_>) -> Opti
         Some(outcome) => outcome == ToolCallOutcome::Served,
         None => call.status == ToolCallStatus::Completed,
     };
-    (tool.matches(&call.tool_name) && served).then(|| tool.payload(&call.arguments))
-}
-
-/// The tool a structured delegation forces: `submit_result`, Python's
-/// `SUBMIT_RESULT`, or the one the caller gave.
-#[derive(Clone, Copy)]
-enum Forced<'tool> {
-    SubmitResult,
-    Given(&'tool ResultTool),
-}
-
-impl<'tool> Forced<'tool> {
-    fn name(self) -> &'tool str {
-        match self {
-            Self::SubmitResult => SUBMIT_RESULT,
-            Self::Given(tool) => tool.name(),
-        }
-    }
-
-    fn definition(self) -> Value {
-        match self {
-            Self::SubmitResult => submit_result_definition(),
-            Self::Given(tool) => tool.tool.clone(),
-        }
-    }
-
-    fn reminder(self) -> &'tool str {
-        match self {
-            Self::SubmitResult => REMINDER,
-            Self::Given(tool) => &tool.reminder,
-        }
-    }
-
-    fn matches(self, tool_name: &str) -> bool {
-        match self {
-            Self::SubmitResult => matches_result_tool(tool_name),
-            Self::Given(tool) => tool.matches(tool_name),
-        }
-    }
-
-    /// A served call's `arguments` as the payload returned, written as
-    /// Python's `json.dumps` writes it.
-    fn payload(self, arguments: &Metadata) -> String {
-        match self {
-            Self::SubmitResult => dumps(&normalize(arguments)),
-            Self::Given(tool) => written((tool.normalize)(arguments)),
-        }
-    }
-
-    /// The payload returned for a worker that never called the tool.
-    fn missing(self, role: &str, last_output: &str, attempts: u32) -> String {
-        match self {
-            Self::SubmitResult => dumps(&missing_payload(role, last_output, attempts)),
-            Self::Given(tool) => written((tool.on_missing)(role, last_output, attempts)),
-        }
-    }
+    (tool.matches(&call.tool_name) && served).then(|| written((tool.normalize)(&call.arguments)))
 }
 
 /// A payload a caller's function built, written in its keys' order.
@@ -227,7 +171,7 @@ impl<'kit, S: ConversationStore> ServedResult<'kit, S> {
         kit: &'kit RoomKit<S>,
         agent: &ChannelId,
         room_id: &RoomId,
-        tool: Forced<'_>,
+        tool: &ResultTool,
     ) -> Result<Self, RoomKitError> {
         let name = tool.name().to_owned();
         let own = kit
@@ -239,7 +183,7 @@ impl<'kit, S: ConversationStore> ServedResult<'kit, S> {
             return Err(collision(&name, "one of the channel's own tools", agent));
         }
         let entry = OwnerToolEntry {
-            definition: tool.definition(),
+            definition: tool.tool.clone(),
             serve: Arc::new(|_kit, _call| {
                 Box::pin(async { OwnerToolAnswer::Served(Value::String(received())) })
             }),
@@ -275,138 +219,10 @@ fn received() -> String {
     "{\"status\": \"received\"}".to_owned()
 }
 
-/// Whether `tool_name` is a call of the result tool: its name, or its name
-/// as an MCP server exposes it (`mcp__<server>__<name>`). Python's
-/// `ResultTool.matches`.
-fn matches_result_tool(tool_name: &str) -> bool {
-    tool_name == SUBMIT_RESULT || tool_name.ends_with(&format!("__{SUBMIT_RESULT}"))
-}
-
-/// A result call's arguments in the payload's shape, in Python's order:
-/// Python's `normalize_result`.
-fn normalize(arguments: &Metadata) -> Payload {
-    let truthy = |key: &str| arguments.get(key).filter(|value| is_truthy(value));
-    let text = |key: &str| Value::String(truthy(key).map_or_else(String::new, value_text));
-    let shaped = |key: &str, keep: fn(&Value) -> bool, empty: Value| {
-        arguments
-            .get(key)
-            .filter(|value| keep(value))
-            .cloned()
-            .unwrap_or(empty)
-    };
-    vec![
-        (
-            "status",
-            truthy("status")
-                .cloned()
-                .unwrap_or_else(|| json!("completed")),
-        ),
-        ("summary", text("summary")),
-        ("data", shaped("data", Value::is_object, json!({}))),
-        (
-            "deliverables",
-            shaped("deliverables", Value::is_array, json!([])),
-        ),
-        ("reason", text("reason")),
-    ]
-}
-
-/// What a delegation returns for a worker that never called the result
-/// tool after `attempts` tries: Python's `orchestration_fail`, a failure of
-/// the mechanism, not the worker's own.
-fn missing_payload(role: &str, last_output: &str, attempts: u32) -> Payload {
-    vec![
-        ("status", json!("failed")),
-        ("by", json!("orchestration")),
-        (
-            "reason",
-            json!(format!("no_structured_result_after_{attempts}_attempts")),
-        ),
-        ("role", json!(role)),
-        ("last_output", json!(last_output)),
-    ]
-}
-
-/// A payload's members, in the order Python's dict holds them.
-type Payload = Vec<(&'static str, Value)>;
-
-/// `payload` as Python's `json.dumps` writes it.
-fn dumps(payload: &Payload) -> String {
-    dumps_object(payload.iter().map(|(name, value)| (*name, value)), true)
-}
-
-/// Whether Python reads `value` as true.
-fn is_truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(flag) => *flag,
-        Value::Number(number) => number.as_f64().is_some_and(|number| number != 0.0),
-        Value::String(text) => !text.is_empty(),
-        Value::Array(items) => !items.is_empty(),
-        Value::Object(members) => !members.is_empty(),
-    }
-}
-
-/// A value as Python's `str` writes it: a string itself, unquoted.
-fn value_text(value: &Value) -> String {
-    match value {
-        Value::String(text) => text.clone(),
-        Value::Bool(true) => "True".to_owned(),
-        Value::Bool(false) => "False".to_owned(),
-        other @ (Value::Null | Value::Number(_) | Value::Array(_) | Value::Object(_)) => {
-            other.to_string()
-        }
-    }
-}
-
-/// The result tool's definition: Python's `SUBMIT_RESULT_TOOL`.
-fn submit_result_definition() -> Value {
-    json!({
-        "name": SUBMIT_RESULT,
-        "description": "Submit your FINAL result for this task. You MUST call this exactly once, \
-    when your work is done — it is the ONLY way to hand your work to the next step. Do NOT end your \
-    turn with a plain message or a question back to the user; call submit_result with your \
-    structured result.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "status": {
-                    "type": "string",
-                    "enum": ["completed", "failed"],
-                    "description": "completed if you did the task; failed only if you genuinely could not.",
-                },
-                "summary": {
-                    "type": "string",
-                    "description": "One or two sentences summarizing what you produced.",
-                },
-                "data": {
-                    "type": "object",
-                    "description": "Your structured result, for the next step to build on.",
-                },
-                "deliverables": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "title": {"type": "string"},
-                            "url": {"type": "string"},
-                        },
-                    },
-                    "description": "Concrete artifacts you produced (e.g. a published report URL).",
-                },
-                "reason": {
-                    "type": "string",
-                    "description": "If status is failed, explain why.",
-                },
-            },
-            "required": ["status", "summary"],
-        },
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
+    use serde_json::json;
 
     use roomkit_core::model::{ChannelType, EventId, EventSource, Timestamp, ToolCallContent};
 
@@ -420,7 +236,7 @@ mod tests {
         arguments.insert("data".to_owned(), json!("not an object"));
         arguments.insert("deliverables".to_owned(), json!([{ "title": "t" }]));
         assert_eq!(
-            dumps(&normalize(&arguments)),
+            written((SUBMIT_RESULT.normalize)(&arguments)),
             "{\"status\": \"completed\", \"summary\": \"12\", \"data\": {}, \"deliverables\": \
              [{\"title\": \"t\"}], \"reason\": \"\"}"
         );
@@ -434,7 +250,7 @@ mod tests {
         arguments.insert("data".to_owned(), json!("not-a-dict"));
         arguments.insert("deliverables".to_owned(), json!("nope"));
         assert_eq!(
-            dumps(&normalize(&arguments)),
+            written((SUBMIT_RESULT.normalize)(&arguments)),
             "{\"status\": \"completed\", \"summary\": \"s\", \"data\": {}, \"deliverables\": [], \
              \"reason\": \"\"}"
         );
@@ -461,13 +277,13 @@ mod tests {
     fn the_scan_ignores_a_call_refused_failed_or_another_channel_s() {
         let worker = ChannelId::new("w1").unwrap();
         let rows = [
-            end_row("w1", SUBMIT_RESULT, ToolCallOutcome::Refused),
-            end_row("w1", SUBMIT_RESULT, ToolCallOutcome::Failed),
-            end_row("other", SUBMIT_RESULT, ToolCallOutcome::Served),
+            end_row("w1", SUBMIT_RESULT.name(), ToolCallOutcome::Refused),
+            end_row("w1", SUBMIT_RESULT.name(), ToolCallOutcome::Failed),
+            end_row("other", SUBMIT_RESULT.name(), ToolCallOutcome::Served),
         ];
         assert!(
             rows.iter()
-                .all(|row| submitted_by(row, &worker, Forced::SubmitResult).is_none())
+                .all(|row| submitted_by(row, &worker, &SUBMIT_RESULT).is_none())
         );
     }
 
@@ -476,9 +292,9 @@ mod tests {
     #[test]
     fn the_scan_takes_the_worker_s_served_call() {
         let worker = ChannelId::new("w1").unwrap();
-        let row = end_row("w1", SUBMIT_RESULT, ToolCallOutcome::Served);
+        let row = end_row("w1", SUBMIT_RESULT.name(), ToolCallOutcome::Served);
         assert_eq!(
-            submitted_by(&row, &worker, Forced::SubmitResult),
+            submitted_by(&row, &worker, &SUBMIT_RESULT),
             Some(
                 "{\"status\": \"completed\", \"summary\": \"mine\", \"data\": {}, \
                  \"deliverables\": [], \"reason\": \"\"}"
@@ -503,7 +319,7 @@ mod tests {
             ToolCallOutcome::Served,
         );
         assert_eq!(
-            submitted_by(&row, &worker, Forced::Given(&given)),
+            submitted_by(&row, &worker, &given),
             Some("{\"summary\": \"mine\"}".to_owned())
         );
     }
@@ -514,11 +330,11 @@ mod tests {
     fn a_prefixed_gateway_call_is_the_result_tool() {
         assert_eq!(
             [
-                matches_result_tool("submit_result"),
-                matches_result_tool("mcp__gateway__submit_result"),
-                matches_result_tool("submit_results"),
-                matches_result_tool("web_search"),
-                matches_result_tool("submit_result_extra"),
+                SUBMIT_RESULT.matches("submit_result"),
+                SUBMIT_RESULT.matches("mcp__gateway__submit_result"),
+                SUBMIT_RESULT.matches("submit_results"),
+                SUBMIT_RESULT.matches("web_search"),
+                SUBMIT_RESULT.matches("submit_result_extra"),
             ],
             [true, true, false, false, false]
         );

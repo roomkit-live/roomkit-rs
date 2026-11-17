@@ -18,6 +18,41 @@ use crate::support::{channel, room};
 
 const REMINDER: &str = "You did not submit a verdict. Call submit_verdict now.";
 
+// Python: tests/tasks/test_structured_result.py::TestResultHelpers::test_public_default_result_tool
+#[test]
+fn the_public_default_result_tool() {
+    use roomkit::SUBMIT_RESULT;
+    use roomkit::orchestration::SUBMIT_RESULT as ORCHESTRATION_RESULT;
+
+    assert!(std::ptr::eq(
+        &raw const SUBMIT_RESULT,
+        &raw const ORCHESTRATION_RESULT
+    ));
+    assert_eq!(
+        SUBMIT_RESULT.tool["parameters"]["required"],
+        json!(["status", "summary"])
+    );
+    assert!(SUBMIT_RESULT.matches("other__submit_result"));
+    assert!(!SUBMIT_RESULT.matches("submit_result_extra"));
+    let args =
+        serde_json::from_value(json!({"summary": ["a", true], "reason": {"why": null}})).unwrap();
+    let payload = (SUBMIT_RESULT.normalize)(&args);
+    let keys: Vec<_> = payload.keys().map(String::as_str).collect();
+    assert_eq!(
+        keys,
+        ["status", "summary", "data", "deliverables", "reason"]
+    );
+    assert_eq!(payload["summary"], "['a', True]");
+    assert_eq!(payload["reason"], "{'why': None}");
+    assert_eq!(
+        json!((SUBMIT_RESULT.on_missing)("Worker", "unfinished", 2)),
+        json!({
+            "status": "failed", "by": "orchestration", "reason": "no_structured_result_after_2_attempts",
+            "role": "Worker", "last_output": "unfinished",
+        })
+    );
+}
+
 /// `submit_verdict`, read as it was called; never called, a refusal.
 fn verdict() -> ResultTool {
     ResultTool::new(

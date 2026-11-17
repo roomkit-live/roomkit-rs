@@ -21,6 +21,7 @@ mod handoff_greeting;
 mod handoff_tool;
 pub(crate) mod lifecycle;
 mod memory;
+mod result;
 mod router;
 mod session_audit;
 mod session_transcript;
@@ -48,6 +49,8 @@ pub use self::handoff_greeting::SendGreetingOptions;
 #[doc(hidden)]
 pub use self::handoff_tool::handoff_tool_definition;
 pub use self::memory::{InMemoryStatusBackend, InMemoryStatusBackendOptions};
+#[doc(inline)]
+pub use self::result::SUBMIT_RESULT;
 pub(crate) use self::router::router_hook_type;
 #[doc(inline)]
 #[doc(inline)]
@@ -86,3 +89,5 @@ pub use self::text::RecentTextOptions;
 pub use self::tool_audit::{
     ConsoleToolAuditor, ConsoleToolAuditorOptions, JsonlToolAuditor, ToolAuditEntry, ToolAuditor,
 };
+#[doc(inline)]
+pub use crate::tasks::result_tool::ResultTool;
