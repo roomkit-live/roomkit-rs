@@ -14,6 +14,10 @@ pub(super) const MEDIA_URL_RULE: &str = "URL must be a link (http://, https://),
 /// Why an audio or a video URL is refused, Python's message.
 pub(super) const PLAYABLE_URL_RULE: &str = "URL must start with http://, https://, or data:";
 
+/// The percent-decodings a reference is read through; one still encoded
+/// after them is refused.
+const MOST_DECODINGS: usize = 3;
+
 /// The schemes a reader could fetch or open itself, or run.
 const REFUSED_SCHEMES: [&str; 4] = ["file", "ftp", "javascript", "vbscript"];
 
@@ -73,9 +77,10 @@ fn lowercase_scheme(url: &str) -> String {
 /// `<scheme>://…` with a scheme of two characters at least (one reads as a
 /// Windows drive), a letter then letters, digits, `+`, `.` or `-`, not a
 /// scheme a reader fetches, opens or runs, and nothing a path reader could
-/// follow once it has percent-decoded the rest, as many times as it may: no
-/// backslash, no control character, no segment that is `..` with the
-/// whitespace around it trimmed.
+/// follow once it has percent-decoded the rest, up to three times, the most
+/// an ordinary reference is encoded: no backslash, no control character, no
+/// segment that is `..` with the whitespace around it trimmed, and no escape
+/// left to decode.
 fn is_safe_reference(url: &str) -> bool {
     let Some((scheme, rest)) = url.split_once("://") else {
         return false;
@@ -87,8 +92,8 @@ fn is_safe_reference(url: &str) -> bool {
     if !well_formed || REFUSED_SCHEMES.contains(&scheme.to_ascii_lowercase().as_str()) {
         return false;
     }
-    let rest = fully_decoded(rest);
-    !rest.contains('\\') && !holds_control(&rest) && !holds_parent(&rest)
+    decoded(rest)
+        .is_some_and(|rest| !rest.contains('\\') && !holds_control(&rest) && !holds_parent(&rest))
 }
 
 /// Whether `text` holds a control character (Unicode Cc: C0, DEL and C1),
@@ -111,16 +116,21 @@ fn holds_parent(text: &str) -> bool {
             .any(|segment| segment.trim() == "..")
 }
 
-/// `text` percent-decoded until it no longer changes (each pass shortens
-/// it, so the loop ends): `%252e` reads as `.` to a reader that decodes
-/// twice. A decoded byte sequence that is no UTF-8 reads as U+FFFD, as
+/// `text` percent-decoded until it no longer changes, as a reader that
+/// decodes once or more reads it (`%252e` reads as `.` to one that decodes
+/// twice); `None` when it still changes after [`MOST_DECODINGS`], a nesting
+/// no reference holds and whose cost would grow with the square of its
+/// length. A decoded byte sequence that is no UTF-8 reads as U+FFFD, as
 /// Python's `urllib.parse.unquote` reads it.
-fn fully_decoded(text: &str) -> Cow<'_, str> {
+fn decoded(text: &str) -> Option<Cow<'_, str>> {
     let mut text = Cow::Borrowed(text);
-    while let Some(decoded) = percent_decoded(&text) {
-        text = Cow::Owned(decoded);
+    for _ in 0..MOST_DECODINGS {
+        match percent_decoded(&text) {
+            Some(decoded) => text = Cow::Owned(decoded),
+            None => return Some(text),
+        }
     }
-    text
+    percent_decoded(&text).is_none().then_some(text)
 }
 
 /// `text` with each `%` and two hex digits replaced by the byte they name;
@@ -221,6 +231,7 @@ mod tests {
             "app-media://a/b\u{0}",
             "app-media://a/b\u{7f}",
             "app-media://a/b\u{85}",
+            "app-media://photos/%25252541.png",
         ] {
             assert!(!is_safe_reference(url), "{url:?} is accepted");
         }
@@ -232,6 +243,7 @@ mod tests {
             "app-media://photos/My Photo.png?size=large#top",
             "app-media://photos/100%",
             "app-media://photos/%e9t%C3%A9.png",
+            "app-media://photos/%252541.png",
         ] {
             assert!(is_safe_reference(url), "{url:?} is refused");
         }
