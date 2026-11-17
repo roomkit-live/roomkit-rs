@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Add `add_turn_note`, `split_turn_notes` and `TURN_NOTES_HEADER` for hooks that append to or read the notes on a text turn.
+
 - Owner-served tools receive the full call context, return their structured copy, and merge independent response-record changes before every outcome, including concurrent calls (RFC §10.6.5).
 
 - Add `SpeakQueueChange::TurnSkipped`, serialized as `"turn_skipped"`; exhaustive matches must handle the new variant. This mirrors the public marker, without enabling offline-executor turn skipping.

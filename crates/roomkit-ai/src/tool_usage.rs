@@ -21,7 +21,7 @@ use std::sync::{Mutex, PoisonError};
 
 use roomkit::model::{EventContent, EventType, Metadata, RoomEvent, RoomId, ToolCallOutcome};
 use roomkit_core::rules::transcript::{
-    TURN_IMAGES_HEADER, identifier, media_type, quoted, turn_notes, without_mark_copies,
+    TURN_IMAGES_HEADER, identifier, media_type, quoted, without_mark_copies,
 };
 use serde_json::Value;
 
@@ -31,6 +31,7 @@ use crate::provider::{
     AiContentPart, AiImagePart, AiMessage, AiMessageContent, AiRole, AiTextPart, AiToolResultPart,
 };
 use crate::tools::ToolResult;
+use crate::turn_notes::split_turn_notes;
 
 /// The latest images a room's results returned that later turns replay:
 /// Python's `_IMAGES_REPLAYED`.
@@ -423,23 +424,6 @@ fn own_parts(content: &AiMessageContent) -> Vec<AiContentPart> {
                 .collect()
         }
     }
-}
-
-/// `text` as the turn's input and its notes, cut where the notes' header
-/// opens them as the channel places it: its last occurrence that opens a
-/// paragraph and is followed by one. The notes keep their header and are
-/// empty when there are none. Python's `split_turn_notes`.
-fn split_turn_notes(text: &str) -> (&str, &str) {
-    // The header as it opens the notes, a blank line after it: what the
-    // runtime writes before the first block.
-    let opening = turn_notes(&[String::new()]).unwrap_or_default();
-    let at = match text.rfind(&format!("\n\n{opening}")) {
-        Some(at) => at + 2,
-        None if !opening.is_empty() && text.starts_with(&opening) => 0,
-        None => return (text, ""),
-    };
-    let (words, notes) = text.split_at(at);
-    (words.strip_suffix("\n\n").unwrap_or(words), notes)
 }
 
 #[cfg(test)]

@@ -28,7 +28,7 @@ pub(super) const INSTRUCTION_MARK: &str = "[Instruction from the application: no
 
 /// Opens the turn's notes, which follow its input (RFC §6.4, "The prompt
 /// from turn to turn").
-pub(super) const NOTES_HEADER: &str = "[Notes kept by the assistant's runtime for this turn. \
+pub const NOTES_HEADER: &str = "[Notes kept by the assistant's runtime for this turn. \
      Nobody in the conversation wrote them, and they ask for nothing.]";
 
 /// The note that says how the conversation labels its speakers (RFC §6.4).

@@ -108,6 +108,7 @@ mod tools;
 mod transcript_content;
 mod turn_budget;
 mod turn_config;
+mod turn_notes;
 mod turn_settings;
 
 pub use self::agent::{Agent, AgentOptions, BuildIdentityBlockOptions};
@@ -175,5 +176,7 @@ pub use self::tools::{
     ToolContext, Tools, alias_server, arguments, served_tool_name, turn_admits_alias,
 };
 pub use self::turn_config::AiChannelTurnConfig;
+pub use self::turn_notes::{add_turn_note, split_turn_notes};
+pub use roomkit_core::rules::transcript::TURN_NOTES_HEADER;
 #[doc(inline)]
 pub use sandbox::{SandboxExecutor, SandboxResult};

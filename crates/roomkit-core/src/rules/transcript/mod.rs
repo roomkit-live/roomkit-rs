@@ -82,6 +82,7 @@ pub use self::fence::without_tags;
 use self::kept::{KeptInstruction, kept_instructions};
 #[doc(hidden)]
 pub use self::marks::COMPACTION_HEADER;
+pub use self::marks::NOTES_HEADER as TURN_NOTES_HEADER;
 pub use self::marks::SPEAKER_NOTE as SPEAKER_ATTRIBUTION_NOTE;
 pub use self::marks::SUMMARY_HEADER;
 #[doc(hidden)]
