@@ -37,12 +37,10 @@ impl Image {
     /// type and parameters in lower case (Python's `canonical_data_uri`):
     /// the base64's form is the provider's to judge. A link (`http`,
     /// `https`) goes as written, its scheme in lower case: the provider
-    /// fetches it. An application reference is held to the content
-    /// model's rule (RFC §6.4), which a struct literal skips: a scheme of
-    /// two characters at least, no part of it a reader fetches, opens or
-    /// runs, no `..` segment, backslash or control character, percent-encoded
-    /// or not, and something after `://`. Anything else returns `None`, and
-    /// the channel reads a mention in its place.
+    /// fetches it. An application reference is held to the rule of
+    /// [`MediaContent::new`](crate::model::MediaContent::new) (RFC §6.4),
+    /// which a struct literal skips. Anything else returns `None`, and the
+    /// channel reads a mention in its place.
     pub fn new(url: &str, mime_type: &str) -> Option<Self> {
         let mime_type = vision_type(mime_type)?;
         let (scheme, rest) = url.split_once(':')?;
@@ -56,7 +54,7 @@ impl Image {
                 mime_type,
             });
         }
-        if rest.len() <= 2 || !is_safe_reference(url) {
+        if !is_safe_reference(url) {
             return None;
         }
         Some(Self {
@@ -186,6 +184,8 @@ mod tests {
         assert!(!format!("{image:?}").contains("AQIDBA"));
         assert!(Image::new("data:image/png;base64,", "image/png").is_none());
         assert!(Image::new("media://safe", "application/pdf").is_none());
+        // Python hands an empty reference to its resolver as it hands any.
+        assert!(Image::new("media://", "image/png").is_some());
         assert!(
             !Image::new("media://safe", "image/png")
                 .unwrap()
