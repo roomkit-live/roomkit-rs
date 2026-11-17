@@ -860,11 +860,10 @@ params = ["session"]
 scope = "media"
 reason = "not in 0.x: voice and video"
 
-[[missing]]
-python = "roomkit.InboundResult"
-members = ["report_cascade"]
-scope = "text"
-reason = "not ported: plumbing (lot 2)"
+[[exception]]
+rust = "roomkit::CascadeReport"
+approved = "2026-11-17"
+reason = "language: InboundResult.report_cascade takes a borrowed view of the cascade's six data fields, with no wait/cancel operations. Rust copies the collections and their values on report; Python aliases its delivery mapping and list elements. The target ResponseMetadata remains shared and keeps its write count and per-channel turns merge. See api/PYTHON_API.md."
 
 [[exception]]
 python = "roomkit.HookEngine"

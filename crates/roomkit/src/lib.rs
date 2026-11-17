@@ -193,7 +193,7 @@ pub use self::context::within_tool_turn_depth;
 #[doc(hidden)]
 pub use self::hooks::TurnPayload;
 pub use self::host::{HostChannel, HostChannelOptions};
-pub use self::inbound::{CancelOptions, DeliveryHandle, InboundResult};
+pub use self::inbound::{CancelOptions, CascadeReport, DeliveryHandle, InboundResult};
 pub use self::kit::{
     AddMemberOptions, EnsureParticipantOptions, IsMemberOptions, RemoveMemberOptions,
     RenameMemberOptions, ResolveParticipantOptions,

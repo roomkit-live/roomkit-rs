@@ -11,7 +11,6 @@ use roomkit_core::model::{
     ChannelId, DeliveryResult, ErrorRecord, Metadata, ResponseMetadata, RoomEvent,
 };
 use roomkit_core::ops::{self, KIT_CLOSED};
-use serde_json::Value;
 use tokio::sync::{Mutex, OnceCell};
 use tokio::task::{AbortHandle, JoinHandle};
 
@@ -19,6 +18,10 @@ use crate::context::{Completion, ExecutionContext};
 use crate::driver::{self, InboundOutput, Record};
 use crate::error::RoomKitError;
 use crate::tasks::Tasks;
+
+mod report;
+
+pub use report::CascadeReport;
 
 /// What became of an inbound message (RFC §10.1 `InboundResult`), as the
 /// Python implementation's `InboundResult` reports it.
@@ -101,7 +104,7 @@ impl InboundResult {
             refused_before_the_lock: _,
         } = result;
         let response_metadata = match &delivery {
-            Some(handle) => handle.shared.reported(response_metadata),
+            Some(handle) => handle.shared.reported(&response_metadata),
             None => response_metadata.into(),
         };
         Self {
@@ -166,9 +169,6 @@ impl Default for CancelOptions {
 pub struct DeliveryHandle {
     shared: Arc<Shared>,
 }
-
-/// The key of a caller's record under which each turn's end is (RFC §6.4).
-const TURNS: &str = "turns";
 
 /// What every clone of a handle shares.
 struct Shared {
@@ -407,19 +407,8 @@ impl DeliveryHandle {
 impl Shared {
     /// The call's record, `reported` merged into it, each channel's end beside
     /// the others': Python's `merge_caller_record`.
-    fn reported(&self, mut reported: Metadata) -> ResponseMetadata {
-        let mut turns = match self.record.get(TURNS) {
-            Some(Value::Object(turns)) => turns,
-            _ => Metadata::new(),
-        };
-        if let Some(Value::Object(ended)) = reported.get(TURNS) {
-            turns.extend(ended.clone());
-        }
-        reported.shift_remove(TURNS);
-        self.record.update(reported);
-        if !turns.is_empty() {
-            self.record.insert(TURNS, Value::Object(turns));
-        }
+    fn reported(&self, reported: &Metadata) -> ResponseMetadata {
+        report::merge_record(&self.record, reported);
         self.record.clone()
     }
 
