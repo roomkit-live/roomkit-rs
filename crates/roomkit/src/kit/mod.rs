@@ -129,11 +129,11 @@ pub use self::status::{
     ListObservationsOptions, ListTasksOptions, SubmitFeedbackOptions, UpdateRoomMetadataOptions,
 };
 pub use self::steering::SteerOptions;
-pub(crate) use self::strategies::strategy_address;
 pub use self::strategies::{
     ClaimRoomStrategyOptions, InstallStrategyOptions, RoomStrategyIsCurrentOptions,
     RoomStrategyOptions, UninstallStrategyOptions,
 };
+pub(crate) use self::strategies::{ClosedRoom, strategy_address};
 pub use self::task_cancel::CancelTaskOptions;
 pub use self::tasks::DelegateOptions;
 pub(crate) use self::tasks::TaskEnd;

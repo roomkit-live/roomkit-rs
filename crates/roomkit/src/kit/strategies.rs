@@ -13,15 +13,16 @@
 use std::any::{Any, TypeId};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
-use std::pin::pin;
+use std::future::Future;
+use std::pin::{Pin, pin};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use roomkit_core::model::{ChannelCategory, ChannelId, Metadata, RoomId};
+use roomkit_core::model::{ChannelCategory, ChannelId, Metadata, Room, RoomId, RoomStatus};
 use tokio::sync::Notify;
 
 use super::RoomKit;
 use crate::context::{ExecutionContext, Section};
-use crate::error::RoomKitError;
+use crate::error::{RoomKitError, with_causes};
 use crate::kit::{AttachChannelOptions, DetachChannelOptions, GetRoomOptions};
 use crate::orchestration::{Discussion, Orchestration, StrategyAgent};
 use crate::store::{ConversationStore, PatchRoomMetadataOptions, StoreError};
@@ -76,6 +77,9 @@ pub struct RoomStrategyIsCurrentOptions {
     pub organization_id: Option<String>,
 }
 
+/// A room a run closed or archived, and the strategy it held then.
+pub(crate) type ClosedRoom<S> = (RoomId, Option<Arc<dyn Orchestration<S>>>);
+
 /// The strategies installed through the kit, by room.
 pub(crate) struct RoomStrategies<S> {
     rooms: Mutex<HashMap<RoomId, Installed<S>>>,
@@ -104,6 +108,14 @@ impl<S> fmt::Debug for RoomStrategies<S> {
 impl<S> RoomStrategies<S> {
     fn rooms(&self) -> MutexGuard<'_, HashMap<RoomId, Installed<S>>> {
         self.rooms.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The strategy recorded for `room_id`, an install under way included:
+    /// what a close takes back out once its run let go of the room's lock.
+    pub(crate) fn held(&self, room_id: &RoomId) -> Option<Arc<dyn Orchestration<S>>> {
+        self.rooms()
+            .get(room_id)
+            .map(|installed| Arc::clone(&installed.strategy))
     }
 }
 
@@ -239,9 +251,11 @@ impl<S: ConversationStore> RoomKit<S> {
     /// # Errors
     ///
     /// Returns [`RoomKitError::RoomNotFound`] for a room the call does not
-    /// reach (RFC §17.2); [`RoomKitError::Value`] when the room holds a
-    /// strategy already (uninstall it first), or the strategy refuses the
-    /// room, what its install added taken back;
+    /// reach (RFC §17.2); [`RoomKitError::RoomClosed`] when the room is
+    /// CLOSED or ARCHIVED, read under its lock: a room holds a strategy only
+    /// while it lives (RFC §19.7); [`RoomKitError::Value`] when the room
+    /// holds a strategy already (uninstall it first), or the strategy
+    /// refuses the room, what its install added taken back;
     /// [`RoomKitError::ChannelNotRegistered`] for an agent named by an id
     /// the kit does not hold; and what the strategy's install failed with.
     /// When what the install added could not be read, or not all of it
@@ -299,10 +313,76 @@ impl<S: ConversationStore> RoomKit<S> {
             )
             .await?;
         self.install_over(room_id).await;
+        self.uninstall_room(&room).await
+    }
+
+    /// Takes the strategies of `rooms`, which a run just closed, by their
+    /// host or by their timers, back out, as [`uninstall_strategy`] does,
+    /// their timelines kept: a room holds a strategy only while it lives
+    /// (RFC §19.7). The run let go of the rooms' locks first; its caller is
+    /// answered once they are taken back. A reopened room holds none: its
+    /// host installs one again. A room is closed whatever this meets: a
+    /// failure is logged, what stays recorded for a later uninstall. An
+    /// install still running is not waited for, as Python's close, under
+    /// the room's lock, finds nothing installed yet. Python's
+    /// `_uninstall_closed`. Boxed: the uninstall runs the kit's calls,
+    /// whose runs end here too.
+    ///
+    /// [`uninstall_strategy`]: Self::uninstall_strategy
+    pub(crate) fn uninstall_closed(
+        &self,
+        rooms: Vec<ClosedRoom<S>>,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            for (room_id, held) in rooms {
+                if let Err(error) = self.uninstall_closed_room(&room_id, held).await {
+                    tracing::error!(
+                        target: "roomkit::strategies",
+                        room_id = %room_id,
+                        error = %with_causes(&error),
+                        "taking the strategy of a closed room back out failed"
+                    );
+                }
+            }
+        })
+    }
+
+    /// Takes back out the strategy `room_id` held when its run closed it,
+    /// `held`: one installed since in its place (a room reopened in
+    /// between, a discussion installed over the one it held) is not that
+    /// close's to take back.
+    async fn uninstall_closed_room(
+        &self,
+        room_id: &RoomId,
+        held: Option<Arc<dyn Orchestration<S>>>,
+    ) -> Result<bool, RoomKitError> {
+        let (running, replaced) = {
+            let rooms = self.inner.room_strategies.rooms();
+            let installed = rooms.get(room_id);
+            (
+                installed.is_some_and(|installed| installed.state == InstallState::Running),
+                match (installed, &held) {
+                    (Some(installed), Some(held)) => !Arc::ptr_eq(&installed.strategy, held),
+                    (Some(_), None) => true,
+                    (None, _) => false,
+                },
+            )
+        };
+        if running || replaced {
+            return Ok(false);
+        }
+        let room = self.get_room(room_id, GetRoomOptions::default()).await?;
+        self.uninstall_room(&room).await
+    }
+
+    /// [`uninstall_strategy`](Self::uninstall_strategy) for `room`, read in
+    /// its scope already, once no install of it runs.
+    async fn uninstall_room(&self, room: &Room) -> Result<bool, RoomKitError> {
+        let room_id = &room.id;
         let Some(strategy) = self.recorded_strategy(room_id) else {
             // A discussion is uninstalled from any process serving the room,
             // one where no host installed it included (RFC §19.7.5 rule 16).
-            return self.uninstall_stored_discussion(&room).await;
+            return self.uninstall_stored_discussion(room).await;
         };
         strategy.uninstall(self, room_id).await?;
         // Released only once all of it is taken back: a room left with part
@@ -510,10 +590,10 @@ impl<S: ConversationStore> RoomKit<S> {
         // A discussion taking another's place binds its new agents itself,
         // once it holds the room (RFC §19.7.5 rule 1).
         let replacing = self.replacing(room_id, strategy);
-        let attached = if replacing {
-            Ok(())
-        } else {
-            self.attach_agents(room_id, strategy.as_ref()).await
+        let attached = match self.refuse_closed(room_id).await {
+            Err(error) => Err(error),
+            Ok(()) if replacing => Ok(()),
+            Ok(()) => self.attach_agents(room_id, strategy.as_ref()).await,
         };
         let installed = match attached {
             Ok(()) => strategy.install(self, room_id).await,
@@ -541,6 +621,19 @@ impl<S: ConversationStore> RoomKit<S> {
                     .await
             }
         }
+    }
+
+    /// Refuses an install in a room no longer live, read under its lock: a
+    /// room holds a strategy only while it lives (RFC §19.7), Python's
+    /// `_refuse_closed`.
+    async fn refuse_closed(&self, room_id: &RoomId) -> Result<(), RoomKitError> {
+        let room = self.get_room(room_id, GetRoomOptions::default()).await?;
+        if matches!(room.status, RoomStatus::Closed | RoomStatus::Archived) {
+            return Err(RoomKitError::RoomClosed {
+                room_id: room_id.clone(),
+            });
+        }
+        Ok(())
     }
 
     /// Whether the install of `strategy` claiming `room_id` takes the place

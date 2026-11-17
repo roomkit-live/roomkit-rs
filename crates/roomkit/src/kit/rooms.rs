@@ -237,8 +237,9 @@ impl<S: ConversationStore> RoomKit<S> {
         Ok(driver::run(&self.inner, "resume_room", resume).await??)
     }
 
-    /// Reopens a closed room: it accepts events again (RFC §5.1). Returns
-    /// the room as it now stands.
+    /// Reopens a closed room: it accepts events again (RFC §5.1). It holds
+    /// no strategy, its close took it back out (RFC §19.7): install one
+    /// again if it should. Returns the room as it now stands.
     ///
     /// # Errors
     ///
@@ -259,8 +260,11 @@ impl<S: ConversationStore> RoomKit<S> {
         Ok(driver::run(&self.inner, "reopen_room", reopen).await??)
     }
 
-    /// Closes a room: it refuses every new event from now on (RFC §5.1). A
-    /// closed room is left as it is. Returns the room as it now stands.
+    /// Closes a room: it refuses every new event from now on (RFC §5.1). Its
+    /// strategy is then taken back out, as
+    /// [`uninstall_strategy`](Self::uninstall_strategy) does, before this
+    /// returns (RFC §19.7). A closed room is left as it is. Returns the room
+    /// as it now stands.
     ///
     /// # Errors
     ///
@@ -282,8 +286,9 @@ impl<S: ConversationStore> RoomKit<S> {
     }
 
     /// Archives a room: a terminal, read-only state it never leaves (RFC
-    /// §5.1). An archived room is left as it is. Returns the room as it now
-    /// stands.
+    /// §5.1); a room archived still open has its strategy taken back out,
+    /// as a closed one (RFC §19.7). An archived room is left as it is.
+    /// Returns the room as it now stands.
     ///
     /// # Errors
     ///

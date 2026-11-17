@@ -8,12 +8,13 @@ use std::sync::Arc;
 
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelId, ChannelOutput, ChannelType, InboundMessage,
-    RoomContext, RoomEvent, RoomId,
+    RoomContext, RoomEvent, RoomId, RoomStatus, RoomTimers, Timestamp,
 };
 use roomkit::orchestration::{StrategyAgent, StrategyFuture};
 use roomkit::{
-    Channel, ChannelError, CreateRoomOptions, ListBindingsOptions, Orchestration, RoomKit,
-    RoomKitOptions, default_inbound_event,
+    ArchiveRoomOptions, Channel, ChannelError, CheckRoomTimersOptions, CloseRoomOptions,
+    CreateRoomOptions, ListBindingsOptions, Orchestration, RoomKit, RoomKitOptions,
+    RoomStrategyOptions, SetRoomTimersOptions, UninstallStrategyOptions, default_inbound_event,
 };
 
 /// An intelligence channel that answers nothing.
@@ -108,6 +109,89 @@ async fn agents_registered_once() {
     kit.close().await.unwrap();
 }
 
+/// How a closed room was closed.
+#[derive(Clone, Copy, Debug)]
+enum ClosedBy {
+    CloseRoom,
+    Timers,
+    ArchiveRoom,
+}
+
+// Python: tests/orchestration/test_strategy_install.py::test_a_closed_room_gives_back_what_its_strategy_set_up
+// A room holds a strategy only while it lives (RFC §19.7): its close, by its
+// host or by its timers, or its archiving while still open, takes the
+// strategy back out as an uninstall does, and it takes no other; a room left
+// open keeps its own install of the same strategy.
+#[tokio::test]
+async fn a_closed_room_gives_back_what_its_strategy_set_up() {
+    for closed_by in [ClosedBy::CloseRoom, ClosedBy::Timers, ClosedBy::ArchiveRoom] {
+        let team: Arc<dyn Orchestration> = Arc::new(Team(vec![Quiet("lead"), Quiet("worker")]));
+        let kit = RoomKit::new(RoomKitOptions {
+            orchestration: Some(Arc::clone(&team)),
+            ..RoomKitOptions::default()
+        });
+        for room in ["r1", "r2"] {
+            let options = CreateRoomOptions {
+                room_id: Some(RoomId::new(room).unwrap()),
+                ..Default::default()
+            };
+            kit.create_room(options).await.unwrap();
+        }
+        let r1 = RoomId::new("r1").unwrap();
+
+        let closed = match closed_by {
+            ClosedBy::CloseRoom => kit
+                .close_room(&r1, CloseRoomOptions::default())
+                .await
+                .unwrap(),
+            ClosedBy::ArchiveRoom => kit
+                .archive_room(&r1, ArchiveRoomOptions::default())
+                .await
+                .unwrap(),
+            ClosedBy::Timers => {
+                let timers = RoomTimers {
+                    inactive_after_seconds: Some(0),
+                    closed_after_seconds: Some(0),
+                    last_activity_at: Some(Timestamp::UNIX_EPOCH),
+                };
+                kit.set_room_timers(&r1, timers, SetRoomTimersOptions::default())
+                    .await
+                    .unwrap();
+                kit.check_room_timers(&r1, CheckRoomTimersOptions::default())
+                    .await
+                    .unwrap()
+            }
+        };
+
+        let held = |room: &str| {
+            kit.room_strategy(&RoomId::new(room).unwrap(), RoomStrategyOptions::default())
+                .is_some_and(|held| Arc::ptr_eq(&held, &team))
+        };
+        let expected = match closed_by {
+            ClosedBy::ArchiveRoom => RoomStatus::Archived,
+            ClosedBy::CloseRoom | ClosedBy::Timers => RoomStatus::Closed,
+        };
+        assert_eq!(closed.status, expected, "{closed_by:?}");
+        assert_eq!((held("r1"), held("r2")), (false, true), "{closed_by:?}");
+        assert!(bound(&kit, "r1").await.is_empty(), "{closed_by:?}");
+        assert_eq!(bound(&kit, "r2").await, ["lead", "worker"], "{closed_by:?}");
+        let uninstalled = kit
+            .uninstall_strategy(&r1, UninstallStrategyOptions::default())
+            .await
+            .unwrap();
+        assert!(!uninstalled, "{closed_by:?}");
+        let refused = kit
+            .install_strategy(&r1, Arc::clone(&team), InstallStrategyOptions::default())
+            .await;
+        assert!(
+            matches!(refused, Err(RoomKitError::RoomClosed { .. })),
+            "{closed_by:?}: {refused:?}"
+        );
+        assert!(!held("r1"), "{closed_by:?}");
+        kit.close().await.unwrap();
+    }
+}
+
 #[path = "strategies/faulty_store.rs"]
 mod faulty_store;
 
@@ -118,10 +202,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use roomkit::model::Metadata;
-use roomkit::{
-    GetRoomOptions, InstallStrategyOptions, RoomKitError, RoomStrategyOptions,
-    UninstallStrategyOptions, UpdateRoomMetadataOptions,
-};
+use roomkit::{GetRoomOptions, InstallStrategyOptions, RoomKitError, UpdateRoomMetadataOptions};
 
 use crate::faulty_store::AbstractOnly as Faulty;
 

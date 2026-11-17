@@ -46,9 +46,9 @@ use std::task::Poll;
 use roomkit_core::model::{ErrorRecord, EventId, RoomEvent, RoomId, Timestamp};
 use roomkit_core::ops::failure_log;
 use roomkit_core::ops::{
-    AnswerOf, ChannelRequest, Delivered, Effect, EffectId, EntryId, Environment, HoldOutcome,
-    HoldRequest, InboundError, InboundResult, KIT_CLOSED, Next, Notice, Operation, Outcome,
-    ProtocolError, Request, Settled, StoreOutcome, StoreRequest,
+    AnswerOf, ChannelRequest, Delivered, Effect, EffectId, EntryId, Environment, FrameworkEvent,
+    HoldOutcome, HoldRequest, InboundError, InboundResult, KIT_CLOSED, Next, Notice, Operation,
+    Outcome, ProtocolError, Request, Settled, StoreOutcome, StoreRequest,
 };
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::{self, AbortHandle, JoinError, JoinHandle, JoinSet};
@@ -395,6 +395,7 @@ async fn drive<S: ConversationStore, O: Operation>(
         }
     }
     let clocks = Clocks::read(&*environment);
+    let closed_rooms: ClosedRooms<S> = Arc::default();
     if let Some(deadline) = caller.as_ref().and_then(|caller| caller.deadline.0)
         && let Some(at) = clocks.timestamp_of(deadline)
     {
@@ -414,6 +415,7 @@ async fn drive<S: ConversationStore, O: Operation>(
         shared,
         adoptions,
         discussion_rooms: Arc::default(),
+        closed_rooms: Arc::clone(&closed_rooms),
         effect_of_task: HashMap::new(),
         call_of_effect: HashMap::new(),
         callers: HashMap::new(),
@@ -446,8 +448,22 @@ async fn drive<S: ConversationStore, O: Operation>(
     };
     // Boxed: the waits and calls a run polls would make every caller's
     // future large.
-    Box::pin(driver.drive(operation)).await
+    let output = Box::pin(driver.drive(operation)).await;
+    // A room the run closed holds no strategy (RFC §19.7): taken back out
+    // once its close is written and announced and the run let go of its
+    // lock, before its caller is answered.
+    let closed = std::mem::take(&mut *closed_rooms.lock().unwrap_or_else(PoisonError::into_inner));
+    if !closed.is_empty() {
+        let kit = crate::RoomKit {
+            inner: Arc::clone(inner),
+        };
+        kit.uninstall_closed(closed).await;
+    }
+    output
 }
+
+/// The rooms a run closed or archived, each with the strategy it held then.
+type ClosedRooms<S> = Arc<Mutex<Vec<crate::kit::ClosedRoom<S>>>>;
 
 /// One run of an operation: what it holds, waits for and calls, and the
 /// callers of the entries its operation adopted.
@@ -482,6 +498,10 @@ struct Driver<'kit, S> {
     /// discussion of, until the operation takes their hooks (RFC §19.7.5
     /// rule 16, RMK-1476).
     discussion_rooms: Arc<Mutex<Vec<RoomId>>>,
+    /// The rooms the run closed, by their host or by their timers, or
+    /// archived, each with the strategy it held then, taken back out once
+    /// the run let go of their locks (RFC §19.7, RMK-341).
+    closed_rooms: ClosedRooms<S>,
     /// The effect each call answers, by its task.
     effect_of_task: HashMap<task::Id, EffectId>,
     /// The call of each effect, until it finishes, to abort it when the
@@ -942,6 +962,17 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 failure_log::log_failure(log, &error, &what, receives);
             }
             notice @ (Notice::FrameworkEvent(_) | Notice::AsyncHooks { .. }) => {
+                if let Notice::FrameworkEvent(
+                    FrameworkEvent::RoomClosed { room_id, .. }
+                    | FrameworkEvent::RoomArchived { room_id, .. },
+                ) = &notice
+                {
+                    let held = self.inner.room_strategies.held(room_id);
+                    self.closed_rooms
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .push((room_id.clone(), held));
+                }
                 if let Some(handled) = perform(self.inner, notice) {
                     handled.wait().await;
                 }

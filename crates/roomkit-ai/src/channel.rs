@@ -659,7 +659,7 @@ impl AiChannel<Routed> {
     /// provider it names gets one attempt, and the turn's later rounds stay
     /// on the provider that served the round before. A cost budget is
     /// checked at each turn's start, on the model the router picks. The
-    /// channel's close closes the router.
+    /// channel's close leaves the router open, its owner's (RFC §6.4).
     ///
     /// # Errors
     ///
