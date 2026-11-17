@@ -14,7 +14,10 @@ fn initialize(state: &OnceLock<AtomicBool>, read: impl FnOnce() -> String) -> &A
     state.get_or_init(|| {
         let value = read();
         AtomicBool::new(matches!(
-            value.trim().to_lowercase().as_str(),
+            value
+                .trim_matches(crate::tasks::text::is_python_space)
+                .to_lowercase()
+                .as_str(),
             "1" | "true" | "yes" | "on"
         ))
     })

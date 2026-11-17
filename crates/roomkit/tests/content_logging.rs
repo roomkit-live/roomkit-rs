@@ -27,6 +27,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         (Some("on"), true),
         (Some("  TrUe  "), true),
         (Some("enabled"), false),
+        (Some("\u{1c}\u{1d}TrUe\u{1e}\u{1f}"), true),
+        (Some("tr\u{1c}ue"), false),
     ] {
         let mut command = std::process::Command::new(std::env::current_exe()?);
         command
