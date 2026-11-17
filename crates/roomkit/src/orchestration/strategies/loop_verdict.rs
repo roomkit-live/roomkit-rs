@@ -5,15 +5,15 @@
 //! A reviewer judges the producer's output by calling `submit_review` once,
 //! forced as a worker's `submit_result` and a supervisor's `submit_verdict`
 //! are, its reminders included. The verdict fails closed: a review that
-//! never called the tool, a reviewer channel that answered in text, or a
-//! task that failed approves nothing, whatever words its text holds.
+//! never called the tool, a reviewer whose turns take no owner tools (never
+//! given the tool, it answers in text), or a task that failed approves
+//! nothing, whatever words its text holds.
 
 use std::sync::Arc;
 
 use roomkit_core::model::Metadata;
 use serde_json::{Value, json};
 
-use super::supervisor::{python_str, truthy};
 use crate::tasks::ResultTool;
 
 /// A reviewer's verdict: whether it approves, and its feedback.
@@ -33,15 +33,16 @@ impl ReviewVerdict {
 }
 
 /// A `submit_review` call's arguments read as a verdict: approved only when
-/// `approved` is the boolean true (Python's `_normalize_review`).
+/// `approved` is the boolean true; a feedback that is no text is none
+/// (Python's `_normalize_review`).
 fn normalize_review(arguments: &Metadata) -> ReviewVerdict {
     ReviewVerdict {
         approved: arguments.get("approved") == Some(&Value::Bool(true)),
         feedback: arguments
             .get("feedback")
-            .filter(|value| truthy(value))
-            .map(python_str)
-            .unwrap_or_default(),
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
     }
 }
 
@@ -84,10 +85,18 @@ pub(super) fn submit_review() -> ResultTool {
 }
 
 /// The verdict a review's task handed back: its `submit_review` payload as
-/// the orchestration wrote it. Anything else (a reviewer channel that
-/// answered in text, a task that failed and handed back nothing) is no
-/// approval, its text the feedback (Python's `read_review`).
-pub(super) fn read_review(output: &str) -> ReviewVerdict {
+/// the orchestration wrote it, when the reviewer was `judged` through the
+/// tool (its turns take the owner's tools). Anything else (the text of a
+/// reviewer never given the tool, even a verdict's JSON; a task that failed
+/// and handed back nothing) is no approval, its text the feedback
+/// (Python's `read_review`).
+pub(super) fn read_review(output: &str, judged: bool) -> ReviewVerdict {
+    if !judged {
+        return ReviewVerdict {
+            approved: false,
+            feedback: output.to_owned(),
+        };
+    }
     match serde_json::from_str::<Value>(output) {
         Ok(Value::Object(payload)) if payload.contains_key("approved") => {
             normalize_review(&payload)
@@ -96,49 +105,5 @@ pub(super) fn read_review(output: &str) -> ReviewVerdict {
             approved: false,
             feedback: output.to_owned(),
         },
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::read_review;
-
-    /// The review's result: an approving `submit_review` payload.
-    const APPROVAL: &str = r#"{"approved": true, "feedback": ""}"#;
-
-    // Python: tests/orchestration/test_loop_strategy.py
-    // TestReviewVerdict::test_only_an_approving_verdict_approves (RMK-597).
-    #[test]
-    fn only_an_approving_verdict_approves() {
-        let cases = [
-            (
-                "Not approved: the intro is missing.",
-                false,
-                "Not approved: the intro is missing.",
-            ),
-            ("DISAPPROVED", false, "DISAPPROVED"),
-            (
-                "I cannot mark this APPROVED yet.",
-                false,
-                "I cannot mark this APPROVED yet.",
-            ),
-            ("APPROVED", false, "APPROVED"),
-            (
-                r#"{"approved": false, "feedback": "Add the intro."}"#,
-                false,
-                "Add the intro.",
-            ),
-            (r#"{"approved": "true", "feedback": ""}"#, false, ""),
-            ("", false, ""),
-            (APPROVAL, true, ""),
-        ];
-        for (output, approved, feedback) in cases {
-            let verdict = read_review(output);
-            assert_eq!(
-                (verdict.approved, verdict.feedback.as_str()),
-                (approved, feedback),
-                "{output:?}"
-            );
-        }
     }
 }

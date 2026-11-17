@@ -93,10 +93,17 @@ async fn review<S: ConversationStore>(
         ("role".to_owned(), json!("reviewer")),
         ("strategy".to_owned(), json!(strategy.as_str())),
     ]);
+    // A reviewer whose turns take no owner tools is never given
+    // `submit_review`: its text is no verdict.
+    let judged = kit.takes_owner_tools(&reviewer.channel_id);
     let status = WorkerStatus {
         metadata,
         action: "review",
-        ended: review_ended,
+        ended: if judged {
+            review_ended
+        } else {
+            unjudged_review_ended
+        },
     };
     let delegation = DelegateOptions {
         require_structured_result: true,
@@ -113,7 +120,7 @@ async fn review<S: ConversationStore>(
         delegation,
     )
     .await?;
-    let verdict = read_review(outcome.result().as_ref().map_or("", task_work));
+    let verdict = read_review(outcome.result().as_ref().map_or("", task_work), judged);
     Ok(Review {
         reviewer: reviewer.name().to_owned(),
         approved: verdict.approved,
@@ -125,6 +132,17 @@ async fn review<S: ConversationStore>(
 /// asks for a revision, failed when the reviewer's task did not complete.
 /// Its detail is the reviewer's feedback, or the verdict when it gave none.
 fn review_ended(reviewed: &WorkerOutcome) -> WorkerEnd {
+    review_ended_as(reviewed, true)
+}
+
+/// The terminal entry of a review by a reviewer never given
+/// `submit_review`: its text approves nothing.
+fn unjudged_review_ended(reviewed: &WorkerOutcome) -> WorkerEnd {
+    review_ended_as(reviewed, false)
+}
+
+/// A review's terminal entry, its verdict read as `judged` says.
+fn review_ended_as(reviewed: &WorkerOutcome, judged: bool) -> WorkerEnd {
     if !reviewed.completed {
         return WorkerEnd {
             level: StatusLevel::Failed,
@@ -133,12 +151,12 @@ fn review_ended(reviewed: &WorkerOutcome) -> WorkerEnd {
         };
     }
     let result = reviewed.result();
-    completed_review_ended(result.as_ref().map_or("", task_work))
+    completed_review_ended(result.as_ref().map_or("", task_work), judged)
 }
 
 /// The terminal entry of a review whose task completed with `output`.
-fn completed_review_ended(output: &str) -> WorkerEnd {
-    let verdict = read_review(output);
+fn completed_review_ended(output: &str, judged: bool) -> WorkerEnd {
+    let verdict = read_review(output, judged);
     let (level, verdict_text) = if verdict.approved {
         (StatusLevel::Completed, "Approved.")
     } else {
@@ -190,11 +208,16 @@ mod tests {
                 false,
                 "Not approved.",
             ),
+            (
+                r#"{"approved": false, "feedback": ["Add it."]}"#,
+                false,
+                "Not approved.",
+            ),
             ("", false, "Not approved."),
             (r#"{"approved": true, "feedback": ""}"#, true, "Approved."),
         ];
         for (output, approved, detail) in cases {
-            let ended = completed_review_ended(output);
+            let ended = completed_review_ended(output, true);
             let level = if approved {
                 StatusLevel::Completed
             } else {
@@ -205,6 +228,23 @@ mod tests {
             assert_eq!(
                 ended.metadata.get("approved"),
                 Some(&serde_json::json!(approved))
+            );
+        }
+    }
+
+    // Python: tests/test_declared_strategies.py
+    // test_a_reviewer_whose_turns_take_no_owner_tools_approves_nothing: a
+    // reviewer never given `submit_review` approves nothing, even with a
+    // verdict's JSON as its text.
+    #[test]
+    fn a_reviewer_never_given_the_tool_approves_nothing() {
+        for words in ["APPROVED", r#"{"approved": true, "feedback": ""}"#] {
+            let ended = completed_review_ended(words, false);
+            assert_eq!(ended.level, StatusLevel::Info, "{words:?}");
+            assert_eq!(ended.detail, words);
+            assert_eq!(
+                ended.metadata.get("approved"),
+                Some(&serde_json::json!(false))
             );
         }
     }

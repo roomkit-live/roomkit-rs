@@ -42,9 +42,13 @@ pub(super) fn worker_tool_names(worker_ids: &[&str]) -> Vec<String> {
         .zip(&kept)
         .map(|(id, kept)| kept.is_none().then(|| replace(id)))
         .collect();
+    // Each id counts once, as Python's names keyed by id read a repeated one.
     let mut uses: HashMap<&str, usize> = HashMap::new();
-    for name in replaced.iter().flatten() {
-        *uses.entry(name.as_str()).or_default() += 1;
+    let mut counted = HashSet::new();
+    for (id, name) in worker_ids.iter().zip(&replaced) {
+        if let Some(name) = name.as_ref().filter(|_| counted.insert(*id)) {
+            *uses.entry(name.as_str()).or_default() += 1;
+        }
     }
     worker_ids
         .iter()
@@ -93,7 +97,7 @@ mod tests {
     fn each_worker_s_tool_is_named_as_every_provider_accepts() {
         let host = "agent:6f1c2a9e-1111-2222-3333-444455556666";
         let long = "a".repeat(120);
-        let cases: [(Vec<&str>, Vec<String>); 5] = [
+        let cases: [(Vec<&str>, Vec<String>); 6] = [
             (
                 vec!["w1", "w2"],
                 vec!["delegate_to_w1".into(), "delegate_to_w2".into()],
@@ -122,6 +126,11 @@ mod tests {
             (
                 vec![long.as_str()],
                 vec![format!("delegate_to_{}_2f3d3354", "a".repeat(107))],
+            ),
+            // A repeated id is one worker's, as Python's names keyed by id read it.
+            (
+                vec!["agent:x", "agent:x"],
+                vec!["delegate_to_agent_x".into(), "delegate_to_agent_x".into()],
             ),
         ];
         for (ids, names) in cases {

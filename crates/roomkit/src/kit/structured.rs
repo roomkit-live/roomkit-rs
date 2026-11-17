@@ -100,7 +100,7 @@ impl<S: ConversationStore> RoomKit<S> {
     /// Whether `agent` is an intelligence channel whose turns declare the
     /// tools the room's owner serves (RFC §10.6.5): Python's
     /// `_takes_owner_tools`.
-    fn takes_owner_tools(&self, agent: &ChannelId) -> bool {
+    pub(crate) fn takes_owner_tools(&self, agent: &ChannelId) -> bool {
         self.inner.channel(agent).is_some_and(|channel| {
             let declaration = channel.declaration();
             declaration.category == ChannelCategory::Intelligence && declaration.takes_owner_tools

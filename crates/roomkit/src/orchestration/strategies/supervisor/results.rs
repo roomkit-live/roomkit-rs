@@ -233,7 +233,7 @@ pub(super) fn format_supervisor_review(
 
 /// Whether Python reads `value` as true: not null, false, zero, nor an
 /// empty text, list or object.
-pub(in crate::orchestration::strategies) fn truthy(value: &Value) -> bool {
+pub(super) fn truthy(value: &Value) -> bool {
     match value {
         Value::Null => false,
         Value::Bool(flag) => *flag,
@@ -247,7 +247,7 @@ pub(in crate::orchestration::strategies) fn truthy(value: &Value) -> bool {
 /// `value` as Python's `str()` writes a JSON value: a text as itself,
 /// `None`, `True` and `False` for null and the booleans, a number as
 /// written, a list or an object as its JSON.
-pub(in crate::orchestration::strategies) fn python_str(value: &Value) -> String {
+pub(super) fn python_str(value: &Value) -> String {
     match value {
         Value::String(text) => text.clone(),
         Value::Null => "None".to_owned(),
