@@ -3,6 +3,9 @@
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
+#[path = "declared_host/close.rs"]
+mod close;
+
 use std::sync::{Arc, Mutex};
 
 use roomkit::model::{ChannelType, InboundMessage, Metadata, TextContent};

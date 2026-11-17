@@ -251,6 +251,12 @@ reason = "Python's **options, which go to RoomKit.delegate's keywords that are d
 # The architecture table's exceptions, approved with the plan on 2026-10-27.
 
 [[exception]]
+rust = "roomkit::TurnHost::call"
+params = ["arguments"]
+approved = "2026-11-17"
+reason = "Rust has no default call arguments: None supplies Python's omitted empty argument object, Some owns the caller's metadata (HITL 50d017c9, RMK-1709)"
+
+[[exception]]
 rust = "roomkit::tools::named_blocks"
 params = ["tags"]
 approved = "2026-11-17"
