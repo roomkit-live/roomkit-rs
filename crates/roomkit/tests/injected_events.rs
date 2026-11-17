@@ -206,8 +206,8 @@ async fn a_hook_s_injected_instruction_is_dropped_with_a_warning() {
     kit.close().await.unwrap();
 }
 
-/// Count requests before awaiting the lock, so the test establishes the
-/// cause, external holder and queued injection order without a sleep.
+/// Observe each acquisition after its first poll, so a contended waiter
+/// has its place in the queue before the test releases the preceding holder.
 struct WatchedLocks {
     inner: InMemoryLockManager,
     requests: watch::Sender<usize>,
@@ -219,8 +219,17 @@ type LockAnswer<'a> =
 impl RoomLockManager for WatchedLocks {
     fn locked<'a>(&'a self, room_id: &'a RoomId) -> LockAnswer<'a> {
         Box::pin(async move {
-            self.requests.send_modify(|requests| *requests += 1);
-            self.inner.locked(room_id).await
+            let mut acquisition = self.inner.locked(room_id);
+            let mut announced = false;
+            std::future::poll_fn(|context| {
+                let answer = acquisition.as_mut().poll(context);
+                if !announced {
+                    announced = true;
+                    self.requests.send_modify(|requests| *requests += 1);
+                }
+                answer
+            })
+            .await
         })
     }
 }
@@ -355,4 +364,77 @@ async fn is_committed_when_its_caller_is_cancelled_waiting_for_the_lock() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn is_committed_when_its_caller_is_cancelled_waiting_for_the_lock_on_four_workers() {
     caller_cancelled_waiting_for_the_lock().await;
+}
+
+/// A watch notification makes the initial lock holder release, then a new
+/// contender tries to pass the watched waiter before the notification returns.
+struct RaceOnObservation {
+    locks: Arc<WatchedLocks>,
+    held: std::sync::Mutex<Option<Box<dyn RoomLock>>>,
+    contender: std::sync::Mutex<Option<Box<dyn RoomLock>>>,
+    attempted: std::sync::atomic::AtomicBool,
+}
+
+impl std::task::Wake for RaceOnObservation {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        use std::sync::atomic::Ordering;
+        if self.attempted.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        drop(self.held.lock().unwrap().take());
+        let room_id = room();
+        let mut contender = self.locks.inner.locked(&room_id);
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        if let std::task::Poll::Ready(answer) = contender.as_mut().poll(&mut context) {
+            *self.contender.lock().unwrap() = Some(answer.unwrap());
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_watched_request_is_queued_before_its_observer_can_release_the_lock() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::task::{Context, Poll, Waker};
+    let (requests, mut observed) = watch::channel(0);
+    let locks = Arc::new(WatchedLocks {
+        inner: InMemoryLockManager::default(),
+        requests,
+    });
+    let room_id = room();
+    let held = locks.inner.locked(&room_id).await.unwrap();
+    let race = Arc::new(RaceOnObservation {
+        locks: Arc::clone(&locks),
+        held: std::sync::Mutex::new(Some(held)),
+        contender: std::sync::Mutex::new(None),
+        attempted: AtomicBool::new(false),
+    });
+    let waker = Waker::from(Arc::clone(&race));
+    let mut changed = Box::pin(observed.changed());
+    assert!(
+        changed
+            .as_mut()
+            .poll(&mut Context::from_waker(&waker))
+            .is_pending()
+    );
+    let mut watched = locks.locked(&room_id);
+    let mut context = Context::from_waker(Waker::noop());
+    assert!(watched.as_mut().poll(&mut context).is_pending());
+    assert!(race.attempted.load(Ordering::SeqCst));
+    assert!(
+        race.contender.lock().unwrap().is_none(),
+        "observation must follow queue registration"
+    );
+    let Poll::Ready(answer) = watched.as_mut().poll(&mut context) else {
+        panic!("the queued waiter must receive the released lock")
+    };
+    assert_eq!(
+        *locks.requests.borrow(),
+        1,
+        "repolling does not announce twice"
+    );
+    answer.unwrap().release().await.unwrap();
 }
