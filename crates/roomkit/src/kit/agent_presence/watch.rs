@@ -34,6 +34,13 @@ pub(crate) struct Watch {
 }
 
 impl Watch {
+    pub(crate) async fn detached(&self, room: &RoomId, channel: &ChannelId) {
+        // The room mutation has finished and released its lock. An earlier
+        // publication finishes before this detach forgets its claim.
+        let _gate = self.gate.lock().await;
+        self.forget(room, Some(channel));
+    }
+
     pub(crate) fn forget(&self, room: &RoomId, channel: Option<&ChannelId>) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let keep = |(held_room, held_channel): &Key| {

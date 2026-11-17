@@ -784,14 +784,6 @@ impl<S> Inner<S> {
         {
             self.agent_presence.forget(room_id, None);
         }
-        if let CoreEvent::RoomChannelDetached {
-            room_id,
-            channel_id,
-            ..
-        } = &notice
-        {
-            self.agent_presence.forget(room_id, Some(channel_id));
-        }
         let event = FrameworkEvent::of(notice, self.environment.now());
         self.events.emit(&self.tasks, event)
     }

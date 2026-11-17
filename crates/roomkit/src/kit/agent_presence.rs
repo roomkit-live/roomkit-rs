@@ -1,5 +1,6 @@
 //! The local executor's coverage of each room's agents (RFC §10.6.7).
 
+pub(in crate::kit) mod detach;
 pub(crate) mod watch;
 
 use roomkit_core::model::{ChannelCategory, ChannelId, RoomId};

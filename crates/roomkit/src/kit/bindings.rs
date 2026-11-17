@@ -155,7 +155,7 @@ impl<S: ConversationStore> RoomKit<S> {
             Some((draw, floor)) => detach.made_in(draw, floor),
             None => detach,
         };
-        match driver::run(&self.inner, "detach_channel", detach).await? {
+        match super::agent_presence::detach::run(&self.inner, detach).await? {
             Ok(_) => Ok(true),
             Err(LifecycleError::ChannelNotBound { .. }) => Ok(false),
             Err(LifecycleError::RoomNotFound(_)) if !scoped => Ok(false),
