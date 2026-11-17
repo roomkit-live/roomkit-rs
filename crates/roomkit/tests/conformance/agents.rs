@@ -30,8 +30,7 @@ use roomkit_ai::{
     ProviderErrorOptions, ProviderStream, RouteReason, RouteRequest, Routed, ServedCall,
     StreamDone, StreamEvent, StreamTextDelta, StreamThinkingDelta, StreamToolCallDelta,
     StreamUsage, Tool, ToolContext, ToolEntry, ToolError, ToolHandler, ToolPolicy, ToolResult,
-    ToolResultPart, Tools,
-    check_schema_answer, checked_stream, schema_for_generate,
+    ToolResultPart, Tools, check_schema_answer, checked_stream, schema_for_generate,
 };
 use serde_json::{Value, json};
 
