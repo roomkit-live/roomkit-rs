@@ -140,6 +140,9 @@ pub(crate) struct Run {
     pub(crate) models: Mutex<BTreeMap<String, ScriptedProvider>>,
     pub(crate) host_tool_readers: Mutex<BTreeMap<String, crate::extra_tools::Reader>>,
     pub(crate) model_methods: Mutex<BTreeMap<String, crate::agents::GenerationMethods>>,
+    /// Whether each scripted model was closed, by its name, shared by the
+    /// copies of a model as its script is (README: `model.fails_once_closed`).
+    pub(crate) model_closed: Mutex<BTreeMap<String, Arc<AtomicBool>>>,
     /// What each scripted ACP agent received, by its channel.
     pub(crate) acp_channels:
         Mutex<BTreeMap<String, roomkit_acp::AcpChannel<crate::acp_agents::ScriptedTransport>>>,
@@ -229,6 +232,7 @@ impl Run {
             models: Mutex::default(),
             host_tool_readers: Mutex::default(),
             model_methods: Mutex::default(),
+            model_closed: Mutex::default(),
             acp_channels: Mutex::default(),
             acp_wires: Mutex::default(),
             acp_mcp_requests: Mutex::default(),

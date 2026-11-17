@@ -210,6 +210,7 @@ const MODEL: &[&str] = &[
     "vision",
     "pricing",
     "context_window",
+    "fails_once_closed",
     "name",
     "provider",
     "chat_dialect",

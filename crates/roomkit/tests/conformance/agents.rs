@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::future::{Future, pending};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::task::{Context, Poll, ready};
 use std::time::Duration;
@@ -26,10 +27,10 @@ use roomkit_ai::{
     AiContext, AiImagePart, AiMessage, AiMessageContent, AiProvider, AiResponse, AiRole, AiRouter,
     AiRouterFuture, AiTextPart, AiThinkingPart, AiTool, AiToolCall, DynAiProvider, FallbackRouter,
     HumanInputToolHandler, HumanInputToolHandlerOptions, ModelInfo, ModelPricing, ProviderError,
-    ProviderStream, RouteReason, RouteRequest, Routed, ServedCall, StreamDone, StreamEvent,
-    StreamTextDelta, StreamThinkingDelta, StreamToolCallDelta, Tool, ToolContext, ToolEntry,
-    ToolError, ToolHandler, ToolPolicy, ToolResult, ToolResultPart, Tools, check_schema_answer,
-    checked_stream, schema_for_generate,
+    ProviderErrorOptions, ProviderStream, RouteReason, RouteRequest, Routed, ServedCall,
+    StreamDone, StreamEvent, StreamTextDelta, StreamThinkingDelta, StreamToolCallDelta, Tool,
+    ToolContext, ToolEntry, ToolError, ToolHandler, ToolPolicy, ToolResult, ToolResultPart, Tools,
+    check_schema_answer, checked_stream, schema_for_generate,
 };
 use serde_json::{Value, json};
 
@@ -52,6 +53,26 @@ pub(crate) struct Paced {
     pricing: Option<ModelPricing>,
     /// The model's context window (README: `model.context_window`).
     context_window: Option<u64>,
+    /// Set once the model is closed, when it fails from then on (README:
+    /// `model.fails_once_closed`), shared by its copies.
+    closed: Option<Arc<AtomicBool>>,
+}
+
+impl Paced {
+    /// The refusal of a model closed for good, as a client its close
+    /// released (README: `model.fails_once_closed`).
+    fn refuse_closed(&self) -> Result<(), ProviderError> {
+        match &self.closed {
+            Some(closed) if closed.load(Ordering::Acquire) => Err(ProviderError::new(
+                "the model was closed",
+                ProviderErrorOptions {
+                    provider: self.whole.provider_name.clone(),
+                    ..ProviderErrorOptions::default()
+                },
+            )),
+            _ => Ok(()),
+        }
+    }
 }
 
 impl AiProvider for Paced {
@@ -93,6 +114,7 @@ impl AiProvider for Paced {
     }
 
     async fn generate(&self, context: &AiContext) -> Result<AiResponse, ProviderError> {
+        self.refuse_closed()?;
         self.whole.generate(context).await
     }
 
@@ -100,10 +122,19 @@ impl AiProvider for Paced {
         self.streaming
     }
 
+    async fn close(&self) {
+        if let Some(closed) = &self.closed {
+            closed.store(true, Ordering::Release);
+        }
+    }
+
     /// The round's events, under a response schema refused before the
     /// request is kept when the model takes none, and checked before its
     /// done event (README, `model.response_schema`).
     fn generate_structured_stream<'a>(&'a self, context: &'a AiContext) -> ProviderStream<'a> {
+        if let Err(error) = self.refuse_closed() {
+            return Box::pin(Refused(Some(error)));
+        }
         if !self.streaming {
             // Use AiProvider's real default adapter over WholeModel::generate.
             return self.whole.generate_structured_stream(context);
@@ -734,6 +765,8 @@ pub(crate) fn scripted_model(
         .transpose()
         .map_err(|e| format!("model.pricing: {e}"))?;
     let methods = generation_methods(run, name, shared.is_some());
+    let closed =
+        (spec["fails_once_closed"] == true).then(|| closed_flag(run, name, shared.is_some()));
     let model = shared.unwrap_or_else(|| ScriptedProvider::new(rounds));
     let paced = Paced {
         whole: WholeModel {
@@ -754,8 +787,21 @@ pub(crate) fn scripted_model(
         deferred_tools: spec["deferred_tools"] == true,
         pricing,
         context_window: spec["context_window"].as_u64(),
+        closed,
     };
     Ok((model, paced))
+}
+
+/// Whether the model `name` was closed: a replacement starts open, another
+/// process's or executor's copy shares the original's.
+fn closed_flag(run: &Arc<Run>, name: &str, shared: bool) -> Arc<AtomicBool> {
+    let mut closed = crate::run::lock(&run.model_closed);
+    if shared {
+        return Arc::clone(closed.entry(name.to_owned()).or_default());
+    }
+    let flag = Arc::new(AtomicBool::new(false));
+    closed.insert(name.to_owned(), Arc::clone(&flag));
+    flag
 }
 
 /// A replacement starts a new log; another process shares the original's.
