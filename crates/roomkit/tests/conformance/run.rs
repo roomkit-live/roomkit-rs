@@ -349,13 +349,7 @@ impl Run {
         if !self.recording.load(Ordering::SeqCst) {
             return;
         }
-        let recent: Vec<Value> = context
-            .recent_events
-            .iter()
-            .map(|event| serde_json::to_value(event).unwrap_or_default())
-            .filter(|event| !is_lifecycle_record(event))
-            .map(|event| event["id"].clone())
-            .collect();
+        let recent = recent_ids(context);
         lock(&self.observed)
             .contexts
             .entry(context.room.id.to_string())
@@ -541,6 +535,7 @@ impl Run {
             "room_id": room_id,
             "event": event,
             "context_room": context.room,
+            "recent_events": recent_ids(context),
         });
         let mut observed = lock(&self.observed);
         observed
@@ -1015,4 +1010,16 @@ fn saw_request(observed: &mut Observed, pending_id: &str) {
     if !observed.requests.iter().any(|seen| seen == pending_id) {
         observed.requests.push(pending_id.to_owned());
     }
+}
+
+/// The ids of `context`'s events, lifecycle records left out: what a
+/// delivery and a hook read of the room (README, `contexts`, `hooks`).
+fn recent_ids(context: &RoomContext) -> Vec<Value> {
+    context
+        .recent_events
+        .iter()
+        .map(|event| serde_json::to_value(event).unwrap_or_default())
+        .filter(|event| !is_lifecycle_record(event))
+        .map(|event| event["id"].clone())
+        .collect()
 }
