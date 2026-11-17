@@ -1067,6 +1067,21 @@ fn background_setup_defaults_as_python() {
 }
 
 #[test]
+fn tool_call_verdict_defaults_as_python() {
+    let verdict = roomkit::ToolCallVerdict::default();
+    // roomkit.ToolCallVerdict.__init__(result) = None
+    assert!(verdict.result().is_none());
+    // roomkit.ToolCallVerdict.__init__(blocked) = False
+    assert!(!verdict.blocked());
+    // roomkit.ToolCallVerdict.__init__(replaces_structured) = False
+    assert!(!verdict.replaces_structured());
+    // roomkit.ToolCallVerdict.__init__(structured_content) = None
+    assert!(verdict.structured_content().is_none());
+    // roomkit.ToolCallVerdict.__init__(error_detail) = None
+    assert!(verdict.error_detail().is_none());
+}
+
+#[test]
 fn setup_background_options_defaults_as_python() {
     let defaults = roomkit::SetupBackgroundOptions::default();
     // roomkit.RoomKit.setup_background(worker) = None

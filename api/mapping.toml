@@ -1582,3 +1582,35 @@ rust = "roomkit::tasks::BackgroundSetup::new"
 params = ["worker", "hand_back"]
 approved = "2026-11-17"
 reason = "Default supplies both Python defaults. The immutable model's validated constructor takes both values explicitly (HITL bb81f9ca)."
+
+[[exception]]
+rust = "roomkit::model::tool_verdict::VerdictList"
+approved = "2026-11-17"
+reason = "Typed text, open data and shared collection handles for the frozen ToolCallVerdict model (HITL 29f71bf8)."
+
+[[exception]]
+rust = "roomkit::model::tool_verdict::VerdictObject"
+approved = "2026-11-17"
+reason = "Typed text, open data and shared collection handles for the frozen ToolCallVerdict model (HITL 29f71bf8)."
+
+[[exception]]
+rust = "roomkit::model::tool_verdict::VerdictResult"
+approved = "2026-11-17"
+reason = "Typed text, open data and shared collection handles for the frozen ToolCallVerdict model (HITL 29f71bf8)."
+
+[[exception]]
+rust = "roomkit::model::tool_verdict::VerdictValue"
+approved = "2026-11-17"
+reason = "Typed text, open data and shared collection handles for the frozen ToolCallVerdict model (HITL 29f71bf8)."
+
+[[exception]]
+rust = "roomkit::ToolCallVerdict::new"
+params = ["result", "blocked", "replaces_structured", "structured_content", "error_detail"]
+approved = "2026-11-17"
+reason = "Default supplies the Python defaults. The constructor takes the frozen fields explicitly and preserves their collection handles (HITL 29f71bf8)."
+
+[[exception]]
+rust = "roomkit::model::ToolCallVerdict::new"
+params = ["result", "blocked", "replaces_structured", "structured_content", "error_detail"]
+approved = "2026-11-17"
+reason = "Default supplies the Python defaults. The constructor takes the frozen fields explicitly and preserves their collection handles (HITL 29f71bf8)."

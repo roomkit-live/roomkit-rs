@@ -92,6 +92,7 @@ pub mod telemetry;
 pub mod testing;
 mod tool_call_scope;
 mod tool_calls;
+mod tool_verdict;
 mod transport;
 mod turn;
 mod turn_record;
@@ -103,6 +104,16 @@ mod unwind;
 /// requests the kit's calls build from their options (a binding's update,
 /// a post), which are no model.
 pub mod model {
+    pub use crate::tool_verdict::ToolCallVerdict;
+
+    /// The result and shared data passed to a [`ToolCallVerdict`].
+    ///
+    /// Nested handles are strong references. Break any cycles before
+    /// releasing the last external handle. A synchronous list update
+    /// must not reacquire that same list's lock.
+    pub mod tool_verdict {
+        pub use crate::tool_verdict::{VerdictList, VerdictObject, VerdictResult, VerdictValue};
+    }
     pub use roomkit_core::model::{
         Access, AgentResponsePolicy, AudioContent, ChannelBinding, ChannelCapabilities,
         ChannelCategory, ChannelDirection, ChannelId, ChannelMediaType, ChannelOutput, ChannelSet,
@@ -260,6 +271,7 @@ pub use self::tool_call_scope::{
 pub use self::tool_calls::ToolCallEvent;
 #[doc(hidden)]
 pub use self::tool_calls::ToolCallReport;
+pub use self::tool_verdict::ToolCallVerdict;
 pub use self::transport::{TransportChannel, TransportChannelOptions};
 #[doc(hidden)]
 pub use self::turn::TurnChain;

@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Export the immutable `ToolCallVerdict` model with shared result lists and structured dictionaries.
+
 - Expose standalone outbound URL validation in `roomkit-provider-http` with configurable schemes and DNS checks.
 
 - Expose Chat Completions message rendering and validated dialects through `roomkit_ai`. The OpenAI provider uses the same renderer for Chat Completions requests.
