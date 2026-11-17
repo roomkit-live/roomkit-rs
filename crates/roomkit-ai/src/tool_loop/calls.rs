@@ -650,7 +650,7 @@ fn timed_out(call: ToolCall, bound: Duration) -> ToolCallReport {
     let detail = format!(
         "{TIMED_OUT}: tool '{}' did not answer within {} s",
         call.name,
-        bound.as_secs_f64()
+        roomkit::orchestration::timeout_seconds(bound)
     );
     logs::timed_out(&call.name, &detail);
     let text = texts::failed(&call.name, TIMED_OUT);

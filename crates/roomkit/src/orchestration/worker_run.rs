@@ -100,10 +100,13 @@ pub(crate) fn completed_or_failed(outcome: &WorkerOutcome) -> WorkerEnd {
 /// What a worker past its bound reads as (Python's `f"The task timed out
 /// after {timeout:g}s."`).
 pub(crate) fn timed_out_text(timeout: Duration) -> String {
-    format!(
-        "The task timed out after {}s.",
-        general(timeout.as_secs_f64())
-    )
+    format!("The task timed out after {}s.", timeout_seconds(timeout))
+}
+
+/// Format a duration for the worker and tool timeout diagnostics.
+#[doc(hidden)]
+pub fn timeout_seconds(timeout: Duration) -> String {
+    general(timeout.as_secs_f64())
 }
 
 /// `value` as Python's `format(value, "g")` writes it: six significant

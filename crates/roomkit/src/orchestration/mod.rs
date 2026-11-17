@@ -33,6 +33,9 @@ mod text;
 mod tool_audit;
 mod worker_run;
 
+#[doc(hidden)]
+pub use worker_run::timeout_seconds;
+
 /// What only a pipeline's install takes: [`InstallOptions`](pipeline::InstallOptions), named as
 /// the router's are.
 pub mod pipeline {

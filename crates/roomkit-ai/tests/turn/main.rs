@@ -599,7 +599,7 @@ async fn a_call_past_its_bound_fails_as_a_timeout() {
         |_call, _context| std::future::pending(),
     );
     let room = Room::equipped(model, hangs, |options| AiChannelOptions {
-        tool_timeout: Some(Duration::from_millis(20)),
+        tool_timeout: Some(Duration::from_nanos(12_345_678)),
         ..options
     })
     .await;
@@ -615,7 +615,7 @@ async fn a_call_past_its_bound_fails_as_a_timeout() {
         (
             json!(r#"{"error": "Tool 'wait' failed (ToolTimeoutError)"}"#),
             vec![Some(
-                "ToolTimeoutError: tool 'wait' did not answer within 0.02 s".to_owned()
+                "ToolTimeoutError: tool 'wait' did not answer within 0.0123457 s".to_owned()
             )]
         )
     );
