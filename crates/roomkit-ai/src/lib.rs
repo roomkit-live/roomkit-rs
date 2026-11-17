@@ -162,8 +162,8 @@ pub use self::skills::dumps;
 pub use self::skills::{
     AddMcpServerOptions, ApproveExecution, CopyOptions, DiscoverOptions, LoadedSkill,
     MAX_RESOURCES_PER_SKILL, MAX_TOTAL_SIZE, McpSkill, McpSkillOptions, McpSkillServer,
-    McpSkillServerError, McpSkillServerFuture, RequiresMatch, SKILLS_EXTENSION, ScriptExecutor,
-    ScriptResult, ServedOrigin, Skill, SkillEntry, SkillEntryKeyError, SkillError,
+    McpSkillServerError, McpSkillServerFuture, RequiresMatch, RunSkillScriptTool, SKILLS_EXTENSION,
+    ScriptExecutor, ScriptResult, ServedOrigin, Skill, SkillEntry, SkillEntryKeyError, SkillError,
     SkillExecutionRequest, SkillFileError, SkillMetadata, SkillPathError, SkillRegistry,
     SkillRegistryOptions, SkillResource, SkillResourceSize, SkillResources, SkillToolNames,
     missing_required_tools, parse_entry, parse_tool_names, safe_join_filename, serves_exactly,

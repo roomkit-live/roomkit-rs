@@ -40,16 +40,10 @@ async fn a_skill_script_that_raised_raises_on_to_the_channel() {
             path: directory.0.clone(),
         })
         .unwrap();
-    let call = ToolCall::new(
-        "s1",
-        "run_skill_script",
-        json!({"skill_name": "s", "script_name": "run"})
-            .as_object()
-            .unwrap()
-            .clone(),
-    );
+    let arguments =
+        serde_json::from_value(json!({"skill_name": "s", "script_name": "run"})).unwrap();
     assert!(matches!(
-        run(&registry, &FailingExecutor, &call).await,
+        run(&registry, &FailingExecutor, &arguments).await,
         Err(ToolError::Raised { kind, message })
             if kind == "ConnectionError" && message == "private executor failure"
     ));

@@ -441,7 +441,7 @@ impl SkillTools {
 
     async fn run_script(&self, call: &ToolCall) -> Result<ToolResult, ToolError> {
         match self.executor.as_deref() {
-            Some(executor) => executor::run(&self.registry, executor, call).await,
+            Some(executor) => executor::run(&self.registry, executor, &call.arguments).await,
             None => Ok(ToolResult::Text(texts::object(&[(
                 "error",
                 json!("Script execution is not available"),

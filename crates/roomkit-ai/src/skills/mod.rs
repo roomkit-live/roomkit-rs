@@ -30,6 +30,7 @@ mod model;
 mod paths;
 mod registry;
 mod requirements;
+mod script_tool;
 mod served;
 mod texts;
 mod tool_names;
@@ -44,6 +45,7 @@ pub use self::model::{DiscoverOptions, Skill, SkillMetadata};
 pub use self::paths::safe_join_filename;
 pub use self::registry::SkillRegistry;
 pub use self::requirements::missing_required_tools;
+pub use self::script_tool::RunSkillScriptTool;
 pub use self::served::{
     AddMcpServerOptions, ApproveExecution, LoadedSkill, MAX_RESOURCES_PER_SKILL, MAX_TOTAL_SIZE,
     McpSkill, McpSkillOptions, McpSkillServer, McpSkillServerError, McpSkillServerFuture,

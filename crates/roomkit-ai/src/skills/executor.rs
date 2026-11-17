@@ -2,7 +2,7 @@
 
 use std::io::ErrorKind;
 
-use roomkit::model::{Metadata, ToolCall};
+use roomkit::model::Metadata;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -94,10 +94,10 @@ pub(super) fn definition() -> AiTool {
 pub(super) async fn run(
     registry: &SkillRegistry,
     executor: &dyn ScriptExecutor,
-    call: &ToolCall,
+    arguments: &Metadata,
 ) -> Result<ToolResult, ToolError> {
-    let name = argument(call, "skill_name");
-    let script_name = argument(call, "script_name");
+    let name = argument(arguments, "skill_name");
+    let script_name = argument(arguments, "script_name");
     let Some(skill) = registry
         .get_skill(name)
         .map_err(|error| ToolError::raised(&error))?
@@ -119,8 +119,7 @@ pub(super) async fn run(
     if let Err(error) = resolved {
         return path_error(&error);
     }
-    let arguments = call
-        .arguments
+    let arguments = arguments
         .get("arguments")
         .and_then(serde_json::Value::as_object);
     let LoadedSkill::Local(skill) = skill else {
@@ -134,8 +133,8 @@ pub(super) async fn run(
         .map_err(|error| ToolError::raised(&error))
 }
 
-fn argument<'a>(call: &'a ToolCall, name: &str) -> &'a str {
-    call.arguments
+fn argument<'a>(arguments: &'a Metadata, name: &str) -> &'a str {
+    arguments
         .get(name)
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default()

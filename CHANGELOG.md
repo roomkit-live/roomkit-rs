@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Expose `RunSkillScriptTool` for applications that supply a skill registry and a script executor through the ordinary tool API.
+
 - Export `POSTGRES_SCHEMA` and `POSTGRES_SCHEMA_VERSION` for applications that inspect or manage the store's schema.
 
 - Expose `current_turn_id()` on the crate and in `roomkit::turns`, including in callbacks served by the room owner.

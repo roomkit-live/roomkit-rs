@@ -13,6 +13,7 @@ the mapping and its tests. The check does not generate or update this document.
 
 | Rust name | Python name | Members or parameters |
 | --- | --- | --- |
+| `roomkit_ai::RunSkillScriptTool` | `roomkit.RunSkillScriptTool` | `NAME` is the Python class variable `name`. The `Tool` trait supplies `definition` and `handler`. |
 | `roomkit_ai::Answers` | Python speaking/classifier contract | `new`, `insert`, `get`, `remove`, `len`, `is_empty`, `snapshot`, `iter` |
 | `roomkit_ai::ClassifierError` | Python speaking/classifier contract | `new`, `message`, `with_source` |
 | `roomkit_ai::MockClassifier` | Python speaking/classifier contract | `calls` |

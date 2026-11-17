@@ -16,6 +16,7 @@ mod local_files;
 mod local_registration;
 mod manifest_bound;
 mod requirements;
+mod run_skill_script_tool;
 mod script_execution;
 mod served_execution;
 mod served_registry;

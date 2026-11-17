@@ -290,6 +290,12 @@ approved = "2026-11-17"
 reason = "Rust has no default call arguments: None preserves Python's omitted arguments and Some borrows the host mapping, following ScriptExecutor (approved 2026-11-17)"
 
 [[exception]]
+rust = "roomkit_ai::RunSkillScriptTool"
+members = ["NAME"]
+approved = "2026-11-17"
+reason = "Python's public class variable RunSkillScriptTool.name is omitted by its signature snapshot. Rust exposes the same tool name as an associated constant."
+
+[[exception]]
 rust = "roomkit_ai::ScriptExecutor::execute"
 params = ["arguments"]
 approved = "2026-11-16"
