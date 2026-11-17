@@ -74,8 +74,8 @@ async fn gates_log_once_at_the_source_level_without_running_a_tool() {
                 turn.kit
                     .hook(
                         HookTrigger::BeforeAiGeneration,
-                        |mut event: AiGenerationEvent, _context| {
-                            event.ai_context.tools.clear();
+                        |event: AiGenerationEvent, _context| {
+                            event.ai_context.update(|context| context.tools.clear());
                             async { HookResult::modify(event, ModifyOptions::default()) }
                         },
                         HookOptions {
