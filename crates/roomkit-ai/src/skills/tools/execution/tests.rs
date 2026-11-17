@@ -1,5 +1,4 @@
 //! The approval cache binds exact origins, held files and conversation scopes.
-#![expect(clippy::unwrap_used, reason = "test setup and assertions")]
 
 use super::*;
 use crate::{

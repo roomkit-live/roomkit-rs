@@ -124,7 +124,7 @@ fn examples(name: &str) -> PathBuf {
 /// Discovery over `examples/skills/` and `examples/skills-broken/` fails
 /// on the malformed skill, naming it, and registers nothing.
 fn a_malformed_skill_fails_discovery(checks: &mut Checks) {
-    let mut skills = SkillRegistry::default();
+    let skills = SkillRegistry::default();
     let failed = skills.discover(
         &[examples("skills"), examples("skills-broken")],
         DiscoverOptions::default(),
@@ -156,11 +156,11 @@ impl Shop {
         endpoint: &OpenAiEndpoint,
         checks: &mut Checks,
     ) -> Result<Self, Box<dyn Error>> {
-        let mut skills = SkillRegistry::default();
+        let skills = SkillRegistry::default();
         let found = skills.discover(&[examples("skills")], DiscoverOptions::default())?;
         checks.expect(
             "discovery registers the two skills of examples/skills/",
-            found == 2 && skills.get_skill("order-returns").is_some(),
+            found == 2 && skills.get_skill("order-returns")?.is_some(),
         );
         // The policy denies every tool of the host: the skills' two tools
         // stay declared (RFC §21.1).
