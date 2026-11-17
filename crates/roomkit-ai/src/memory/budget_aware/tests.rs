@@ -358,31 +358,103 @@ fn pasted(name: &str, body: &str) -> RoomEvent {
     event
 }
 
-// Python: tests/test_memory_new.py::TestBudgetAwareMemory::test_a_turn_counts_as_it_is_sent
-#[tokio::test]
-async fn a_turn_counts_as_it_is_sent() {
-    let paste = (0..8).fold(String::new(), |mut paste, k| {
+/// Eight JSON lines, which a labelled turn sends each after its label, its
+/// quotes escaped: about half as long again as typed.
+fn paste() -> String {
+    (0..8).fold(String::new(), |mut paste, k| {
         let _ = writeln!(paste, "\"item_{k}\": {{\"sku\": \"A-{k}\", \"qty\": {k}}},");
         paste
-    });
-    let typed = estimate_tokens(&paste);
-    let sent = estimate_tokens(&roomkit_core::rules::transcript::labelled_text(
-        &paste, "Alice",
-    ));
-    // Three pastes as sent pass what holds four as typed.
-    assert!(4 * typed <= 3 * sent);
-    for (names, kept) in [(["Alice", "Brian"], 2), (["Alice", "Alice"], 3)] {
-        let events: Vec<RoomEvent> = (0..4).map(|k| pasted(names[k % 2], &paste)).collect();
-        let memory = with(
-            of(events[..3].to_vec()),
-            3 * sent + 1,
+    })
+}
+
+/// A memory of `kind` whose window holds three pastes as typed, and the
+/// current one, but not as sent: below its threshold, or past it.
+fn counting(kind: &str, inner: Arc<dyn MemoryProvider>, typed: usize) -> Arc<dyn MemoryProvider> {
+    let summarizer = crate::memory::testing::Summarizer::answering(&["Summary."]);
+    match kind {
+        "budget-aware" => Arc::new(with(
+            inner,
+            4 * typed,
             BudgetAwareMemoryOptions {
                 safety_margin_ratio: 0.0,
                 min_events: 1,
                 ..BudgetAwareMemoryOptions::default()
             },
-        );
-        let result = read(&memory, &events[3]).await;
-        assert_eq!(result.events, events[3 - kept..3].to_vec(), "{names:?}");
+        )),
+        "compacting" => Arc::new(crate::memory::CompactingMemory::new(
+            inner,
+            summarizer,
+            4 * typed,
+            crate::memory::CompactingMemoryOptions {
+                safety_margin_ratio: 0.0,
+                min_events: 1,
+                ..crate::memory::CompactingMemoryOptions::default()
+            },
+        )),
+        _ => {
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_precision_loss,
+                clippy::cast_sign_loss,
+                reason = "Python's int(typed + 3 * typed / 0.85) + 2"
+            )]
+            let window = (typed as f64 + 3.0 * typed as f64 / 0.85) as usize + 2;
+            Arc::new(crate::memory::SummarizingMemory::new(
+                inner,
+                summarizer,
+                window,
+                crate::memory::SummarizingMemoryOptions {
+                    min_events: 1,
+                    ..crate::memory::SummarizingMemoryOptions::default()
+                },
+            ))
+        }
     }
+}
+
+// Python: tests/test_memory_new.py::test_a_turn_counts_as_it_is_sent
+#[tokio::test]
+async fn a_turn_counts_as_it_is_sent() {
+    let paste = paste();
+    let typed = estimate_tokens(&paste);
+    let sent = estimate_tokens(&roomkit_core::rules::transcript::labelled_text(
+        &paste, "Alice",
+    ));
+    assert!(4 * typed <= 3 * sent);
+    for kind in ["budget-aware", "compacting", "summarizing"] {
+        for (names, labelled) in [(["Alice", "Brian"], true), (["Alice", "Alice"], false)] {
+            let events: Vec<RoomEvent> = (0..4).map(|k| pasted(names[k % 2], &paste)).collect();
+            let memory = counting(kind, of(events[..3].to_vec()), typed);
+            let context = RoomContext::new(Room::new(room()));
+            let result = memory
+                .retrieve(&room(), &events[3], &context, RetrieveOptions::default())
+                .await
+                .unwrap();
+            assert_eq!(result.events != events[..3], labelled, "{kind} {names:?}");
+        }
+    }
+}
+
+// Python: tests/test_memory_new.py::test_the_current_turn_counts_as_it_is_sent
+#[tokio::test]
+async fn the_current_turn_counts_as_it_is_sent() {
+    let paste = paste();
+    let question = pasted("Brian", &paste);
+    let current = pasted("Alice", &paste);
+    let sent = estimate_tokens(&roomkit_core::rules::transcript::labelled_text(
+        &paste, "Brian",
+    ));
+    let memory = with(
+        of(vec![question]),
+        sent + estimate_tokens(&paste),
+        BudgetAwareMemoryOptions {
+            safety_margin_ratio: 0.0,
+            min_events: 0,
+            ..BudgetAwareMemoryOptions::default()
+        },
+    );
+    assert_eq!(
+        read(&memory, &current).await.events,
+        Vec::<RoomEvent>::new()
+    );
 }

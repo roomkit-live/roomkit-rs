@@ -78,6 +78,30 @@ impl SummaryChain {
             .all(|(id, print)| said.get(id).is_some_and(|now| now == print))
     }
 
+    /// Whether the window's `events` go on from the summary: the turn right
+    /// after the last one it covers in the room's history, `current` aside,
+    /// is among them, or there is none. A turn between the two would be
+    /// neither summarized nor read. Python's `SummaryChain.reaches`.
+    pub(super) fn reaches(
+        &self,
+        events: &[RoomEvent],
+        context: &RoomContext,
+        current: &RoomEvent,
+    ) -> bool {
+        let history: Vec<&RoomEvent> = context
+            .recent_events
+            .iter()
+            .filter(|event| event.id != current.id)
+            .collect();
+        let after = history
+            .iter()
+            .rposition(|event| self.covers.iter().any(|(id, _)| *id == event.id))
+            .map_or(0, |at| at + 1);
+        history
+            .get(after)
+            .is_none_or(|following| events.iter().any(|event| event.id == following.id))
+    }
+
     /// This chain, built on `prior`: the turns and speakers both cover.
     pub(super) fn after(mut self, prior: Option<&Self>) -> Self {
         if let Some(prior) = prior {

@@ -119,15 +119,16 @@ impl SummaryLines<'_> {
     /// fewer than two people take part.
     fn labels(&self, events: &[RoomEvent]) -> HashMap<EventId, Option<String>> {
         let mut turns: Vec<&RoomEvent> = Vec::new();
+        let mut places: HashMap<&EventId, usize> = HashMap::new();
         for event in events.iter().chain(&self.kept).chain(self.current) {
-            match turns.iter().position(|turn| turn.id == event.id) {
-                // Python's dict keeps the first place and the last value.
-                Some(at) => {
-                    if let Some(turn) = turns.get_mut(at) {
-                        *turn = event;
-                    }
+            // Python's dict keeps the first place and the last value.
+            if let Some(&at) = places.get(&event.id) {
+                if let Some(turn) = turns.get_mut(at) {
+                    *turn = event;
                 }
-                None => turns.push(event),
+            } else {
+                places.insert(&event.id, turns.len());
+                turns.push(event);
             }
         }
         // A name that reads as a label of the agent's own turns ("You")

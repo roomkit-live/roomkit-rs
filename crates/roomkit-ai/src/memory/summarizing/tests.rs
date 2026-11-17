@@ -330,9 +330,28 @@ async fn a_read_goes_on_from_the_summary_it_built() {
     assert_eq!(ids(&passes.events), ["q2", "a2", "q3", "a3"]);
 }
 
+// Python: TestTier2Cut::test_a_summary_ends_once_turns_after_it_left_the_window
+#[tokio::test]
+async fn a_summary_ends_once_turns_after_it_left_the_window() {
+    let summarizer = Summarizer::answering(&["S1.", "S2."]);
+    let room = Room::new(room());
+    let memory = chained(&summarizer, 4);
+    read_in(&memory, &history(&room, &[pair(0, 29), pair(1, 29)])).await;
+    let six: Vec<[RoomEvent; 2]> = (0..6).map(|n| pair(n, 29)).collect();
+    let result = read_in(&memory, &history(&room, &six)).await;
+    let read: Vec<String> = result.messages.iter().map(|m| m.content.text()).collect();
+    let later = summarizer.prompts().into_iter().skip(1);
+    assert!(
+        read.into_iter()
+            .chain(later)
+            .all(|text| !text.contains("S1."))
+    );
+}
+
 // Python: TestTier2Cut::test_a_summary_ends_once_a_turn_it_covers_changed
 #[tokio::test]
 async fn a_summary_ends_once_a_turn_it_covers_changed() {
+    let mut carried = Vec::new();
     for change in ["deleted", "edited", "gone", "created-again"] {
         let summarizer = Summarizer::answering(&["S1.", "S2."]);
         let room = Room::new(room());
@@ -362,13 +381,15 @@ async fn a_summary_ends_once_a_turn_it_covers_changed() {
         let result = read_in(&memory, &context).await;
         let read: Vec<String> = result.messages.iter().map(|m| m.content.text()).collect();
         let later = summarizer.prompts().into_iter().skip(1);
-        assert!(
-            read.into_iter()
-                .chain(later)
-                .all(|text| !text.contains("S1.")),
-            "{change}"
-        );
+        if read
+            .into_iter()
+            .chain(later)
+            .any(|text| text.contains("S1."))
+        {
+            carried.push(change);
+        }
     }
+    assert_eq!(carried, Vec::<&str>::new());
 }
 
 // Python: TestTier2Summarization::test_ai_failure_produces_fallback and

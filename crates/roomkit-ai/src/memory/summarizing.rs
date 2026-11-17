@@ -309,18 +309,19 @@ impl<P: AiProvider> SummarizingMemory<P> {
 
     /// The summary this memory last built for `room_id`, which the read
     /// goes on from (RFC §20.3), while it still stands for the room of
-    /// `context`: the same room, each turn it covers there unchanged; else
-    /// it is forgotten, a room created again or a covered turn deleted or
-    /// changed.
+    /// `context`: the same room, each turn it covers there unchanged, and
+    /// `inner`'s window going on from it; else it is forgotten, a room
+    /// created again, a covered turn deleted or changed, or turns after it
+    /// out of the window.
     fn chain(
         &self,
         room_id: &RoomId,
         channel_id: Option<&ChannelId>,
-        context: &RoomContext,
+        (context, inner, current): (&RoomContext, &MemoryResult, &RoomEvent),
         now: Instant,
     ) -> Option<SummaryChain> {
         let chain = self.chains.get(room_id, channel_id, now)?;
-        if chain.holds(context) {
+        if chain.holds(context) && chain.reaches(&inner.events, context, current) {
             return Some(chain);
         }
         self.chains.drop_chain(room_id, channel_id);
@@ -508,7 +509,12 @@ impl<P: AiProvider> MemoryProvider for SummarizingMemory<P> {
                 kept: Vec::new(),
             };
             let now = Instant::now();
-            let chain = self.chain(room_id, channel_id.as_ref(), context, now);
+            let chain = self.chain(
+                room_id,
+                channel_id.as_ref(),
+                (context, &inner, current_event),
+                now,
+            );
             let inner = match &chain {
                 Some(chain) => chain.carried(inner),
                 None => inner,
