@@ -263,6 +263,7 @@ fn replayed_round(calls: &[Call<'_>]) -> Option<ToolRound> {
         message.is_error = call
             .end
             .is_some_and(|end| end.status == ToolCallStatus::Failed);
+        message.outcome = call.end.and_then(|end| end.outcome);
         message
     }));
     Some(ToolRound {

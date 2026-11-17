@@ -1000,12 +1000,6 @@ approved = "2026-11-10"
 reason = "language: AiContext is Clone and built by struct update, Python's model_copy(update=...) (architecture: the names table, AIContext.model_copy)"
 
 [[missing]]
-python = "roomkit.providers.ai.AIResponse.__init__"
-params = ["tasks", "observations"]
-scope = "text"
-reason = "not in 0.x: a response's tasks and observations"
-
-[[missing]]
 python = "roomkit.providers.ai.AIToolCall.__init__"
 params = ["served"]
 scope = "text"
@@ -1016,12 +1010,6 @@ python = "roomkit.providers.ai.StreamToolCall.__init__"
 params = ["served"]
 scope = "text"
 reason = "not in 0.x: owner-served tools"
-
-[[missing]]
-python = "roomkit.providers.ai.AIToolResultPart.__init__"
-params = ["structured_content", "outcome"]
-scope = "text"
-reason = "not in 0.x: MCP structured results and a call's outcome"
 
 [[exception]]
 python = "roomkit.providers.ai.AITextPart.__init__"

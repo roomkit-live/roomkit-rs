@@ -53,7 +53,9 @@ impl Loop {
     pub(super) fn keep_round_results(&mut self, at: usize, results: &[AiToolResultPart]) {
         self.media.keep_results(at, results);
         for (offset, result) in results.iter().enumerate() {
-            if !result.references.is_empty() {
+            // The transcript carries the outcome, but only this turn keeps
+            // the structured copy beside its model-facing result text.
+            if !result.references.is_empty() || result.structured_content.is_some() {
                 self.said.insert(
                     at + 1 + offset,
                     vec![AiContentPart::ToolResult(result.clone())],

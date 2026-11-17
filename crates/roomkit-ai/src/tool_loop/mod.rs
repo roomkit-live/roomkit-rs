@@ -136,6 +136,25 @@ pub(crate) struct ToolEnd {
     pub(crate) references: Vec<String>,
 }
 
+impl ToolEnd {
+    /// Python's typed outcome as the next generation reads its result.
+    fn as_part(&self) -> AiToolResultPart {
+        AiToolResultPart {
+            tool_call_id: self.call.id.clone(),
+            name: self.call.name.clone(),
+            result: self.result.clone(),
+            is_error: self.outcome != ToolCallOutcome::Served,
+            structured_content: self
+                .structured_content
+                .as_ref()
+                .and_then(Value::as_object)
+                .cloned(),
+            outcome: Some(self.outcome),
+            references: self.references.clone(),
+        }
+    }
+}
+
 /// The items of a turn's loop, or the provider's error that ended it.
 pub(crate) type TurnItems<'a> = Items<'a, Result<TurnItem, ProviderError>>;
 
@@ -822,14 +841,9 @@ impl Loop {
             // The model reads every outcome but served as a failure (RFC §9.3,
             // Python's `ToolOutcome.as_part`).
             result.is_error = end.outcome != ToolCallOutcome::Served;
+            result.outcome = Some(end.outcome);
             if !unrun {
-                ran.results.push(AiToolResultPart {
-                    tool_call_id: end.call.id.clone(),
-                    name: end.call.name.clone(),
-                    result: end.result.clone(),
-                    is_error: result.is_error,
-                    references: end.references.clone(),
-                });
+                ran.results.push(end.as_part());
             }
             read.push(result);
             out.give(Ok(TurnItem::ToolEnd(end))).await;
@@ -940,6 +954,41 @@ fn replayed(mut metadata: Metadata) -> Metadata {
 
 #[cfg(test)]
 mod tests {
+    // Python: tests/test_tool_outcome_typed.py::test_a_part_carries_its_outcome
+    #[test]
+    fn a_part_carries_its_outcome() {
+        for outcome in [
+            ToolCallOutcome::Served,
+            ToolCallOutcome::Failed,
+            ToolCallOutcome::Blocked,
+            ToolCallOutcome::Refused,
+            ToolCallOutcome::Unserved,
+            ToolCallOutcome::Cancelled,
+        ] {
+            let end = ToolEnd {
+                call: ToolCall::new("c1", "lookup", Metadata::new()),
+                outcome,
+                result: "body".into(),
+                duration: Duration::ZERO,
+                announced_only: false,
+                structured_content: Some(serde_json::json!({"page": 3})),
+                references: vec!["x".to_owned()],
+            };
+            let part = end.as_part();
+            assert_eq!(part.outcome, Some(outcome));
+            assert_eq!(part.is_error, outcome != ToolCallOutcome::Served);
+            assert_eq!(part.references, ["x"]);
+            assert_eq!(
+                part.structured_content,
+                end.structured_content
+                    .as_ref()
+                    .and_then(Value::as_object)
+                    .cloned()
+            );
+            assert_eq!(part.as_text(), "body");
+        }
+    }
+
     use pretty_assertions::assert_eq;
 
     use super::*;

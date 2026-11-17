@@ -68,6 +68,8 @@ fn result(id: &str) -> AiMessage {
         name: "echo".to_owned(),
         result: "ok".into(),
         is_error: false,
+        structured_content: None,
+        outcome: None,
         references: Vec::new(),
     };
     AiMessage::new(
@@ -340,4 +342,32 @@ fn a_summary_quotes_a_replayed_instruction_as_the_application_s() {
     let summary = summary_text(&[replayed]).unwrap();
     let lines: Vec<&str> = summary.lines().skip(1).collect();
     assert_eq!(lines, ["[application]: \u{201c}Greet the caller.\u{201d}"]);
+}
+
+// Python: tests/test_channels/test_ai_result_carriers.py::test_compaction_stores_text_without_erasing_the_result_carriers
+#[test]
+fn compaction_stores_text_without_erasing_the_result_carriers() {
+    use roomkit::model::ToolCallOutcome;
+    for copy in [
+        None,
+        Some(serde_json::json!({"page": 3}).as_object().unwrap().clone()),
+    ] {
+        let original = AiToolResultPart {
+            structured_content: copy.clone(),
+            outcome: Some(ToolCallOutcome::Served),
+            ..AiToolResultPart::new("c1", "lookup", "A".repeat(STORED_OVER_CHARS + 100))
+        };
+        let message = AiMessage::new(
+            AiRole::Tool,
+            AiMessageContent::Parts(vec![AiContentPart::ToolResult(original.clone())]),
+        );
+        let shortened = with_stored_results(&message, &ToolEviction::new(5000), ROOM).unwrap();
+        let results = shortened.tool_results();
+        let result = results.first().unwrap();
+        assert!(result.as_text().starts_with("Result too large ("));
+        assert_eq!(result.structured_content, copy);
+        assert_eq!(result.outcome, Some(ToolCallOutcome::Served));
+        assert_eq!(message.tool_results().first().copied(), Some(&original));
+        assert_eq!(original.as_text(), "A".repeat(STORED_OVER_CHARS + 100));
+    }
 }

@@ -172,6 +172,24 @@ fn every_call_the_turn_ended_is_replayed_but_a_cancelled_one() {
         .map(|message| message.is_error)
         .collect();
     assert_eq!(errors, [false, true, false, false, false, false, false]);
+    let outcomes: Vec<_> = replayed
+        .iter()
+        .flat_map(|round| &round.messages)
+        .filter(|message| message.role == Role::Tool)
+        .map(|message| message.outcome)
+        .collect();
+    assert_eq!(
+        outcomes,
+        [
+            Some(ToolCallOutcome::Served),
+            Some(ToolCallOutcome::Failed),
+            Some(ToolCallOutcome::Blocked),
+            Some(ToolCallOutcome::Refused),
+            Some(ToolCallOutcome::Unserved),
+            None,
+            None
+        ]
+    );
 }
 
 #[test]

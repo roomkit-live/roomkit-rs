@@ -4,7 +4,7 @@
 
 use std::collections::HashSet;
 
-use roomkit::model::Metadata;
+use roomkit::model::{Metadata, Observation, Task};
 use serde_json::Value;
 
 use super::context::AiThinkingPart;
@@ -23,8 +23,8 @@ const OUT_OF_ROOM: [&str; 4] = [
 const CUTTING: [&str; 3] = ["error", "content_filter", "refusal"];
 
 /// A whole generation (RFC §6.7): Python's `AIResponse(*, content,
-/// finish_reason=None, usage={}, metadata={}, tool_calls=[])`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// finish_reason=None, usage={}, metadata={}, tasks=[], observations=[], tool_calls=[])`.
+#[derive(Clone, Debug, PartialEq)]
 pub struct AiResponse {
     /// Its text.
     pub content: String,
@@ -39,6 +39,12 @@ pub struct AiResponse {
     /// provider-owned data for replaying a tool round, which the loop copies
     /// to the assistant message without those two keys, never to the room.
     pub metadata: Metadata,
+    /// Tasks attached to the response (RFC §6.7), retained by the model.
+    /// Wrapping a response as stream events does not emit these tasks.
+    pub tasks: Vec<Task>,
+    /// Observations attached to the response (RFC §6.7), retained by the
+    /// model rather than emitted by the response-to-stream adapter.
+    pub observations: Vec<Observation>,
     /// The calls it made, in order.
     pub tool_calls: Vec<AiToolCall>,
     /// All the model's reasoning text (RFC §6.7), none when it showed none.
@@ -52,6 +58,11 @@ pub struct AiResponse {
     pub thinking_parts: Option<Vec<AiThinkingPart>>,
 }
 
+// Observation's only float is Confidence, whose private value is validated
+// on construction and deserialization to 0..=1, excluding NaN. Its equality
+// is therefore reflexive; adding observations preserves AiResponse's Eq.
+impl Eq for AiResponse {}
+
 impl AiResponse {
     /// A response saying `content`, with no call, ending for no reason.
     pub fn new(content: impl Into<String>) -> Self {
@@ -60,6 +71,8 @@ impl AiResponse {
             finish_reason: None,
             usage: Metadata::new(),
             metadata: Metadata::new(),
+            tasks: Vec::new(),
+            observations: Vec::new(),
             tool_calls: Vec::new(),
             thinking: None,
             thinking_signature: None,
@@ -499,6 +512,31 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    // Python: tests/test_channels/test_ai_result_carriers.py::test_response_lists_are_kept_by_the_model_but_not_added_to_the_stream
+    #[test]
+    fn response_lists_are_not_added_to_the_stream() {
+        use roomkit::model::{
+            ChannelId, Observation, ObservationId, RoomId, Task, TaskId, Timestamp,
+        };
+        let mut response = AiResponse::new("answer");
+        let expected = response_events(response.clone());
+        let room = RoomId::new("r1").unwrap();
+        response.tasks.push(Task::at(
+            TaskId::new("t1").unwrap(),
+            room.clone(),
+            "Task",
+            Timestamp::UNIX_EPOCH,
+        ));
+        response.observations.push(Observation::at(
+            ObservationId::new("o1").unwrap(),
+            room,
+            ChannelId::new("ai1").unwrap(),
+            "Observation",
+            Timestamp::UNIX_EPOCH,
+        ));
+        assert_eq!(response_events(response), expected);
+    }
 
     // Python: tests/test_providers/test_tool_call_handoff.py::TestCallIds::test_every_call_of_a_response_gets_its_own_id
     #[test]

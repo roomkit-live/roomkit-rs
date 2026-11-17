@@ -19,6 +19,7 @@ mod observer_depth;
 mod observer_tools;
 mod prompt;
 mod resilience;
+mod result_carriers;
 mod room_turns;
 mod router;
 mod servers;

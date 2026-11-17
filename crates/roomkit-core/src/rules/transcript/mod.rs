@@ -155,9 +155,12 @@ pub struct Message {
     /// The call a tool's result answers; `None` on any other message.
     pub tool_call_id: Option<String>,
     /// Whether the model reads the call a tool's result answers as failed:
-    /// Python's `AIToolResultPart.is_error`, true for every outcome but
-    /// served (RFC §6.4, §9.3); false on any other message.
+    /// Python's `AIToolResultPart.is_error`, carried from the live result
+    /// or a stored row's status (RFC §6.4, §9.3); false on any other message.
     pub is_error: bool,
+    /// The recorded result's outcome (RFC §6.7), independent of its error
+    /// status; absent when the row records none and on other messages.
+    pub outcome: Option<crate::model::ToolCallOutcome>,
     /// Provider-owned data carried within the current tool loop (RFC §6.7,
     /// `AIMessage.metadata`), separate from visible text and room history.
     pub metadata: crate::model::Metadata,
@@ -174,6 +177,7 @@ impl Message {
             tool_calls: Vec::new(),
             tool_call_id: None,
             is_error: false,
+            outcome: None,
             metadata: crate::model::Metadata::new(),
         }
     }

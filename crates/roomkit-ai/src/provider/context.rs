@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use roomkit::model::{Metadata, ResponseMetadata};
+use roomkit::model::{Metadata, ResponseMetadata, ToolCallOutcome};
 use roomkit_core::rules::transcript::{Image, Message, Part, Role};
 use serde_json::{Map, Value};
 
@@ -357,7 +357,7 @@ impl AiToolCallPart {
 }
 
 /// A tool's result: Python's `AIToolResultPart(*, tool_call_id, name,
-/// result, is_error=False)`.
+/// result, is_error=False, structured_content=None, outcome=None, references=[])`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AiToolResultPart {
     /// The call the result answers.
@@ -371,6 +371,12 @@ pub struct AiToolResultPart {
     pub result: ToolResult,
     /// Whether the call failed.
     pub is_error: bool,
+    /// The tool's structured copy, separate from its model-facing text
+    /// (RFC §6.7). Carried within a turn, never rendered to the provider wire.
+    pub structured_content: Option<Metadata>,
+    /// How the call ended (RFC §6.7), carried without inferring it from
+    /// result text. A result may have no recorded outcome.
+    pub outcome: Option<ToolCallOutcome>,
     /// Deferred tools made callable by this result, in declaration order.
     pub references: Vec<String>,
 }
@@ -388,6 +394,8 @@ impl AiToolResultPart {
             name: name.into(),
             result: result.into(),
             is_error: false,
+            structured_content: None,
+            outcome: None,
             references: Vec::new(),
         }
     }
@@ -498,6 +506,8 @@ fn content(message: &Message, name: &str, kept: Option<&ToolResult>) -> AiMessag
                 .cloned()
                 .unwrap_or_else(|| ToolResult::Text(message.text.clone())),
             is_error: message.is_error,
+            structured_content: None,
+            outcome: message.outcome,
             references: Vec::new(),
         })]);
     }
