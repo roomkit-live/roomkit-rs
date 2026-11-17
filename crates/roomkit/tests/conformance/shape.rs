@@ -998,6 +998,10 @@ fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
         }
     }
     skills(&channel["skills"], &format!("{path}.skills"), found);
+    execution_backends(channel, path, found);
+}
+
+fn execution_backends(channel: &Value, path: &str, found: &mut Vec<String>) {
     if let Some(sandbox) = channel.get("sandbox") {
         crate::sandbox::shape(sandbox, &format!("{path}.sandbox"), found);
     }

@@ -39,9 +39,14 @@ impl Toolbox {
         }).collect();
         turn.host_count -= host;
         turn.injected_at -= before;
-        for tool in declared {
+        let before_planner = turn
+            .tools
+            .iter()
+            .position(|(tool, _)| turn.planning && tool.name == crate::planning::PLAN_TOOL)
+            .unwrap_or(turn.tools.len());
+        for (offset, tool) in declared.into_iter().enumerate() {
             turn.served.insert(tool.name.clone(), position);
-            turn.tools.push((tool, position));
+            turn.tools.insert(before_planner + offset, (tool, position));
         }
         turn
     }
