@@ -18,8 +18,8 @@ use std::time::Duration;
 
 use roomkit::identity::{MockIdentityResolver, MockIdentityResolverOptions};
 use roomkit::model::{
-    ChannelBinding, ChannelId, ChannelOutput, ChannelType, EventId, Identity, IdentityId,
-    InboundMessage, RoomContext, RoomEvent, RoomId, TextContent, VerificationPolicy,
+    ChannelBinding, ChannelCategory, ChannelId, ChannelOutput, ChannelType, EventId, Identity,
+    IdentityId, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent, VerificationPolicy,
 };
 use roomkit::store::ListEventsOptions;
 use roomkit::testing::{
@@ -57,6 +57,12 @@ fn room() -> RoomId {
 /// `id-alice`, its room binding the SMS channel and an agent answering
 /// `answer` (Python's `_kit`).
 async fn kit_on(store: Arc<InMemoryStore>) -> RoomKit {
+    let agent = EchoAgent::new(channel("ai"), "answer", EchoAgentOptions::default());
+    kit_with(store, agent).await
+}
+
+/// [`kit_on`]'s kit with `agent` as its room's agent `ai`.
+async fn kit_with(store: Arc<InMemoryStore>, agent: impl Channel) -> RoomKit {
     let resolver = MockIdentityResolver::new(MockIdentityResolverOptions {
         mapping: BTreeMap::from([(ALICE.to_owned(), Identity::new(alice()))]),
         ..MockIdentityResolverOptions::default()
@@ -73,7 +79,6 @@ async fn kit_on(store: Arc<InMemoryStore>) -> RoomKit {
         RecordingTransportOptions::default(),
     );
     kit.register_channel(sms).unwrap();
-    let agent = EchoAgent::new(channel("ai"), "answer", EchoAgentOptions::default());
     kit.register_channel(agent).unwrap();
     if kit.store().get_room(&room()).await.unwrap().is_none() {
         let create = CreateRoomOptions {
@@ -210,6 +215,105 @@ async fn a_deferred_held_message_cancelled_by_key_is_released_with_no_answer() {
 
     assert_eq!(answers(&kit).await, 0);
     assert_eq!(kit.cancel_delivery(KEY, stopped()).await, 0);
+    kit.close().await.unwrap();
+}
+
+/// An agent answering `answer` once `go` opens, saying through `asked` that
+/// it was asked (Python's `_GatedAgent`).
+struct Gated {
+    inner: EchoAgent,
+    asked: Arc<watch::Sender<bool>>,
+    go: watch::Receiver<bool>,
+}
+
+impl Channel for Gated {
+    fn channel_id(&self) -> ChannelId {
+        self.inner.channel_id().clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::AI
+    }
+
+    fn category(&self) -> ChannelCategory {
+        ChannelCategory::Intelligence
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        self.inner.handle_inbound(message, context)
+    }
+
+    fn deliver(
+        &self,
+        event: RoomEvent,
+        binding: ChannelBinding,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        self.inner.deliver(event, binding, context)
+    }
+
+    fn on_event(
+        &self,
+        event: RoomEvent,
+        binding: ChannelBinding,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        self.asked.send_replace(true);
+        let mut go = self.go.clone();
+        let answer = self.inner.on_event(event, binding, context);
+        async move {
+            drop(go.wait_for(|open| *open).await);
+            answer.await
+        }
+    }
+}
+
+// Python: tests/test_verification_release_cancel.py::test_a_code_reply_whose_caller_goes_still_answers_its_release
+#[tokio::test]
+async fn a_code_reply_whose_caller_goes_still_answers_its_release() {
+    let (go, wait) = watch::channel(false);
+    let (asked, mut was_asked) = watch::channel(false);
+    let agent = Gated {
+        inner: EchoAgent::new(channel("ai"), "answer", EchoAgentOptions::default()),
+        asked: Arc::new(asked),
+        go: wait,
+    };
+    let kit = kit_with(Arc::new(InMemoryStore::new()), agent).await;
+    let held = send(&kit, message("Did my transfer go through?", None), false).await;
+    let options = RequestVerificationOptions {
+        method: "code".to_owned(),
+        window_start: Some(held.event.as_ref().unwrap().created_at),
+        ..RequestVerificationOptions::default()
+    };
+    let (_, code) = kit
+        .request_verification(&alice(), &room(), &channel("sms"), options)
+        .await
+        .unwrap();
+    let reply = {
+        let kit = kit.clone();
+        tokio::spawn(async move { send(&kit, message(&code, None), false).await })
+    };
+    tokio::time::timeout(BOUND, was_asked.wait_for(|asked| *asked))
+        .await
+        .unwrap()
+        .unwrap();
+
+    reply.abort();
+    assert!(reply.await.unwrap_err().is_cancelled());
+    go.send_replace(true);
+
+    let answered = async {
+        while answers(&kit).await == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    };
+    tokio::time::timeout(BOUND, answered)
+        .await
+        .expect("the release's answer was cut with its caller");
     kit.close().await.unwrap();
 }
 
