@@ -54,6 +54,7 @@ pub(super) struct Called {
     /// before anything else is read of it (RFC §12.4). Python's
     /// `AnnouncedCall.duplicate`.
     pub(super) duplicate: bool,
+    pub(super) report: std::sync::Arc<crate::tools::Occurrence>,
 }
 
 impl Called {
@@ -424,6 +425,7 @@ fn read_calls(calls: Vec<StreamToolCall>) -> Vec<Called> {
             let mut call = ToolCall::new(given.id, given.name, given.arguments);
             call.intent = given.intent;
             Called {
+                report: crate::tools::announce_tool_call(&call.id),
                 call,
                 partial,
                 metadata: given.metadata,
@@ -469,6 +471,7 @@ mod tests {
                 partial,
                 metadata: Metadata::new(),
                 duplicate: false,
+                report: crate::tools::Occurrence::detached("c1"),
             };
             let call = called.replayed();
             (call.partial, call.garbled)

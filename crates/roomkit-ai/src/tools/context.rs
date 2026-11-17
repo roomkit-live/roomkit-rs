@@ -1,6 +1,11 @@
 //! A caller-described tool turn, scoped across asynchronous suspension.
 
 mod catalogue;
+mod reports;
+
+use reports::Reports;
+pub use reports::turn_report_claim;
+pub(crate) use reports::{Occurrence, announce_tool_call, next_report_round, within_reporting};
 
 use std::collections::{BTreeSet, HashSet};
 use std::future::Future;
@@ -158,11 +163,14 @@ pub fn current_tool_actor_id() -> Option<String> {
     current()?.turn.actor_id.clone()
 }
 
+#[derive(Clone)]
 struct Scope {
     turn: ToolTurnContextOptions,
     room_metadata: Option<Arc<Metadata>>,
     catalogue: Catalogue,
     closing: ClosingContext,
+    reports: Option<Arc<Reports>>,
+    reporting: Option<Arc<Occurrence>>,
 }
 
 impl Scope {
@@ -179,6 +187,8 @@ impl Scope {
             room_metadata,
             catalogue: Catalogue::default(),
             closing: closing_context(),
+            reports: None,
+            reporting: None,
         }
     }
 
@@ -198,13 +208,18 @@ pub(crate) fn within_ai_turn<F: Future>(
 
 /// Capture preparation's readable snapshot now. Consumption starts a fresh
 /// lifetime at its first poll, never reviving preparation's retained children.
-pub(crate) fn continue_ai_turn<F: Future>(work: F) -> impl Future<Output = F::Output> {
+pub(crate) fn continue_ai_turn<F: Future>(
+    channel: &str,
+    work: F,
+) -> impl Future<Output = F::Output> + use<F> {
     let scope = current().map(|parent| {
         Arc::new(Scope {
             turn: parent.turn.clone(),
             room_metadata: parent.room_metadata.clone(),
             catalogue: parent.catalogue.for_loop(),
             closing: parent.closing.clone(),
+            reports: Some(Arc::new(Reports::new(channel))),
+            reporting: None,
         })
     });
     let work = Box::pin(work);
@@ -272,6 +287,8 @@ pub(crate) async fn within_call<T>(
             room_metadata: parent.room_metadata.clone(),
             catalogue: parent.catalogue.clone(),
             closing: parent.closing.clone(),
+            reports: parent.reports.clone(),
+            reporting: parent.reporting.clone(),
         },
         None => Scope {
             turn: ToolTurnContextOptions {
@@ -283,6 +300,8 @@ pub(crate) async fn within_call<T>(
             room_metadata,
             catalogue: Catalogue::default(),
             closing: closing_context(),
+            reports: None,
+            reporting: None,
         },
     };
     roomkit::within_tool_call_scope(Arc::new(scope), work).await
@@ -309,6 +328,8 @@ pub(crate) async fn within_closing_context<F: Future>(
             room_metadata: parent.room_metadata.clone(),
             catalogue: parent.catalogue.clone(),
             closing: parent.closing.clone(),
+            reports: parent.reports.clone(),
+            reporting: parent.reporting.clone(),
         },
         None => Scope::new(ToolTurnContextOptions::default()),
     };

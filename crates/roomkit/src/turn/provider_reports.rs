@@ -21,7 +21,7 @@ impl TurnHost {
                 .await;
             let Some(context) = context else {
                 if let Some(report) = reporting.report.take() {
-                    self.emit_tool_call(&self.event_of(&report));
+                    self.report_event_only(&report);
                 }
                 return;
             };
@@ -79,7 +79,7 @@ impl Drop for Reporting {
                         .external_tool_context(host.room_id().clone())
                         .await
                     else {
-                        host.emit_tool_call(&host.event_of(&report));
+                        host.report_event_only(&report);
                         return;
                     };
                     reporting.tool_report_context = Some(Arc::new(context));

@@ -80,6 +80,12 @@ pub async fn within_tool_call_scope<F: Future>(
     TOOL_CALL.scope(call, work).await
 }
 
+/// Schedule a retained call's reports under its readable snapshot. This
+/// reinstalls no live turn depth; the executor still owns that lifetime.
+pub(crate) fn in_tool_call_scope<T>(call: Call, work: impl FnOnce() -> T) -> T {
+    TOOL_CALL.sync_scope(call, work)
+}
+
 /// `future` within the tool call its caller runs within, if any: what
 /// [`keep_context`](crate::keep_context) carries into a spawned task.
 pub(crate) fn within_current_tool_call<F>(

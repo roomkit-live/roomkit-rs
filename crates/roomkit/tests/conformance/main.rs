@@ -44,6 +44,7 @@ mod member_calls;
 mod memory;
 mod normalize;
 mod process_tests;
+mod report_claims;
 mod room_calls;
 mod room_queries;
 mod routing_calls;

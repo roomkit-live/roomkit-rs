@@ -158,7 +158,7 @@ pub use self::tools::{
     ToolTurnContextOptions, compose_tool_handlers, current_response_metadata,
     current_tool_actor_id, current_tool_allowed_names, current_tool_call, current_tool_chain_depth,
     current_tool_requester, current_tool_room, current_tool_room_id, extract_tools,
-    tool_turn_context,
+    tool_turn_context, turn_report_claim,
 };
 #[doc(hidden)]
 pub use self::tools::{

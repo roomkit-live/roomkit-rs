@@ -1166,6 +1166,12 @@ params = ["work"]
 approved = "2026-11-15"
 reason = "language: a scoped future replaces Python's enclosed with block, preserving task-local context across suspension without Send or static bounds (HITL 47e0cee0)"
 
+# The owning optional callback form is approved in api/PYTHON_API.md (2026-11-17).
+[[map]]
+rust = "roomkit_ai::turn_report_claim"
+python = "roomkit.tools.turn_report_claim"
+py_spec = "sha256:6765d26373e63029a54e07f8583e556ee714dcb6428e55bbe8ee258d9787012c"
+
 [[missing]]
 python = "roomkit.providers.openai.OpenAIAIProvider.__init__"
 params = ["transport"]

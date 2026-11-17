@@ -20,6 +20,7 @@ mod observer_depth;
 mod observer_tools;
 mod prompt;
 mod provider_served;
+mod report_claims;
 mod resilience;
 mod result_carriers;
 mod room_turns;

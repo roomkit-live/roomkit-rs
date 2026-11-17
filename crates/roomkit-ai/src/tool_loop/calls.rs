@@ -80,7 +80,10 @@ impl Loop {
         let mut ran = called.call.clone();
         match steering
             .lifetime()
-            .call(Box::pin(self.serve_call(called, nth, &mut ran)))
+            .call(Box::pin(crate::tools::within_reporting(
+                Arc::clone(&called.report),
+                self.serve_call(called, nth, &mut ran),
+            )))
             .await
         {
             Some(end) => end,
@@ -191,8 +194,12 @@ impl Loop {
     /// reports it to the kit's observers.
     fn tell(&self, called: &Called, nth: usize, reported: &ToolCallReport, end: &ToolEnd) {
         let Some(turn) = &self.turn else {
+            if end.outcome == ToolCallOutcome::Served {
+                called.report.claim();
+            }
             return;
         };
+        let turn = turn.with_tool_report_claim(called.report.callback());
         turn.call_ended(nth, end_row(end.clone()));
         if called.duplicate {
             turn.report_call_under_held_id(reported);
@@ -405,6 +412,7 @@ impl Loop {
         let Some(turn) = &self.turn else {
             return Gated::Runs { call, asked };
         };
+        let turn = turn.with_tool_report_claim(called.report.callback());
         let arguments = match turn.before_tool_use(&call).await {
             ToolGate::Allowed(arguments) => arguments,
             ToolGate::Refused { text, error_detail } => {

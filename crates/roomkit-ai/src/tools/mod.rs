@@ -46,14 +46,15 @@ use serde_json::Value;
 pub use self::builder::Tools;
 #[doc(hidden)]
 pub use self::context::turn_admits_alias;
+pub(crate) use self::context::{
+    Occurrence, announce_tool_call, closing_context, continue_ai_turn, current_tool_room_metadata,
+    next_report_round, record_tool_declaration, resolve_tool_catalogue, resolve_tool_policy,
+    within_ai_turn, within_closing_context, within_reporting,
+};
 pub use self::context::{
     ToolTurnContextOptions, current_tool_actor_id, current_tool_allowed_names, current_tool_call,
     current_tool_chain_depth, current_tool_requester, current_tool_room, current_tool_room_id,
-    tool_turn_context,
-};
-pub(crate) use self::context::{
-    closing_context, continue_ai_turn, current_tool_room_metadata, record_tool_declaration,
-    resolve_tool_catalogue, resolve_tool_policy, within_ai_turn, within_closing_context,
+    tool_turn_context, turn_report_claim,
 };
 pub use self::external::{
     BeforeToolDecision, ExternalToolFuture, ExternalToolHandler, ExternalToolHandlerState,

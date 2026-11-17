@@ -18,6 +18,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Expose `AiChannel::extra_tools` and `Agent::extra_tools` as shared host definitions; replacements update subsequent turns while keeping the original handlers.
 
+- Expose `turn_report_claim`: retained callbacks share each call's report right with observers and cancellation while keeping turns isolated.
+
 - Expose `roomkit::tools::named_blocks` and `FENCED_TAGS`, preserving Python's default tags and supplied tag order (RFC §6.4).
 
 - The first and last lines of an ACP agent's room context (`[Room context — …`, `[End of room context]`) are runtime marks, short ones, as Python's: a participant's copy in a missed message or in the request is replaced, the block roomkit-acp writes around them kept (RFC §6.4, RMK-1736).

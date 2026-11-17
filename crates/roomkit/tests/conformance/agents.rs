@@ -1078,9 +1078,11 @@ fn undeclared_tools(spec: &Value, run: &Arc<Run>) -> Option<ToolHandler> {
 /// unserved.
 fn scripted_handler(tools: Vec<Value>, run: &Arc<Run>) -> ToolHandler {
     let run = Arc::downgrade(run);
+    let claims = super::report_claims::ReportClaims::default();
     ToolHandler::new(move |name, _arguments| {
         let behaviour = tools.iter().find(|tool| tool["name"] == name).cloned();
         let run = Weak::clone(&run);
+        let claims = claims.clone();
         async move {
             let Some(behaviour) = behaviour else {
                 return Err(ToolError::unserved(format!("{name} is not this handler's")));
@@ -1090,7 +1092,10 @@ fn scripted_handler(tools: Vec<Value>, run: &Arc<Run>) -> ToolHandler {
             if let (Some(gate), Some(run)) = (behaviour["gate"].as_str(), run.upgrade()) {
                 run.gates.hold(gate).await;
             }
-            answer(&behaviour).await
+            match behaviour["report_claim_probe"].as_str() {
+                Some(mode) => Ok(claims.answer(mode)),
+                None => answer(&behaviour).await,
+            }
         }
     })
 }
@@ -1272,6 +1277,7 @@ fn turn_config(spec: &Value, run: &Arc<Run>) -> Result<AiChannelTurnConfig, Stri
 /// The scripted tools of `spec` the agent declares, each answering every
 /// call one way, held at its `gate` first, `run`'s.
 fn tools(spec: &Value, run: &Arc<Run>) -> Tools {
+    let claims = super::report_claims::ReportClaims::default();
     spec["tools"]
         .as_array()
         .into_iter()
@@ -1299,15 +1305,20 @@ fn tools(spec: &Value, run: &Arc<Run>) -> Tools {
             };
             let behaviour = tool.clone();
             let run = Arc::downgrade(run);
+            let claims = claims.clone();
             tools.tool(definition, move |_call: ToolCall, _context: ToolContext| {
                 let (behaviour, run) = (behaviour.clone(), Weak::clone(&run));
+                let claims = claims.clone();
                 async move {
                     write_record(&behaviour);
                     write_structured_content(&behaviour)?;
                     if let (Some(gate), Some(run)) = (behaviour["gate"].as_str(), run.upgrade()) {
                         run.gates.hold(gate).await;
                     }
-                    answer(&behaviour).await
+                    match behaviour["report_claim_probe"].as_str() {
+                        Some(mode) => Ok(claims.answer(mode)),
+                        None => answer(&behaviour).await,
+                    }
                 }
             })
         })

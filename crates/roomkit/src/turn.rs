@@ -47,6 +47,8 @@ mod inputs;
 mod loop_hooks;
 mod media;
 mod provider_reports;
+mod report_claim;
+use report_claim::{ReportClaim, RunningCall};
 mod publication_scope;
 mod publish;
 
@@ -101,6 +103,7 @@ pub struct TurnHost {
     room_hooks: Arc<[String]>,
     /// The room snapshot built when this external tool report fires.
     tool_report_context: Option<Arc<RoomContext>>,
+    report_claim: Option<ReportClaim>,
 }
 
 struct Shared {
@@ -129,7 +132,7 @@ struct Calls {
     /// The arguments each call runs with, by its id: what the gate left.
     ran_with: HashMap<String, Metadata>,
     /// The calls running: let run, not reported yet.
-    running: Vec<ToolCall>,
+    running: Vec<RunningCall>,
     /// The ends told before their end item was sent, each with the call's
     /// place among the open calls under its id.
     told_ends: Vec<(usize, ToolCallContent)>,
@@ -642,7 +645,10 @@ impl TurnHost {
         calls.ran_with.insert(call.id.clone(), arguments.clone());
         let mut running = call.clone();
         running.arguments.clone_from(arguments);
-        calls.running.push(running);
+        calls.running.push(RunningCall {
+            call: running,
+            claim: self.report_claim.clone(),
+        });
     }
 
     /// Runs `read` on the arguments each call of the turn runs with, by
@@ -781,7 +787,7 @@ impl TurnHost {
             if let Some(position) = calls
                 .running
                 .iter()
-                .position(|call| call.id == report.call.id)
+                .position(|call| call.call.id == report.call.id)
             {
                 calls.running.remove(position);
             }
@@ -807,7 +813,8 @@ impl TurnHost {
     /// the turn's response, in `execution`, the turn's context.
     pub(crate) fn report_cut(&self, execution: &ExecutionContext, reason: &str) {
         let running = std::mem::take(&mut self.calls().running);
-        for call in running {
+        for running in running {
+            let call = running.call;
             let tool = serde_json::to_string(&call.name).unwrap_or_default();
             let read = format!(
                 "{{\"error\": \"Tool call cancelled\", \"tool\": {tool}, \"hint\": \"{CUT_HINT}\"}}"
@@ -815,7 +822,9 @@ impl TurnHost {
             let report = ToolCallReport::new(call)
                 .ended(ToolCallOutcome::Cancelled, Value::String(read))
                 .with_error_detail(format!("cancelled: {reason}"));
-            self.observe(&report, execution, self.shared.response_depth);
+            let mut host = self.clone();
+            host.report_claim = running.claim;
+            host.observe(&report, execution, self.shared.response_depth);
         }
     }
 
@@ -823,10 +832,23 @@ impl TurnHost {
     /// background, in `execution`, at least `floor` deep, and emits its
     /// `tool_call` framework event (RFC §8.2).
     fn observe(&self, report: &ToolCallReport, execution: &ExecutionContext, floor: u32) {
-        let event = self.event_of(report);
-        let hooks = self.hooks(HookTrigger::OnToolCall);
-        self.observe_with(&hooks, &event, execution, floor);
-        self.emit_tool_call(&event);
+        self.in_report_context(|| {
+            if !self.claim_tool_report() {
+                return;
+            }
+            let event = self.event_of(report);
+            let hooks = self.hooks(HookTrigger::OnToolCall);
+            self.observe_with(&hooks, &event, execution, floor);
+            self.emit_tool_call(&event);
+        });
+    }
+
+    fn report_event_only(&self, report: &ToolCallReport) {
+        self.in_report_context(|| {
+            if self.claim_tool_report() {
+                self.emit_tool_call(&self.event_of(report));
+            }
+        });
     }
 
     /// Runs the ASYNC hooks of `hooks` on `event` in the background, each
@@ -1747,6 +1769,7 @@ pub(crate) fn host(
     TurnHost {
         answer_unscoped: true,
         tool_report_context: None,
+        report_claim: None,
         room_hooks: Arc::default(),
         shared: Arc::new(Shared {
             room_id: context.room.id.clone(),

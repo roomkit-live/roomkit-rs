@@ -342,7 +342,8 @@ impl Loop {
     /// none, as Python's generator never started.
     pub(crate) fn run(mut self, conversation: Vec<Message>) -> TurnItems<'static> {
         items(move |out| {
-            crate::tools::continue_ai_turn(async move {
+            let channel_id = self.context.channel_id.clone();
+            crate::tools::continue_ai_turn(channel_id.as_str(), async move {
                 let (room_id, channel_id) = (&self.context.room_id, &self.context.channel_id);
                 let name = self.provider.dyn_type_name();
                 self.turn_span = self.telemetry.start_turn(room_id, channel_id, name);
@@ -385,6 +386,7 @@ impl Loop {
         }
         self.hand_instruction(&out).await;
         for round in 0..=self.bounds.max_rounds {
+            crate::tools::next_report_round();
             if steering.cancelled() {
                 let ending = (&limits, &steering, &out);
                 return self

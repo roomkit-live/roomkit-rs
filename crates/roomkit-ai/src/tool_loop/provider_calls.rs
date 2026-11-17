@@ -53,7 +53,9 @@ impl ProviderCalls {
     ) -> (AiToolCall, ToolEnd) {
         let started = Instant::now();
         let ran = ToolCall::new(call.id.clone(), call.name.clone(), call.arguments.clone());
-        self.report(&ran, &served).await;
+        let entry = crate::tools::announce_tool_call(&ran.id);
+        crate::tools::within_reporting(Arc::clone(&entry), self.report(&ran, &served, &entry))
+            .await;
         out.give(Ok(TurnItem::ToolStart(ran.clone()))).await;
         if let Some(events) = &self.events {
             events.started([&ran]);
@@ -76,12 +78,19 @@ impl ProviderCalls {
         closing.handed();
         (call.into(), end)
     }
-    async fn report(&self, ran: &ToolCall, served: &ServedCall) {
+    async fn report(
+        &self,
+        ran: &ToolCall,
+        served: &ServedCall,
+        entry: &Arc<crate::tools::Occurrence>,
+    ) {
         if let Some(turn) = &self.turn {
+            let turn = turn.with_tool_report_claim(entry.callback());
             let report = ToolCallReport::new(ran.clone())
                 .ended(outcome(served), Value::String(served.result.clone()));
             turn.report_provider_tool_call(report).await;
         }
+        entry.claim();
     }
 
     fn end(&self, ran: ToolCall, served: &ServedCall, duration: std::time::Duration) -> ToolEnd {
