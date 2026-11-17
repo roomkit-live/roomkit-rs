@@ -3,7 +3,7 @@
 //! after the table of `docs/rfc-gaps.md` G-085.
 
 use roomkit::RoomKitError;
-use roomkit::model::{ModelError, Visibility};
+use roomkit::model::{MediaContent, ModelError, Visibility};
 use serde_json::{Value, json};
 
 pub(crate) fn named(name: &str) -> Value {
@@ -29,6 +29,33 @@ pub(crate) fn visibility_input_error(spec: &Value) -> Option<Value> {
         )
         .then(|| named("invalid_argument"))
     })
+}
+
+/// A media URL the content model refuses (RFC §6.4), in the content of a
+/// `process_inbound` or a `send_event`, through a composite's parts and an
+/// edit's new content, is the suite's `invalid_argument`, as Python's
+/// validator refusing it is; roomkit-rs refuses it as it deserializes the
+/// content, which the runner would read as a scenario it cannot read.
+pub(crate) fn media_url_input_error(spec: &Value) -> Option<Value> {
+    let content = match spec["call"].as_str() {
+        Some("process_inbound") => &spec["message"]["content"],
+        Some("send_event") => &spec["content"],
+        _ => return None,
+    };
+    refuses_media_url(content).then(|| named("invalid_argument"))
+}
+
+fn refuses_media_url(content: &Value) -> bool {
+    match content["type"].as_str() {
+        Some("media") => content["url"]
+            .as_str()
+            .is_some_and(|url| MediaContent::new(url, "image/png").is_err()),
+        Some("composite") => content["parts"]
+            .as_array()
+            .is_some_and(|parts| parts.iter().any(refuses_media_url)),
+        Some("edit") => refuses_media_url(&content["new_content"]),
+        _ => false,
+    }
 }
 
 /// The suite's name of `error`; `None` for an error it has no name for, a
@@ -97,8 +124,29 @@ pub(crate) fn error_of(error: &RoomKitError) -> Option<Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::visibility_input_error;
+    use super::{media_url_input_error, visibility_input_error};
     use serde_json::json;
+
+    #[test]
+    fn a_refused_media_url_is_a_named_public_input_error() {
+        let media = json!({ "type": "media", "url": "app://a/%2e%2e/b", "mime_type": "image/png" });
+        let composite =
+            json!({ "type": "composite", "parts": [{ "type": "text", "body": "x" }, media] });
+        let inbound = json!({ "call": "process_inbound", "message": { "content": composite } });
+        let sent = json!({ "call": "send_event", "content": media });
+        for spec in [inbound, sent] {
+            assert_eq!(
+                media_url_input_error(&spec),
+                Some(json!({ "name": "invalid_argument" }))
+            );
+        }
+        let link =
+            json!({ "type": "media", "url": "https://a/%2e%2e/b", "mime_type": "image/png" });
+        assert_eq!(
+            media_url_input_error(&json!({ "call": "send_event", "content": link })),
+            None
+        );
+    }
 
     #[test]
     fn a_visibility_constructor_refusal_is_a_named_public_input_error() {

@@ -114,8 +114,8 @@ fn javascript_media() -> EventContent {
 fn javascript_refused() -> StoreError {
     StoreError::Value(
         "URL must be a link (http://, https://), a data: URI, or a reference <scheme>://... (two \
-         letters of scheme at least, not file, ftp, javascript or vbscript, no '..' segment and \
-         no backslash): \"javascript:alert(1)\""
+         letters of scheme at least, not file, ftp, javascript or vbscript, no '..' segment, \
+         backslash or control character, even percent-encoded): \"javascript:alert(1)\""
             .to_owned(),
     )
 }

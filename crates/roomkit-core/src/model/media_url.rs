@@ -2,12 +2,14 @@
 //! URI, a link, or a reference, as the Python implementation's
 //! `roomkit._media_url` reads it.
 
+use std::borrow::Cow;
+
 use super::ModelError;
 
 /// Why a media content's `url` is refused, Python's message.
 pub(super) const MEDIA_URL_RULE: &str = "URL must be a link (http://, https://), a data: URI, or a \
      reference <scheme>://... (two letters of scheme at least, not file, ftp, javascript or \
-     vbscript, no '..' segment and no backslash)";
+     vbscript, no '..' segment, backslash or control character, even percent-encoded)";
 
 /// Why an audio or a video URL is refused, Python's message.
 pub(super) const PLAYABLE_URL_RULE: &str = "URL must start with http://, https://, or data:";
@@ -70,8 +72,10 @@ fn lowercase_scheme(url: &str) -> String {
 /// Whether `url` is a reference no reader could take for something else:
 /// `<scheme>://…` with a scheme of two characters at least (one reads as a
 /// Windows drive), a letter then letters, digits, `+`, `.` or `-`, not a
-/// scheme a reader fetches, opens or runs, no `..` segment and no
-/// backslash.
+/// scheme a reader fetches, opens or runs, and nothing a path reader could
+/// follow once it has percent-decoded the rest, as many times as it may: no
+/// backslash, no control character, no segment that is `..` with the
+/// whitespace around it trimmed.
 fn is_safe_reference(url: &str) -> bool {
     let Some((scheme, rest)) = url.split_once("://") else {
         return false;
@@ -80,10 +84,80 @@ fn is_safe_reference(url: &str) -> bool {
     let well_formed = characters.next().is_some_and(|c| c.is_ascii_alphabetic())
         && scheme.len() >= 2
         && characters.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'));
-    well_formed
-        && !REFUSED_SCHEMES.contains(&scheme.to_ascii_lowercase().as_str())
-        && !rest.contains('\\')
-        && !rest.split('/').any(|segment| segment == "..")
+    if !well_formed || REFUSED_SCHEMES.contains(&scheme.to_ascii_lowercase().as_str()) {
+        return false;
+    }
+    let rest = fully_decoded(rest);
+    !rest.contains('\\') && !holds_control(&rest) && !holds_parent(&rest)
+}
+
+/// Whether `text` holds a control character (Unicode Cc: C0, DEL and C1),
+/// which a path reader may cut a name at or drop. An ASCII text is read by
+/// its bytes.
+fn holds_control(text: &str) -> bool {
+    if text.is_ascii() {
+        text.bytes().any(|byte| byte.is_ascii_control())
+    } else {
+        text.chars().any(char::is_control)
+    }
+}
+
+/// Whether a segment of `text`, between `/`, `?` and `#`, is `..` once
+/// trimmed of whitespace.
+fn holds_parent(text: &str) -> bool {
+    text.contains("..")
+        && text
+            .split(['/', '?', '#'])
+            .any(|segment| segment.trim() == "..")
+}
+
+/// `text` percent-decoded until it no longer changes (each pass shortens
+/// it, so the loop ends): `%252e` reads as `.` to a reader that decodes
+/// twice. A decoded byte sequence that is no UTF-8 reads as U+FFFD, as
+/// Python's `urllib.parse.unquote` reads it.
+fn fully_decoded(text: &str) -> Cow<'_, str> {
+    let mut text = Cow::Borrowed(text);
+    while let Some(decoded) = percent_decoded(&text) {
+        text = Cow::Owned(decoded);
+    }
+    text
+}
+
+/// `text` with each `%` and two hex digits replaced by the byte they name;
+/// `None` when it holds none.
+fn percent_decoded(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut changed = false;
+    let mut index = 0;
+    while let Some(&byte) = bytes.get(index) {
+        if let Some(escaped) = escaped_byte(bytes, index) {
+            decoded.push(escaped);
+            changed = true;
+            index += 3;
+        } else {
+            decoded.push(byte);
+            index += 1;
+        }
+    }
+    changed.then(|| String::from_utf8_lossy(&decoded).into_owned())
+}
+
+/// The byte a `%` and two hex digits at `index` of `bytes` name, if they
+/// stand there.
+fn escaped_byte(bytes: &[u8], index: usize) -> Option<u8> {
+    if *bytes.get(index)? != b'%' {
+        return None;
+    }
+    let high = hex_digit(*bytes.get(index + 1)?)?;
+    let low = hex_digit(*bytes.get(index + 2)?)?;
+    Some((high << 4) | low)
+}
+
+fn hex_digit(byte: u8) -> Option<u8> {
+    char::from(byte)
+        .to_digit(16)
+        .and_then(|digit| u8::try_from(digit).ok())
 }
 
 #[cfg(test)]
@@ -122,6 +196,45 @@ mod tests {
                 Ok("App://a/b".to_owned()),
             ]
         );
+    }
+
+    /// Python's `TestReferenceURL`: a reference a reader that percent-decodes,
+    /// once or more, or trims, could follow is refused; an encoded dot or
+    /// slash that leads nowhere, a space or `a..b` is not.
+    #[test]
+    fn a_reference_is_refused_in_every_spelling_a_path_reader_follows() {
+        for url in [
+            "app-media://a/%2e%2e/secret",
+            "app-media://a/%2E%2E%2Fsecret",
+            "app-media://a/.%2E/secret",
+            "app-media://a/%252e%252e/secret",
+            "app-media://a/%25252e%25252E/secret",
+            "app-media://a/..%2fsecret",
+            "app-media://a/..%5Csecret",
+            "app-media://a/ ../secret",
+            "app-media://a/%20..%09/secret",
+            "app-media://a/\u{a0}../secret",
+            "app-media://a/..?secret",
+            "app-media://a/b#..",
+            "app-media://a/b\nc",
+            "app-media://a/b%0Ac",
+            "app-media://a/b\u{0}",
+            "app-media://a/b\u{7f}",
+            "app-media://a/b\u{85}",
+        ] {
+            assert!(!is_safe_reference(url), "{url:?} is accepted");
+        }
+        for url in [
+            "app-media://photos/a..b.png",
+            "app-media://photos/./.../1.png",
+            "app-media://photos/file%2Ename.png",
+            "app-media://bucket/folder%2Ffile.png",
+            "app-media://photos/My Photo.png?size=large#top",
+            "app-media://photos/100%",
+            "app-media://photos/%e9t%C3%A9.png",
+        ] {
+            assert!(is_safe_reference(url), "{url:?} is refused");
+        }
     }
 
     /// A scheme `://` matches as the first `://` of the URL, so a reference

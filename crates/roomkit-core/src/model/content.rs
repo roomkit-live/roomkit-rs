@@ -1057,8 +1057,8 @@ mod tests {
                     value: value.to_owned(),
                     reason: "URL must be a link (http://, https://), a data: URI, or a \
                              reference <scheme>://... (two letters of scheme at least, not \
-                             file, ftp, javascript or vbscript, no '..' segment and no \
-                             backslash)",
+                             file, ftp, javascript or vbscript, no '..' segment, backslash or \
+                             control character, even percent-encoded)",
                 }
             })
         );
