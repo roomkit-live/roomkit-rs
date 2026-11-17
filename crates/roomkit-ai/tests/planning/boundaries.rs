@@ -1,7 +1,9 @@
 use super::*;
 use roomkit::ConversationStore;
 use roomkit::model::{EventContent, EventType, Metadata, ToolCallOutcome};
-use roomkit_ai::{Agent, AgentOptions, AiError, AiTool, PlanUpdatedEvent, ToolResult};
+use roomkit_ai::{
+    Agent, AgentOptions, AiError, AiTool, PlanTaskHandle, PlanUpdatedEvent, ToolResult,
+};
 use roomkit_core::ops::{Environment, SystemEnvironment};
 
 // Python: test_planning_boundaries.py::test_task_and_unicode_title_limits_reach_the_actual_tool_result
@@ -81,9 +83,9 @@ fn payload_defaults_are_independent_and_preserve_open_task_objects() {
     let task: Metadata =
         serde_json::from_value(json!({"title":"Read", "status":"custom", "extra":{"id":1}}))
             .unwrap();
-    event.tasks.push(task.clone());
-    assert_eq!(other.tasks, Vec::<Metadata>::new());
-    assert_eq!(event.tasks, vec![task]);
+    event.tasks.push(PlanTaskHandle::new(task.clone()));
+    assert_eq!(other.tasks, Vec::<PlanTaskHandle>::new());
+    assert_eq!(task_values(&event.tasks), json!([task]));
     assert_eq!(event.clone(), event);
 }
 

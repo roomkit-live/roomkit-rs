@@ -7,6 +7,8 @@ mod boundaries;
 mod compaction;
 #[path = "planning/concurrent.rs"]
 mod concurrent;
+#[path = "planning/handles.rs"]
+mod handles;
 #[path = "planning/observers.rs"]
 mod observers;
 #[path = "planning/rooms.rs"]
@@ -28,6 +30,15 @@ use roomkit_ai::{
 use serde_json::{Value, json};
 
 const BOUND: Duration = Duration::from_secs(5);
+
+fn task_values(tasks: &[roomkit_ai::PlanTaskHandle]) -> Value {
+    json!(
+        tasks
+            .iter()
+            .map(roomkit_ai::PlanTaskHandle::get)
+            .collect::<Vec<_>>()
+    )
+}
 
 fn plan(tasks: Value) -> AiResponse {
     let mut response = AiResponse::new("");

@@ -83,6 +83,7 @@ pub mod memory;
 mod mock;
 pub mod orchestration;
 mod plan_event;
+mod plan_task;
 mod planning;
 mod provider;
 mod router;
@@ -121,6 +122,7 @@ pub use self::loop_events::{
 };
 pub use self::mock::{MockAiProvider, MockAiProviderOptions};
 pub use self::plan_event::PlanUpdatedEvent;
+pub use self::plan_task::PlanTaskHandle;
 pub use self::provider::{
     API_KEY_METADATA_KEY, AiContentPart, AiContext, AiImagePart, AiMessage, AiMessageContent,
     AiProvider, AiResponse, AiRole, AiTextPart, AiThinkingPart, AiToolCall, AiToolCallPart,

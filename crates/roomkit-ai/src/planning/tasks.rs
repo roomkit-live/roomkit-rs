@@ -2,12 +2,41 @@
 //! shallow; errors here are served JSON results, not refused tool calls.
 
 use roomkit::model::Metadata;
+use roomkit_core::rules::transcript::quoted;
 use serde_json::{Value, json};
 
 use super::{MAX_TASKS, MAX_TITLE_LENGTH, PLAN_TOOL};
 use crate::AiTool;
 
-const STATUSES: [&str; 4] = ["completed", "in_progress", "blocked", "pending"];
+pub(super) const STATUSES: [&str; 4] = ["completed", "in_progress", "blocked", "pending"];
+
+/// Host edits keep Python's `one_of` and `quoted(Any)` rendering. Only model
+/// arguments pass through validation; an observer's open object does not.
+pub(super) fn line(task: &Metadata) -> String {
+    let status = task
+        .get("status")
+        .and_then(Value::as_str)
+        .filter(|status| STATUSES.contains(status))
+        .unwrap_or("pending");
+    let title = task.get("title").map_or_else(
+        || "Untitled".to_owned(),
+        |value| match value {
+            Value::String(text) => text.clone(),
+            value @ (Value::Null
+            | Value::Bool(_)
+            | Value::Number(_)
+            | Value::Array(_)
+            | Value::Object(_)) => crate::memory::repr::repr(value),
+        },
+    );
+    let icon = match status {
+        "completed" => "[x]",
+        "in_progress" => "[-]",
+        "blocked" => "[!]",
+        _ => "[ ]",
+    };
+    format!("- {icon} {} ({status})", quoted(&title, MAX_TITLE_LENGTH))
+}
 
 pub(super) fn validated(given: Option<&Value>) -> Result<Vec<Metadata>, String> {
     let tasks = match given {

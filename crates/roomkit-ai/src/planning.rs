@@ -9,11 +9,10 @@ use std::sync::{Mutex, PoisonError};
 
 use roomkit::model::{Metadata, RoomId, ToolCall};
 use roomkit::realtime::{EphemeralEvent, EphemeralEventType};
-use roomkit_core::rules::transcript::quoted;
-use serde_json::{Value, json};
+use serde_json::json;
 
-use crate::PlanUpdatedEvent;
 use crate::tools::{AiTool, BoxFuture, DynToolset, ToolContext, ToolError, ToolResult};
+use crate::{PlanTaskHandle, PlanUpdatedEvent};
 
 pub(crate) const PLAN_TOOL: &str = "plan_tasks";
 const MAX_ROOMS: usize = 100;
@@ -24,11 +23,11 @@ const MAX_TITLE_LENGTH: usize = 500;
 /// validation and the cache mutation complete before observers are notified.
 #[derive(Debug, Default)]
 pub(crate) struct TaskPlanner {
-    plans: Mutex<Vec<(RoomId, Vec<Metadata>)>>,
+    plans: Mutex<Vec<(RoomId, Vec<PlanTaskHandle>)>>,
 }
 
 impl TaskPlanner {
-    fn store(&self, room: &RoomId, tasks: Vec<Metadata>) {
+    fn store(&self, room: &RoomId, tasks: Vec<PlanTaskHandle>) {
         let mut plans = self.plans.lock().unwrap_or_else(PoisonError::into_inner);
         plans.retain(|(key, _)| key != room);
         plans.push((room.clone(), tasks));
@@ -37,7 +36,7 @@ impl TaskPlanner {
         }
     }
 
-    fn plan_for(&self, room: &RoomId) -> Option<Vec<Metadata>> {
+    fn plan_for(&self, room: &RoomId) -> Option<Vec<PlanTaskHandle>> {
         let mut plans = self.plans.lock().unwrap_or_else(PoisonError::into_inner);
         let at = plans.iter().position(|(key, _)| key == room)?;
         let entry = plans.remove(at);
@@ -63,26 +62,7 @@ impl TaskPlanner {
             return Vec::new();
         };
         let mut lines = vec!["## Current Task Plan".to_owned()];
-        for task in tasks {
-            let status = task
-                .get("status")
-                .and_then(Value::as_str)
-                .unwrap_or("pending");
-            let title = task
-                .get("title")
-                .and_then(Value::as_str)
-                .unwrap_or("Untitled");
-            let icon = match status {
-                "completed" => "[x]",
-                "in_progress" => "[-]",
-                "blocked" => "[!]",
-                _ => "[ ]",
-            };
-            lines.push(format!(
-                "- {icon} {} ({status})",
-                quoted(title, MAX_TITLE_LENGTH)
-            ));
-        }
+        lines.extend(tasks.into_iter().map(|task| tasks::line(&task.get())));
         vec![lines.join("\n")]
     }
 
@@ -91,9 +71,12 @@ impl TaskPlanner {
             Ok(tasks) => tasks,
             Err(error) => return ToolResult::Text(crate::texts::error_envelope(&error)),
         };
+        let tasks: Vec<_> = tasks.into_iter().map(PlanTaskHandle::new).collect();
         self.store(&context.room_id, tasks.clone());
         notify(context, &tasks);
-        ToolResult::Text(tasks::summary(&tasks))
+        ToolResult::Text(tasks::summary(
+            &tasks.iter().map(PlanTaskHandle::get).collect::<Vec<_>>(),
+        ))
     }
 
     pub(crate) fn definition() -> AiTool {
@@ -104,7 +87,7 @@ impl TaskPlanner {
 /// Publishing hands the event to the turn's proxy, without waiting for the
 /// physical backend. The hook sees stored state, even with no backend; its
 /// observer work is tracked by the existing turn machinery (RFC §10.6.6).
-fn notify(context: &ToolContext, tasks: &[Metadata]) {
+fn notify(context: &ToolContext, tasks: &[PlanTaskHandle]) {
     let Some(turn) = context
         .turn()
         .filter(|_| !context.room_id.as_str().is_empty())
@@ -115,7 +98,10 @@ fn notify(context: &ToolContext, tasks: &[Metadata]) {
         channel_id: Some(context.channel_id.clone()),
         data: Metadata::from_iter([
             ("type".to_owned(), json!("plan_updated")),
-            ("tasks".to_owned(), json!(tasks)),
+            (
+                "tasks".to_owned(),
+                json!(tasks.iter().map(PlanTaskHandle::get).collect::<Vec<_>>()),
+            ),
         ]),
         ..EphemeralEvent::new(
             context.room_id.clone(),

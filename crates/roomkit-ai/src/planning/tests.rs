@@ -26,6 +26,7 @@ fn validation_is_atomic_and_notes_quote_titles_with_known_status_icons() {
         {"title":"Wait", "status":"blocked"}
     ])))
     .unwrap();
+    let original: Vec<_> = original.into_iter().map(PlanTaskHandle::new).collect();
     planner.store(&room, original.clone());
     let context = ToolContext::new(room.clone(), "agent".parse().unwrap());
     let invalid =

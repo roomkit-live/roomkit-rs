@@ -1379,6 +1379,11 @@ rust = "roomkit_ai::AiToolHandle"
 approved = "2026-11-17"
 reason = "language: extra_tools returns shared cloneable host definitions with get/replace. get, nested fields and already prepared provider contexts are owned snapshots; replace changes subsequent turns."
 
+[[exception]]
+rust = "roomkit_ai::PlanTaskHandle"
+approved = "2026-11-17"
+reason = "language: PlanUpdatedEvent copies its tasks list and shares its task objects with the stored plan. Clone shares an object; new owns its map, get copies its nested values, replace replaces it whole, and with_mut edits it atomically in a synchronous non-reentrant callback."
+
 
 [[exception]]
 rust = "roomkit_ai::LoadedSkill"

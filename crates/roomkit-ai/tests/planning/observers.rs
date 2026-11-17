@@ -88,7 +88,7 @@ async fn a_failing_observer_ignores_channel_type_filters_and_keeps_the_plan() {
         assert_eq!(provider.calls().len(), 2);
         assert_eq!(seen.lock().unwrap().len(), 1);
         assert_eq!(
-            json!(seen.lock().unwrap().first().unwrap().tasks),
+            task_values(&seen.lock().unwrap().first().unwrap().tasks),
             tasks("Follow up")
         );
         say(&kit, "r", "Continue.").await;
@@ -150,7 +150,10 @@ async fn publication_boundary(streaming: bool) {
     tokio::time::timeout(BOUND, heard.notified()).await.unwrap();
     let observed = seen.lock().unwrap().clone();
     assert_eq!(observed.len(), 1);
-    assert_eq!(json!(observed.first().unwrap().tasks), tasks("Follow up"));
+    assert_eq!(
+        task_values(&observed.first().unwrap().tasks),
+        tasks("Follow up")
+    );
     let published = backend.plans.lock().unwrap().clone();
     let [event] = published.as_slice() else {
         panic!("one publication required")

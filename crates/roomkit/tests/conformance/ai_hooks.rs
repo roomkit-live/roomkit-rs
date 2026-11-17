@@ -218,7 +218,8 @@ impl Scripted for PlanUpdatedEvent {
 
     fn record(&self) -> Value {
         json!({"room_id": self.room_id, "channel_id": self.channel_id,
-            "tasks": self.tasks, "timestamp": self.timestamp})
+            "tasks": self.tasks.iter().map(roomkit_ai::PlanTaskHandle::get).collect::<Vec<_>>(),
+            "timestamp": self.timestamp})
     }
 
     fn patched(self, _patch: &Value) -> Result<Self, String> {
