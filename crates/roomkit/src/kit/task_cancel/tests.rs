@@ -324,7 +324,7 @@ async fn lines(bus: &StatusBus, count: usize) -> Vec<Metadata> {
         loop {
             let lines = room_lines(bus, "r", 50).await;
             if lines.len() >= count {
-                return lines.iter().map(Line::to_metadata).collect();
+                return lines.into_iter().map(Line::into_metadata).collect();
             }
             tokio::task::yield_now().await;
         }

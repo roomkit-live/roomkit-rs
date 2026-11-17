@@ -61,6 +61,7 @@ pub use self::delegated::{DelegatedTask, DelegatedTaskOptions, DelegatedTaskResu
 pub(crate) use self::delegated::{cut_short_message, task_cut_reason, task_work};
 pub(crate) use self::held::{Claim, HeldTasks, spawn_apart, until_ended};
 pub(crate) use self::hosted::HostTasks;
+pub use self::lines::room_tasks;
 #[cfg(test)]
 pub(crate) use self::record::ENDED_ROOM_TASKS_KEPT;
 pub(crate) use self::record::{AGENT_REACH, RoomTaskRecord, TaskCancel, TaskCancels, TaskReach};

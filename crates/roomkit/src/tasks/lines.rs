@@ -2,7 +2,9 @@
 //! `tasks.status.room_tasks` and `room_task_lines`, what `task_status` and
 //! a turn's host's `room_tasks` read.
 
-use roomkit_core::model::Metadata;
+use std::borrow::Borrow;
+
+use roomkit_core::model::{Metadata, truthy_python_str};
 use roomkit_core::rules::discussion::agent_handle;
 use serde_json::{Value, json};
 
@@ -62,9 +64,21 @@ impl Line {
     }
 
     /// The line as a record.
-    pub(crate) fn to_metadata(&self) -> Metadata {
-        self.members.iter().cloned().collect()
+    pub(crate) fn into_metadata(self) -> Metadata {
+        self.members.into_iter().collect()
     }
+}
+
+/// Project caller-supplied status entries in posting order into one record per
+/// task (RFC §23.4). Each record retains its task, latest progress and terminal
+/// result where present. A worker initially recorded without a task ID moves to
+/// the end when an entry gives it an ID. Supply entries from the desired rooms.
+/// The returned records and their nested results are owned by the caller.
+pub fn room_tasks<E: Borrow<StatusEntry>>(entries: impl IntoIterator<Item = E>) -> Vec<Metadata> {
+    task_lines(entries)
+        .into_iter()
+        .map(Line::into_metadata)
+        .collect()
 }
 
 /// The tasks `bus` lists for `room_id`, read from its latest `window`
@@ -77,8 +91,8 @@ pub(crate) async fn room_task_lines(
 ) -> Vec<Metadata> {
     room_lines(bus, room_id, window)
         .await
-        .iter()
-        .map(Line::to_metadata)
+        .into_iter()
+        .map(Line::into_metadata)
         .collect()
 }
 
@@ -89,7 +103,7 @@ pub(crate) async fn room_lines(bus: &StatusBus, room_id: &str, window: usize) ->
         ..RecentOptions::default()
     };
     let entries = bus.recent(options).await;
-    room_tasks(
+    task_lines(
         entries
             .iter()
             .filter(|entry| entry.room_id() == Some(room_id) && of_a_task(entry)),
@@ -122,16 +136,16 @@ pub(crate) fn truthy(value: &Value) -> bool {
 /// One line per task, from its entries in posting order: the task from
 /// its `pending` entry, its state and result from its latest terminal
 /// one, its progress from its latest `info` one, which never ends it.
-pub(crate) fn room_tasks<'a>(entries: impl Iterator<Item = &'a StatusEntry>) -> Vec<Line> {
+fn task_lines<E: Borrow<StatusEntry>>(entries: impl IntoIterator<Item = E>) -> Vec<Line> {
     let mut order: Vec<String> = Vec::new();
     let mut lines: std::collections::HashMap<String, Line> = std::collections::HashMap::new();
     for entry in entries {
+        let entry = entry.borrow();
         let task_id = entry
             .metadata
             .get("task_id")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_owned();
+            .and_then(truthy_python_str)
+            .unwrap_or_default();
         if entry.action != TASK_ACTION {
             if let Some(line) = lines.get_mut(&task_id) {
                 end_run_line(line, entry);
@@ -195,9 +209,8 @@ fn read_entry(line: &mut Line, entry: &StatusEntry) {
             let status = entry
                 .metadata
                 .get("task_status")
-                .filter(|status| truthy(status))
-                .and_then(Value::as_str)
-                .map_or_else(|| level_name(entry.status), str::to_owned);
+                .and_then(truthy_python_str)
+                .unwrap_or_else(|| level_name(entry.status));
             line.insert("status", json!(status));
             line.insert("ended", json!(entry.ts));
             if status == "completed" {
@@ -276,7 +289,7 @@ mod tests {
             entry("writer", StatusLevel::Pending, "Write it.", None),
             entry("writer", StatusLevel::Completed, "The text.", Some("t2")),
         ];
-        let lines = room_tasks(entries.iter());
+        let lines = task_lines(entries.iter());
 
         assert_eq!(
             read(&lines),
@@ -308,7 +321,7 @@ mod tests {
             counted(StatusLevel::Info, "5/20 s", 5),
             counted(StatusLevel::Info, "12/20 s", 12),
         ];
-        let lines = room_tasks(entries.iter());
+        let lines = task_lines(entries.iter());
 
         let read: Vec<_> = lines
             .iter()
@@ -341,7 +354,7 @@ mod tests {
         ];
 
         assert_eq!(
-            read(&room_tasks(entries.iter())),
+            read(&task_lines(entries.iter())),
             vec![(json!("t1"), json!("counter"), json!("completed"))]
         );
     }
@@ -358,7 +371,7 @@ mod tests {
         let running = entry("worker", StatusLevel::Pending, "Count.", Some("t1"));
 
         let read_by_lines = |entries: [StatusEntry; 2]| {
-            read(&room_tasks(entries.iter().filter(|entry| of_a_task(entry))))
+            read(&task_lines(entries.iter().filter(|entry| of_a_task(entry))))
         };
         let lines = read_by_lines([running.clone(), foreign]);
         assert_eq!(
@@ -381,7 +394,7 @@ mod tests {
         ];
 
         assert_eq!(
-            read(&room_tasks(entries.iter())),
+            read(&task_lines(entries.iter())),
             vec![
                 (json!("t1"), json!("worker"), json!("running")),
                 (json!("t2"), json!("writer"), json!("completed")),

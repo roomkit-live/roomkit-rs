@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Expose `roomkit::tasks::room_tasks` to project caller-supplied status entries in posting order.
+
 - Text model history skips stored responses whose cancellation reason is `SUPERSEDED`. The public `SUPERSEDED`, `model::STANDALONE` and `model::TURNS_KEY` constants expose the corresponding wire strings.
 
 - Match legacy MCP SSE network deadlines per connect, read and complete write, preserving slow POST responses, cancellation and reentry.
