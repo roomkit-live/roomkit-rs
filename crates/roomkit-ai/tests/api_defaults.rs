@@ -256,6 +256,8 @@ fn ai_channel_options_defaults_as_python() {
     assert!(defaults.response_schema.is_none());
     // roomkit.AIChannel.__init__(thinking_budget) = None
     assert!(defaults.thinking_budget.is_none());
+    // roomkit.AIChannel.__init__(enable_planning) = False
+    assert!(!defaults.enable_planning);
     // roomkit.AIChannel.__init__(enable_thinking) = None
     assert!(defaults.enable_thinking.is_none());
     // roomkit.AIChannel.__init__(thinking_coalesce_ms) = 80.0

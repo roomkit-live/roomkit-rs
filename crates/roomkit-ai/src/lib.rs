@@ -82,6 +82,8 @@ mod loop_events;
 pub mod memory;
 mod mock;
 pub mod orchestration;
+mod plan_event;
+mod planning;
 mod provider;
 mod router;
 pub mod tasks;
@@ -118,6 +120,7 @@ pub use self::loop_events::{
     ThinkingEvent, ToolDeclarationOrigin, ToolRoundEvent, response_transcript,
 };
 pub use self::mock::{MockAiProvider, MockAiProviderOptions};
+pub use self::plan_event::PlanUpdatedEvent;
 pub use self::provider::{
     API_KEY_METADATA_KEY, AiContentPart, AiContext, AiImagePart, AiMessage, AiMessageContent,
     AiProvider, AiResponse, AiRole, AiTextPart, AiThinkingPart, AiToolCall, AiToolCallPart,

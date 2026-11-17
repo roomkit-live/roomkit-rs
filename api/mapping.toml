@@ -872,9 +872,9 @@ reason = "not in 0.x: the hook triggers of voice, video, realtime, recording, vi
 
 [[missing]]
 python = "roomkit.HookTrigger"
-members = ["ON_PLAN_UPDATED", "ON_SPEAK_DECISION", "ON_THOUGHT"]
+members = ["ON_SPEAK_DECISION", "ON_THOUGHT"]
 scope = "text"
-reason = "not in 0.x: the hook triggers of the planner, speaking turns and the thinker"
+reason = "not in 0.x: the hook triggers of speaking turns and the thinker"
 
 [[missing]]
 python = "roomkit.HookTrigger"
@@ -1163,12 +1163,11 @@ reason = "Python's `async with` (`__aenter__`, `__aexit__`): Rust has no async c
 [[missing]]
 python = "roomkit.AIChannel.__init__"
 params = [
-    "enable_planning",
     "speak_policy", "speak_timeout", "thinker",
     "think_wait",
 ]
 scope = "text"
-reason = "not in 0.x: thinking, planning, speaking turns and the thinker"
+reason = "not in 0.x: speaking turns and the thinker"
 
 [[missing]]
 python = "roomkit.AIChannel"

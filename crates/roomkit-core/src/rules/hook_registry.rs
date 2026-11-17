@@ -170,6 +170,9 @@ pub enum HookTrigger {
     /// text, observed. A turn fires it, on the turn executor hosting the
     /// channel.
     OnAiThinking,
+    /// A room plan was stored (RFC §9.2): observed `PlanUpdatedEvent` on its
+    /// turn executor, without a channel-type filter.
+    OnPlanUpdated,
     /// A room's speak queue changed (RFC §19.7.5): its payload is a
     /// `SpeakQueueEvent`, observed.
     OnSpeakQueue,
@@ -226,6 +229,7 @@ impl HookTrigger {
             | Self::OnVerificationCompleted
             | Self::OnVerificationEnded
             | Self::OnAiResponse
+            | Self::OnPlanUpdated
             | Self::OnAiThinking
             | Self::OnSpeakQueue
             | Self::OnDispatchDecision => HookExecution::Async,
@@ -275,6 +279,7 @@ impl HookTrigger {
             | Self::AfterToolRound
             | Self::BeforeAiGeneration
             | Self::OnAiResponse
+            | Self::OnPlanUpdated
             | Self::OnAiThinking
             | Self::OnSpeakQueue
             | Self::OnDispatchDecision
@@ -308,6 +313,7 @@ impl HookTrigger {
             | Self::AfterToolRound
             | Self::BeforeAiGeneration
             | Self::OnAiResponse
+            | Self::OnPlanUpdated
             | Self::OnAiThinking => true,
             Self::OnSpeakQueue
             | Self::OnDispatchDecision
@@ -1139,6 +1145,8 @@ fn payload_of(trigger: HookTrigger) -> &'static str {
         "an AIResponseEvent"
     } else if trigger == HookTrigger::OnAiThinking {
         "a ThinkingEvent"
+    } else if trigger == HookTrigger::OnPlanUpdated {
+        "a PlanUpdatedEvent"
     } else if trigger == HookTrigger::OnSpeakQueue {
         "a SpeakQueueEvent"
     } else if trigger == HookTrigger::OnDispatchDecision {

@@ -38,6 +38,7 @@ use crate::memory::{
     SlidingWindowMemoryOptions, TurnFootprint, ending_texts, measured, runtime_or_cleaned,
     split_copies_cut, with_ending_texts,
 };
+use crate::planning::TaskPlanner;
 use crate::provider::{AiContentPart, AiMessage, AiProvider, DynAiProvider, check_portable_schema};
 use crate::router::{AiRouter, RouteRequest, Routed};
 use crate::rows;
@@ -105,6 +106,9 @@ pub struct AiChannelOptions {
     /// budget a less specific level set: Python's `enable_thinking`; `None`
     /// sets none.
     pub enable_thinking: Option<bool>,
+    /// Serve `plan_tasks` and carry each room's plan in later turn input notes
+    /// (RFC §6.4, §9.2). Python's `enable_planning`, false by default.
+    pub enable_planning: bool,
     /// How long, in milliseconds, a model's reasoning deltas batch into one
     /// `THINKING_DELTA` publish; 0 publishes each. Python's
     /// `thinking_coalesce_ms`, 80 by default.
@@ -338,6 +342,7 @@ impl Default for AiChannelOptions {
             max_tokens: None,
             thinking_budget: None,
             enable_thinking: None,
+            enable_planning: false,
             thinking_coalesce_ms: 80.0,
             thinking_coalesce_chars: 256,
             text_coalesce_ms: 80.0,
@@ -492,6 +497,8 @@ pub struct AiChannel<P> {
     /// How its turns read their authors' media (RFC §6.4).
     media: MediaReading,
     skills: Option<Arc<SkillTools>>,
+    /// Room-scoped task plans, shared by channel clones.
+    planner: Option<Arc<TaskPlanner>>,
     script_executor: Option<Arc<dyn ScriptExecutor>>,
     sandbox: Option<Arc<SandboxTools>>,
     intents: Intents,
@@ -618,6 +625,7 @@ impl<P> Clone for AiChannel<P> {
             memory: Arc::clone(&self.memory),
             media: self.media.clone(),
             skills: self.skills.clone(),
+            planner: self.planner.clone(),
             script_executor: self.script_executor.clone(),
             sandbox: self.sandbox.clone(),
             intents: self.intents.clone(),
@@ -759,6 +767,7 @@ impl<P: AiProvider> AiChannel<P> {
             options.tools,
             options.human_input_handler,
             skilled,
+            options.enable_planning,
         )?;
         let sandbox = SandboxTools::install(&mut surface.toolbox, options.sandbox)?;
         Ok(Self {
@@ -811,6 +820,7 @@ impl<P: AiProvider> AiChannel<P> {
                 options.describe_empty_event,
             ),
             skills: surface.skills,
+            planner: surface.planner,
             script_executor: options.script_executor,
             sandbox,
             intents: Intents::of(
@@ -1404,12 +1414,14 @@ impl<P: AiProvider> AiChannel<P> {
     /// Drops what the channel keeps for `room` (RFC §6.4, §10.6.3): the
     /// author images its provider refused there, its tools' images, and
     /// the skills active there, which its next turn reads again from the
-    /// store, and its stored tool results. Python's `_forget_room`: roomkit-rs
-    /// has none of the thought, speak policy or plan it also drops.
+    /// store, its stored tool results and task plan. Python's `_forget_room`.
     fn forget_room(&self, room: &RoomId) {
         self.media.refused.forget(room);
         self.media.tool_usage.forget(room);
         self.eviction.forget(room.as_str());
+        if let Some(planner) = &self.planner {
+            planner.forget(room);
+        }
         if let Some(skills) = &self.skills {
             skills.forget(room);
         }
@@ -1647,6 +1659,7 @@ struct ToolSurface {
     extra_tools: Vec<crate::AiToolHandle>,
     human_input: Option<(HumanInputToolHandler, Arc<AtomicU64>)>,
     skills: Option<Arc<SkillTools>>,
+    planner: Option<Arc<TaskPlanner>>,
     /// The store of large results the re-read serves (RFC §21.5).
     eviction: Arc<ToolEviction>,
 }
@@ -1669,6 +1682,7 @@ fn tool_surface(
         bool,
         Option<Arc<dyn ScriptExecutor>>,
     ),
+    planning: bool,
 ) -> Result<ToolSurface, AiError> {
     let mut toolbox = Toolbox::default();
     // The re-read of stored results, which no tool may take (RFC §21.5).
@@ -1707,12 +1721,17 @@ fn tool_surface(
         reserve_skill_names(&toolbox)?;
     }
     let skills = serve_skills(&mut toolbox, skills, skills_in_prompt, executor)?;
+    let planner = planning.then(|| Arc::new(TaskPlanner::default()));
+    if let Some(planner) = &planner {
+        toolbox.add_planner(Arc::clone(planner))?;
+    }
     Ok(ToolSurface {
         toolbox,
         tool_handler,
         extra_tools,
         human_input,
         skills,
+        planner,
         eviction,
     })
 }
@@ -1874,7 +1893,7 @@ impl<P: AiProvider> AiChannel<P> {
         looped.resolve_tool_catalogue();
         // Measured as the first round sends it, before the memory reads the
         // room (RFC §20).
-        let notes = own_notes(&event, &context, looped.turn.as_ref(), stands_alone).await;
+        let notes = self.own_notes(&event, &context, looped.turn.as_ref()).await;
         let footprint = self.measure_turn(&looped, &context, stands_alone, &notes);
         // The event as the model reads it, the media the application keeps
         // beside its content among its parts, as its history (RFC §6.4).
@@ -1933,18 +1952,24 @@ fn loop_bounds(
     }
 }
 
-/// The notes the channel adds to the turn's input (RFC §6.4): the room's
-/// background tasks (RFC §23.4), then what a discussion's turn on `event`
-/// adds. Python's `_own_notes` and `discussion_notes`.
-async fn own_notes(
-    event: &RoomEvent,
-    context: &RoomContext,
-    turn: Option<&roomkit::TurnHost>,
-    stands_alone: bool,
-) -> Vec<String> {
-    let mut notes = tasks_note::tasks_notes(turn, &context.room.metadata, stands_alone).await;
-    notes.extend(roomkit::discussion_notes(event));
-    notes
+impl<P> AiChannel<P> {
+    /// The notes the channel adds to the turn's input (RFC §6.4): its plan,
+    /// background tasks (RFC §23.4), then the discussion's turn on `event`.
+    /// Python's `_own_notes` and `discussion_notes`.
+    async fn own_notes(
+        &self,
+        event: &RoomEvent,
+        context: &RoomContext,
+        turn: Option<&roomkit::TurnHost>,
+    ) -> Vec<String> {
+        let standalone = stands_alone(event);
+        let mut notes = self.planner.as_ref().map_or_else(Vec::new, |planner| {
+            planner.notes(&context.room.id, standalone)
+        });
+        notes.extend(tasks_note::tasks_notes(turn, &context.room.metadata, standalone).await);
+        notes.extend(roomkit::discussion_notes(event));
+        notes
+    }
 }
 
 /// `memory`, with the channel's own `notes` (RFC §6.4) and a discussion's

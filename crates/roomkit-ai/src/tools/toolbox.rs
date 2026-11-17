@@ -8,6 +8,7 @@ use roomkit::model::{ToolCall, ToolCallOutcome};
 
 use super::{AiTool, DynToolset, ToolContext, ToolPolicy};
 use crate::error::AiError;
+use crate::planning::{PLAN_TOOL, TaskPlanner};
 use crate::tool_eviction::{REREAD_TOOL, ToolEviction};
 use crate::tool_search::search_tool_defs;
 use crate::turn_config::Collisions;
@@ -52,6 +53,9 @@ pub(crate) struct Toolbox {
     /// The names a registry given keeps for them, a tool under one refused as
     /// any tool under a name served.
     skill_names: HashSet<String>,
+    /// Whether the channel owns `plan_tasks`; it is never hidden, but its
+    /// calls remain subject to policy and stay in tool memory.
+    planning: bool,
     /// The re-read of stored results, once the agent serves it, and where
     /// its toolset is: never among the tools a round declares in their
     /// order, since it is declared last of all (RFC §21.5).
@@ -242,8 +246,8 @@ impl Toolbox {
     }
 
     /// The toolbox of a turn that reads a registry of its own (RFC §24.3):
-    /// `toolset` serving the skill tools, which it declares as `declared`, last
-    /// as the agent's stand, in place of the agent's. Never installed on the
+    /// `toolset` serving the skill tools, which it declares as `declared`,
+    /// in the agent's original position, before planning. Never installed on the
     /// agent: the turn reads its own copy.
     pub(crate) fn with_skills(&self, toolset: Arc<dyn DynToolset>, declared: Vec<AiTool>) -> Self {
         let mut turn = self.clone();
@@ -255,14 +259,29 @@ impl Toolbox {
         }
         turn.tools.retain(|(_, at)| *at != position);
         turn.served.retain(|_, at| *at != position);
-        for tool in declared {
+        let declarations_at = turn
+            .tools
+            .iter()
+            .position(|(tool, _)| turn.planning && tool.name == PLAN_TOOL)
+            .unwrap_or(turn.tools.len());
+        for (offset, tool) in declared.into_iter().enumerate() {
             turn.served.insert(tool.name.clone(), position);
             if tool.name != "run_skill_script" {
                 turn.exempt.insert(tool.name.clone());
             }
-            turn.tools.push((tool, position));
+            turn.tools
+                .insert(declarations_at + offset, (tool, position));
         }
         turn
+    }
+
+    /// The planning tool follows skill declarations and uses ordinary guards
+    /// and policy (RFC §21.1), while keeping its name from host replacement.
+    pub(crate) fn add_planner(&mut self, planner: Arc<TaskPlanner>) -> Result<(), AiError> {
+        self.insert(planner, vec![TaskPlanner::definition()], false)?;
+        self.reserved.insert(PLAN_TOOL.to_owned());
+        self.planning = true;
+        Ok(())
     }
 
     /// Serves `read_stored_result` with `toolset` (RFC §21.5): a tool of the
@@ -328,7 +347,8 @@ impl Toolbox {
 
     /// Whether Tool Search never hides `name`.
     fn never_hidden_name(&self, name: &str) -> bool {
-        self.exempt.contains(name)
+        (self.planning && name == PLAN_TOOL)
+            || self.exempt.contains(name)
             || self.skill_names.contains(name)
             || self.person_tools.contains(name)
             || self.injected.contains(name)
@@ -474,7 +494,7 @@ impl Toolbox {
 
     /// The refusal of a tool under `name`, a name kept for the agent's own.
     fn refused_name(&self, name: &str) -> AiError {
-        if self.skill_names.contains(name) || name == REREAD_TOOL {
+        if self.skill_names.contains(name) || name == REREAD_TOOL || name == PLAN_TOOL {
             return AiError::DuplicateTool {
                 name: name.to_owned(),
             };
@@ -517,7 +537,7 @@ impl Toolbox {
     /// Search's), as the reference implementation's `in_tool_memory` trait
     /// reads them.
     pub(crate) fn in_tool_memory(&self, name: &str) -> bool {
-        !self.exempt.contains(name) && !self.reserved.contains(name)
+        !self.exempt.contains(name) && (name == PLAN_TOOL || !self.reserved.contains(name))
     }
 
     /// The tools `policy` lets the model call, in order: what each round
