@@ -392,7 +392,7 @@ mod tests {
         PendingInputEvent {
             pending_id: id.to_owned(),
             tool_name: "ask_user".to_owned(),
-            arguments: Default::default(),
+            arguments: serde_json::Map::default(),
             room_id: "r1".to_owned(),
             tool_call_id: "c1".to_owned(),
             channel_id: "agent".to_owned(),
