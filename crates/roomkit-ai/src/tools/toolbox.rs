@@ -12,6 +12,8 @@ use crate::tool_eviction::{REREAD_TOOL, ToolEviction};
 use crate::tool_search::search_tool_defs;
 use crate::turn_config::Collisions;
 
+mod sandbox;
+
 /// The toolsets an agent took, and the tools they declare, in the order a
 /// turn declares them: each name served by one toolset.
 #[derive(Clone, Default)]
@@ -45,6 +47,8 @@ pub(crate) struct Toolbox {
     injected_at: usize,
     /// The toolset of the skill tools, once the agent was given a registry.
     skills: Option<usize>,
+    /// The host sandbox's toolset; its commands keep ordinary policy and search.
+    sandbox: Option<usize>,
     /// The names a registry given keeps for them, a tool under one refused as
     /// any tool under a name served.
     skill_names: HashSet<String>,
@@ -333,7 +337,8 @@ impl Toolbox {
     /// Whether a skill activation's hint may name `name`: not a tool the agent
     /// serves itself nor one that asks a person (RFC §24.4).
     pub(crate) fn hintable(&self, name: &str) -> bool {
-        !self.exempt.contains(name)
+        !self.is_sandbox(name)
+            && !self.exempt.contains(name)
             && !self.skill_names.contains(name)
             && !self.person_tools.contains(name)
     }

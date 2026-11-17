@@ -517,7 +517,10 @@ impl Loop {
         };
         // A person's answer is bounded by its handler's timeout alone, unless
         // the tool has its own bound.
-        let bound = self.bounds.for_call(&call.name, toolset.bounds_itself());
+        let bound = self.bounds.for_call(
+            &call.name,
+            toolset.bounds_itself() || self.toolbox.sandbox_waits(&call.name),
+        );
         let answered = match bound {
             Some(bound) => tokio::time::timeout(bound, answer)
                 .await

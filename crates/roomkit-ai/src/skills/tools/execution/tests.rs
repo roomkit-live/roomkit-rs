@@ -79,7 +79,7 @@ async fn approval_is_shared_between_turns_but_bound_to_room_and_exact_origin() {
     let tools = SkillTools::new(registry(false, &requests).await, true, None);
     for turn in [tools.for_turn(), tools.for_turn()] {
         assert!(
-            turn.execution_refusal("host_run", &context("one"), &active())
+            turn.execution_refusal("host_run", &context("one"), &active(), false)
                 .await
                 .unwrap()
                 .is_none()
@@ -89,7 +89,7 @@ async fn approval_is_shared_between_turns_but_bound_to_room_and_exact_origin() {
     let replacement = tools.of_turn(registry(false, &requests).await);
     assert!(
         replacement
-            .execution_refusal("host_run", &context("one"), &active())
+            .execution_refusal("host_run", &context("one"), &active(), false)
             .await
             .unwrap()
             .is_none()
@@ -97,7 +97,7 @@ async fn approval_is_shared_between_turns_but_bound_to_room_and_exact_origin() {
     assert_eq!(lock(&requests).len(), 2);
     assert!(
         tools
-            .execution_refusal("host_run", &context("two"), &active())
+            .execution_refusal("host_run", &context("two"), &active(), false)
             .await
             .unwrap()
             .is_none()
@@ -106,7 +106,7 @@ async fn approval_is_shared_between_turns_but_bound_to_room_and_exact_origin() {
     tools.forget(&RoomId::new("one").unwrap());
     assert!(
         tools
-            .execution_refusal("host_run", &context("one"), &active())
+            .execution_refusal("host_run", &context("one"), &active(), false)
             .await
             .unwrap()
             .is_none()
@@ -128,7 +128,7 @@ async fn dynamic_entries_are_approved_every_time() {
     for _ in 0..2 {
         assert!(
             tools
-                .execution_refusal("host_run", &context("one"), &active())
+                .execution_refusal("host_run", &context("one"), &active(), false)
                 .await
                 .unwrap()
                 .is_none()
@@ -147,14 +147,14 @@ async fn a_standalone_turn_borrows_no_room_activation_and_unknown_names_do_not_e
     standalone.stands_alone = true;
     assert!(
         tools
-            .execution_refusal("host_run", &standalone, &HashSet::new())
+            .execution_refusal("host_run", &standalone, &HashSet::new(), false)
             .await
             .unwrap()
             .is_none()
     );
     assert!(
         tools
-            .execution_refusal("read", &context("one"), &active())
+            .execution_refusal("read", &context("one"), &active(), false)
             .await
             .unwrap()
             .is_none()
@@ -165,7 +165,7 @@ async fn a_standalone_turn_borrows_no_room_activation_and_unknown_names_do_not_e
     let missing = HashSet::from(["docs:unloaded".to_owned()]);
     assert!(
         tools
-            .execution_refusal("host_run", &standalone, &missing)
+            .execution_refusal("host_run", &standalone, &missing, false)
             .await
             .unwrap()
             .is_some()
@@ -200,7 +200,7 @@ async fn retirement_is_immediate_and_pending_activations_belong_to_one_turn() {
     first.retire(&RoomId::new("one").unwrap(), NAME);
     assert!(
         first
-            .execution_refusal("host_run", &context("one"), &active())
+            .execution_refusal("host_run", &context("one"), &active(), false)
             .await
             .unwrap()
             .is_none()

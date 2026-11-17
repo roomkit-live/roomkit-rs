@@ -8,6 +8,7 @@ use roomkit_core::rules::transcript::Message;
 
 use super::{AiChannel, AiProvider, turn_actor};
 use crate::tool_loop::{Loop, TurnItems};
+use crate::tools::toolbox::Toolbox;
 use crate::tools::{ToolTurnContextOptions, within_ai_turn};
 use crate::{AiError, ToolPolicy, rows};
 
@@ -34,6 +35,31 @@ impl PreparedAnswer {
 }
 
 impl<P: AiProvider> AiChannel<P> {
+    /// Refresh exact ownership before per-turn host admission.
+    pub(super) fn admission_toolbox(&self) -> Result<Arc<Toolbox>, ChannelError> {
+        let Some(sandbox) = &self.sandbox else {
+            return Ok(self.host_toolbox(&self.toolbox));
+        };
+        let names = sandbox
+            .names()
+            .map_err(crate::sandbox::tools::channel_error)?;
+        Ok(self.host_toolbox(&self.toolbox.with_sandbox(names)))
+    }
+
+    /// Schemas are read as context is built, after selecting the turn's provider.
+    pub(super) fn sandbox_definitions(
+        &self,
+        toolbox: Arc<Toolbox>,
+    ) -> Result<Arc<Toolbox>, ChannelError> {
+        let Some(sandbox) = &self.sandbox else {
+            return Ok(toolbox);
+        };
+        let definitions = sandbox
+            .definitions()
+            .map_err(crate::sandbox::tools::channel_error)?;
+        Ok(Arc::new(toolbox.with_sandbox(definitions)))
+    }
+
     /// Install after ingestion and before configuration. Consumption inherits
     /// the snapshot and record with a new lifetime, on both public call paths.
     pub(super) async fn answer_in_context(

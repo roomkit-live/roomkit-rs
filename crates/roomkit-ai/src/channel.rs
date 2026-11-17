@@ -41,6 +41,7 @@ use crate::memory::{
 use crate::provider::{AiContentPart, AiMessage, AiProvider, DynAiProvider, check_portable_schema};
 use crate::router::{AiRouter, RouteRequest, Routed};
 use crate::rows;
+use crate::sandbox::{SANDBOX_PREAMBLE, SandboxExecutor, tools::SandboxTools};
 use crate::server_instructions::ServerInstructions;
 use crate::skills::tools::{SkillTools, SkillTurn};
 use crate::skills::{ScriptExecutor, SkillRegistry};
@@ -251,6 +252,8 @@ pub struct AiChannelOptions {
     pub skills_in_prompt: bool,
     /// Host-owned local script execution (RFC §24.6); absent by default.
     pub script_executor: Option<Arc<dyn ScriptExecutor>>,
+    /// Host sandbox commands, policy governed; no executor is supplied by default.
+    pub sandbox: Option<Arc<dyn SandboxExecutor>>,
     /// Which tools the model may call (RFC §21.1); `None` allows every
     /// tool.
     pub tool_policy: Option<ToolPolicy>,
@@ -366,6 +369,7 @@ impl Default for AiChannelOptions {
             skills: None,
             skills_in_prompt: true,
             script_executor: None,
+            sandbox: None,
             tool_policy: None,
             server_instructions: Vec::new(),
             tool_call_intents: false,
@@ -489,6 +493,7 @@ pub struct AiChannel<P> {
     media: MediaReading,
     skills: Option<Arc<SkillTools>>,
     script_executor: Option<Arc<dyn ScriptExecutor>>,
+    sandbox: Option<Arc<SandboxTools>>,
     intents: Intents,
     /// The turns' running loops, which steering reaches (RFC §21.3).
     loops: Arc<Loops>,
@@ -614,6 +619,7 @@ impl<P> Clone for AiChannel<P> {
             media: self.media.clone(),
             skills: self.skills.clone(),
             script_executor: self.script_executor.clone(),
+            sandbox: self.sandbox.clone(),
             intents: self.intents.clone(),
             loops: Arc::clone(&self.loops),
             room_turns: self.room_turns,
@@ -747,13 +753,14 @@ impl<P: AiProvider> AiChannel<P> {
             options.script_executor.clone(),
         );
         let setup = (&channel_id, &search, options.evict_threshold_tokens);
-        let surface = tool_surface(
+        let mut surface = tool_surface(
             setup,
             options.tool_handler,
             options.tools,
             options.human_input_handler,
             skilled,
         )?;
+        let sandbox = SandboxTools::install(&mut surface.toolbox, options.sandbox)?;
         Ok(Self {
             capabilities: ai_channel_capabilities(),
             channel_id,
@@ -805,6 +812,7 @@ impl<P: AiProvider> AiChannel<P> {
             ),
             skills: surface.skills,
             script_executor: options.script_executor,
+            sandbox,
             intents: Intents::of(
                 options.tool_call_intents,
                 options.tool_call_intents_required,
@@ -1178,15 +1186,18 @@ impl<P: AiProvider> AiChannel<P> {
     /// or a value that is no text, is not set), then the instruction a strategy gives this one turn
     /// ([`with_turn_instruction`]), then the MCP
     /// servers' instructions (RFC §21.2), then what the turn's `skills` add
-    /// (RFC §6.4, §24.4), then Tool Search's preamble when it is `searching`.
-    fn turn_system_prompt(
+    /// (RFC §6.4, §24.4), the sandbox preamble when policy permits one of its
+    /// commands, then Tool Search's preamble when it is `searching`. Returns
+    /// that same resolved policy for the turn's calls.
+    fn turn_prompt_and_policy(
         &self,
         binding: &ChannelBinding,
         (configured, skills): (Option<&AiChannelTurnConfig>, Option<&SkillTools>),
         context: &RoomContext,
-        (stands_alone, searching): (bool, bool),
-        policy: &ToolPolicy,
-    ) -> Result<Option<String>, ChannelError> {
+        (stands_alone, searching, toolbox): (bool, bool, &Toolbox),
+        role: Option<&str>,
+    ) -> Result<(ToolPolicy, Option<String>), ChannelError> {
+        let policy = self.turn_policy(role)?;
         // An empty one lifts the channel's prompt for the room (RFC
         // Appendix A.9), the turn then sending none.
         let set = binding
@@ -1213,13 +1224,21 @@ impl<P: AiProvider> AiChannel<P> {
                 skills.system_prompt(prompt.as_deref(), turn)?
             }
         };
+        let prompt = if toolbox.sandbox_allowed(&policy) {
+            Some(format!(
+                "{}\n\n{SANDBOX_PREAMBLE}",
+                prompt.unwrap_or_default()
+            ))
+        } else {
+            prompt
+        };
         let prompt = if searching {
             let before = prompt.unwrap_or_default();
             Some(format!("{before}\n\n{TOOL_SEARCH_PREAMBLE}"))
         } else {
             prompt
         };
-        Ok(self.with_identity_block(prompt, context))
+        Ok((policy, self.with_identity_block(prompt, context)))
     }
 
     /// `prompt`, an [`Agent`](crate::Agent)'s identity block after it, in
@@ -1783,7 +1802,7 @@ impl<P: AiProvider> AiChannel<P> {
         // The tools the room's owner serves this turn join the agent's own
         // (RFC §10.6.5), before the turn's own, none of which is declared
         // under their names (RFC §21.1).
-        let live = self.host_toolbox(&self.toolbox);
+        let live = self.admission_toolbox()?;
         let owned = crate::tools::owner::with_owner_tools(&live, turn.as_ref())?;
         let configured = self.turn_configs.resolve(&binding, &context).await?;
         let owned = self.host_toolbox(&owned);
@@ -1794,18 +1813,19 @@ impl<P: AiProvider> AiChannel<P> {
         // The context is built for the provider the turn runs on (RFC §6.4).
         let started = self.start_turn(&event, &binding, &mut settings).await?;
         let bounds = crate::turn_config::turn_bounds(&self.bounds, configured)?;
+        let toolbox = self.sandbox_definitions(toolbox)?;
         let vision = started.provider.dyn_supports_vision();
         let stands_alone = stands_alone(&event);
         let window = (&context, &*started.provider);
         let (toolbox, search) =
             self.turn_search(toolbox, window, (stands_alone, turn.is_some()))?;
-        let policy = self.turn_policy(role)?;
-        let system_prompt = self.turn_system_prompt(
+        let shown = (stands_alone, search.active(), &*toolbox);
+        let (policy, system_prompt) = self.turn_prompt_and_policy(
             &binding,
             (configured, skills.as_deref()),
             &context,
-            (stands_alone, search.active()),
-            &policy,
+            shown,
+            role,
         )?;
         let tools = self.tool_context((&event, &context), turn.clone(), stands_alone);
         let mut looped = Loop {
@@ -2123,6 +2143,9 @@ impl<P: AiProvider> Channel for AiChannel<P> {
         }
         if let Some(executor) = &self.script_executor {
             executor.close().await;
+        }
+        if let Some(sandbox) = &self.sandbox {
+            sandbox.0.close().await;
         }
     }
 

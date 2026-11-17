@@ -269,6 +269,12 @@ approved = "2026-11-16"
 reason = "Rust has no default call arguments: None preserves Python's omitted params and Some borrows the host mapping (HITL 70a4bdc7, RMK-1709)"
 
 [[exception]]
+rust = "roomkit_ai::SandboxExecutor::execute"
+params = ["arguments"]
+approved = "2026-11-17"
+reason = "Rust has no default call arguments: None preserves Python's omitted arguments and Some borrows the host mapping, following ScriptExecutor (approved 2026-11-17)"
+
+[[exception]]
 rust = "roomkit_ai::ScriptExecutor::execute"
 params = ["arguments"]
 approved = "2026-11-16"
@@ -1129,13 +1135,12 @@ reason = "Python's `async with` (`__aenter__`, `__aexit__`): Rust has no async c
 [[missing]]
 python = "roomkit.AIChannel.__init__"
 params = [
-    "sandbox",
     "enable_planning",
     "speak_policy", "speak_timeout", "thinker",
     "think_wait",
 ]
 scope = "text"
-reason = "not in 0.x: thinking, sandbox, planning, speaking turns and the thinker"
+reason = "not in 0.x: thinking, planning, speaking turns and the thinker"
 
 [[missing]]
 python = "roomkit.AIChannel"

@@ -116,11 +116,13 @@ impl SkillTools {
         tool: &str,
         context: &ToolContext,
         local: &HashSet<String>,
+        sandbox: bool,
     ) -> Result<Option<String>, SkillError> {
         if !self.registry.has_served() {
             return Ok(None);
         }
-        let executes = tool == super::RUN_SKILL_SCRIPT
+        let executes = sandbox
+            || tool == super::RUN_SKILL_SCRIPT
             || self
                 .registry
                 .execution_tool_patterns()

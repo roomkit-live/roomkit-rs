@@ -72,7 +72,7 @@ impl Loop {
         };
         let active = self.skill_activated();
         let refusal = skills
-            .execution_refusal(name, &self.context, &active)
+            .execution_refusal(name, &self.context, &active, self.toolbox.is_sandbox(name))
             .await
             .map_err(|error| ToolError::raised(&error))?;
         if let Some(refusal) = refusal {

@@ -58,6 +58,18 @@ their turn's context and reach observers once even when the handler raises after
 delegation. The runtime supplies the hook bridge; it does not depend on the AI or
 ACP crates.
 
+## Host sandbox executors
+
+`AiChannelOptions::sandbox` accepts a shared `SandboxExecutor`. The host chooses
+its execution environment; RoomKit provides no process runner and promises no
+isolation. The channel re-reads the declared catalogue each turn, serves only
+its exact prefixed names, and applies ordinary policy, schema checks and Tool
+Search. Active served skills require their host's execution approval before a
+sandbox command runs. Only `sandbox_bash` carries its own default bound; an
+explicit timeout for that name still wins. Channel close ends running calls
+before closing the sandbox, including one with an empty catalogue. Providers
+and routers remain owned by their callers.
+
 ## Contracts and verification
 
 The [RoomKit specification](https://github.com/roomkit-live/roomkit-specs) defines

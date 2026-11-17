@@ -108,6 +108,7 @@ mod turn_settings;
 
 pub use self::agent::{Agent, AgentOptions, BuildIdentityBlockOptions};
 pub use self::channel::{AiChannel, AiChannelOptions};
+pub mod sandbox;
 pub use self::continuation::ContinuationPolicy;
 pub use self::error::AiError;
 pub use self::handoff::{SetupHandoffOptions, setup_handoff};
@@ -169,3 +170,4 @@ pub use self::tools::{
     ToolContext, Tools, alias_server, arguments, served_tool_name, turn_admits_alias,
 };
 pub use self::turn_config::AiChannelTurnConfig;
+pub use sandbox::{SandboxExecutor, SandboxResult};

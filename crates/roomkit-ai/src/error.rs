@@ -1,10 +1,17 @@
 //! What building or steering an AI channel fails with.
 
-/// What building or steering an AI channel failed with: what Python's
-/// raises as `ValueError`.
+/// What building or steering an AI channel failed with: usually Python's
+/// `ValueError`; a sandbox catalogue failure retains its host error instead.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum AiError {
+    /// The host's sandbox catalogue failed while the channel read its definitions.
+    #[error("{error}")]
+    SandboxDefinition {
+        /// The original host error, including its class and diagnostic.
+        #[source]
+        error: crate::ToolError,
+    },
     /// A raw schema or tool object's definition cannot be read as an `AITool`.
     #[error("invalid tool definition field {field}: {reason}")]
     ToolDefinition {

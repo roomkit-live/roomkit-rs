@@ -281,6 +281,8 @@ fn ai_channel_options_defaults_as_python() {
     assert!(defaults.skills_in_prompt);
     // roomkit.AIChannel.__init__(script_executor) = None
     assert!(defaults.script_executor.is_none());
+    // roomkit.AIChannel.__init__(sandbox) = None
+    assert!(defaults.sandbox.is_none());
     // roomkit.AIChannel.__init__(system_prompt) = None
     assert!(defaults.system_prompt.is_none());
     // roomkit.AIChannel.__init__(temperature) = 0.7

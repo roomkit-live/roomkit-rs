@@ -19,6 +19,7 @@ mod requirements;
 mod script_execution;
 mod served_execution;
 mod served_registry;
+mod served_sandbox;
 mod served_yaml;
 mod standalone_helpers;
 mod support;
