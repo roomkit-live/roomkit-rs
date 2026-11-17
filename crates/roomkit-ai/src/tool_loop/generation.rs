@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeSet, HashSet};
 
-use roomkit::model::{Metadata, ToolCall};
+use roomkit::model::{Metadata, ToolCall, UsageMarker};
 
 use super::TurnItem;
 use super::resilience::Reading;
@@ -31,8 +31,12 @@ pub(super) struct Generation {
     pub(super) provider_results: Vec<super::ToolEnd>,
     pub(super) done: StreamDone,
     /// The usage each of its done events reported, those that did, in
-    /// order: each one's priced as one response (RFC §6.4).
+    /// order: each one's priced as one response (RFC §6.4). A generation
+    /// whose end reported none counts what it told before it, once.
     pub(super) reports: Vec<Metadata>,
+    /// Its usage is what its done event reported, the generation's whole;
+    /// false when it is what it told before its end, or nothing.
+    pub(super) whole: bool,
     /// A `Cancel` stopped it before its end (RFC §21.3).
     pub(super) cancelled: bool,
     /// The round's reasoning, once the read returned.
@@ -88,7 +92,8 @@ pub(super) struct Failed {
     /// turn's last segment when the failure ends it `error` (RFC §6.4).
     pub(super) delivered: String,
     /// The usage each done event it handed before the failure reported,
-    /// which the turn's usage keeps (RFC §6.4).
+    /// which the turn's usage keeps, or what it told before, when no done
+    /// event reported any (RFC §6.4).
     pub(super) reports: Vec<Metadata>,
 }
 
@@ -103,6 +108,16 @@ impl Failed {
             reports: Vec::new(),
         }
     }
+}
+
+/// How one try of a round's generation is read: whether a response schema
+/// holds its text, the model and the provider that serve it, and what the
+/// round's tries told they used before their end, the latest, which its
+/// tries share as Python's round state does.
+pub(super) struct Attempt<'a> {
+    pub(super) held: bool,
+    pub(super) served_by: (&'a str, &'a str),
+    pub(super) told: &'a mut Metadata,
 }
 
 /// Why a call never runs, whatever its tool.
@@ -136,10 +151,10 @@ impl Generation {
     pub(super) async fn read(
         stream: ProviderStream<'_>,
         (steering, out, prefix, window, limits, provider_calls): Reading<'_>,
-        held: bool,
+        attempt: Attempt<'_>,
     ) -> Result<Self, Failed> {
         let reading = (steering, out, prefix, &mut *window, limits, provider_calls);
-        let result = Self::read_stream(stream, reading, held).await;
+        let result = Self::read_stream(stream, reading, attempt).await;
         window.text.flush();
         window.composition.close();
         result
@@ -150,8 +165,9 @@ impl Generation {
     async fn read_stream(
         mut stream: ProviderStream<'_>,
         (steering, out, prefix, window, limits, provider_calls): Reading<'_>,
-        held: bool,
+        attempt: Attempt<'_>,
     ) -> Result<Self, Failed> {
+        let (held, served_by, told) = (attempt.held, attempt.served_by, attempt.told);
         let mut transcript = RoundTranscript::new();
         let mut delivered = String::new();
         let mut replayed = Replayed::new(prefix);
@@ -166,12 +182,13 @@ impl Generation {
         while let Some(event) = next(&mut stream).await {
             if steering.cancelled() {
                 window.thinking.end();
-                return Ok(Self::cut(transcript, delivered, done, reports));
+                return Ok(Self::cut(transcript, delivered, (done, reports), told));
             }
             let event = match event {
                 Ok(event) => event,
                 Err(error) => {
                     window.thinking.end();
+                    count_told(&mut done, &mut reports, told);
                     return Err(Failed {
                         error,
                         streamed,
@@ -182,14 +199,7 @@ impl Generation {
                 }
             };
             received = true;
-            // Reasoning is no part of the answer the room holds, nor is text
-            // a response schema holds: a failure after either is tried again
-            // (RFC §6.4).
-            streamed = streamed
-                || !(matches!(
-                    event,
-                    StreamEvent::ThinkingDelta(_) | StreamEvent::ToolCallDelta(_)
-                ) || held && matches!(event, StreamEvent::TextDelta(_)));
+            streamed = streamed || hands_an_answer(&event, held);
             let read = (&mut transcript, &mut replayed, &mut delivered);
             match event {
                 StreamEvent::TextDelta(delta) if held => holding.push(delta.text),
@@ -222,6 +232,7 @@ impl Generation {
                         break;
                     }
                 }
+                StreamEvent::Usage(now) => tell(now.usage, (&mut *told, served_by), out).await,
                 // A delta with a signature or redacted data alone reaches no
                 // reader; the round replays it all the same (RFC §6.4).
                 StreamEvent::ThinkingDelta(delta) => {
@@ -243,6 +254,7 @@ impl Generation {
         window.text.add(&finished);
         deliver(finished, &mut delivered, out).await;
         window.text.flush();
+        let whole = count_told(&mut done, &mut reports, told);
         Ok(Self {
             text: transcript.text(),
             delivered,
@@ -251,6 +263,7 @@ impl Generation {
             provider_results: served_results,
             done,
             reports,
+            whole,
             cancelled: false,
             thinking: String::new(),
             transcript,
@@ -259,13 +272,15 @@ impl Generation {
 
     /// A generation a `Cancel` stopped after it said what `transcript`
     /// holds, `delivered` of its text handed to the room, and after the end
-    /// `done` it handed, if any, its usage among `reports`.
+    /// `done` it handed, if any, its usage among `reports`; with none, what
+    /// it `told` before counts.
     fn cut(
         transcript: RoundTranscript,
         delivered: String,
-        done: StreamDone,
-        reports: Vec<Metadata>,
+        (mut done, mut reports): (StreamDone, Vec<Metadata>),
+        told: &Metadata,
     ) -> Self {
+        let whole = count_told(&mut done, &mut reports, told);
         Self {
             text: transcript.text(),
             delivered,
@@ -274,6 +289,7 @@ impl Generation {
             provider_results: Vec::new(),
             done,
             reports,
+            whole,
             cancelled: true,
             thinking: String::new(),
             transcript,
@@ -299,6 +315,49 @@ impl Generation {
             }
         }
     }
+}
+
+/// Whether `event` is part of the answer the room holds: reasoning is not,
+/// nor is text a response schema holds (`held`), nor what the generation
+/// told it used; a failure after any of them is tried again (RFC §6.4).
+fn hands_an_answer(event: &StreamEvent, held: bool) -> bool {
+    !(matches!(
+        event,
+        StreamEvent::ThinkingDelta(_) | StreamEvent::ToolCallDelta(_) | StreamEvent::Usage(_)
+    ) || held && matches!(event, StreamEvent::TextDelta(_)))
+}
+
+/// Whether the generation's end reported its usage, its whole; when it did
+/// not, what it `told` before counts, once: a cut's, a failure's, a done
+/// event's without counters (RFC §6.4, Python's `_count_told`).
+fn count_told(done: &mut StreamDone, reports: &mut Vec<Metadata>, told: &Metadata) -> bool {
+    if !done.usage.is_empty() {
+        return true;
+    }
+    if !told.is_empty() {
+        done.usage.clone_from(told);
+        reports.push(told.clone());
+    }
+    false
+}
+
+/// Keeps what a generation told it used before its end as the round's
+/// `told`, and hands it to the reader as a partial marker under the model
+/// and the provider that serve it, which the generation's own replaces
+/// (RFC §6.4).
+async fn tell(
+    usage: Metadata,
+    (told, (model, provider)): (&mut Metadata, (&str, &str)),
+    out: &Yielder<Result<TurnItem, ProviderError>>,
+) {
+    told.clone_from(&usage);
+    let marker = UsageMarker {
+        usage,
+        model: Some(model.to_owned()),
+        provider: Some(provider.to_owned()),
+        partial: true,
+    };
+    out.give(Ok(TurnItem::Usage(marker))).await;
 }
 
 /// Takes a done event `ended` as Python's stream round does: the last one

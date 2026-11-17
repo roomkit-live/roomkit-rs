@@ -180,7 +180,7 @@ pub(crate) async fn whole(mut stream: ProviderStream<'_>) -> Result<AiResponse, 
     let mut thinking = ThinkingBlocks::new();
     while let Some(event) = poll_fn(|cx| stream.as_mut().poll_next(cx)).await {
         match event? {
-            StreamEvent::ToolCallDelta(_) => {}
+            StreamEvent::ToolCallDelta(_) | StreamEvent::Usage(_) => {}
             StreamEvent::TextDelta(delta) => response.content.push_str(&delta.text),
             StreamEvent::ThinkingDelta(delta) => {
                 thinking.add(&delta);

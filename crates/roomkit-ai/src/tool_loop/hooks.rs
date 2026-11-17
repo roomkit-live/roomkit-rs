@@ -247,6 +247,7 @@ impl Loop {
             segments,
             declared_tools: self.reported_tools(),
             thinking: spent.thinking.join("\n\n"),
+            usage_complete: spent.complete,
             ..AiResponseEvent::new(self.context.channel_id.clone(), content)
         };
         let mut data = Metadata::new();

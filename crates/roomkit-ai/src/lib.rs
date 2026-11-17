@@ -123,7 +123,7 @@ pub use self::provider::{
     AiToolResultPart, CallIds, Date, DynAiProvider, ModelInfo, ModelPricing, ProviderError,
     ProviderErrorOptions, ProviderStream, RoundTranscript, SPEECH_CAPABILITY, ServedCall,
     StreamDone, StreamEvent, StreamTextDelta, StreamThinkingDelta, StreamToolCall,
-    StreamToolCallDelta, TRANSCRIPTION_CAPABILITY, TextStream, ThinkingBlocks,
+    StreamToolCallDelta, StreamUsage, TRANSCRIPTION_CAPABILITY, TextStream, ThinkingBlocks,
     is_context_overflow_message, round_parts, speech_tags, thinking_parts_of, tool_arguments,
     with_speech_tags,
 };

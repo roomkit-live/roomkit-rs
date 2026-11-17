@@ -148,6 +148,7 @@ fn stream_only_fields_and_non_boolean_modes_are_refused() {
         "thinking",
         "stream",
         "done",
+        "usage_at_start",
         "failure_after_calls",
         "failure_after_done",
     ] {

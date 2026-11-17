@@ -116,7 +116,8 @@ fn text_of(events: &[StreamEvent]) -> String {
             StreamEvent::ToolCall(_)
             | StreamEvent::ToolCallDelta(_)
             | StreamEvent::Done(_)
-            | StreamEvent::ThinkingDelta(_) => None,
+            | StreamEvent::ThinkingDelta(_)
+            | StreamEvent::Usage(_) => None,
         })
         .collect()
 }
@@ -445,7 +446,8 @@ async fn a_responses_refusal_without_a_schema_is_text_its_end_naming_it() {
         StreamEvent::TextDelta(_)
         | StreamEvent::ToolCall(_)
         | StreamEvent::ToolCallDelta(_)
-        | StreamEvent::ThinkingDelta(_) => None,
+        | StreamEvent::ThinkingDelta(_)
+        | StreamEvent::Usage(_) => None,
     });
     assert_eq!(
         (text_of(&events), refusal),

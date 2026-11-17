@@ -2,7 +2,7 @@
 use crate::{AnthropicAiProvider, AnthropicConfig, error, folding::Folding, models, request};
 use roomkit_ai::{
     AiContentPart, AiContext, AiImagePart, AiMessage, AiMessageContent, AiProvider, AiRole,
-    AiThinkingPart, AiTool, AiToolResultPart, StreamEvent, ToolResult, ToolResultPart,
+    AiThinkingPart, AiTool, AiToolResultPart, StreamEvent, StreamUsage, ToolResult, ToolResultPart,
 };
 use serde_json::{Value, json};
 use std::collections::VecDeque;
@@ -250,15 +250,37 @@ fn fragmented_calls_are_not_executable_when_the_output_cap_cuts_them() {
             json!({"type":"message_stop"}),
         ],
     );
-    let StreamEvent::ToolCall(call) = &events[2] else {
+    let StreamEvent::ToolCall(call) = &events[3] else {
         panic!("missing call")
     };
     assert!(call.partial && !call.garbled);
-    let StreamEvent::Done(done) = &events[3] else {
+    let StreamEvent::Done(done) = &events[4] else {
         panic!("missing done")
     };
     assert_eq!(done.usage["output_tokens"], 10);
     assert_eq!(done.usage["input_tokens"], 3);
+}
+
+// Python: test_anthropic.py::TestAnthropicUsageCounters::test_a_message_start_tells_its_input
+#[test]
+fn a_message_start_tells_its_input() {
+    for (usage, told) in [
+        (
+            json!({"input_tokens": 11, "output_tokens": 7}),
+            json!({"input_tokens": 11}),
+        ),
+        (
+            json!({"input_tokens": 11, "output_tokens": 7, "cache_creation_input_tokens": 5, "cache_read_input_tokens": 3}),
+            json!({"input_tokens": 11, "cache_creation_input_tokens": 5, "cache_read_input_tokens": 3}),
+        ),
+    ] {
+        let events = feed(
+            &mut Folding::new("asked"),
+            &[json!({"type":"message_start", "message":{"usage": usage}})],
+        );
+        let told = told.as_object().cloned().unwrap_or_default();
+        assert_eq!(events, [StreamEvent::Usage(StreamUsage { usage: told })]);
+    }
 }
 
 // Python: test_anthropic.py::test_sdk_error_wrapped_in_provider_error

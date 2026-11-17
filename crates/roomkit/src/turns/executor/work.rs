@@ -253,6 +253,7 @@ impl Pump<'_> {
             usage: marker.usage,
             model: marker.model,
             provider: marker.provider,
+            partial: marker.partial,
         };
         self.sender.send(&Frame::Item { item }).map(drop)
     }

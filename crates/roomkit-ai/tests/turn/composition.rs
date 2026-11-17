@@ -53,7 +53,8 @@ async fn mock_fragments_keep_python_json_and_complete_call() {
                     StreamEvent::ToolCall(call) => calls.push(call),
                     StreamEvent::TextDelta(_)
                     | StreamEvent::Done(_)
-                    | StreamEvent::ThinkingDelta(_) => {}
+                    | StreamEvent::ThinkingDelta(_)
+                    | StreamEvent::Usage(_) => {}
                 }
             }
             // Python json.dumps uses ASCII escapes, spaces, and surrogate pairs.

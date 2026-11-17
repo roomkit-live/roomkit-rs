@@ -43,17 +43,25 @@ async fn live_text_stream_and_model_listing() {
     let mut stream = provider.generate_structured_stream(&context);
     let mut text = String::new();
     let mut done = None;
+    let mut told = None;
     while let Some(event) = poll_fn(|cx| stream.as_mut().poll_next(cx)).await {
         match event.unwrap() {
             StreamEvent::TextDelta(delta) => text.push_str(&delta.text),
             StreamEvent::Done(end) => done = Some(end),
+            // Its input, told at message_start, before any text (RMK-369).
+            StreamEvent::Usage(usage) if text.is_empty() => told = Some(usage),
             StreamEvent::ThinkingDelta(_)
             | StreamEvent::ToolCall(_)
-            | StreamEvent::ToolCallDelta(_) => {}
+            | StreamEvent::ToolCallDelta(_)
+            | StreamEvent::Usage(_) => {}
         }
     }
     assert!(text.contains("READY"), "unexpected answer: {text}");
     let done = done.unwrap();
+    assert_eq!(
+        told.unwrap().usage["input_tokens"],
+        done.usage["input_tokens"]
+    );
     assert_eq!(done.finish_reason.as_deref(), Some("end_turn"));
     assert!(done.usage["input_tokens"].as_u64().unwrap() > 0);
     assert!(done.usage["output_tokens"].as_u64().unwrap() > 0);

@@ -54,7 +54,8 @@ async fn wire_fragments_keep_each_calls_final_id() {
                 StreamEvent::TextDelta(_)
                 | StreamEvent::ToolCall(_)
                 | StreamEvent::Done(_)
-                | StreamEvent::ThinkingDelta(_) => None,
+                | StreamEvent::ThinkingDelta(_)
+                | StreamEvent::Usage(_) => None,
             })
             .collect();
         let calls: Vec<_> = events
@@ -64,7 +65,8 @@ async fn wire_fragments_keep_each_calls_final_id() {
                 StreamEvent::TextDelta(_)
                 | StreamEvent::Done(_)
                 | StreamEvent::ThinkingDelta(_)
-                | StreamEvent::ToolCallDelta(_) => None,
+                | StreamEvent::ToolCallDelta(_)
+                | StreamEvent::Usage(_) => None,
             })
             .collect();
         assert_eq!(

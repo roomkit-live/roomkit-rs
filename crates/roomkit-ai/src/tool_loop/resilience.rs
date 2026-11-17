@@ -14,7 +14,7 @@ use std::time::Duration;
 use roomkit::model::RetryPolicy;
 use roomkit_core::rules::transcript::Message;
 
-use super::generation::{Failed, Generation};
+use super::generation::{Attempt, Failed, Generation};
 use super::rules::Limits;
 use super::text_window::RoundWindows;
 use super::{Loop, TurnItem};
@@ -123,8 +123,9 @@ impl Loop {
         let mut attempt = 0;
         // What any try received, held text included: the round's, which
         // its tries and another provider's attempt share (Python's
-        // `note_received`).
+        // `note_received`); and what the latest told it used.
         let mut received = false;
+        let mut told = roomkit::model::Metadata::new();
         let last = loop {
             let sending = super::deferred::declared_for(
                 self.provider.dyn_supports_deferred_tools(),
@@ -132,8 +133,12 @@ impl Loop {
             );
             let stream = self.provider.dyn_generate_structured_stream(&sending);
             let reading = (steering, out, prefix, &mut *window, limits, provider_calls);
-            let held = context.response_schema.is_some();
-            let failure = match Generation::read(stream, reading, held).await {
+            let asked = Attempt {
+                held: context.response_schema.is_some(),
+                served_by: self.served_by(),
+                told: &mut told,
+            };
+            let failure = match Generation::read(stream, reading, asked).await {
                 Ok(generation) => return Ok(generation),
                 Err(failure) => failure,
             };
@@ -181,7 +186,7 @@ impl Loop {
             return Err(last);
         };
         let reading = (steering, out, prefix, window, limits, provider_calls);
-        let generation = rerouted(&*other, &context, last, reading).await?;
+        let generation = rerouted(&*other, &context, (last, &mut told), reading).await?;
         // It served the generation: the turn's later rounds stay on it.
         self.provider = other;
         Ok(generation)
@@ -209,18 +214,22 @@ impl Loop {
 async fn rerouted(
     provider: &dyn DynAiProvider,
     context: &AiContext,
-    spent: Failed,
+    (spent, told): (Failed, &mut roomkit::model::Metadata),
     reading: Reading<'_>,
 ) -> Result<Generation, Failed> {
     tracing::warn!(target: "roomkit::ai", error = %spent.error, provider = provider.dyn_name(), "retries spent: the router hands the generation over");
     let context = super::deferred::declared_for(provider.dyn_supports_deferred_tools(), context);
     let stream = provider.dyn_generate_structured_stream(&context);
-    let held = context.response_schema.is_some();
+    let attempt = Attempt {
+        held: context.response_schema.is_some(),
+        served_by: (provider.dyn_model_name(), provider.dyn_name()),
+        told,
+    };
     let (steering, out, prefix, window, limits, provider_calls) = reading;
     let read = Generation::read(
         stream,
         (steering, out, prefix, &mut *window, limits, provider_calls),
-        held,
+        attempt,
     )
     .await;
     match read {

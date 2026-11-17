@@ -290,10 +290,12 @@ impl OwnerTurn {
                 usage,
                 model,
                 provider,
+                partial,
             } => self.read_usage(UsageMarker {
                 usage,
                 model,
                 provider,
+                partial,
             }),
             Item::StreamEnd => Read::Ended,
             Item::InstructionRead {

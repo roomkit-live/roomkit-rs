@@ -457,7 +457,7 @@ fn response_of(events: Vec<StreamEvent>) -> AiResponse {
     let mut thinking = String::new();
     for event in events {
         match event {
-            StreamEvent::ToolCallDelta(_) => {}
+            StreamEvent::ToolCallDelta(_) | StreamEvent::Usage(_) => {}
             StreamEvent::TextDelta(delta) => response.content.push_str(&delta.text),
             StreamEvent::ThinkingDelta(delta) => thinking.push_str(&delta.thinking),
             StreamEvent::ToolCall(call) => response.tool_calls.push(AiToolCall::from(call)),

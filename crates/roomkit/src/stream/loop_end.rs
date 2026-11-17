@@ -97,9 +97,13 @@ impl fmt::Display for LoopEndReason {
 
 /// What a generation of a turn used, and what it ran on, told after it, in
 /// its order among the text and the rows (RFC §6.4): Python's
-/// `roomkit.models.UsageMarker(usage={}, model=None, provider=None)`.
-/// `usage` is that generation's alone, empty when it reported no counters;
-/// the store holds none of it, and a generation in flight has told nothing.
+/// `roomkit.models.UsageMarker(usage={}, model=None, provider=None,
+/// partial=False)`. `usage` is that generation's alone, empty when it
+/// reported no counters; the store holds none of it. A generation whose
+/// provider tells its input as its stream starts yields it first,
+/// `partial`: what it used so far, which the marker after it replaces, so a
+/// reader that sums usage skips it. A generation in flight has told only
+/// that: the record of a turn cut there counts it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct UsageMarker {
     /// What the generation used, as its provider reported it.
@@ -108,6 +112,9 @@ pub struct UsageMarker {
     pub model: Option<String>,
     /// The provider that served it, a fallback when it did.
     pub provider: Option<String>,
+    /// What the generation told before its end, which its own marker
+    /// replaces.
+    pub partial: bool,
 }
 
 /// The last item of an intelligence channel's streamed response, saying

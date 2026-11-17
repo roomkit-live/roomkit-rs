@@ -225,6 +225,7 @@ const MODEL_ROUND: &[&str] = &[
     "calls",
     "finish_reason",
     "usage",
+    "usage_at_start",
     "fails",
     "done",
     "gate",
@@ -1288,6 +1289,7 @@ fn scripted_model(model: &Value, path: &str, found: &mut Vec<String>) {
                 "thinking",
                 "stream",
                 "done",
+                "usage_at_start",
                 "failure_after_calls",
                 "failure_after_done",
             ] {

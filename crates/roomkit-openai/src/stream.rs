@@ -285,7 +285,7 @@ pub(crate) async fn whole(mut events: ProviderStream<'_>) -> Result<AiResponse, 
     let mut response = AiResponse::new("");
     while let Some(event) = roomkit_next(&mut events).await {
         match event? {
-            StreamEvent::ToolCallDelta(_) => {}
+            StreamEvent::ToolCallDelta(_) | StreamEvent::Usage(_) => {}
             StreamEvent::TextDelta(delta) => response.content.push_str(&delta.text),
             StreamEvent::ThinkingDelta(delta) => {
                 let thinking = response.thinking.get_or_insert_default();
@@ -330,7 +330,8 @@ impl Stream for Texts<'_> {
                     StreamEvent::ToolCall(_)
                     | StreamEvent::ToolCallDelta(_)
                     | StreamEvent::Done(_)
-                    | StreamEvent::ThinkingDelta(_),
+                    | StreamEvent::ThinkingDelta(_)
+                    | StreamEvent::Usage(_),
                 ))) => {}
             }
         }

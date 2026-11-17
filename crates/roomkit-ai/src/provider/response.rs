@@ -319,6 +319,9 @@ pub enum StreamEvent {
     ThinkingDelta(StreamThinkingDelta),
     /// The opening or an argument fragment of a call, before its whole value.
     ToolCallDelta(StreamToolCallDelta),
+    /// What the generation used so far, as its provider told it before its
+    /// end (RFC §6.4).
+    Usage(StreamUsage),
 }
 
 /// A streaming call fragment: Python's `StreamToolCallDelta`.
@@ -463,6 +466,17 @@ impl From<StreamToolCall> for AiToolCall {
             served,
         }
     }
+}
+
+/// What a generation used so far, as its provider told it before its end:
+/// Python's `StreamUsage(*, usage={})`. A provider that tells its input
+/// counters as its stream starts (Anthropic's `message_start`) yields them
+/// here; a generation cut before its end counts them, and the usage of its
+/// [`StreamDone`], when it comes, replaces them (RFC §6.4).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StreamUsage {
+    /// What it used so far.
+    pub usage: Metadata,
 }
 
 /// How a generation ended: Python's `StreamDone(*, finish_reason=None,

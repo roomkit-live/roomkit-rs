@@ -1877,9 +1877,10 @@ mod tests {
             .filter_map(|e| match e {
                 StreamEvent::TextDelta(delta) => Some(Segment::Text(delta.text)),
                 StreamEvent::ThinkingDelta(delta) => Some(Segment::Thinking(delta.thinking)),
-                StreamEvent::ToolCall(_) | StreamEvent::ToolCallDelta(_) | StreamEvent::Done(_) => {
-                    None
-                }
+                StreamEvent::ToolCall(_)
+                | StreamEvent::ToolCallDelta(_)
+                | StreamEvent::Done(_)
+                | StreamEvent::Usage(_) => None,
             })
             .collect();
         let (calls, done) = folding.finish().unwrap();

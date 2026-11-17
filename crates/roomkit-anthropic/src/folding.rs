@@ -2,7 +2,7 @@
 use crate::error;
 use roomkit_ai::{
     AiToolCall, CallIds, ProviderError, StreamDone, StreamEvent, StreamTextDelta,
-    StreamThinkingDelta, StreamToolCallDelta,
+    StreamThinkingDelta, StreamToolCallDelta, StreamUsage,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, VecDeque};
@@ -13,6 +13,13 @@ struct Call {
     name: String,
     arguments: String,
 }
+
+/// The counters a message's start tells of its input.
+const INPUT_COUNTERS: [&str; 3] = [
+    "input_tokens",
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+];
 
 pub(crate) struct Folding {
     calls: BTreeMap<u32, Call>,
@@ -62,7 +69,7 @@ impl Folding {
             return Err(error::failed("content arrived before message_start"));
         }
         match kind {
-            "message_start" => self.start(value),
+            "message_start" => self.start(value, ready),
             "message_delta" => {
                 self.message_delta(value)?;
                 Ok(())
@@ -85,7 +92,11 @@ impl Folding {
         }
     }
 
-    fn start(&mut self, value: &Value) -> Result<(), ProviderError> {
+    fn start(
+        &mut self,
+        value: &Value,
+        ready: &mut VecDeque<StreamEvent>,
+    ) -> Result<(), ProviderError> {
         if self.started {
             return Err(error::failed("a message started twice"));
         }
@@ -102,6 +113,16 @@ impl Folding {
             self.done.metadata.insert("model".into(), model.into());
         }
         self.usage(message.get("usage"));
+        // Its input, which a generation cut before its end counts; the
+        // output the start tells is no count yet (RFC §6.4).
+        let told: roomkit::model::Metadata = INPUT_COUNTERS
+            .iter()
+            .filter_map(|key| Some((*key, self.done.usage.get(*key)?.clone())))
+            .map(|(key, value)| (key.to_owned(), value))
+            .collect();
+        if !told.is_empty() {
+            ready.push_back(StreamEvent::Usage(StreamUsage { usage: told }));
+        }
         Ok(())
     }
 

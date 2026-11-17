@@ -790,6 +790,7 @@ impl Loop {
             usage: generation.done.usage.clone(),
             model: Some(model.to_owned()),
             provider: Some(provider.to_owned()),
+            partial: false,
         }
     }
 
@@ -930,13 +931,14 @@ impl Spent {
         }
     }
 
-    /// Counts one generation's usage counters.
+    /// Counts one generation's usage counters: whole only when its end
+    /// reported them (RFC §6.4).
     fn count(&mut self, generation: &Generation) {
         let last = &generation.done.usage;
         for report in &generation.reports {
             add_usage(&mut self.usage, report);
         }
-        self.complete &= reports_counters(last);
+        self.complete &= generation.whole && reports_counters(last);
         self.last.clone_from(last);
     }
 }

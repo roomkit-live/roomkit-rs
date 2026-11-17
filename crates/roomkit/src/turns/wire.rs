@@ -220,7 +220,8 @@ pub(crate) enum Item {
     },
     /// The loop goes on after a round that ended without a call.
     SegmentBreak,
-    /// What a generation used, told after it (RFC §6.4).
+    /// What a generation used, told after it, or before its end when
+    /// `partial` (RFC §6.4).
     Usage {
         #[serde(default)]
         usage: Metadata,
@@ -228,6 +229,10 @@ pub(crate) enum Item {
         model: Option<String>,
         #[serde(default)]
         provider: Option<String>,
+        /// Written only when true, as Python's codec writes it: a frame of
+        /// a generation's own usage is as it was (RFC §6.4).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        partial: bool,
     },
     /// The loop's end: why, its rounds, its usage, the limits it ran under.
     LoopEnd(WireLoopEnd),

@@ -680,6 +680,7 @@ impl Channel for ScriptedChannel {
                     if self.reads_usage {
                         let told = json!({
                             "usage": marker.usage,
+                            "partial": marker.partial,
                             "model": marker.model,
                             "provider": marker.provider,
                         });

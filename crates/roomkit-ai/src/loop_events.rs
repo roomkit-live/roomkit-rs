@@ -282,7 +282,8 @@ pub struct FromToolOptions {
 /// tool_calls_count=0, usage={}, thinking='', round_count=0,
 /// loop_end_reason=None, latency_ms=0, streaming=False,
 /// timestamp=<factory>, segments=[], usage_metadata={},
-/// declared_tools=[])`. Fired once a turn's loop reached its end; a turn
+/// declared_tools=[], usage_complete=True)`. Fired once a turn's loop
+/// reached its end; a turn
 /// that raised before a round, or whose stream was dropped first, fires
 /// none.
 #[derive(Clone, Debug, PartialEq)]
@@ -322,6 +323,11 @@ pub struct AiResponseEvent {
     /// The tools the provider received this turn, over every round, in
     /// first declaration order, one entry per name.
     pub declared_tools: Vec<DeclaredTool>,
+    /// Whether [`usage`](Self::usage) counts every generation of the turn
+    /// whole: false when one reported no counters, or was cut before its
+    /// end, which counts only what its provider told as its stream started
+    /// (RFC §6.4).
+    pub usage_complete: bool,
 }
 
 impl AiResponseEvent {
@@ -343,6 +349,7 @@ impl AiResponseEvent {
             segments: Vec::new(),
             usage_metadata: Metadata::new(),
             declared_tools: Vec::new(),
+            usage_complete: true,
         }
     }
 }

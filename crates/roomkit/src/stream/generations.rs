@@ -15,7 +15,9 @@ const LOOP_END_REASON: &str = "loop_end_reason";
 /// A generation told its usage ends one. The next counts as in flight from
 /// the end of the calls that followed it, or from a segment break, until it
 /// tells: the safe side, a reader that stops right there reading incomplete.
-/// A provider's own calls run within a generation and change nothing.
+/// What a generation in flight told before its end (a partial marker)
+/// counts if the turn is cut there. A provider's own calls run within a
+/// generation and change nothing.
 #[derive(Debug)]
 pub(super) struct GenerationsRead {
     usage: Metadata,
@@ -25,6 +27,8 @@ pub(super) struct GenerationsRead {
     provider: Option<String>,
     in_flight: bool,
     open_calls: usize,
+    /// What the generation in flight told before its end.
+    pending: Option<UsageMarker>,
 }
 
 impl Default for GenerationsRead {
@@ -37,13 +41,19 @@ impl Default for GenerationsRead {
             provider: None,
             in_flight: true,
             open_calls: 0,
+            pending: None,
         }
     }
 }
 
 impl GenerationsRead {
-    /// A generation told what it used.
+    /// A generation told what it used, or, partial, what it used so far.
     pub(super) fn told(&mut self, marker: &UsageMarker) {
+        if marker.partial {
+            self.pending = Some(marker.clone());
+            return;
+        }
+        self.pending = None;
         add_usage(&mut self.usage, &marker.usage);
         self.last_usage = Some(marker.usage.clone());
         self.complete = self.complete && reports_counters(&marker.usage);
@@ -76,21 +86,34 @@ impl GenerationsRead {
     /// agent's or a text-only channel's reports no usage at all, and a first
     /// generation in flight cannot be told from them.
     pub(super) fn cut_record(&self) -> Metadata {
-        if self.last_usage.is_none() {
+        let mut usage = self.usage.clone();
+        let (mut last, mut model, mut provider) = (
+            self.last_usage.clone(),
+            self.model.clone(),
+            self.provider.clone(),
+        );
+        if let Some(told) = &self.pending {
+            add_usage(&mut usage, &told.usage);
+            last = Some(told.usage.clone());
+            model.clone_from(&told.model);
+            provider.clone_from(&told.provider);
+        }
+        if last.is_none() {
             let mut record = Metadata::new();
             record.insert(LOOP_END_REASON.to_owned(), Value::from("cancelled"));
             return record;
         }
+        let empty = usage.is_empty();
         let marker = LoopEndMarker {
-            usage: self.usage.clone(),
-            last_usage: self.last_usage.clone(),
+            usage,
+            last_usage: last,
             usage_complete: Some(self.complete && !self.in_flight),
-            model: self.model.clone(),
-            provider: self.provider.clone(),
+            model,
+            provider,
             ..LoopEndMarker::new(LoopEndReason::Cancelled)
         };
         let mut record = marker.record();
-        if self.usage.is_empty() {
+        if empty {
             record.shift_remove(AI_USAGE);
         }
         record

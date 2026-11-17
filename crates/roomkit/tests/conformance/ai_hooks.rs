@@ -255,6 +255,7 @@ impl Scripted for AiResponseEvent {
             "round_count": self.round_count,
             "loop_end_reason": self.loop_end_reason,
             "usage": self.usage,
+            "usage_complete": self.usage_complete,
             "usage_metadata": self.usage_metadata,
             "streaming": self.streaming,
             "thinking": self.thinking,

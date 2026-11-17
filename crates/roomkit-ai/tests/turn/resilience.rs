@@ -12,13 +12,13 @@ use std::task::{Context, Poll};
 use futures_core::Stream;
 use pretty_assertions::assert_eq;
 use roomkit::SteerOptions;
-use roomkit::model::{Cancel, Metadata};
+use roomkit::model::{Cancel, Metadata, RetryPolicy};
 use roomkit::testing::TurnTap;
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
     AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, AiToolCall, Date,
     FallbackRouter, MockAiProvider, MockAiProviderOptions, ModelInfo, ModelPricing, ProviderError,
-    ProviderStream, StreamDone, StreamEvent, StreamTextDelta, Tools, tool_arguments,
+    ProviderStream, StreamDone, StreamEvent, StreamTextDelta, StreamUsage, Tools, tool_arguments,
 };
 use roomkit_core::rules::transcoding::text_of;
 use serde_json::{Value, json};
@@ -143,6 +143,39 @@ async fn answer(room: &Room) -> (String, Value, Value, Value) {
         read("ai_last_usage"),
         read("loop_end_reason"),
     )
+}
+
+// Python: tests/test_channels/test_ai_retry.py::TestStreamRetry::test_a_stream_that_handed_no_answer_is_tried_again[told-its-input]
+/// What a provider tells it used as its stream starts is no answer handed:
+/// a stream that fails after it alone is tried again (RFC §6.4, RMK-369).
+#[tokio::test]
+async fn a_stream_that_told_only_its_usage_is_tried_again() {
+    let told = StreamUsage {
+        usage: serde_json::from_value(json!({ "input_tokens": 40 })).unwrap(),
+    };
+    let model = ScriptedProvider::new([
+        ScriptedRound::streaming([StreamEvent::Usage(told)])
+            .refusing(503, "connection reset")
+            .retrying(),
+        ScriptedRound::answering("Asked again."),
+    ]);
+    let options = AiChannelOptions {
+        retry_policy: Some(RetryPolicy {
+            max_retries: 1,
+            base_delay_seconds: 0.001,
+            ..RetryPolicy::default()
+        }),
+        ..AiChannelOptions::default()
+    };
+    let agent = AiChannel::new(channel("assistant"), model.clone(), options).unwrap();
+    let room = Room::with_agent(agent).await;
+    room.says("Hello?").await;
+    let (text, ..) = answer(&room).await;
+    assert_eq!(
+        (text, model.requests().len()),
+        ("Asked again.".to_owned(), 2)
+    );
+    room.kit.close().await.unwrap();
 }
 
 /// Python's `_StreamRound.stream` reads a stream to its end, taking each

@@ -28,8 +28,9 @@ use roomkit_ai::{
     AiRouterFuture, AiTextPart, AiThinkingPart, AiTool, AiToolCall, DynAiProvider, FallbackRouter,
     HumanInputToolHandler, HumanInputToolHandlerOptions, ModelInfo, ModelPricing, ProviderError,
     ProviderErrorOptions, ProviderStream, RouteReason, RouteRequest, Routed, ServedCall,
-    StreamDone, StreamEvent, StreamTextDelta, StreamThinkingDelta, StreamToolCallDelta, Tool,
-    ToolContext, ToolEntry, ToolError, ToolHandler, ToolPolicy, ToolResult, ToolResultPart, Tools,
+    StreamDone, StreamEvent, StreamTextDelta, StreamThinkingDelta, StreamToolCallDelta,
+    StreamUsage, Tool, ToolContext, ToolEntry, ToolError, ToolHandler, ToolPolicy, ToolResult,
+    ToolResultPart, Tools,
     check_schema_answer, checked_stream, schema_for_generate,
 };
 use serde_json::{Value, json};
@@ -154,15 +155,17 @@ impl AiProvider for Paced {
 impl Paced {
     /// The script's events for `context`, held at its round's gate first.
     fn scripted_stream<'a>(&'a self, context: &'a AiContext) -> ProviderStream<'a> {
-        let (inner, gate, served) = {
+        let (inner, gate, told, served) = {
             let mut methods = crate::run::lock(&self.whole.methods);
             let position = self.whole.script.requests().len();
             let gate = self.whole.gates.get(position).cloned().flatten();
+            let told = self.whole.told.get(position).cloned().flatten();
             let inner = self.whole.script.generate_structured_stream(context);
             methods.push("generate_structured_stream");
             (
                 inner,
                 gate,
+                told,
                 self.whole.served.get(position).cloned().unwrap_or_default(),
             )
         };
@@ -177,6 +180,9 @@ impl Paced {
         });
         Box::pin(PacedStream {
             inner,
+            // What the model tells it used as its stream starts, before its
+            // gate (README, `usage_at_start`).
+            told: told.map(|usage| StreamEvent::Usage(StreamUsage { usage })),
             holding,
             held: None,
             after_text: false,
@@ -191,6 +197,8 @@ impl Paced {
 struct WholeModel {
     script: ScriptedProvider,
     gates: Vec<Option<String>>,
+    /// Each round's `usage_at_start`, told before its gate.
+    told: Vec<Option<Metadata>>,
     served: Vec<Vec<Option<ServedCall>>>,
     run: Weak<Run>,
     model_name: String,
@@ -303,6 +311,7 @@ fn labelled(run: &Weak<Run>, arguments: &mut Metadata) {
 /// arguments read as the model writes them.
 struct PacedStream<'a> {
     inner: ProviderStream<'a>,
+    told: Option<StreamEvent>,
     holding: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
     held: Option<Result<StreamEvent, ProviderError>>,
     after_text: bool,
@@ -315,6 +324,9 @@ impl Stream for PacedStream<'_> {
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
+        if let Some(told) = this.told.take() {
+            return Poll::Ready(Some(Ok(told)));
+        }
         if let Some(holding) = this.holding.as_mut() {
             ready!(holding.as_mut().poll(cx));
             this.holding = None;
@@ -758,7 +770,11 @@ pub(crate) fn scripted_model(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let gates = scripted
+        .clone()
         .map(|round| round["gate"].as_str().map(str::to_owned))
+        .collect();
+    let told = scripted
+        .map(|round| round["usage_at_start"].as_object().cloned())
         .collect();
     let pricing = spec
         .get("pricing")
@@ -773,6 +789,7 @@ pub(crate) fn scripted_model(
         whole: WholeModel {
             script: model.clone(),
             gates,
+            told,
             served,
             run: Arc::downgrade(run),
             model_name: spec["name"].as_str().unwrap_or("scripted").to_owned(),
