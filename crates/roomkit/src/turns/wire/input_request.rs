@@ -50,7 +50,9 @@ mod tests {
         let pending = PendingInput::new(
             "p1",
             "ask_user",
-            [("question".to_owned(), json!("Color?"))].into(),
+            [("question".to_owned(), json!("Color?"))]
+                .into_iter()
+                .collect(),
             "r1",
             "c1",
             "agent",
