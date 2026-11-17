@@ -50,7 +50,7 @@ use crate::tools::AiTool;
 /// What separates two segments of a turn in
 /// [`AiResponseEvent::response_content`]: a paragraph break, only ever
 /// between two segments (Python's `RESPONSE_SEGMENT_SEPARATOR`).
-const RESPONSE_SEGMENT_SEPARATOR: &str = "\n\n";
+pub const RESPONSE_SEGMENT_SEPARATOR: &str = "\n\n";
 
 /// The turn's text as `ON_AI_RESPONSE` reports it, Python's
 /// `response_transcript(segments)`: the segments kept, the blank stretches
@@ -61,7 +61,8 @@ const RESPONSE_SEGMENT_SEPARATOR: &str = "\n\n";
 /// ```
 /// let (segments, content) = roomkit_ai::response_transcript(["\n\n", "Let me look.", "", "Done."]);
 /// assert_eq!(segments, ["Let me look.", "Done."]);
-/// assert_eq!(content, "Let me look.\n\nDone.");
+/// assert_eq!(roomkit_ai::RESPONSE_SEGMENT_SEPARATOR, "\n\n");
+/// assert_eq!(content, segments.join(roomkit_ai::RESPONSE_SEGMENT_SEPARATOR));
 /// ```
 pub fn response_transcript<I, S>(segments: I) -> (Vec<String>, String)
 where
