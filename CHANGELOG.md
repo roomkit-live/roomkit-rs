@@ -7,6 +7,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 - **`DelegateHandlerOptions::wait_in_task_rooms`: a worker's `delegate_task` waits for the task it starts**, as Python's (RFC §23.4, RMK-1621). A worker that delegated in turn got the task's receipt and ended its own task, so the sub-task's result never reached the conversation, and cancelling the worker left the sub-task running. With the option, a call made from a task's room runs its task inline: it answers with the task's status and its result, bounded by `max_result_chars`, and cancelling the worker's task cancels it too. A call from any other room still starts a background task.
+
 - Add host continuation policies to AI channels, sharing retry limits and preserving callback failures.
 
 - **A supervisor's per-worker tool is named as every built-in provider accepts**, as Python's (RFC §19.7.3, RMK-521). A host that names its agent channels `agent:<uuid>` declared `delegate_to_agent:<uuid>`, which Anthropic, OpenAI and DeepSeek refuse, and the supervisor never answered. An id that makes no such name has each character outside `[A-Za-z0-9_-]` replaced by `_`; a replaced name that meets another worker's, or passes 128 characters, ends with `_` and 8 hex digits of the id's SHA-256. An id that already makes such a name keeps `delegate_to_<id>`.
