@@ -70,6 +70,6 @@ mod unicode;
 mod unicode_data;
 pub mod verification;
 
-pub use self::permissions::{visibility_allows, visible_events, withheld_history};
+pub use self::permissions::{received_events, visibility_allows, visible_events, withheld_history};
 #[doc(hidden)]
 pub use self::unicode::{casefold, is_alnum, python_repr};

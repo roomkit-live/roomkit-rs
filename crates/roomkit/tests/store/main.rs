@@ -7,6 +7,7 @@
 
 mod abstract_only;
 mod abstract_only_store;
+mod received_events;
 mod suite;
 
 use roomkit::InMemoryStore;

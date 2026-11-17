@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Expose `received_events` for callers filtering blocked rows from an event history.
+
 - Expose `RESPONSE_SEGMENT_SEPARATOR`, the paragraph break between the segments of a text response.
 
 - Add `add_turn_note`, `split_turn_notes` and `TURN_NOTES_HEADER` for hooks that append to or read the notes on a text turn.

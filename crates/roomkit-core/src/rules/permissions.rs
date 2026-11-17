@@ -1,6 +1,7 @@
 //! Who reads, who writes, and whom a broadcast reaches (RFC §7.5, §10.2,
 //! §19.3).
 
+use std::borrow::Borrow;
 use std::collections::BTreeSet;
 
 use crate::model::{
@@ -59,6 +60,16 @@ pub(crate) fn receives(reader: &ChannelBinding, event: &RoomEvent) -> bool {
         && event.visibility.admits(&reader.channel_id, reader.category)
 }
 
+/// The rows the room received, in their input order (RFC §7.5 and §14.1).
+/// A blocked row is omitted. Both owned rows and references keep their identity.
+pub fn received_events<E: Borrow<RoomEvent>>(events: impl IntoIterator<Item = E>) -> Vec<E> {
+    events.into_iter().filter(received).collect()
+}
+
+fn received<E: Borrow<RoomEvent>>(event: &E) -> bool {
+    event.borrow().status != EventStatus::Blocked
+}
+
 /// The events of `timeline` that may be rebuilt as context for `reader`
 /// (RFC §7.5 rule 8), in timeline order.
 ///
@@ -73,7 +84,7 @@ pub(crate) fn history_for<'timeline>(
 ) -> Vec<&'timeline RoomEvent> {
     timeline
         .iter()
-        .filter(|event| event.status != EventStatus::Blocked)
+        .filter(received)
         .filter(|event| {
             event.source.channel_id == reader.channel_id
                 || (reader.access.reads()
@@ -140,11 +151,7 @@ pub fn visible_events(context: &RoomContext, channel_id: &ChannelId) -> Vec<Room
     };
     // The deleted marks are read from the received events alone, as
     // Python's `withheld(received_events(...))` reads them (RMK-1102).
-    let received: Vec<&RoomEvent> = context
-        .recent_events
-        .iter()
-        .filter(|event| event.status != EventStatus::Blocked)
-        .collect();
+    let received = received_events(&context.recent_events);
     let deleted = deleted_events(received.iter().copied());
     received
         .into_iter()
