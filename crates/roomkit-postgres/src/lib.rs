@@ -13,9 +13,31 @@
 //!   holds only this crate's own names;
 //! - a call its caller cuts (a task cancelled, a timeout, a future dropped) has
 //!   the statement it left running cancelled on the server, as asyncpg cancels
-//!   it, and its connection closed, never handed back to the pool; the cancel
-//!   leaves once the call is dropped, so the statement ends a moment later;
+//!   it. Outside a connection block, the connection is closed, never handed
+//!   back to the pool. Inside a block, cancellation is acknowledged and
+//!   Sync/ReadyForQuery is drained before the same connection serves another
+//!   call or returns to the pool; failed cleanup closes it instead;
 //! - a DSN holds a password: nothing here logs or prints one.
+//!
+//! [`ConversationStore::connection`](roomkit::ConversationStore::connection)
+//! brackets sequential store calls, without starting a transaction or exposing
+//! a SQL client. Nesting on the same store or one of its clones joins the current
+//! connection. Another store temporarily masks that binding. A dropped body
+//! leaves any pending cancellation owned by its cleanup task; its connection
+//! cannot return to the pool before cleanup finishes. Cleanup uses the runtime
+//! that entered the block even when the future is dropped on another thread;
+//! that runtime must remain alive for the cleanup to complete.
+//!
+//! An externally supplied standard pool must provide
+//! [`PostgresStoreOptions::cancel_query`], including when framework reads enter
+//! the block. Keep a clone of the pool's TLS connector for that callback; a
+//! plaintext pool must explicitly use `tokio_postgres::NoTls`. There is no TLS
+//! fallback inside a block. A token from a custom raw connection may not know
+//! its actual target; such a pool cannot use this capability as-is.
+//!
+//! Cancellation-safe reuse requires a tokio-postgres version whose
+//! `cancel_query` waits for the cancellation connection to close. A root
+//! workspace patch is a development check, not a transitive library dependency.
 //!
 //! One condition holds for Python to read a row this crate wrote: every
 //! channel type in it is one Python's enumeration lists.
@@ -56,6 +78,7 @@
 //! ```
 
 mod connect;
+mod connection;
 mod dsn;
 mod error;
 mod events;
@@ -87,7 +110,8 @@ pub use self::knowledge::PostgresKnowledgeSource;
 pub use self::lock::PostgresAdvisoryLockManager;
 pub use self::options::{
     DedupeEventIndicesOptions, DropLegacyParentIndexOptions, InitOptions, MigrateOptions,
-    PostgresAdvisoryLockManagerOptions, PostgresKnowledgeSourceOptions, PostgresStoreOptions,
+    PostgresAdvisoryLockManagerOptions, PostgresCancelQuery, PostgresKnowledgeSourceOptions,
+    PostgresStoreOptions,
 };
 pub use self::schema::{SCHEMA as POSTGRES_SCHEMA, SCHEMA_VERSION as POSTGRES_SCHEMA_VERSION};
 pub use self::store::PostgresStore;

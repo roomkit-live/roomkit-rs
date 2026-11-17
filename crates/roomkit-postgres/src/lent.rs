@@ -20,9 +20,10 @@ tokio::task_local! {
 
 /// `work`, an operation of the crate. Dropped unfinished (a task cancelled, a
 /// timeout, a future its caller let go), each connection it holds has its
-/// statement cancelled on the server and is closed, never handed back to its
-/// pool: the pool's next user would wait behind that statement, or have its own
-/// cut by a late cancel. The operation's future is boxed, so that this one adds
+/// statement cancelled on the server. An autonomous loan is closed, never
+/// handed back to its pool: the pool's next user would wait behind that statement,
+/// or have its own cut by a late cancel. A scoped loan instead waits for the
+/// cancellation and protocol barriers before reuse. The future is boxed, so this adds
 /// no copy of it to its caller's.
 pub(crate) fn cancellable<F: Future>(work: F) -> impl Future<Output = F::Output> {
     let polled = Arc::new(AtomicBool::new(false));
@@ -36,8 +37,8 @@ pub(crate) fn cancellable<F: Future>(work: F) -> impl Future<Output = F::Output>
 }
 
 /// A connection of a pool, lent to the operation that took it: handed back when
-/// the operation lets it go, cancelled and closed when its caller cut the
-/// operation, or when the operation panics with it.
+/// the operation lets it go. A cut or panic cancels an autonomous loan and
+/// closes it, or drains a scoped loan before returning it to its block.
 pub(crate) struct Lent {
     /// The connection, until the drop.
     client: Option<Object>,
@@ -45,6 +46,8 @@ pub(crate) struct Lent {
     polled: Option<Arc<AtomicBool>>,
     /// What a cancel request connects with, when the crate knows it.
     tls: Option<Tls>,
+    /// Where a scoped operation returns its connection.
+    lease: Option<crate::connection::Lease>,
 }
 
 impl Lent {
@@ -59,7 +62,14 @@ impl Lent {
             client: Some(client),
             polled,
             tls,
+            lease: None,
         }
+    }
+
+    pub(crate) fn scoped(client: Object, lease: crate::connection::Lease) -> Self {
+        let mut lent = Self::new(client, None);
+        lent.lease = Some(lease);
+        lent
     }
 
     /// Whether the operation was cut: dropped while not polled, or panicking.
@@ -92,7 +102,13 @@ impl Drop for Lent {
         let Some(client) = self.client.take() else {
             return;
         };
-        if cut {
+        if let Some(lease) = self.lease.take() {
+            if cut {
+                lease.cut(client);
+            } else {
+                lease.returned(client);
+            }
+        } else if cut {
             cancel_then_close(client, self.tls.take());
         }
     }

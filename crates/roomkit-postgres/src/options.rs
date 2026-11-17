@@ -2,8 +2,47 @@
 //! defaults.
 
 use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 
 use deadpool_postgres::Pool;
+
+/// Cancels a query using the exact connector of an externally supplied pool.
+///
+/// `Ok(())` must mean the server closed the cancellation connection. RoomKit
+/// then waits for Sync/ReadyForQuery on the retained main connection. The
+/// callback must not fall back to another TLS policy after a failure.
+/// Cloning this value shares the callback.
+///
+/// ```no_run
+/// # fn example(config: tokio_postgres::Config) -> Result<(), Box<dyn std::error::Error>> {
+/// use std::sync::Arc;
+/// use roomkit::StoreError;
+/// use roomkit_postgres::{PostgresStore, PostgresStoreOptions};
+/// use tokio_postgres::NoTls;
+///
+/// let pool = deadpool_postgres::Pool::builder(deadpool_postgres::Manager::new(config, NoTls))
+///     .build()?;
+/// let store = PostgresStore::new(PostgresStoreOptions {
+///     pool: Some(pool),
+///     cancel_query: Some(Arc::new(|token| Box::pin(async move {
+///         token.cancel_query(NoTls).await.map_err(StoreError::unavailable)
+///     }))),
+///     ..PostgresStoreOptions::default()
+/// });
+/// # Ok(())
+/// # }
+/// ```
+/// For TLS, clone the same connector into both the manager and the callback.
+pub type PostgresCancelQuery = Arc<
+    dyn Fn(
+            tokio_postgres::CancelToken,
+        )
+            -> Pin<Box<dyn Future<Output = Result<(), roomkit::StoreError>> + Send + 'static>>
+        + Send
+        + Sync,
+>;
 
 /// What [`PostgresStore::new`](crate::PostgresStore::new) takes: Python's
 /// `PostgresStore(dsn=None, pool=None)`.
@@ -44,11 +83,23 @@ pub struct PostgresStoreOptions {
     /// takes no CA as an end entity; give the server one issued by that CA.
     pub dsn: Option<String>,
     /// A pool of the integrator's, which stays theirs: the store never closes
-    /// it. The crate cannot read its TLS: the cancel request of a call cut on
-    /// it asks for TLS that checks no certificate when the connection's mode
+    /// it. A connection block requires [`Self::cancel_query`] with its exact
+    /// connector. Outside a block the crate cannot read its TLS: cancellation
+    /// before closing asks for TLS that checks no certificate when the mode
     /// asks for TLS, then goes in clear if that fails, never under
     /// `sslmode=require` (HITL f281e902).
     pub pool: Option<Pool>,
+    /// The cancellation capability of `pool`, required by
+    /// [`ConversationStore::connection`](roomkit::ConversationStore::connection)
+    /// for an externally supplied pool. Absence refuses the block before its
+    /// body runs. A store-created pool retains its own connector instead.
+    ///
+    /// A standard pool can clone its TLS connector into this callback and await
+    /// `token.cancel_query(tls)`. A plaintext pool must explicitly use `NoTls`.
+    /// The driver must await server closure, not just the sending of the request.
+    /// Custom pools whose token cannot reconnect to the same target are outside
+    /// this capability. `None` is not a plaintext fallback.
+    pub cancel_query: Option<PostgresCancelQuery>,
 }
 
 impl fmt::Debug for PostgresStoreOptions {
@@ -57,6 +108,7 @@ impl fmt::Debug for PostgresStoreOptions {
             .debug_struct("PostgresStoreOptions")
             .field("dsn", &self.dsn.as_ref().map(|_| "<set>"))
             .field("pool", &self.pool.as_ref().map(|_| "<set>"))
+            .field("cancel_query", &self.cancel_query.as_ref().map(|_| "<set>"))
             .finish()
     }
 }

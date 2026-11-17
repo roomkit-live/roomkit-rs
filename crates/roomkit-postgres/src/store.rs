@@ -55,12 +55,13 @@ pub struct PostgresStore {
     shared: Arc<Shared>,
 }
 
-struct Shared {
+pub(crate) struct Shared {
     dsn: Option<String>,
     pool: RwLock<Option<Pool>>,
     /// What a cancel request connects with, for a pool the store opened.
     tls: RwLock<Option<Tls>>,
     owns_pool: bool,
+    cancel_query: Option<crate::PostgresCancelQuery>,
     telemetry: QuerySpans,
 }
 
@@ -79,11 +80,16 @@ impl PostgresStore {
     /// integrator's: no I/O happens here. [`init`](Self::init) must run
     /// before any other operation.
     pub fn new(options: PostgresStoreOptions) -> Self {
-        let PostgresStoreOptions { dsn, pool } = options;
+        let PostgresStoreOptions {
+            dsn,
+            pool,
+            cancel_query,
+        } = options;
         Self {
             shared: Arc::new(Shared {
                 dsn,
                 owns_pool: pool.is_none(),
+                cancel_query,
                 pool: RwLock::new(pool),
                 tls: RwLock::new(None),
                 telemetry: QuerySpans::default(),
@@ -235,6 +241,41 @@ impl PostgresStore {
     /// the operation running: one its caller cuts has its statement cancelled on
     /// the server, as asyncpg cancels it (HITL 3ebe4596).
     async fn client(&self) -> Result<Lent, StoreError> {
+        if let Some(bound) = crate::connection::current(&self.shared) {
+            return bound.client().await;
+        }
+        let (client, tls) = self.checkout().await?;
+        Ok(Lent::new(client, tls))
+    }
+
+    fn cancel_capability(&self) -> Result<crate::PostgresCancelQuery, StoreError> {
+        if !self.shared.owns_pool {
+            return self.shared.cancel_query.clone().ok_or_else(|| {
+                StoreError::Value(
+                    "PostgresStore.connection() requires cancel_query for an external pool"
+                        .to_owned(),
+                )
+            });
+        }
+        let tls = self
+            .shared
+            .tls
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        Ok(Arc::new(move |token| {
+            let tls = tls.clone();
+            Box::pin(async move {
+                match tls {
+                    Some(tls) => token.cancel_query(tls).await,
+                    None => token.cancel_query(tokio_postgres::NoTls).await,
+                }
+                .map_err(StoreError::unavailable)
+            })
+        }))
+    }
+
+    async fn checkout(&self) -> Result<(deadpool_postgres::Object, Option<Tls>), StoreError> {
         let Some(pool) = self.pool() else {
             return Err(StoreError::unavailable(NoConnection::NotInitialized));
         };
@@ -245,7 +286,7 @@ impl PostgresStore {
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
         match tokio::time::timeout(ACQUIRE_TIMEOUT, pool.get()).await {
-            Ok(client) => Ok(Lent::new(client.map_err(StoreError::unavailable)?, tls)),
+            Ok(client) => Ok((client.map_err(StoreError::unavailable)?, tls)),
             Err(_) => Err(StoreError::unavailable(NoConnection::TimedOut)),
         }
     }
@@ -278,6 +319,29 @@ fn decoded_after_the_span<T>(
 type RoomRead = (Option<Room>, Vec<ChannelBinding>, Vec<Participant>);
 
 impl ConversationStore for PostgresStore {
+    fn connection<'a, W, T, E>(&'a self, work: W) -> impl Future<Output = Result<T, E>> + Send + 'a
+    where
+        W: Future<Output = Result<T, E>> + Send + 'a,
+        T: Send + 'a,
+        E: From<StoreError> + Send + 'a,
+    {
+        // A nested block keeps one copy of its body, not an acquisition state
+        // machine in every enclosing store operation's future.
+        Box::pin(async move {
+            if crate::connection::current(&self.shared).is_some() {
+                return work.await;
+            }
+            let cancel = self.cancel_capability()?;
+            let runtime = tokio::runtime::Handle::try_current().map_err(StoreError::unavailable)?;
+            let (client, _) = self.checkout().await?;
+            let bound =
+                crate::connection::Bound::new(Arc::clone(&self.shared), client, cancel, runtime);
+            let result = bound.run(work).await;
+            bound.finish().await?;
+            result
+        })
+    }
+
     /// Python's `is_process_local = False`: the database outlives the
     /// process, and other processes share it.
     fn is_process_local(&self) -> bool {

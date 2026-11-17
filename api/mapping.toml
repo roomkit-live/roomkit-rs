@@ -885,11 +885,28 @@ members = ["claim_voice_delivery", "complete_voice_delivery", "get_voice_deliver
 scope = "media"
 reason = "not in 0.x: voice deliveries"
 
-[[missing]]
-python = "roomkit.ConversationStore"
-members = ["connection"]
-scope = "text"
-reason = "not in 0.x: the block of store calls one backend connection serves"
+[[exception]]
+rust = "roomkit::ConversationStore::connection"
+params = ["work"]
+approved = "2026-11-17"
+reason = "language: an async body passed as a future replaces the Python async-with block; entry precedes the body's first poll (approved 2026-11-17)"
+
+[[exception]]
+rust = "roomkit::store::ConversationStore::connection"
+params = ["work"]
+approved = "2026-11-17"
+reason = "language: the same connection block under the store module path (approved 2026-11-17)"
+
+[[exception]]
+rust = "roomkit_postgres::PostgresCancelQuery"
+approved = "2026-11-17"
+reason = "language: a supplied standard pool hides its TLS connector; this shared callback supplies cancellation with the pool's exact connector and server-close acknowledgement (approved 2026-11-17)"
+
+[[exception]]
+rust = "roomkit_postgres::PostgresStoreOptions"
+members = ["cancel_query"]
+approved = "2026-11-17"
+reason = "language: external pools require an explicit cancellation capability before a connection block begins; owned pools retain their own connector (approved 2026-11-17)"
 
 [[missing]]
 python = "roomkit.HookTrigger"

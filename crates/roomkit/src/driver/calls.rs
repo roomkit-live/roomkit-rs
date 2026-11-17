@@ -321,7 +321,19 @@ pub(crate) fn follow_discussion<S: ConversationStore>(inner: &Arc<Inner<S>>, roo
 /// one included (`get_conversation`),
 /// and its register of authors, its private state (gap G-089); `None` for
 /// a room the store lacks.
-pub(crate) async fn load_context<S: ConversationStore>(
+pub(crate) fn load_context<'a, S: ConversationStore>(
+    store: &'a S,
+    room_id: &'a RoomId,
+    recent_events: RecentEvents,
+) -> impl Future<Output = Result<Option<RoomContext>, StoreError>> + Send + 'a {
+    let reads: crate::channel::BoxFuture<'a, Result<Option<RoomContext>, StoreError>> =
+        Box::pin(read_context(store, room_id, recent_events));
+    store.connection(reads)
+}
+
+/// The sequential reads only: hooks, delivery and writes do not retain the
+/// connection used to construct their context.
+async fn read_context<S: ConversationStore>(
     store: &S,
     room_id: &RoomId,
     recent_events: RecentEvents,

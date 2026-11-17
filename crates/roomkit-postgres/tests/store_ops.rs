@@ -225,6 +225,7 @@ async fn a_cancelled_update_writes_nothing() {
         let store = PostgresStore::new(PostgresStoreOptions {
             dsn: Some(schema.dsn()),
             pool,
+            ..PostgresStoreOptions::default()
         });
         store
             .init(InitOptions {

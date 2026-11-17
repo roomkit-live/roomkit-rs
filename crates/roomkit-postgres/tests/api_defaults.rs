@@ -24,6 +24,7 @@ fn postgres_advisory_lock_manager_options_defaults_as_python() {
 #[test]
 fn postgres_store_options_defaults_as_python() {
     let defaults = PostgresStoreOptions::default();
+    assert!(defaults.cancel_query.is_none());
     // roomkit.store.PostgresStore.__init__(dsn) = None
     assert!(defaults.dsn.is_none());
     // roomkit.store.PostgresStore.__init__(pool) = None

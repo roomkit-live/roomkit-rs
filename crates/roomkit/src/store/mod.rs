@@ -266,6 +266,27 @@ async fn mark_edits_deleted<S: ConversationStore + ?Sized>(
 /// (RFC §10.6.5): the framework writes them, and host code that writes the
 /// store directly must leave them alone.
 pub trait ConversationStore: Send + Sync + 'static {
+    /// Runs a block of sequential store calls. A pooled store may reuse one
+    /// connection until the block exits. Writes retain their usual transaction
+    /// boundaries. The default runs the block directly.
+    ///
+    /// Only sequential store calls belong inside the block: no hooks, provider
+    /// calls, lock acquisition or spawned work. Nested blocks on the same store
+    /// join the outer connection. This provides no transaction, isolation or
+    /// rollback; completed writes survive a later error.
+    ///
+    /// # Errors
+    ///
+    /// Returns the block's error, or a connection error converted to its error type.
+    fn connection<'a, W, T, E>(&'a self, work: W) -> impl Future<Output = Result<T, E>> + Send + 'a
+    where
+        W: Future<Output = Result<T, E>> + Send + 'a,
+        T: Send + 'a,
+        E: From<StoreError> + Send + 'a,
+    {
+        work
+    }
+
     /// Python `is_process_local`: whether the store lives and dies with this
     /// process, so that no other process can share it. A persistent store,
     /// the default, is shared as soon as a deployment runs a second process:
@@ -670,12 +691,15 @@ pub trait ConversationStore: Send + Sync + 'static {
         Output = Result<(Option<Room>, Vec<ChannelBinding>, Vec<Participant>), StoreError>,
     > + Send {
         async move {
-            let Some(room) = self.get_room(room_id).await? else {
-                return Ok((None, Vec::new(), Vec::new()));
-            };
-            let bindings = self.list_bindings(room_id).await?;
-            let participants = self.list_participants(room_id).await?;
-            Ok((Some(room), bindings, participants))
+            self.connection(async move {
+                let Some(room) = self.get_room(room_id).await? else {
+                    return Ok((None, Vec::new(), Vec::new()));
+                };
+                let bindings = self.list_bindings(room_id).await?;
+                let participants = self.list_participants(room_id).await?;
+                Ok((Some(room), bindings, participants))
+            })
+            .await
         }
     }
 

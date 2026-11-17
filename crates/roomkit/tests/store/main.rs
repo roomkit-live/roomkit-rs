@@ -7,6 +7,8 @@
 
 mod abstract_only;
 mod abstract_only_store;
+mod connection;
+mod connection_store;
 mod received_events;
 mod suite;
 
