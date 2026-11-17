@@ -544,6 +544,16 @@ impl<P: AiProvider> Channel for Agent<P> {
             .deliver_stream(text_stream, event, binding, context)
     }
 
+    fn deliver_cut(
+        &self,
+        event: RoomEvent,
+        row: Option<RoomEvent>,
+        binding: ChannelBinding,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<(), ChannelError>> + Send {
+        self.channel.deliver_cut(event, row, binding, context)
+    }
+
     fn close(&self) -> impl Future<Output = ()> + Send {
         self.channel.close()
     }

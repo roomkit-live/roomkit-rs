@@ -131,19 +131,25 @@ impl TurnReader<'_> {
 }
 
 /// What a model reads of a content that is no image: its text, a media by
-/// its label, a location and a template by their text form (RFC §6.6). The
-/// event a turn answers reaches the AI channel transcoded to that text; the
-/// history reads the stored event, so it reads it the same (§6.4). Python's
-/// `_read_as_text`.
+/// its label, a location and a template by their text form, a nested
+/// composite by its parts, one per line (RFC §6.6). The event a turn answers
+/// reaches the AI channel transcoded to that text; the history reads the
+/// stored event, so it reads it the same (§6.4). Python's `_read_as_text`.
 fn read_as_text(content: &EventContent) -> String {
     match content {
         EventContent::Location(_) | EventContent::Template(_) => text_of(content),
+        EventContent::Composite(composite) => composite
+            .parts()
+            .iter()
+            .map(read_as_text)
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"),
         EventContent::Text(_)
         | EventContent::Rich(_)
         | EventContent::Media(_)
         | EventContent::Audio(_)
         | EventContent::Video(_)
-        | EventContent::Composite(_)
         | EventContent::System(_)
         | EventContent::Edit(_)
         | EventContent::Delete(_)
