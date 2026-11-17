@@ -476,23 +476,6 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
         "update_event" => &["room_id", "event_id", "content", "source", "metadata"],
         "delete_event" => &["room_id", "event_id", "cascade_replies"],
         "create_room" => &["room", "orchestration"],
-        "attach_channel" => &[
-            "room_id",
-            "channel_id",
-            "category",
-            "access",
-            "visibility",
-            "muted",
-            "output_muted",
-            "metadata",
-            "participant_id",
-        ],
-        "detach_channel" | "mute" | "unmute" | "mute_output" | "unmute_output" => {
-            &["room_id", "channel_id"]
-        }
-        "set_access" => &["room_id", "channel_id", "access"],
-        "update_binding_metadata" => &["room_id", "channel_id", "metadata"],
-        "set_visibility" => &["room_id", "channel_id", "visibility"],
         "pause_room" | "resume_room" | "reopen_room" | "close_room" | "archive_room"
         | "check_timers" | "regenerate_target" => &["room_id"],
         "set_room_timers" => &["room_id", "timers"],
@@ -525,7 +508,8 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
         "steer" => &["channel_id", "directive", "room_id"],
         "acp.cancel" => &["channel_id", "room_id"],
         other => {
-            return crate::room_queries::arguments(other)
+            return binding_arguments(other)
+                .or_else(|| crate::room_queries::arguments(other))
                 .or_else(|| crate::extra_tools::arguments(other))
                 .or_else(|| crate::task_calls::arguments(other))
                 .or_else(|| crate::store_calls::arguments(other))
@@ -538,6 +522,29 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
                 .or_else(|| crate::delegate_calls::arguments(other))
                 .or_else(|| crate::discussion_calls::arguments(other));
         }
+    })
+}
+
+fn binding_arguments(call: &str) -> Option<&'static [&'static str]> {
+    Some(match call {
+        "attach_channel" => &[
+            "room_id",
+            "channel_id",
+            "category",
+            "access",
+            "visibility",
+            "muted",
+            "output_muted",
+            "metadata",
+            "participant_id",
+        ],
+        "detach_channel" | "mute" | "unmute" | "mute_output" | "unmute_output" => {
+            &["room_id", "channel_id"]
+        }
+        "set_access" => &["room_id", "channel_id", "access"],
+        "update_binding_metadata" => &["room_id", "channel_id", "metadata"],
+        "set_visibility" => &["room_id", "channel_id", "visibility"],
+        _ => return None,
     })
 }
 
