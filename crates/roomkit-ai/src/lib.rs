@@ -74,6 +74,7 @@
 mod agent;
 mod author_images;
 mod channel;
+mod continuation;
 mod error;
 mod human_input;
 pub mod knowledge;
@@ -107,6 +108,7 @@ mod turn_settings;
 
 pub use self::agent::{Agent, AgentOptions, BuildIdentityBlockOptions};
 pub use self::channel::{AiChannel, AiChannelOptions};
+pub use self::continuation::ContinuationPolicy;
 pub use self::error::AiError;
 pub use self::handoff::{SetupHandoffOptions, setup_handoff};
 pub use self::human_input::{AskOptions, HumanInputToolHandler, HumanInputToolHandlerOptions};

@@ -69,6 +69,7 @@ pub(crate) struct Observed {
     pub(crate) steps: Vec<Value>,
     pub(crate) actions: BTreeMap<String, Vec<Value>>,
     pub(crate) models: BTreeMap<String, Vec<Value>>,
+    pub(crate) continuations: BTreeMap<String, Vec<Value>>,
     /// What each scripted ACP agent received, by its channel.
     pub(crate) acp_wire: BTreeMap<String, Vec<Value>>,
     pub(crate) acp_handlers: BTreeMap<String, Vec<Value>>,

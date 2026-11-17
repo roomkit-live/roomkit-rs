@@ -294,7 +294,28 @@ impl Comparison<'_> {
                 &format!("models.{channel}"),
             );
         }
+        self.continuations();
         self.acp();
+    }
+
+    fn continuations(&mut self) {
+        for (channel, expected) in self.expect["continuations"]
+            .as_object()
+            .into_iter()
+            .flatten()
+        {
+            let actual = self
+                .observed
+                .continuations
+                .get(channel)
+                .cloned()
+                .map(Value::Array);
+            self.check(
+                expected,
+                actual.as_ref(),
+                &format!("continuations.{channel}"),
+            );
+        }
     }
 
     fn acp(&mut self) {

@@ -10,6 +10,7 @@ use roomkit_core::rules::transcript::{Message, Role, is_blank};
 use tokio::time::Instant;
 
 use super::Bounds;
+use crate::ContinuationPolicy;
 use crate::error::AiError;
 use crate::provider::{
     ProviderError, ResponseSchemaError, ResponseSchemaErrorOptions, ResponseSchemaFailure,
@@ -141,35 +142,67 @@ impl Limits {
         }
     }
 
-    /// Whether a round that ended with `text` for `finish_reason` and no
-    /// call to run is tried again: when it is, the messages the next
-    /// generation reads after it, what the model said, then the word to it.
-    /// A try is spent only while one is left and the deadline holds.
+    /// The empty-answer retry and host continuation share this turn's budget.
     pub(super) fn try_again(
         &mut self,
         had_tool_round: bool,
         text: &str,
         finish_reason: Option<&str>,
-    ) -> Option<Vec<Message>> {
-        let nudge = empty_round_nudge(had_tool_round, text, finish_reason)?;
-        if self.empty_retries >= self.max_empty_retries || self.passed().is_some() {
-            return None;
+        policy: Option<&ContinuationPolicy>,
+        cancelled: impl FnOnce() -> bool,
+    ) -> Result<Retry, ProviderError> {
+        let empty = empty_round_nudge(had_tool_round, text, finish_reason);
+        let nudge = match empty {
+            Some(nudge) => Some(nudge.to_owned()),
+            None => continuation_nudge(policy, text, finish_reason)?,
+        };
+        let Some(nudge) = nudge else {
+            return Ok(Retry::Done);
+        };
+        if self.empty_retries >= self.max_empty_retries || cancelled() || self.passed().is_some() {
+            return Ok(if empty.is_none() {
+                Retry::Unfinished
+            } else {
+                Retry::Done
+            });
         }
         self.empty_retries += 1;
-        tracing::warn!(
-            target: "roomkit::ai",
-            finish_reason,
-            retry = self.empty_retries,
-            of = self.max_empty_retries,
-            "the round left no answer: the model is asked again"
-        );
+        tracing::warn!(target: "roomkit::ai", finish_reason, retry = self.empty_retries,
+            of = self.max_empty_retries, "the round is asked again");
         let mut said = Vec::with_capacity(2);
         if !is_blank(text) {
             said.push(Message::new(Role::Assistant, text));
         }
         said.push(Message::new(Role::User, nudge));
-        Some(said)
+        Ok(Retry::Again(said))
     }
+}
+
+/// The outcome of asking whether a round needs another try.
+pub(super) enum Retry {
+    Again(Vec<Message>),
+    Unfinished,
+    Done,
+}
+
+/// Python's `_continuation_nudge`, called only with the current declaration.
+fn continuation_nudge(
+    policy: Option<&ContinuationPolicy>,
+    text: &str,
+    finish: Option<&str>,
+) -> Result<Option<String>, ProviderError> {
+    let Some(policy) = policy else {
+        return Ok(None);
+    };
+    let natural = finish.is_some_and(|reason| {
+        ["stop", "end_turn", "stop_sequence"]
+            .iter()
+            .any(|word| reason.eq_ignore_ascii_case(word))
+    });
+    if is_blank(text) || !natural {
+        return Ok(None);
+    }
+    policy(text)
 }
 
 /// What a model whose round ended with no call to run is told, or `None`

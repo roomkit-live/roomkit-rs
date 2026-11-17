@@ -26,6 +26,7 @@ mod calls;
 mod channel_verbs;
 mod chat_wire;
 mod compare;
+mod continuation;
 mod delegate_calls;
 mod discussion_calls;
 mod errors;

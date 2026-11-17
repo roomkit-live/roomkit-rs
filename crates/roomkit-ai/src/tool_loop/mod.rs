@@ -30,6 +30,7 @@ mod between_rounds;
 mod calls;
 mod compaction;
 mod composition;
+mod continuation;
 mod deferred;
 pub(crate) use deferred::DeferredTools;
 mod footprint;
@@ -69,7 +70,7 @@ use self::hooks::Ran;
 use self::repeat_guard::FORCE_STOP_NUDGE;
 pub(crate) use self::repeat_guard::RepeatGuard;
 pub(crate) use self::resilience::Resilience;
-use self::rules::{Limits, final_round_reason, unanswered};
+use self::rules::{Limits, unanswered};
 pub(crate) use self::text_window::TextPublication;
 use self::text_window::{RoundWindows, TextWindow};
 pub(crate) use self::thinking::ThinkingPublication;
@@ -210,6 +211,7 @@ pub(crate) struct Loop {
     pub(crate) skill_gates: SkillGates,
     pub(crate) policy: ToolPolicy,
     pub(crate) bounds: Bounds,
+    pub(crate) continuation: Option<crate::ContinuationPolicy>,
     /// What the turn may spend (RFC §6.4); `None` sets no budget.
     pub(crate) budget: Option<TurnBudget>,
     /// How its generations recover from their provider's refusals.
@@ -397,6 +399,7 @@ impl Loop {
             // Declared as the provider is about to be asked, nothing reported
             // of a round a cancel kept from running (RFC §6.4).
             let asked = (self.round_tools(), system_prompt.clone());
+            let has_tools = !asked.0.is_empty();
             let reading = (&steering, &out, prefix.as_str(), round, &limits);
             let read = self.read_round(&messages, asked, reading).await;
             let read = read.and_then(|read| self.counted(read, &mut spent, &mut limits));
@@ -419,14 +422,16 @@ impl Loop {
                 return self.end(stop, tool_rounds, spent, ending).await;
             }
             if generation.calls.is_empty() {
-                let tried = (had_tool_round, &generation);
-                if try_again(&mut limits, tried, &mut messages, &out).await {
-                    continue;
-                }
-                let finish_reason = generation.done.finish_reason.as_deref();
-                let limit = limits.passed();
-                let reason =
-                    final_round_reason(had_tool_round, &generation.text, finish_reason, limit);
+                let answered = (had_tool_round, &generation, has_tools);
+                let writer = (&steering, &out);
+                let retry = self
+                    .retry_round(&mut limits, answered, &mut messages, writer)
+                    .await;
+                let reason = match retry {
+                    Ok(None) => continue,
+                    Ok(Some(reason)) => reason,
+                    Err(error) => return self.fail_unanswered(error, &steering, &out).await,
+                };
                 let asked = (&steering, &mut messages, &mut system_prompt);
                 if reason == LoopEndReason::Completed
                     && round < self.bounds.max_rounds
@@ -560,9 +565,9 @@ impl Loop {
         self.report(reason, rounds, &spent);
     }
 
-    /// Fails a turn under a response schema whose loop stopped short of its
-    /// answer with `error` (RFC §6.7): the turn delivers no answer and
-    /// reports none, its span ending in error.
+    /// Fails the answer itself: a response schema or host continuation policy
+    /// refused it (RFC §6.4, §6.7). No completed turn is reported, and the
+    /// failure is never handled as a provider interruption or retried.
     async fn fail_unanswered(
         &self,
         error: ProviderError,
@@ -888,25 +893,6 @@ type Ending<'a> = (
     &'a Steering,
     &'a Yielder<Result<TurnItem, ProviderError>>,
 );
-
-/// Whether the round `generation` read, which made no call to run after a
-/// round of calls or none (`had_tool_round`), is tried again under `limits`
-/// (Appendix A.9): its text then ends its segment (RFC §6.4), and
-/// `messages` take what the next generation reads after it.
-async fn try_again(
-    limits: &mut Limits,
-    (had_tool_round, generation): (bool, &Generation),
-    messages: &mut Vec<Message>,
-    out: &Yielder<Result<TurnItem, ProviderError>>,
-) -> bool {
-    let finish_reason = generation.done.finish_reason.as_deref();
-    let Some(said) = limits.try_again(had_tool_round, &generation.text, finish_reason) else {
-        return false;
-    };
-    out.give(Ok(TurnItem::SegmentBreak)).await;
-    messages.extend(said);
-    true
-}
 
 /// What a turn's generations used: their counters summed, the last one's,
 /// and whether every one reported its input and output tokens; and what

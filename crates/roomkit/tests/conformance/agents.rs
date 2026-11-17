@@ -350,6 +350,7 @@ pub(crate) fn scripted_agent_of(
     if let Some(policy) = spec.get("tool_policy") {
         options.tool_policy = Some(tool_policy(policy)?);
     }
+    options.continuation = crate::continuation::policy(spec, run)?;
     bounds(spec, &mut options)?;
     agent_settings(spec, &mut options)?;
     run.skills.script_executor(spec, &mut options)?;
@@ -902,7 +903,7 @@ fn streaming_round(spec: &Value, events: &[Value]) -> Result<ScriptedRound, Stri
         });
     }
     read.push(StreamEvent::Done(StreamDone {
-        finish_reason: Some(finish_reason(spec, called)),
+        finish_reason: finish_reason(spec, called),
         usage: usage(spec)?,
         ..StreamDone::default()
     }));
@@ -930,7 +931,7 @@ fn whole_round(spec: &Value, whole: &Value) -> Result<ScriptedRound, String> {
             .collect()
     });
     Ok(ScriptedRound::whole_response(AiResponse {
-        finish_reason: Some(finish_reason(spec, !calls.is_empty())),
+        finish_reason: finish_reason(spec, !calls.is_empty()),
         usage: usage(spec)?,
         tool_calls: calls,
         thinking: text(whole, "thinking"),
@@ -988,9 +989,12 @@ fn served_call(value: &Value) -> Result<Option<ServedCall>, String> {
 }
 
 /// How a round ends, `tool_calls` by default when it calls, else `stop`.
-fn finish_reason(spec: &Value, called: bool) -> String {
+fn finish_reason(spec: &Value, called: bool) -> Option<String> {
+    if spec.get("finish_reason").is_some_and(Value::is_null) {
+        return None;
+    }
     let default = if called { "tool_calls" } else { "stop" };
-    spec["finish_reason"].as_str().unwrap_or(default).to_owned()
+    Some(spec["finish_reason"].as_str().unwrap_or(default).to_owned())
 }
 
 /// What a round used.
@@ -1025,19 +1029,12 @@ pub(crate) fn round(spec: &Value) -> Result<ScriptedRound, String> {
             (text("id"), text("name"), arguments)
         })
         .collect();
-    let finish = spec["finish_reason"]
-        .as_str()
-        .unwrap_or(if calls.is_empty() {
-            "stop"
-        } else {
-            "tool_calls"
-        });
     let made = calls
         .iter()
         .map(|(id, name, arguments)| (id.as_str(), name.as_str(), arguments.as_str()));
     let mut round = ScriptedRound::calling(spec["text"].as_str().unwrap_or_default(), made)
-        .with_finish_reason(finish)
         .with_usage(usage(spec)?);
+    round.done.finish_reason = finish_reason(spec, !calls.is_empty());
     if let Some(deltas) = spec.get("deltas") {
         let deltas = deltas.as_array().ok_or("deltas: not a list")?;
         round = round.in_pieces(deltas.iter().filter_map(Value::as_str));

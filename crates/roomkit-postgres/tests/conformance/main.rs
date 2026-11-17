@@ -25,6 +25,8 @@ mod channel_verbs;
 mod chat_wire;
 #[path = "../../../roomkit/tests/conformance/compare.rs"]
 mod compare;
+#[path = "../../../roomkit/tests/conformance/continuation.rs"]
+mod continuation;
 #[path = "../../../roomkit/tests/conformance/delegate_calls.rs"]
 mod delegate_calls;
 #[path = "../../../roomkit/tests/conformance/discussion_calls.rs"]

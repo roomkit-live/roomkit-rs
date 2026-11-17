@@ -1133,7 +1133,6 @@ reason = "Python's `async with` (`__aenter__`, `__aexit__`): Rust has no async c
 [[missing]]
 python = "roomkit.AIChannel.__init__"
 params = [
-    "continuation",
     "sandbox",
     "external_tool_handler",
     "enable_planning",
@@ -1141,7 +1140,7 @@ params = [
     "think_wait",
 ]
 scope = "text"
-reason = "not in 0.x: continuation, thinking, sandbox, external tools, planning, speaking turns and the thinker"
+reason = "not in 0.x: thinking, sandbox, external tools, planning, speaking turns and the thinker"
 
 [[missing]]
 python = "roomkit.AIChannel"
