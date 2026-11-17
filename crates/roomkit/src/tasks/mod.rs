@@ -296,6 +296,21 @@ impl Tasks {
         self.spawn_in(kind, marks, future)
     }
 
+    /// As `spawn`, keeping the new unit's identity for a scoped waiter.
+    pub(crate) fn spawn_owned<F>(
+        self: &Arc<Self>,
+        kind: Kind,
+        future: F,
+    ) -> Option<(JoinHandle<F::Output>, Unit)>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        let unit = Unit::new();
+        self.spawn_in(kind, Marks::current().with(unit), future)
+            .map(|task| (task, unit))
+    }
+
     /// Runs `future` as [`spawn`](Self::spawn) does, within no work but
     /// its own: a task the current code fires and forgets, an observer,
     /// which nothing of the current code waits for, so that a close it

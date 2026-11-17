@@ -13,15 +13,15 @@ impl Pump {
     pub(super) async fn end_calls(&mut self) -> Ending {
         let mut calls = std::mem::take(&mut self.withdrawn);
         calls.extend(self.calls.drain().map(|(_, call)| call));
-        calls.retain(|call| !self.kit.is_close_caller(call.id()));
+        calls.retain(|call| !self.kit.is_close_caller(call.task.id(), call.unit));
         for call in &calls {
-            call.abort();
+            call.task.abort();
         }
         let mut cancelled = self.state.cancel.subscribe();
         let mut deadline = self.cancel_deadline();
         let cleanup = async {
             for call in calls {
-                drop(call.await);
+                drop(call.task.await);
             }
             self.kit.end_inline_calls(&self.state.turn.turn_id).await;
         };

@@ -29,8 +29,8 @@ use crate::kit::Inner;
 use crate::orchestration::{StatusEntry, StatusLevel};
 use crate::store::ConversationStore;
 use crate::stream::ResponseStream;
-use crate::tasks::Kind;
 use crate::tasks::{DelegatedTask, DelegatedTaskResult};
+use crate::tasks::{Kind, Marks, Unit};
 use crate::telemetry::KitTelemetry;
 use crate::tool_calls::{ToolCallEvent, ToolCallReport, error_envelope};
 use crate::turns::wire::{
@@ -1345,8 +1345,14 @@ pub(crate) trait TurnKit: Send + Sync {
     /// Keeps the tracked task's end for an owner that must join its calls.
     fn spawn_joined(&self, task: BoxFuture<'static, ()>) -> Option<tokio::task::JoinHandle<()>>;
 
+    /// An owner handler has its own unit, inherited only by its descendants.
+    fn spawn_owner_call(
+        &self,
+        task: BoxFuture<'static, ()>,
+    ) -> Option<(tokio::task::JoinHandle<()>, Unit)>;
+
     /// A handler calling close is neither cut nor joined by its own turn.
-    fn is_close_caller(&self, id: tokio::task::Id) -> bool;
+    fn is_close_caller(&self, id: tokio::task::Id, unit: Unit) -> bool;
 
     /// End the inline delegations this owner's turn created, including
     /// their completion, while sparing a close's own calling work.
@@ -1572,6 +1578,14 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
         inner.tasks.spawn_joined(Kind::Turn, task)
     }
 
+    fn spawn_owner_call(
+        &self,
+        task: BoxFuture<'static, ()>,
+    ) -> Option<(tokio::task::JoinHandle<()>, Unit)> {
+        let task = crate::turns::context::TurnScope::current().scope(task);
+        self.upgrade()?.tasks.spawn_owned(Kind::Turn, task)
+    }
+
     fn end_inline_calls<'a>(&'a self, turn_id: &'a str) -> BoxFuture<'a, ()> {
         Box::pin(async move {
             if let Some(inner) = self.upgrade() {
@@ -1580,9 +1594,10 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
         })
     }
 
-    fn is_close_caller(&self, id: tokio::task::Id) -> bool {
-        self.upgrade()
-            .is_some_and(|inner| inner.tasks.is_close_caller(id))
+    fn is_close_caller(&self, id: tokio::task::Id, unit: Unit) -> bool {
+        self.upgrade().is_some_and(|inner| {
+            inner.tasks.is_close_caller(id) || inner.tasks.spares(&Marks::default().with(unit))
+        })
     }
 
     fn spawn_observer(&self, task: BoxFuture<'static, ()>) -> bool {

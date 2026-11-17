@@ -14,6 +14,65 @@ use roomkit_ai::ToolResult;
 
 use crate::support::{asks, channel, kit, room};
 
+// Python: test_turns_owner_tools::test_a_handler_that_closes_the_kit_sees_the_close_through.
+// Here a real host_call runs send_event on the owner. Its synchronous hook
+// closes the kit within that owner handler, not within an executor tool.
+#[tokio::test(start_paused = true)]
+async fn an_owner_host_call_can_close_its_kit_without_being_aborted() {
+    let kit = kit(move |_, context| async move {
+        let host = current_turn_host().unwrap();
+        let _answer = host
+            .send_event(
+                &context.room_id,
+                &channel("ai"),
+                TextContent::new("close owner"),
+                SendEventOptions::default(),
+            )
+            .await;
+        Ok(ToolResult::Text("done".to_owned()))
+    })
+    .await;
+    let closed = Arc::new(tokio::sync::Notify::new());
+    let stages = Arc::new(Mutex::new(Vec::<&str>::new()));
+    let tracing = Arc::clone(&stages);
+    let (weak, tells) = (kit.downgrade(), Arc::clone(&closed));
+    kit.hook(
+        roomkit::HookTrigger::BeforeBroadcast,
+        move |event: roomkit::model::RoomEvent, _context| {
+            let (weak, tells) = (weak.clone(), Arc::clone(&tells));
+            let tracing = Arc::clone(&tracing);
+            async move {
+                if roomkit_core::rules::transcoding::text_of(&event.content) == "close owner" {
+                    tracing.lock().unwrap().push("hook entered close");
+                    weak.upgrade().unwrap().close().await.unwrap();
+                    tracing.lock().unwrap().push("hook close returned");
+                    tells.notify_one();
+                }
+                Ok(roomkit::model::HookResult::allow(
+                    roomkit::model::hook::AllowOptions::default(),
+                ))
+            }
+        },
+        roomkit::HookOptions {
+            name: "close_from_owner".to_owned(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let asking = tokio::spawn({
+        let kit = kit.clone();
+        async move { asks(&kit, "go").await }
+    });
+    let end = tokio::time::timeout(std::time::Duration::from_secs(30), closed.notified()).await;
+    assert!(
+        end.is_ok(),
+        "owner hook stages: {:?}",
+        stages.lock().unwrap()
+    );
+    asking.await.unwrap();
+    roomkit::testing::idle(&kit).await;
+}
+
 /// RFC §10.6.5 (MUST): the host of a turn writes to the turn's room only;
 /// a send naming another room is refused by the owner with Python's
 /// `ValueError`, nothing stored there.

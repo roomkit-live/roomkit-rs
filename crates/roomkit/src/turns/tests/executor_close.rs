@@ -193,7 +193,9 @@ async fn a_close_from_an_owner_served_tool_spares_its_turn() {
 #[tokio::test(start_paused = true)]
 async fn a_kit_close_from_an_owner_served_tool_finishes_its_call() {
     for sibling in [false, true] {
-        closes_with_owner_sibling(sibling).await;
+        for via_hook in [false, true] {
+            closes_with_owner_sibling(sibling, via_hook).await;
+        }
     }
 }
 
@@ -205,12 +207,13 @@ impl Drop for Dropped {
     }
 }
 
-async fn closes_with_owner_sibling(sibling: bool) {
+async fn closes_with_owner_sibling(sibling: bool, via_hook: bool) {
     let kit = kit_with(CallsOwner {
         expects_answer: false,
         sibling,
     })
     .await;
+    let hook_returned = closing_owner_hook(&kit, via_hook);
     let closed = Arc::new(tokio::sync::Notify::new());
     let told = Arc::clone(&closed);
     let started = Arc::new(tokio::sync::Notify::new());
@@ -225,7 +228,19 @@ async fn closes_with_owner_sibling(sibling: bool) {
                 if sibling {
                     begins.notified().await;
                 }
-                kit.close().await.unwrap();
+                if via_hook {
+                    drop(
+                        kit.send_event(
+                            &room_id(),
+                            &channel("ai"),
+                            roomkit_core::model::TextContent::new("close owner"),
+                            crate::SendEventOptions::default(),
+                        )
+                        .await,
+                    );
+                } else {
+                    kit.close().await.unwrap();
+                }
                 told.notify_one();
                 crate::turn::OwnerToolAnswer::Served(serde_json::json!("closed"))
             })
@@ -262,4 +277,34 @@ async fn closes_with_owner_sibling(sibling: bool) {
     drop(asking.await.unwrap());
     crate::testing::idle(&kit).await;
     assert_eq!(dropped.load(Ordering::SeqCst), sibling);
+    assert_eq!(hook_returned.load(Ordering::SeqCst), via_hook);
+}
+
+fn closing_owner_hook(kit: &crate::RoomKit, enabled: bool) -> Arc<AtomicBool> {
+    let returned = Arc::new(AtomicBool::new(false));
+    if !enabled {
+        return returned;
+    }
+    let (weak, notes) = (kit.downgrade(), Arc::clone(&returned));
+    kit.hook(
+        crate::HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _context| {
+            let (weak, notes) = (weak.clone(), Arc::clone(&notes));
+            async move {
+                if roomkit_core::rules::transcoding::text_of(&event.content) == "close owner" {
+                    weak.upgrade().unwrap().close().await.unwrap();
+                    notes.store(true, Ordering::SeqCst);
+                }
+                Ok(roomkit_core::model::HookResult::allow(
+                    roomkit_core::model::hook::AllowOptions::default(),
+                ))
+            }
+        },
+        crate::HookOptions {
+            name: "close_from_owner".to_owned(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    returned
 }

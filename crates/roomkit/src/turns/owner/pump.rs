@@ -17,6 +17,7 @@ use tokio::time::Instant;
 
 use super::{Facts, Main, OwnerState, verbs};
 use crate::context::ExecutionContext;
+use crate::tasks::Unit;
 use crate::turn::TurnKit;
 use crate::turns::codec::decode_end;
 use crate::turns::context::TurnContext;
@@ -95,6 +96,12 @@ fn emitted_by_its_turn(
         && channel_id.is_none_or(|named| named == facts.channel_id.as_str())
 }
 
+/// A handler's own unit, excluding the turn unit its siblings share.
+struct RunningCall {
+    task: JoinHandle<()>,
+    unit: Unit,
+}
+
 /// The owner's reading of one turn's frames.
 pub(super) struct Pump {
     state: Arc<OwnerState>,
@@ -103,9 +110,9 @@ pub(super) struct Pump {
     kit: Arc<dyn TurnKit>,
     turns: Arc<Turns>,
     /// The verbs running for the turn, by their call.
-    calls: HashMap<String, JoinHandle<()>>,
+    calls: HashMap<String, RunningCall>,
     /// Withdrawn calls still unwinding; their inline work remains the turn's.
-    withdrawn: Vec<JoinHandle<()>>,
+    withdrawn: Vec<RunningCall>,
     accepted: bool,
     /// The items received, deltas counted: never more than granted.
     received: u64,
@@ -225,10 +232,10 @@ impl Pump {
             } => self.serve_tool(call_id, name, arguments, &context),
             Frame::CallCancel { call_id } => {
                 if let Some(call) = self.calls.remove(&call_id)
-                    && !self.kit.is_close_caller(call.id())
+                    && !self.kit.is_close_caller(call.task.id(), call.unit)
                 {
-                    call.abort();
-                    self.withdrawn.retain(|call| !call.is_finished());
+                    call.task.abort();
+                    self.withdrawn.retain(|call| !call.task.is_finished());
                     self.withdrawn.push(call);
                 }
             }
@@ -314,9 +321,9 @@ impl Pump {
             let answered = waiting.scope(served).await;
             answer(&state, answering, answered);
         };
-        if let Some(running) = self.kit.spawn_joined(Box::pin(task)) {
-            self.calls.retain(|_, call| !call.is_finished());
-            self.calls.insert(call_id, running);
+        if let Some((task, unit)) = self.kit.spawn_owner_call(Box::pin(task)) {
+            self.calls.retain(|_, call| !call.task.is_finished());
+            self.calls.insert(call_id, RunningCall { task, unit });
         } else {
             let refused = one("backend_closed", "the kit is shut down".to_owned());
             answer(&self.state, call_id, Err(Box::new(refused)));
@@ -354,9 +361,9 @@ impl Pump {
             let answered = waiting.at_least(floor).scope(served).await;
             answer_tool(&state, answering, answered);
         };
-        if let Some(running) = self.kit.spawn_joined(Box::pin(task)) {
-            self.calls.retain(|_, call| !call.is_finished());
-            self.calls.insert(call_id, running);
+        if let Some((task, unit)) = self.kit.spawn_owner_call(Box::pin(task)) {
+            self.calls.retain(|_, call| !call.task.is_finished());
+            self.calls.insert(call_id, RunningCall { task, unit });
         } else {
             let refused = crate::turn::OwnerToolAnswer::Failed {
                 kind: "backend_closed".to_owned(),
@@ -450,8 +457,8 @@ impl Drop for Pump {
     /// pipes shut, and whoever awaits its end told.
     fn drop(&mut self) {
         for call in self.calls.values() {
-            if !self.kit.is_close_caller(call.id()) {
-                call.abort();
+            if !self.kit.is_close_caller(call.task.id(), call.unit) {
+                call.task.abort();
             }
         }
         self.state.over.send_replace(true);
