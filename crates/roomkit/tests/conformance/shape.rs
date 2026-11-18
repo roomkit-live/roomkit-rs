@@ -428,6 +428,7 @@ const EXPECT: &[&str] = &[
     "speak_turns",
     "thinker_calls",
     "external_handlers",
+    "executors",
     "script_executors",
     "sandbox_executors",
     "acp_wire",
@@ -473,7 +474,7 @@ fn base_arguments(call: &str) -> Option<&'static [&'static str]> {
         | "kit_executor.closed"
         | "kit_executor.executor_id"
         | "executors" => &[],
-        "executor.start" | "executor.close" => &["executor"],
+        "executor.start" | "executor.close" | "executor.calls" => &["executor"],
         "process_inbound" => &["message", "room_id", "defer_delivery"],
         "delivery.cancel" => &["of", "reason", "timeout_ms"],
         "delivery.wait" => &["of"],
@@ -593,7 +594,14 @@ pub(crate) fn unknown_members(scenario: &Value) -> Vec<String> {
     for (position, executor) in items(&setup["executors"]) {
         members(
             executor,
-            &["id", "hosts", "organizations", "started"],
+            &[
+                "id",
+                "hosts",
+                "organizations",
+                "started",
+                "builds",
+                "max_channels",
+            ],
             &format!("setup.executors[{position}]"),
             &mut found,
         );

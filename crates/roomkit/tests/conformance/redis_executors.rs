@@ -1,5 +1,7 @@
 //! RFC §6.4 and §10.6. The normal runner places declared channels on workers
 //! with independent Redis nodes and compares the complete scenario expectations.
+mod channel;
+
 use futures_core::future::BoxFuture;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -12,15 +14,38 @@ use serde::Deserialize;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::agents::{self, Scripted};
 use crate::identity::RunSlot;
+use channel::WorkerChannel;
 
 const SUPPORTED: &[&str] = &[
-    "executors/the-kit-lists-the-executors-served-and-what-each-declares",
+    "executors/a-channel-call-no-executor-takes-fails-no-executor",
+    "executors/a-declared-agent-s-turn-runs-on-the-executor-hosting-it",
+    "executors/a-delegation-to-a-declared-worker-runs-on-its-executor",
+    "executors/a-live-agent-s-turn-stays-on-the-kit-s-executor",
+    "executors/a-provider-the-factory-hands-every-build-outlives-a-build-let-go",
+    "executors/a-released-channel-is-built-anew-for-the-next-turn",
     "executors/a-room-s-agent-presence-names-the-executors-covering-each-agent",
-    "executors/a-turn-s-record-names-the-executor-that-ran-it-apart",
+    "executors/a-room-whose-executor-builds-nothing-for-its-agent-stays-on-it",
+    "executors/a-room-whose-executor-closed-moves-to-another",
+    "executors/a-turn-apart-calls-a-tool-the-room-owner-serves",
     "executors/a-turn-apart-emits-its-framework-events",
+    "executors/a-turn-apart-publishes-its-thinking-and-tool-calls-to-the-room",
     "executors/a-turn-cut-on-its-executor-names-it-in-its-record",
+    "executors/a-turn-no-executor-declares-fails-and-the-room-goes-on",
+    "executors/a-turn-running-on-a-released-channel-ends-on-it",
+    "executors/a-turn-s-record-names-the-executor-that-ran-it-apart",
+    "executors/a-verb-the-channel-lacks-fails",
+    "executors/an-agent-its-executor-builds-nothing-for-fails-no-executor",
+    "executors/an-executor-builds-an-agent-at-its-first-turn-not-when-a-room-attaches-it",
+    "executors/an-executor-declaring-every-agent-takes-the-turns-of-agents-it-was-never-named",
+    "executors/an-executor-past-its-bound-closes-the-agent-it-used-least-recently",
+    "executors/an-executor-serving-every-organization-takes-every-room-s-turns",
+    "executors/an-executor-takes-the-turns-of-the-organizations-it-serves-alone",
+    "executors/attach-and-detach-reach-every-executor-declaring-the-channel",
+    "executors/executors-declaring-prefixes-take-only-the-agents-under-them",
+    "executors/one-build-serving-two-rooms-reads-each-turn-s-room-alone",
+    "executors/the-kit-lists-the-executors-served-and-what-each-declares",
+    "executors/what-the-room-keeps-for-a-channel-reaches-the-next-executor",
 ];
 
 pub(super) fn run(
@@ -50,13 +75,50 @@ pub(super) fn run(
     }))
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Worker {
     id: String,
     hosts: BTreeSet<String>,
     organizations: Option<BTreeSet<String>>,
     started: Option<bool>,
+    builds: Option<BTreeSet<String>>,
+    max_channels: Option<usize>,
+    #[serde(skip)]
+    counts: Arc<std::sync::Mutex<BTreeMap<String, usize>>>,
+}
+
+impl Worker {
+    fn channel(
+        &self,
+        channel: &str,
+        declarations: &[Value],
+        slot: &RunSlot,
+    ) -> Result<Option<WorkerChannel>, RoomKitError> {
+        if self
+            .builds
+            .as_ref()
+            .is_some_and(|allowed| !allowed.contains(channel))
+        {
+            return Ok(None);
+        }
+        let Some(spec) = declarations.iter().find(|spec| spec["id"] == channel) else {
+            return Ok(None);
+        };
+        let run = slot
+            .run()
+            .ok_or_else(|| RoomKitError::Runtime("scenario owner is unavailable".into()))?;
+        WorkerChannel::build(spec, &run, self, channel)
+            .map(Some)
+            .map_err(RoomKitError::Value)
+    }
+
+    fn next_build(&self, channel: &str) -> usize {
+        let mut counts = crate::run::lock(&self.counts);
+        let generation = counts.entry(channel.to_owned()).or_default();
+        *generation += 1;
+        *generation
+    }
 }
 
 struct Workers {
@@ -76,35 +138,16 @@ impl Workers {
     fn build(&self, worker: &Worker) -> Result<TurnExecutor, RoomKitError> {
         let declarations = Arc::clone(&self.channels);
         let observed = self.slot.clone();
+        let serving = worker.clone();
         TurnExecutor::new(
             move |channel| {
-                let observed = observed.clone();
-                let declarations = Arc::clone(&declarations);
-                async move {
-                    let spec = declarations
-                        .iter()
-                        .find(|spec| spec["id"] == channel.as_str() && spec["declared"] == true);
-                    let Some(spec) = spec else {
-                        return Ok(None);
-                    };
-                    let run = observed.run().ok_or_else(|| {
-                        RoomKitError::Runtime("scenario owner is unavailable".into())
-                    })?;
-                    let (built, models) = agents::scripted_agent_of(spec, &run, false)
-                        .map_err(RoomKitError::Value)?;
-                    crate::run::lock(&run.models).extend(models);
-                    let Scripted::Channel(channel) = built else {
-                        return Err(RoomKitError::Value(
-                            "this executor fixture requires a scripted AI channel".into(),
-                        ));
-                    };
-                    Ok(Some(*channel))
-                }
+                std::future::ready(serving.channel(channel.as_str(), &declarations, &observed))
             },
             TurnExecutorOptions {
                 executor_id: Some(worker.id.clone()),
                 hosts: Some(worker.hosts.clone()),
                 organizations: worker.organizations.clone(),
+                max_channels: worker.max_channels,
                 ..TurnExecutorOptions::default()
             },
         )
@@ -179,7 +222,7 @@ async fn exercise(url: &str, scenario: &Value) -> Result<Vec<String>, RoomKitErr
     let problems = crate::harness::run_with(
         scenario,
         workers.slot.clone(),
-        Some(workers.clone()),
+        Some(Arc::<Workers>::clone(&workers)),
         |mut options| {
             options.turn_backend = Some(owner.clone());
             options

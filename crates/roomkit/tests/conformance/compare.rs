@@ -43,6 +43,14 @@ pub(crate) fn compare(run: &Run, scenario: &Value, observed: &Observed) -> Vec<S
     comparison.channel_calls();
     comparison.side_effects();
     comparison.models();
+    for (worker, expected) in scenario["expect"]["executors"]
+        .as_object()
+        .into_iter()
+        .flatten()
+    {
+        let actual = Value::Array(observed.executors.get(worker).cloned().unwrap_or_default());
+        comparison.check(expected, Some(&actual), &format!("executors.{worker}"));
+    }
     comparison.script_executors(&run.skills);
     comparison.sandbox_executors(&run.sandboxes);
     comparison.found

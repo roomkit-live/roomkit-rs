@@ -24,6 +24,15 @@ use crate::run::Run;
 pub(crate) async fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Called, Unreadable> {
     let kit = run.kit();
     match name {
+        "executor.calls" => {
+            let id: String = field(spec, "executor")?;
+            let calls = crate::run::lock(&run.observed)
+                .executors
+                .get(&id)
+                .cloned()
+                .unwrap_or_default();
+            Ok(finish(run, name, Ok(calls), crate::calls::dump))
+        }
         "executor.start" | "executor.close" => {
             let id: String = field(spec, "executor")?;
             let workers = run

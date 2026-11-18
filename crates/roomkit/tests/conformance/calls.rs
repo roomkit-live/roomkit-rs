@@ -529,6 +529,7 @@ async fn lifecycle_call(
             Value::Null
         }),
         "executor.start"
+        | "executor.calls"
         | "executor.close"
         | "kit_executor.close"
         | "kit_executor.executor_id"
@@ -775,39 +776,51 @@ pub(crate) fn register_channel_with_skills(
     let Ok(id) = ChannelId::new(channel["id"].as_str().unwrap_or_default()) else {
         return Ok(Err(named("invalid_argument")));
     };
-    let registered = if channel["declared"] == true {
-        run.kit()
-            .register_channel(roomkit::ChannelDeclaration::new(id))
-    } else if channel["type"] == "host" {
-        run.kit()
-            .register_channel(HostChannel::new(roomkit::HostChannelOptions {
-                channel_id: id,
-            }))
+    let declared = channel["declared"] == true;
+    let registered = if channel["type"] == "host" {
+        register_built(
+            run,
+            declared,
+            HostChannel::new(roomkit::HostChannelOptions { channel_id: id }),
+        )
     } else if channel.get("acp").is_some() {
         let (agent, wire, pipe) =
             crate::acp_agents::scripted_acp_channel(channel, id.clone(), run)?;
         crate::run::lock(&run.acp_channels).insert(id.to_string(), agent.clone());
         crate::run::lock(&run.acp_wires).insert(id.to_string(), wire);
         crate::run::lock(&run.acp_pipes).insert(id.to_string(), pipe);
-        run.kit().register_channel(agent)
+        register_built(run, declared, agent)
     } else if channel.get("model").is_some() {
         let (agent, models) = agents::scripted_agent_with_skills(channel, run, false, skills)?;
         crate::run::lock(&run.host_tool_readers)
             .insert(id.to_string(), crate::extra_tools::reader(&agent));
         crate::run::lock(&run.models).extend(models);
         match agent {
-            agents::Scripted::Channel(agent) => run.kit().register_channel(*agent),
-            agents::Scripted::Agent(agent) => run.kit().register_channel(*agent),
-            agents::Scripted::RoutedChannel(agent) => run.kit().register_channel(*agent),
-            agents::Scripted::RoutedAgent(agent) => run.kit().register_channel(*agent),
+            agents::Scripted::Channel(agent) => register_built(run, declared, *agent),
+            agents::Scripted::Agent(agent) => register_built(run, declared, *agent),
+            agents::Scripted::RoutedChannel(agent) => register_built(run, declared, *agent),
+            agents::Scripted::RoutedAgent(agent) => register_built(run, declared, *agent),
         }
     } else {
-        run.kit()
-            .register_channel(ScriptedChannel::new(channel, run)?)
+        register_built(run, declared, ScriptedChannel::new(channel, run)?)
     };
     Ok(finish(run, "register_channel", registered, |()| {
         Value::Null
     }))
+}
+
+/// Build the scenario's actual channel before registering its advertisement,
+/// so the remote workers share its model and see its declared capabilities.
+fn register_built(
+    run: &Run,
+    declared: bool,
+    channel: impl roomkit::Channel,
+) -> Result<(), RoomKitError> {
+    if declared {
+        run.kit().register_channel(channel.declaration())
+    } else {
+        run.kit().register_channel(channel)
+    }
 }
 
 /// Registers `channel` on `kit`, another process of the setup: a scripted
