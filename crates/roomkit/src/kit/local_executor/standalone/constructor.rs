@@ -25,6 +25,8 @@ pub struct TurnExecutorOptions {
     pub timeouts: TurnTimeouts,
     /// Application error types this standalone worker can reconstruct and report.
     pub error_classes: crate::turns::ErrorClasses,
+    /// The provider that records the worker's turns and hooks.
+    pub telemetry: Option<Arc<dyn crate::telemetry::TelemetryProvider>>,
     /// Build, cache and close channels. Disable for a host-owned registry lookup on every use.
     pub owns_channels: bool,
     /// Maximum idle and running builds to retain. Active work can temporarily exceed the bound.
@@ -39,6 +41,7 @@ impl Default for TurnExecutorOptions {
             executor_id: None,
             timeouts: TurnTimeouts::default(),
             error_classes: crate::turns::ErrorClasses::default(),
+            telemetry: None,
             owns_channels: true,
             max_channels: None,
         }
@@ -139,7 +142,10 @@ impl TurnExecutor<InMemoryStore> {
                 "organizations must be nonempty and contain exact IDs or '*'".into(),
             ));
         }
-        let kit = RoomKit::new(RoomKitOptions::default());
+        let kit = RoomKit::new(RoomKitOptions {
+            telemetry: options.telemetry.map(Into::into),
+            ..RoomKitOptions::default()
+        });
         kit.inner.turns.set_timeouts(options.timeouts.bounded());
         kit.inner.turns.set_error_classes(options.error_classes);
         let id = options

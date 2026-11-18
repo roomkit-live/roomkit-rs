@@ -129,9 +129,16 @@ pub(crate) fn within_turn_trace<F: Future>(
 ) -> impl Future<Output = F::Output> + use<F> {
     let held = CURRENT.try_with(Option::clone).ok().flatten();
     let named = trace.and_then(|trace| Some((trace, trace.get("span_id")?)));
+    let parent = held.as_ref().and_then(Current::span_id);
+    let same_provider = held
+        .as_ref()
+        .zip(telemetry.as_ref())
+        .is_some_and(|(current, worker)| {
+            Arc::ptr_eq(&current.telemetry.provider, &worker.provider)
+        });
     let current = match (named, telemetry) {
         (Some((trace, span_id)), Some(telemetry))
-            if !span_id.is_empty() && get_current_span().as_ref() != Some(span_id) =>
+            if !span_id.is_empty() && (!same_provider || parent.as_ref() != Some(span_id)) =>
         {
             let context = telemetry.provider.extract_context(trace);
             Some(Current {
@@ -141,6 +148,15 @@ pub(crate) fn within_turn_trace<F: Future>(
                 late: None,
             })
         }
+        // Even when the owner traced nothing, generations and hooks on a
+        // standalone worker report to its provider. An inherited span ID is
+        // still a parent, but a different provider cannot use its local context.
+        (_, Some(telemetry)) if !same_provider => Some(Current {
+            telemetry,
+            span_id: parent,
+            context: None,
+            late: None,
+        }),
         _ => held,
     };
     CURRENT.scope(current, work)
