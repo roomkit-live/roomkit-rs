@@ -2,10 +2,14 @@
 
 use super::{Frame, FrameSender};
 use crate::{channel::DynChannel, steering::SteeringDirective};
-use std::{future::Future, pin::Pin, sync::Arc};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::{Arc, OnceLock},
+};
 
 pub(super) struct Steering {
-    channel: Arc<dyn DynChannel>,
+    channel: Arc<OnceLock<Arc<dyn DynChannel>>>,
     turn_id: String,
     sender: Arc<FrameSender>,
     applying: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
@@ -13,7 +17,7 @@ pub(super) struct Steering {
 
 impl Steering {
     pub(super) fn new(
-        channel: Arc<dyn DynChannel>,
+        channel: Arc<OnceLock<Arc<dyn DynChannel>>>,
         turn_id: String,
         sender: Arc<FrameSender>,
     ) -> Self {
@@ -37,6 +41,13 @@ impl Steering {
         let turn_id = self.turn_id.clone();
         let sender = Arc::clone(&self.sender);
         self.applying = Some(Box::pin(async move {
+            let Some(channel) = channel.get() else {
+                drop(sender.send(&Frame::SteerResult {
+                    steer_id,
+                    loops: Some(0),
+                }));
+                return;
+            };
             let loops = channel.steer_turn_async(&directive, &turn_id).await
                 .unwrap_or_else(|error| {
                     tracing::error!(target: "roomkit::turns", turn = %turn_id, error = %error, "the channel's steering failed");

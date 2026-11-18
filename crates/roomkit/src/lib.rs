@@ -238,7 +238,7 @@ pub use self::kit::{
 };
 pub use self::kit::{
     ChannelCallOptions, ChannelRegistration, FrameworkAware, FrameworkAwareChannel, TurnExecutor,
-    framework_aware,
+    TurnExecutorOptions, framework_aware,
 };
 pub use self::kit::{
     CompleteVerificationOptions, RecordFailedAttemptOptions, RequestVerificationOptions,

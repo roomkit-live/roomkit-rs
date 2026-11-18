@@ -1,6 +1,13 @@
 //! Public access to the kit's own turn executor (RFC §10.6.6).
+mod channels;
+mod control;
+pub(crate) use channels::WorkerChannel;
+mod standalone;
+pub use standalone::TurnExecutorOptions;
+
 use std::collections::BTreeSet;
 use std::future::Future;
+use std::sync::Arc;
 
 use roomkit_core::model::{ChannelId, RoomContext};
 
@@ -12,17 +19,19 @@ use crate::{
 };
 
 /// The kit's local executor: its turn hooks and the channels it takes.
-/// Obtain it through [`RoomKit::turn_executor`]; backend construction is private.
+/// Obtain the kit's executor through [`RoomKit::turn_executor`], or construct a worker with [`TurnExecutor::new`].
 /// Like a hook engine, this handle keeps the kit alive; closures should capture
 /// a [`WeakRoomKit`](crate::WeakRoomKit).
 pub struct TurnExecutor<S = InMemoryStore> {
     kit: RoomKit<S>,
+    standalone: Option<Arc<standalone::Standalone>>,
 }
 
 impl<S> Clone for TurnExecutor<S> {
     fn clone(&self) -> Self {
         Self {
             kit: self.kit.clone(),
+            standalone: self.standalone.clone(),
         }
     }
 }
@@ -38,14 +47,20 @@ impl<S> std::fmt::Debug for TurnExecutor<S> {
 impl<S: ConversationStore> RoomKit<S> {
     /// The kit's own turn executor (RFC §10.6.6), Python `turn_executor`.
     pub fn turn_executor(&self) -> TurnExecutor<S> {
-        TurnExecutor { kit: self.clone() }
+        TurnExecutor {
+            kit: self.clone(),
+            standalone: None,
+        }
     }
 }
 
 impl<S: ConversationStore> TurnExecutor<S> {
     /// The id this executor answers with, Python's `executor_id`.
     pub fn executor_id(&self) -> &str {
-        self.kit.inner.turns.executor_id()
+        self.standalone.as_ref().map_or_else(
+            || self.kit.inner.turns.executor_id(),
+            |worker| worker.executor_id(),
+        )
     }
 
     /// The engine on which this executor's hooks are registered.
@@ -109,6 +124,15 @@ impl<S: ConversationStore> TurnExecutor<S> {
     /// under (RFC §10.6.8). The kit and its registered channels remain open.
     pub async fn close(&self) {
         self.kit.inner.turns.executor_lifecycle.close().await;
+        if let Some(worker) = &self.standalone {
+            worker.finish_builds().await;
+            if crate::turns::current_turn_id().is_none() {
+                worker.generations.settled().await;
+            }
+            if let Err(error) = self.kit.close().await {
+                tracing::warn!(%error, "the executor could not close its channels");
+            }
+        }
     }
 
     /// Whether this executor has closed.
@@ -118,7 +142,10 @@ impl<S: ConversationStore> TurnExecutor<S> {
 
     /// Whether it hosts this channel, even after closing.
     pub fn hosts_channel(&self, channel_id: &ChannelId) -> bool {
-        self.kit.inner.channel(channel_id).is_some()
+        self.standalone.as_ref().map_or_else(
+            || self.kit.inner.channel(channel_id).is_some(),
+            |worker| worker.hosts(channel_id),
+        )
     }
 
     /// Whether it declares this channel and has not closed.
@@ -128,18 +155,24 @@ impl<S: ConversationStore> TurnExecutor<S> {
 
     /// An open-ended registry predicate has no finite advertised host list.
     pub fn hosted(&self) -> Option<BTreeSet<String>> {
-        None
+        self.standalone
+            .as_ref()
+            .and_then(|worker| worker.hosts.clone())
     }
 
     /// The kit's executor serves every organization (RFC §10.6.7).
     pub fn organizations(&self) -> BTreeSet<String> {
-        BTreeSet::from(["*".to_owned()])
+        self.standalone.as_ref().map_or_else(
+            || BTreeSet::from(["*".to_owned()]),
+            |worker| worker.organizations(),
+        )
     }
 
     /// Whether it serves this organization; the kit's executor serves all.
     pub fn serves(&self, organization_id: Option<&str>) -> bool {
-        let _ = organization_id;
-        true
+        self.standalone
+            .as_ref()
+            .is_none_or(|worker| worker.serves(organization_id))
     }
 
     /// Whether it takes this channel with every requested hook name.

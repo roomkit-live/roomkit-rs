@@ -14,3 +14,5 @@ mod trace;
 mod verb_depth;
 mod verb_reentry;
 mod window;
+mod worker;
+mod worker_controls;

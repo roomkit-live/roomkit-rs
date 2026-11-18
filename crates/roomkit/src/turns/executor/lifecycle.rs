@@ -39,7 +39,7 @@ impl Lifecycle {
     /// A concurrent close either refuses admission or waits for this guard.
     pub(crate) fn admit(self: &Arc<Self>, turn: Arc<str>) -> Option<Running> {
         let mut state = lock(&self.state);
-        if state.closed {
+        if state.closed || state.running.contains_key(&turn) {
             return None;
         }
         let (cut, cutting) = watch::channel(false);

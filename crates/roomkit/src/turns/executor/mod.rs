@@ -26,13 +26,15 @@ mod inputs;
 mod lifecycle;
 mod link;
 mod record;
+mod remote;
+pub(crate) use remote::{WorkerTurn, factory_error, missing, no_executor, refused};
 mod steering;
 mod work;
 
 use std::future::{Future, pending};
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, OnceLock};
 
 use roomkit_core::rules::chain_depth::response_depth;
 
@@ -80,10 +82,10 @@ pub(super) fn take(
     };
     #[cfg(test)]
     if turns.executor_apart.load(Ordering::SeqCst) {
-        let run = executor.run(controls, carried);
+        let run = executor.run(controls, Incoming::Local(carried));
         return kit.spawn(Box::pin(crate::telemetry::within_no_span(run)));
     }
-    kit.spawn(Box::pin(executor.run(controls, carried)))
+    kit.spawn(Box::pin(executor.run(controls, Incoming::Local(carried))))
 }
 
 /// What one turn's task runs with.
@@ -96,6 +98,19 @@ struct Executor {
     turn: Arc<MemoryTurn>,
     sender: Arc<FrameSender>,
     kit: Arc<dyn TurnKit>,
+}
+
+type Build =
+    crate::channel::BoxFuture<'static, Result<crate::kit::WorkerChannel, super::wire::WireError>>;
+
+enum Incoming {
+    Local(CarriedRequest),
+    Worker(Box<TurnRequest>, Build),
+}
+
+enum Selected {
+    Local(Arc<dyn DynChannel>),
+    Worker(Build),
 }
 
 /// What ended the turn's work early.
@@ -115,7 +130,7 @@ enum Cut {
 
 impl Executor {
     /// Runs the turn to its end, which the owner is told unless lost.
-    async fn run(self, mut controls: PipeReceiver<Control>, carried: CarriedRequest) {
+    async fn run(self, mut controls: PipeReceiver<Control>, incoming: Incoming) {
         if self
             .send(&Frame::Accepted {
                 executor_id: self.id.clone(),
@@ -125,7 +140,7 @@ impl Executor {
             return;
         }
         let panicked = Panicked(Some(Arc::clone(&self.sender)));
-        let Some((request, channel)) = self.ready(carried) else {
+        let Some((mut request, channel)) = self.ready(incoming) else {
             drop(self.send(&Frame::End));
             panicked.disarm();
             return;
@@ -152,14 +167,19 @@ impl Executor {
             response_depth(&request.event),
         );
         let host = host
+            .with_channel_rows(std::mem::take(&mut request.channel_rows))
             .with_strategy_turn(request.strategy_turn)
             .with_publication_scope(&request.event)
             .with_room_hooks(request.room_hooks.clone());
         host.reads_trace_from(Arc::clone(&self.turn.traced));
         let flow = Arc::new(Flow::default());
         let _released = Released(Arc::clone(&link));
+        let built = Arc::new(OnceLock::new());
+        if let Selected::Local(channel) = &channel {
+            drop(built.set(Arc::clone(channel)));
+        }
         let mut steering = Steering::new(
-            Arc::clone(&channel),
+            Arc::clone(&built),
             request.turn_id.clone(),
             Arc::clone(&self.sender),
         );
@@ -171,7 +191,7 @@ impl Executor {
             trace.as_ref(),
             self.ready_work(
                 request,
-                channel,
+                (channel, built),
                 host.clone(),
                 Arc::clone(&flow),
                 Arc::clone(&changes),
@@ -193,7 +213,7 @@ impl Executor {
     fn ready_work(
         &self,
         request: TurnRequest,
-        channel: Arc<dyn DynChannel>,
+        selected: (Selected, Arc<OnceLock<Arc<dyn DynChannel>>>),
         host: TurnHost,
         flow: Arc<Flow>,
         changes: Arc<RecordChanges>,
@@ -204,20 +224,53 @@ impl Executor {
         let rooms = Arc::clone(&self.turns.rooms);
         let (turn, sender) = (Arc::clone(&self.turn), Arc::clone(&self.sender));
         Box::pin(async move {
-            if let Err(error) = rooms.ready(&*channel, &key, stored, stale).await {
+            let (built, stale) = match selected.0 {
+                Selected::Local(channel) => (crate::kit::WorkerChannel::registered(channel), stale),
+                Selected::Worker(build) => match build.await {
+                    Ok(built) => {
+                        let channel = &built.channel;
+                        drop(selected.1.set(Arc::clone(channel)));
+                        let stale = rooms.enter(
+                            channel,
+                            key.clone(),
+                            &request.turn_id,
+                            request.previous_turn.as_ref(),
+                        );
+                        (built, stale)
+                    }
+                    Err(error) => {
+                        drop(sender.send(&Frame::Error { error }));
+                        return;
+                    }
+                },
+            };
+            if let Err(error) = rooms.ready(&*built.channel, &key, stored, stale).await {
                 drop(sender.send(&Frame::Error {
                     error: super::error::turn_failure(&*error),
                 }));
                 return;
             }
-            work(turn, sender, changes, host, flow, request, channel).await;
+            work(
+                turn,
+                sender,
+                changes,
+                host,
+                flow,
+                request,
+                Arc::clone(&built.channel),
+            )
+            .await;
         })
     }
 
     /// The turn's request, parsed anew around its events, and its channel;
     /// `None`, its error sent, when either is missing.
-    fn ready(&self, carried: CarriedRequest) -> Option<(TurnRequest, Arc<dyn DynChannel>)> {
-        let request = match parse(carried) {
+    fn ready(&self, incoming: Incoming) -> Option<(TurnRequest, Selected)> {
+        let (request, build) = match incoming {
+            Incoming::Local(carried) => (parse(carried), None),
+            Incoming::Worker(request, build) => (Ok(*request), Some(build)),
+        };
+        let request = match request {
             Ok(request) => request,
             Err(why) => {
                 let error = one(
@@ -240,6 +293,9 @@ impl Executor {
             }));
             return None;
         }
+        if let Some(build) = build {
+            return Some((request, Selected::Worker(build)));
+        }
         let Some(channel) = self.kit.channel(&request.channel_id) else {
             let error = one(
                 CHANNEL_NOT_REGISTERED,
@@ -248,7 +304,7 @@ impl Executor {
             drop(self.send(&Frame::Error { error }));
             return None;
         };
-        Some((request, channel))
+        Some((request, Selected::Local(channel)))
     }
 
     /// Polls the turn's work beside the owner's control messages and the
@@ -569,7 +625,7 @@ fn lost(failure: &LinkFailure) -> TurnError {
 }
 
 /// The request `carried` brings, its rest parsed anew around its events.
-fn parse(carried: CarriedRequest) -> Result<TurnRequest, String> {
+pub(crate) fn parse(carried: CarriedRequest) -> Result<TurnRequest, String> {
     let rest = validate_rest(&carried.rest)?;
     let ContextRest {
         room,

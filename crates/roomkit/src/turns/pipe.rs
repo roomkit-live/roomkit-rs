@@ -182,6 +182,14 @@ impl<M: Serialize> Pipe<M> {
 }
 
 impl<M> Pipe<M> {
+    /// Queue an already numbered envelope received by the transport. The final
+    /// consumer validates its size, turn identity and sequence when reading.
+    pub(crate) fn deliver_raw(&self, envelope: String) {
+        if self.is_open() {
+            drop(self.queue.send(Packet::Message(envelope)));
+        }
+    }
+
     /// Whether the pipe still carries messages.
     pub(crate) fn is_open(&self) -> bool {
         self.open.load(Ordering::Acquire)
@@ -192,6 +200,16 @@ impl<M> Pipe<M> {
     pub(crate) fn shut(&self) {
         if self.open.swap(false, Ordering::AcqRel) {
             drop(self.queue.send(Packet::Shut));
+        }
+    }
+}
+
+impl<M> PipeReceiver<M> {
+    /// Take an outgoing envelope without renumbering it at the transport boundary.
+    pub(crate) async fn next_raw(&mut self) -> Option<String> {
+        match self.queue.recv().await? {
+            Packet::Message(raw) => Some(raw),
+            Packet::Shut => None,
         }
     }
 }

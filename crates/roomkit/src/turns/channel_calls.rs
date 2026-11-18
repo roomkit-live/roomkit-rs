@@ -95,7 +95,9 @@ impl Turns {
             .rooms
             .ready(&*channel, &key, call.room_state.clone(), stale)
             .await;
-        let answer = self.answer_call(&*channel, &call, ready).await;
+        let answer = self
+            .answer_call(&*channel, &call, ready, &self.executor_id)
+            .await;
         let raw = serde_json::to_string(&answer).map_err(|e| invalid(&e))?;
         self.observers().tell(Carried::ChannelResult, &raw);
         let answer: ChannelResult = serde_json::from_str(&raw).map_err(|e| invalid(&e))?;
@@ -105,11 +107,40 @@ impl Turns {
         Ok(answer)
     }
 
+    pub(crate) fn forget_worker_room(
+        &self,
+        channel_id: &roomkit_core::model::ChannelId,
+        room_id: &roomkit_core::model::RoomId,
+    ) {
+        self.rooms.forget(channel_id, room_id);
+    }
+
+    pub(crate) async fn worker_call(
+        &self,
+        channel: &Arc<dyn DynChannel>,
+        call: &ChannelCall,
+        executor_id: &str,
+    ) -> ChannelResult {
+        let key = (call.channel_id.clone(), call.room_id.clone());
+        let stale = self.rooms.enter(
+            channel,
+            key.clone(),
+            &call.call_id,
+            call.previous_turn.as_ref(),
+        );
+        let ready = self
+            .rooms
+            .ready(&**channel, &key, call.room_state.clone(), stale)
+            .await;
+        self.answer_call(&**channel, call, ready, executor_id).await
+    }
+
     async fn answer_call(
         &self,
         channel: &dyn DynChannel,
         call: &ChannelCall,
         ready: Result<(), ChannelError>,
+        executor_id: &str,
     ) -> ChannelResult {
         let before = ready.and_then(|()| {
             self.call_states
@@ -144,7 +175,7 @@ impl Turns {
             result,
             error,
             room_state,
-            executor_id: Some(self.executor_id.clone()),
+            executor_id: Some(executor_id.to_owned()),
         }
     }
 }

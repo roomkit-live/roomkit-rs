@@ -109,6 +109,7 @@ pub struct TurnHost {
     answer_unscoped: bool,
     shared: Arc<Shared>,
     room_hooks: Arc<[String]>,
+    channel_rows: Arc<[RoomEvent]>,
     /// The room snapshot built when this external tool report fires.
     tool_report_context: Option<Arc<RoomContext>>,
     report_claim: Option<ReportClaim>,
@@ -207,6 +208,27 @@ impl TurnHost {
 
     pub(crate) fn mark_stream_closed(&self) {
         self.shared.stream_cut.store(false, Ordering::Release);
+    }
+
+    pub(crate) fn with_channel_rows(mut self, mut rows: Vec<RoomEvent>) -> Self {
+        rows.retain(|row| {
+            row.room_id == self.shared.room_id
+                && row.source.channel_id == self.shared.channel_id
+                && matches!(
+                    row.r#type,
+                    roomkit_core::model::EventType::ToolCallStart
+                        | roomkit_core::model::EventType::ToolCallEnd
+                        | roomkit_core::model::EventType::InstructionRead
+                )
+        });
+        self.channel_rows = rows.into();
+        self
+    }
+
+    /// This channel's tool and instruction history carried by a distributed owner (§10.6.3).
+    #[doc(hidden)]
+    pub fn channel_rows(&self) -> &[RoomEvent] {
+        &self.channel_rows
     }
 
     pub(crate) fn with_room_hooks(mut self, names: Vec<String>) -> Self {
@@ -1859,6 +1881,7 @@ pub(crate) fn host(
         tool_report_context: None,
         report_claim: None,
         room_hooks: Arc::default(),
+        channel_rows: Arc::default(),
         shared: Arc::new(Shared {
             room_id: context.room.id.clone(),
             channel_id,

@@ -1850,6 +1850,10 @@ impl<P: AiProvider> AiChannel<P> {
         let live = self.admission_toolbox()?;
         let owned = crate::tools::owner::with_owner_tools(&live, turn.as_ref())?;
         let configured = self.turn_configs.resolve(&binding, &context).await?;
+        let context = context::with_channel_rows(
+            context,
+            turn.as_ref().map_or(&[], roomkit::TurnHost::channel_rows),
+        );
         let owned = self.host_toolbox(&owned);
         let configured = configured.as_ref();
         let mut settings = self.turn_settings(&binding, configured)?;

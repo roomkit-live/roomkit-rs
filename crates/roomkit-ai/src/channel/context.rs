@@ -15,6 +15,25 @@ use crate::tools::toolbox::Toolbox;
 use crate::tools::{ToolTurnContextOptions, within_ai_turn};
 use crate::{AiError, ToolPolicy, rows};
 
+/// The AI's private rows restore its tool memory and earlier rounds. They are
+/// presented to neither the channel factory nor the room's conversation memory.
+pub(super) fn with_channel_rows(mut context: RoomContext, rows: &[RoomEvent]) -> RoomContext {
+    if !rows.is_empty() {
+        let mut seen: std::collections::HashSet<_> = context
+            .recent_events
+            .iter()
+            .map(|event| event.id.clone())
+            .collect();
+        context.recent_events.extend(
+            rows.iter()
+                .filter(|row| seen.insert(row.id.clone()))
+                .cloned(),
+        );
+        context.recent_events.sort_by_key(|row| row.index);
+    }
+    context
+}
+
 /// What preparation hands its consumer. The stream already captured its
 /// room and record, but its own live depth starts only when it is polled.
 pub(super) struct PreparedAnswer {

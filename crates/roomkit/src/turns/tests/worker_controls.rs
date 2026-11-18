@@ -1,0 +1,205 @@
+//! The worker, outside a turn, receives the same channel controls as Python.
+
+use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+
+use roomkit_core::model::{
+    ChannelBinding, ChannelCategory, ChannelId, ChannelOutput, ChannelType, InboundMessage,
+    Metadata, RoomContext, RoomEvent, RoomId,
+};
+use serde_json::{Value, json};
+
+use crate::turns::wire::ChannelControlEnvelope;
+use crate::{Channel, ChannelError, TurnExecutor, TurnExecutorOptions};
+
+type Events = Arc<Mutex<Vec<(usize, &'static str)>>>;
+
+struct Observed {
+    instance: usize,
+    events: Events,
+    state: Mutex<Metadata>,
+}
+
+impl Observed {
+    fn note(&self, action: &'static str) {
+        self.events.lock().unwrap().push((self.instance, action));
+    }
+}
+
+impl Channel for Observed {
+    fn channel_id(&self) -> ChannelId {
+        super::support::channel("ai")
+    }
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::AI
+    }
+    fn category(&self) -> ChannelCategory {
+        ChannelCategory::Intelligence
+    }
+    async fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> Result<RoomEvent, ChannelError> {
+        Ok(crate::default_inbound_event(self, &message, &context))
+    }
+    async fn deliver(
+        &self,
+        _: RoomEvent,
+        _: ChannelBinding,
+        _: RoomContext,
+    ) -> Result<ChannelOutput, ChannelError> {
+        Ok(ChannelOutput::empty())
+    }
+    async fn on_room_attached(&self, _: RoomId, _: ChannelBinding) -> Result<(), ChannelError> {
+        self.note("attach");
+        Ok(())
+    }
+    async fn on_room_detached(&self, _: RoomId) -> Result<(), ChannelError> {
+        self.note("detach");
+        Ok(())
+    }
+    async fn on_room_event(&self, _: RoomId, _: RoomEvent) -> Result<(), ChannelError> {
+        self.note("event");
+        Ok(())
+    }
+    fn room_state(&self, _: &RoomId) -> Result<Metadata, ChannelError> {
+        Ok(self.state.lock().unwrap().clone())
+    }
+    fn restore_room_state(&self, _: &RoomId, state: Metadata) -> Result<(), ChannelError> {
+        *self.state.lock().unwrap() = state;
+        Ok(())
+    }
+    async fn channel_call(
+        &self,
+        _: RoomId,
+        verb: String,
+        arguments: Metadata,
+    ) -> Result<Value, ChannelError> {
+        self.note("call");
+        let mut state = self.state.lock().unwrap();
+        let before = state["cursor"].clone();
+        state.insert("cursor".into(), json!(17));
+        if verb == "fail" {
+            return Err(crate::RoomKitError::Value("failed verb".into()).into());
+        }
+        Ok(json!([before, arguments["a"]]))
+    }
+    async fn close(&self) {
+        self.note("close");
+    }
+}
+
+fn envelope(kind: &str, update: impl FnOnce(&mut Value)) -> ChannelControlEnvelope {
+    let mut value = include_str!("../../../tests/fixtures/turns/python-rpc.jsonl")
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .find(|row| {
+            row["direction"] == "channel_control" && row["message"]["message"]["type"] == kind
+        })
+        .unwrap()["message"]
+        .take();
+    update(&mut value["message"]);
+    serde_json::from_value(value).unwrap()
+}
+
+#[tokio::test]
+async fn genuine_controls_prepare_call_restore_and_release_the_built_channel() {
+    let builds = Arc::new(AtomicUsize::new(0));
+    let events = Events::default();
+    let executor = TurnExecutor::new(
+        {
+            let builds = Arc::clone(&builds);
+            let events = Arc::clone(&events);
+            move |_| {
+                std::future::ready(Ok(Some(Observed {
+                    instance: builds.fetch_add(1, Ordering::SeqCst),
+                    events: Arc::clone(&events),
+                    state: Mutex::default(),
+                })))
+            }
+        },
+        TurnExecutorOptions {
+            executor_id: Some("worker".into()),
+            organizations: Some(BTreeSet::from(["org".into()])),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    for kind in ["room_attached", "room_detached"] {
+        assert!(
+            executor
+                .control(envelope(kind, |_| {}))
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+    let refused = executor
+        .control(envelope("channel_call", |m| {
+            m["organization_id"] = json!("foreign")
+        }))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(refused.error.unwrap().attributes["reason"], "no_executor");
+    assert_eq!(builds.load(Ordering::SeqCst), 0);
+    executor
+        .control(envelope("committed_event", |m| m["room_hooks"] = json!([])))
+        .await
+        .unwrap();
+    executor
+        .control(envelope("room_attached", |_| {}))
+        .await
+        .unwrap();
+    let call = executor
+        .control(envelope("channel_call", |m| {
+            m["previous_turn"] = Value::Null
+        }))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(call.result, json!([3, 1]));
+    assert!(call.error.is_none());
+    assert_eq!(call.room_state.unwrap()["cursor"], 17);
+    assert_eq!(call.executor_id.as_deref(), Some("worker"));
+    let failed = executor
+        .control(envelope("channel_call", |m| {
+            m["verb"] = json!("fail");
+            m["previous_turn"] = json!({"turn_id":m["call_id"],"executor_id":"worker"});
+        }))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(failed.error.unwrap().message, "failed verb");
+    assert_eq!(failed.room_state.unwrap()["cursor"], 17);
+    executor
+        .control(envelope("room_detached", |_| {}))
+        .await
+        .unwrap();
+    executor
+        .control(envelope("channel_released", |_| {}))
+        .await
+        .unwrap();
+    executor
+        .control(envelope("committed_event", |m| m["room_hooks"] = json!([])))
+        .await
+        .unwrap();
+    executor.close().await;
+    assert_eq!(builds.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        *events.lock().unwrap(),
+        [
+            (0, "event"),
+            (0, "attach"),
+            (0, "call"),
+            (0, "call"),
+            (0, "detach"),
+            (0, "close"),
+            (1, "event"),
+            (1, "close")
+        ]
+    );
+}

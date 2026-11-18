@@ -52,7 +52,7 @@ pub(crate) use detach_state::{DetachTicket, PendingDetaches};
 mod codec;
 pub(crate) mod context;
 mod error;
-mod executor;
+pub(crate) mod executor;
 mod memory;
 mod observe;
 mod owner;
@@ -61,7 +61,7 @@ mod pipe;
 mod pulls;
 mod records;
 mod rooms;
-pub(crate) use channel_calls::ChannelCall;
+pub(crate) use channel_calls::{ChannelCall, ChannelResult};
 pub(crate) use error::rebuild_kit_error;
 pub(crate) use rooms::{state_key, stored_state};
 pub(crate) mod served;
@@ -86,7 +86,7 @@ pub(crate) use self::error::{
     CHANNEL_ERROR, RemoteError, TURN_LINK_ERROR, cause_records, record_of, variant_name,
 };
 pub(crate) use self::error::{TurnError, TurnFailure, to_record};
-pub(crate) use self::executor::{ExecutorInputs, HostLink, InputSettler};
+pub(crate) use self::executor::{ExecutorInputs, HostLink, InputSettler, WorkerTurn};
 use self::memory::Request;
 pub(crate) use self::memory::{CarriedRequest, MemoryTurn};
 use self::observe::Observers;
@@ -598,7 +598,7 @@ impl Turns {
 /// the executor to `channel`, the executor's (`None`: none registered), as
 /// the Python implementation's `ExecutorRooms.apply` and `_hand_event`:
 /// what the channel raises is logged, never returned (RFC §10.6.3).
-async fn apply(channel: Option<Arc<dyn DynChannel>>, message: ChannelControl) {
+pub(crate) async fn apply(channel: Option<Arc<dyn DynChannel>>, message: ChannelControl) {
     let Some(channel) = channel else {
         return;
     };

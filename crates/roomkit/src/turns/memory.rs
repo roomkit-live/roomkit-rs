@@ -59,6 +59,16 @@ impl MemoryTurn {
         controls: Pipe<Control>,
         timeouts: TurnTimeouts,
     ) -> Self {
+        Self::with_context(turn_id, frames, controls, timeouts, TurnContext::current())
+    }
+
+    pub(super) fn with_context(
+        turn_id: Arc<str>,
+        frames: Pipe<Frame>,
+        controls: Pipe<Control>,
+        timeouts: TurnTimeouts,
+        context: TurnContext,
+    ) -> Self {
         Self {
             turn_id,
             frames,
@@ -66,7 +76,7 @@ impl MemoryTurn {
             timeouts,
             traced: Arc::default(),
             contexts: Mutex::new(Contexts {
-                turn: TurnContext::current(),
+                turn: context,
                 stream: None,
             }),
         }
