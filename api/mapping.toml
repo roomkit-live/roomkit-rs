@@ -49,6 +49,7 @@ roomkit = ["roomkit"]
 "roomkit::testing" = ["roomkit.testing"]
 "roomkit::tools" = ["roomkit.tools"]
 "roomkit::turns" = ["roomkit.turns", "roomkit"]
+"roomkit::turns::wire" = ["roomkit.turns", "roomkit", "roomkit.turns.wire"]
 roomkit_ai = ["roomkit.providers.ai", "roomkit", "roomkit.tools", "roomkit.skills", "roomkit.skills.mcp", "roomkit.speaking", "roomkit.classifiers"]
 "roomkit_ai::memory" = ["roomkit.memory", "roomkit"]
 "roomkit_ai::knowledge" = ["roomkit.knowledge"]
@@ -1040,12 +1041,6 @@ params = ["role"]
 approved = "2026-11-16"
 reason = "language: explicit Option<&str>, None for Python's default, with a fallible Cow preserving unchanged identity or an owned resolved policy (RMK-1709)"
 
-[[missing]]
-python = "roomkit.TurnHost"
-members = ["room_vision"]
-scope = "media"
-reason = "not in 0.x: vision"
-
 [[exception]]
 python = "roomkit.ResponseMetadata.__init__"
 params = ["initial"]
@@ -1544,36 +1539,6 @@ reason = "Ordered mutable mapping handle with atomic insert/remove, owned reads 
 rust = "roomkit_ai::speaking::Speakers"
 approved = "2026-11-17"
 reason = "Ordered mutable mapping handle with atomic insert/remove, owned reads and explicit snapshots; Clone preserves aliases (approved speaking forms)."
-
-[[exception]]
-rust = "roomkit_ai::classifiers::MockClassifierOptions"
-approved = "2026-11-17"
-reason = "Module re-export of the keyword options also checked at roomkit_ai root; identical fields and defaults, not a separate constructor."
-
-[[exception]]
-rust = "roomkit_ai::speaking::ClassifierSpeakPolicyOptions"
-approved = "2026-11-17"
-reason = "Module re-export of the keyword options also checked at roomkit_ai root; identical fields and defaults, not a separate constructor."
-
-[[exception]]
-rust = "roomkit_ai::speaking::LlmThinkerOptions"
-approved = "2026-11-17"
-reason = "Module re-export of the keyword options also checked at roomkit_ai root; identical fields and defaults, not a separate constructor."
-
-[[exception]]
-rust = "roomkit_ai::speaking::MockSpeakPolicyOptions"
-approved = "2026-11-17"
-reason = "Module re-export of the keyword options also checked at roomkit_ai root; identical fields and defaults, not a separate constructor."
-
-[[exception]]
-rust = "roomkit_ai::speaking::MockThinkerOptions"
-approved = "2026-11-17"
-reason = "Module re-export of the keyword options also checked at roomkit_ai root; identical fields and defaults, not a separate constructor."
-
-[[exception]]
-rust = "roomkit_ai::speaking::SpeakDecisionOptions"
-approved = "2026-11-17"
-reason = "Module re-export of the keyword options also checked at roomkit_ai root; identical fields and defaults, not a separate constructor."
 
 [[exception]]
 rust = "roomkit_ai::classifiers::ScriptedAnswer"

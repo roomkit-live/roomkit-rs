@@ -37,6 +37,31 @@ def _names(members: list[dict]) -> list[str]:
     return [member["name"] for member in members]
 
 
+class ExplicitStructTag(unittest.TestCase):
+    def test_a_reexport_identifies_its_source_and_reads_only_its_own_literal_tag(self) -> None:
+        body = '<span class="sub-heading"><a class="src" href="../../src/kit/wire.rs.html#3-4">Source</a>'
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            page = root / "src/kit/wire.rs.html"
+            page.parent.mkdir(parents=True)
+            page.write_text(
+                '<a href=#1 id=1 data-nosnippet>1</a>#[derive(Serialize)]\n'
+                '<a href=#2 id=2 data-nosnippet>2</a>#[serde(rename = "notice", tag = "type")]\n'
+                '<a href=#3 id=3 data-nosnippet>3</a><span class="kw">pub struct </span>Notice {\n'
+                '<a href=#4 id=4 data-nosnippet>4</a>}\n'
+                '<a href=#5 id=5 data-nosnippet>5</a>pub struct Other;\n'
+            )
+            alias = surface._struct_source(root, "kit/model/struct.Notice.html", body, "Notice")
+            source = "src/kit/wire.rs.html#3-4"
+            self.assertEqual(alias, {"source": source, "tag": {"field": "type", "value": "notice"}})
+            original = surface._struct_source(root, "kit/struct.Notice.html", body.replace("../../", "../"), "Notice")
+            self.assertEqual(alias, original)
+            other = surface._struct_source(root, "kit/model/struct.Other.html", body.replace("#3-4", "#5"), "Other")
+            self.assertNotIn("tag", other)
+            phantom = surface._struct_source(root, "kit/model/struct.Other.html", body, "Other")
+            self.assertNotIn("tag", phantom)
+
+
 class ReadsTheFixtureCrate(unittest.TestCase):
     def setUp(self) -> None:
         self.items = _by_path(surface.read_crate(FIXTURES, "fixture"))
@@ -153,6 +178,7 @@ class FailsClosed(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.doc = Path(self._tmp.name)
         shutil.copytree(FIXTURES / "fixture", self.doc / "fixture")
+        shutil.copytree(FIXTURES / "src", self.doc / "src")
 
     def tearDown(self) -> None:
         self._tmp.cleanup()

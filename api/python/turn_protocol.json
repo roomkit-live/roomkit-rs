@@ -1,0 +1,111 @@
+{
+  "attributes": {
+    "roomkit.ExecutorLink": [
+      "request"
+    ],
+    "roomkit.RedisTurnBackend": [
+      "node_id",
+      "timeouts"
+    ],
+    "roomkit.RoomOwner": [
+      "executor"
+    ],
+    "roomkit.TurnBackend": [
+      "timeouts"
+    ],
+    "roomkit.TurnLink": [
+      "request"
+    ]
+  },
+  "commit": "73d16bc6c61195450a6cb36c7903a713469fb994",
+  "protocol_records": {
+    "roomkit.turns.wire.CallContext": {
+      "__init__": [
+        "def",
+        "*",
+        "tool_call_id",
+        "room_id",
+        "channel_id",
+        "chain_depth=0",
+        "actor_id=None",
+        "allowed_names=None",
+        "requester=None",
+        "response_metadata=None"
+      ]
+    },
+    "roomkit.turns.wire.ChannelControlEnvelope": {
+      "__init__": [
+        "def",
+        "*",
+        "message"
+      ]
+    },
+    "roomkit.turns.wire.ErrorRecord": {
+      "__init__": [
+        "def",
+        "*",
+        "kind",
+        "message",
+        "args=<factory>",
+        "attributes=<factory>",
+        "causes=<factory>",
+        "traceback=None",
+        "bases=<factory>"
+      ]
+    },
+    "roomkit.turns.wire.HostResult": {
+      "__init__": [
+        "def",
+        "*",
+        "type='host_result'",
+        "call_id",
+        "result=None",
+        "error=None",
+        "record_changes=None"
+      ]
+    },
+    "roomkit.turns.wire.InputRequest": {
+      "__init__": [
+        "def",
+        "*",
+        "type='input_request'",
+        "request_id",
+        "tool_name",
+        "arguments",
+        "room_id=None",
+        "channel_id=None",
+        "tool_call_id=None",
+        "actor_id=None",
+        "created_at=None"
+      ]
+    },
+    "roomkit.turns.wire.OwnerMessageEnvelope": {
+      "__init__": [
+        "def",
+        "*",
+        "message"
+      ]
+    },
+    "roomkit.turns.wire.RecordChanges": {
+      "__init__": [
+        "def",
+        "*",
+        "written=<factory>",
+        "removed=<factory>"
+      ]
+    },
+    "roomkit.turns.wire.WireOutput": {
+      "__init__": [
+        "def",
+        "*",
+        "responded=False",
+        "response_events=<factory>",
+        "response_metadata=<factory>",
+        "tasks=<factory>",
+        "observations=<factory>",
+        "metadata_updates=<factory>",
+        "error=None"
+      ]
+    }
+  }
+}

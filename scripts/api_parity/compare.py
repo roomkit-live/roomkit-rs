@@ -436,11 +436,14 @@ class Comparison:
                 self._find("rust", f"{cls.path}::{name}", "no Python parameter", cls.path, cls.python)
 
     def _union_tag(self, path: str, param) -> bool:
-        """Python's `type='text'` of a content: the tag of the tagged union
+        """A fixed serde struct tag, or Python's `type='text'` in the tagged union
         the Rust type is a variant of (`EventContent::Text(TextContent)`),
         no field or parameter of its own. The enum stands for a Python
         union, a name the snapshot exports and describes as no class, and
         the tag is the variant's `snake_case` name."""
+        tag = self.surface.items.get(path, {}).get("tag")
+        if tag is not None:
+            return param.name == tag["field"] and param.default == repr(tag["value"])
         if param.name != "type" or not (param.default or "").startswith("'"):
             return False
         name = path.rpartition("::")[2]
@@ -462,7 +465,7 @@ class Comparison:
         """A model Rust builds by struct literal alone cannot take Python's
         defaults: `new(<required fields>)` sets them, or `Default` when
         Python requires nothing (convention 4)."""
-        params = python_signature(init)
+        params = [param for param in python_signature(init) if not self._union_tag(cls.path, param)]
         defaulted = [param.name for param in params if not param.required]
         required = [param.name for param in params if param.required]
         if not defaulted or (default and not required):

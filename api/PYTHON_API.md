@@ -606,9 +606,10 @@ The following application contracts remain open for text API parity.
 | `TurnClient` | Standalone application construction of the owner client remains open. |
 | `TurnExecutor.wire`, `use_wiring`, `wiring` | The SDK wires the channels it registers. Inspection and replacement of that environment by the application remain open. |
 
-The Python snapshot lists methods and properties. It omits instance attributes
-such as `link.request` and `RedisTurnBackend.node_id`, which are accessors in
-Rust. `ChannelCall::new` and `RoomCall::new` generate a fresh correlation ID. Applications can set an explicit ID. Reading either call from JSON uses the same defaults.
+The signature snapshot lists methods and properties. The parity check also
+reads turn attributes such as `link.request` and `RedisTurnBackend.node_id`,
+and the constructor fields of wire records used by public links, from the
+same pinned Python source. Rust exposes the two attributes as accessors. `ChannelCall::new` and `RoomCall::new` generate a fresh correlation ID. Applications can set an explicit ID. Reading either call from JSON uses the same defaults.
 
 The Python worker constructor also takes `media_resolver` and `attached_media`.
 These belong to the media API.

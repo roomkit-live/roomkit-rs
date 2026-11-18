@@ -8,7 +8,7 @@ from pathlib import Path
 
 from api_parity import ParityError
 
-SNAPSHOT = ("public_api_names.json", "public_api_signatures.json")
+SNAPSHOT = ("public_api_names.json", "public_api_signatures.json", "turn_protocol.json")
 
 
 def spec_hash(spec: object) -> str:
@@ -19,9 +19,7 @@ def spec_hash(spec: object) -> str:
 
 
 def fingerprint(directory: Path) -> str:
-    """The copies' fingerprint, as `make api-sync` writes it: the sha256 of
-    what `sha256sum public_api_names.json public_api_signatures.json`
-    prints."""
+    """Hash the snapshot files in the same order as `make api-sync`."""
     listing = "".join(
         f"{hashlib.sha256((directory / name).read_bytes()).hexdigest()}  {name}\n" for name in SNAPSHOT
     )
@@ -172,6 +170,7 @@ def load_python(directory: Path) -> Python:
         actual = fingerprint(directory)
         exports = json.loads((directory / "public_api_names.json").read_text(encoding="utf-8"))
         signatures = json.loads((directory / "public_api_signatures.json").read_text(encoding="utf-8"))
+        protocol = json.loads((directory / "turn_protocol.json").read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         raise ParityError(f"{directory}: the pinned snapshot cannot be read: {error}") from error
     if actual != expected:
@@ -179,6 +178,13 @@ def load_python(directory: Path) -> Python:
             f"{directory}: the copies' fingerprint is {actual}, SNAPSHOT_SHA256 holds {expected}: "
             "the copies are never edited, run make api-sync"
         )
+    if protocol.get("commit") != commit:
+        raise ParityError(f"{directory}: turn protocol does not belong to roomkit {commit}")
+    for owner, names in protocol["attributes"].items():
+        for name in names:
+            if owner in signatures:
+                signatures[owner].setdefault(name, ["property"])
+    signatures.update(protocol["protocol_records"])
     return Python(signatures, exports, commit)
 
 

@@ -29,8 +29,10 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import posixpath
 import re
 import sys
+from functools import lru_cache
 from pathlib import Path
 from typing import TextIO
 
@@ -405,6 +407,53 @@ def _impls(sections: dict[str, str], where: str) -> list[str]:
     return found
 
 
+@lru_cache(maxsize=256)
+def _source_lines(page: Path) -> dict[int, str]:
+    """The numbered lines in a rustdoc source page, without syntax highlighting."""
+    try:
+        source = page.read_text(encoding="utf-8")
+    except OSError as error:
+        raise SurfaceError(f"{page}: cannot read the source page ({error.strerror})") from error
+    return {
+        int(number): html.unescape(_TAG.sub("", line))
+        for number, line in re.findall(r'<a href=#(\d+) id=\d+ data-nosnippet>\d+</a>([^\n]*)', source)
+    }
+
+
+def _struct_source(doc: Path, where: str, body: str, name: str) -> dict:
+    """Read the definition identified by the struct heading, even on a re-export."""
+    heading = body.partition('<pre class="rust item-decl">')[0]
+    link = re.search(r'<a class="src" href="([^"#]+)#(\d+)(-\d+)?"', heading)
+    if link is None:
+        return {}
+    path, first, rest = link.groups()
+    source = posixpath.normpath(posixpath.join(posixpath.dirname(where), path))
+    if not source.startswith("src/"):
+        return {}
+    facts = {"source": f"{source}#{first}{rest or ''}"}
+    lines = _source_lines(doc / source)
+    line = int(first)
+    if not re.search(rf"\bstruct\s+{re.escape(name)}\b", lines.get(line, "")):
+        return facts
+    # Rustdoc strips serde attributes from the public declaration. A simple
+    # explicit struct tag is actionable only on this exact struct's attributes.
+    for previous in range(line - 1, 0, -1):
+        attribute = lines.get(previous, "").strip()
+        if not attribute.startswith("#["):
+            break
+        # Only ordinary two-field literals are recognized. Conversion hooks,
+        # conditional attributes, and one-way renames need their own evidence.
+        keys = re.fullmatch(
+            r'#\[serde\(\s*(tag|rename)\s*=\s*"([\w]+)"\s*,\s*(tag|rename)\s*=\s*"([\w]+)"\s*,?\s*\)\]',
+            attribute,
+        )
+        if keys and keys[1] != keys[3]:
+            values = {keys[1]: keys[2], keys[3]: keys[4]}
+            facts["tag"] = {"field": values["tag"], "value": values["rename"]}
+            break
+    return facts
+
+
 def read_item(doc: Path, crate: str, kind: str, name: str, href: str) -> dict:
     where = f"{crate}/{href}"
     body = _main_content(_page(doc, crate, href), where)
@@ -427,6 +476,7 @@ def read_item(doc: Path, crate: str, kind: str, name: str, href: str) -> dict:
     item.update(methods=methods, constants=constants, impls=_impls(sections, where))
     if kind == "struct":
         item["fields"] = _fields(sections, decl, where)
+        item.update(_struct_source(doc, where, body, name.rpartition("::")[2]))
     elif kind == "enum":
         item["variants"] = _variants(sections, decl, where)
     else:

@@ -235,7 +235,8 @@ turns-rpc-fixture:
 # origin/main does not hold yet, for a copy synced again before it is pushed.
 API_PYTHON := api/python
 API_REPORT := target/api-parity
-API_SNAPSHOT := public_api_names.json public_api_signatures.json
+API_COPIES := public_api_names.json public_api_signatures.json
+API_SNAPSHOT := $(API_COPIES) turn_protocol.json
 ROOMKIT_REF ?= origin/main
 # The first roomkit commit whose snapshot is the exact public surface
 # (RMK-1010): an older one leaves out what was added without breaking.
@@ -257,10 +258,11 @@ api-sync:
 		exit 1; \
 	fi && \
 	mkdir -p "$$API_PYTHON" && \
-	for file in $(API_SNAPSHOT); do \
+	for file in $(API_COPIES); do \
 		git -C "$$ROOMKIT_DIR" show "$$commit:tests/$$file" > "$$API_PYTHON/$$file.new" || \
 			{ rm -f "$$API_PYTHON"/*.new; exit 1; }; \
 	done && \
+	$(PYTHON) scripts/api_parity/turn_source.py "$$ROOMKIT_DIR" "$$commit" > "$$API_PYTHON/turn_protocol.json.new" || { rm -f "$$API_PYTHON"/*.new; exit 1; }; \
 	for file in $(API_SNAPSHOT); do mv "$$API_PYTHON/$$file.new" "$$API_PYTHON/$$file"; done && \
 	echo "$$commit" > "$$API_PYTHON/ROOMKIT_COMMIT" && \
 	(cd "$$API_PYTHON" && sha256sum $(API_SNAPSHOT) | sha256sum | cut -c1-64) > "$$API_PYTHON/SNAPSHOT_SHA256" && \
@@ -290,12 +292,13 @@ api-check-pin:
 		echo "api-check-pin: roomkit $$commit is not on origin/main: push it, fetch, and run make api-sync"; \
 		exit 1; \
 	fi && \
-	for file in $(API_SNAPSHOT); do \
+	for file in $(API_COPIES); do \
 		if ! git -C "$$ROOMKIT_DIR" show "$$commit:tests/$$file" | cmp -s - "$$API_PYTHON/$$file"; then \
 			echo "api-check-pin: $$API_PYTHON/$$file is not roomkit $$commit's tests/$$file: the copies are never edited, run make api-sync"; \
 			exit 1; \
 		fi; \
-	done
+	done && \
+	$(PYTHON) scripts/api_parity/turn_source.py "$$ROOMKIT_DIR" "$$commit" | cmp - "$$API_PYTHON/turn_protocol.json"
 
 # The model catalogues roomkit-openai embeds (HITL e7768b18): the
 # Python implementation's `available_models()` of `OpenAIAIProvider` and of

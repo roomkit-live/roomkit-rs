@@ -1827,3 +1827,35 @@ fn local_presence_defaults() {
             .is_none()
     );
 }
+
+#[test]
+fn turn_transport_option_defaults() {
+    let kit = RoomKitOptions::<InMemoryStore>::default();
+    // roomkit.RoomKit.__init__(turn_backend) = None
+    assert!(kit.turn_backend.is_none());
+    let worker = roomkit::TurnExecutorOptions::default();
+    // roomkit.TurnExecutor.__init__(executor_id) = None
+    assert!(worker.executor_id.is_none());
+    // roomkit.TurnExecutor.__init__(hosts) = None
+    assert!(worker.hosts.is_none());
+    // roomkit.TurnExecutor.__init__(organizations) = None
+    assert!(worker.organizations.is_none());
+    // roomkit.TurnExecutor.__init__(max_channels) = None
+    assert!(worker.max_channels.is_none());
+    // roomkit.TurnExecutor.__init__(owns_channels) = True
+    assert!(worker.owns_channels);
+    // roomkit.TurnExecutor.__init__(timeouts) = None, resolving to TurnTimeouts()
+    assert_eq!(worker.timeouts, roomkit::TurnTimeouts::default());
+}
+
+#[cfg(feature = "redis")]
+#[test]
+fn redis_turn_transport_option_defaults() {
+    let options = roomkit::RedisTurnBackendOptions::default();
+    // roomkit.RedisTurnBackend.__init__(client) = None
+    assert!(options.client.is_none());
+    // roomkit.RedisTurnBackend.__init__(key_prefix) = 'roomkit:turns'
+    assert_eq!(options.key_prefix, "roomkit:turns");
+    // roomkit.RedisTurnBackend.__init__(timeouts) = None, resolving to TurnTimeouts()
+    assert_eq!(options.timeouts, roomkit::TurnTimeouts::default());
+}

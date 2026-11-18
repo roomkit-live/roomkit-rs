@@ -63,7 +63,12 @@ class PinTargets(unittest.TestCase):
         tests.mkdir(exist_ok=True)
         (tests / "public_api_names.json").write_text(json.dumps({"roomkit": [f"Name{version}"]}), encoding="utf-8")
         (tests / "public_api_signatures.json").write_text(json.dumps({f"roomkit.Name{version}": {}}), encoding="utf-8")
-        self._git("add", "tests")
+        turns = self.roomkit / "src/roomkit/turns"
+        turns.mkdir(parents=True, exist_ok=True)
+        for module in ("base", "redis", "wire"):
+            (turns / f"{module}.py").write_text("", encoding="utf-8")
+        (turns / "base.py").write_text(f"class TurnLink:\n    request{version}: TurnRequest\n", encoding="utf-8")
+        self._git("add", "tests", "src")
         self._git("commit", "-q", "-m", message)
         return self._git("rev-parse", "HEAD")
 
@@ -110,6 +115,16 @@ class PinTargets(unittest.TestCase):
         done = self._make("api-check-pin")
         self.assertNotEqual(done.returncode, 0, self._out(done))
         self.assertIn("public_api_names.json", self._out(done))
+
+    def test_check_pin_refuses_protocol_facts_taken_from_another_commit(self) -> None:
+        self.assertEqual(self._make("api-sync", ROOMKIT_REF=self.head).returncode, 0)
+        file = self.api / "turn_protocol.json"
+        facts = json.loads(file.read_text())
+        self.assertEqual(facts["attributes"]["roomkit.TurnLink"], ["request3"])
+        facts["attributes"]["roomkit.TurnLink"] = ["request4"]
+        file.write_text(json.dumps(facts))
+        (self.api / "SNAPSHOT_SHA256").write_text(parity.fingerprint(self.api) + "\n")
+        self.assertNotEqual(self._make("api-check-pin").returncode, 0)
 
     def test_check_pin_without_a_checkout_checks_the_fingerprint_alone(self) -> None:
         self.assertEqual(self._make("api-sync", ROOMKIT_REF=self.head).returncode, 0)

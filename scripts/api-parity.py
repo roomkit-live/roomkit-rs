@@ -63,6 +63,10 @@ The rules, which apply with no entry:
   `Literal` of the field it types (`HookAction`, `HookResult.action`):
   the field must exist, and the variants' `snake_case` names are the
   Literal's values the rule lists, read from the Python source;
+- a serde record's explicit literal tag is read from the struct definition linked
+  by rustdoc. Its Python parameter stands for that tag only when both the name
+  and value agree. Re-exports of an options struct are recognized by their
+  defining source span, so an unrelated type with the same name still differs;
 - a content's `type='text'` is the tag of the tagged union its Rust type
   is a variant of (`EventContent::Text(TextContent)`), no field, when that
   enum stands for a Python union, a name the snapshot exports and
@@ -84,6 +88,11 @@ The rules, which apply with no entry:
 - a rule naming a Rust item, variant or member that is gone, or what no
   comparison reads, is a finding (`listed in [rules] ...`) no entry covers,
   a whole item's included.
+
+The pinned Python turn protocol supplements the signature snapshot with class
+and instance attributes and the fields of plain wire records referenced by
+public links. The records remain in their original module. Both files used by
+Python's public API tests are kept verbatim.
 
 Known limits: an error enum with no Python base (`StoreError`) and no
 family listed has its variants read by no rule; a `Literal`'s values and a

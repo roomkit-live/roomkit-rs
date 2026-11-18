@@ -181,6 +181,26 @@ class Members(unittest.TestCase):
         self.assertEqual(found(report), [("rust", "roomkit::CommitEventOptions")])
         self.assertEqual(report.items["roomkit::store::CommitEventOptions"].status, "options")
 
+    def test_an_options_reexport_is_recognized_only_for_the_same_definition(self) -> None:
+        one = struct("roomkit::WorkerOptions", [("limit", "u32")])
+        alias = {**one, "path":"roomkit::model::WorkerOptions", "source":"src/kit/options.rs#11-15"}
+        homonym = {**one, "path":"roomkit::testing::WorkerOptions","source":"src/kit/other.rs#11-15"}
+        one["source"] = alias["source"]
+        worker = struct("roomkit::Worker", methods=["pub fn new(options: WorkerOptions) -> Self"])
+        worker["methods"][0]["links"] = {"WorkerOptions": one["path"]}
+        report = run([one, alias, homonym, worker], {"roomkit.Worker":{"__init__":["def","limit=2"]}})
+        self.assertEqual(found(report), [("rust", homonym["path"])])
+
+    def test_an_explicit_serde_tag_must_have_the_same_name_and_literal_default(self) -> None:
+        model = struct("roomkit::Notice", fields=[("number", "u32")])
+        model["tag"] = {"field": "type", "value": "notice"}
+        def results(name, value):
+            report = run([model], {"roomkit.Notice":{"__init__":["def","*",f"{name}='{value}'","number"]}})
+            return found(report)
+        self.assertEqual(results("type","notice"), [])
+        for name,value in [("type","other"),("kind","notice")]:
+            self.assertIn(("python", f"roomkit.Notice.__init__({name})"), results(name,value))
+
     def test_an_options_struct_s_own_members_have_no_python_counterpart(self) -> None:
         report = run(
             [
@@ -1322,6 +1342,7 @@ class ThePin(unittest.TestCase):
         (self.dir / "public_api_signatures.json").write_text(json.dumps({"roomkit.RoomKit": {}}), encoding="utf-8")
         (self.dir / "public_api_names.json").write_text(json.dumps({"roomkit": ["RoomKit"]}), encoding="utf-8")
         (self.dir / "ROOMKIT_COMMIT").write_text("6e420487\n", encoding="utf-8")
+        (self.dir / "turn_protocol.json").write_text(json.dumps({"commit":"6e420487","attributes":{},"protocol_records":{}}), encoding="utf-8")
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
@@ -1330,8 +1351,16 @@ class ThePin(unittest.TestCase):
         return f"{hashlib.sha256((self.dir / name).read_bytes()).hexdigest()}  {name}\n"
 
     def test_the_fingerprint_is_the_makefile_s(self) -> None:
-        listing = self._sha256sum_line("public_api_names.json") + self._sha256sum_line("public_api_signatures.json")
+        listing = "".join(self._sha256sum_line(name) for name in ("public_api_names.json","public_api_signatures.json","turn_protocol.json"))
         self.assertEqual(parity.fingerprint(self.dir), hashlib.sha256(listing.encode()).hexdigest())
+
+    def test_attributes_and_transitive_records_cannot_come_from_another_commit(self) -> None:
+        (self.dir / "turn_protocol.json").write_text(json.dumps({
+            "commit": "different", "attributes": {}, "protocol_records": {},
+        }))
+        (self.dir / "SNAPSHOT_SHA256").write_text(parity.fingerprint(self.dir) + "\n")
+        with self.assertRaisesRegex(parity.ParityError, "does not belong"):
+            parity.load_python(self.dir)
 
     def test_a_copy_edited_by_hand_is_refused(self) -> None:
         (self.dir / "SNAPSHOT_SHA256").write_text(parity.fingerprint(self.dir) + "\n", encoding="utf-8")

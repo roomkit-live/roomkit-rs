@@ -105,8 +105,13 @@ def _settle(items: dict[str, ItemResult], comparison: Comparison, mapping: Mappi
     """Each item's status. An options struct a compared method takes stands
     for Python's parameters: it is no unmapped item."""
     exceptions = {entry.rust for entry in mapping.of("exception") if entry.rust and entry.whole}
+    sources = {
+        comparison.surface.items[path]["source"] for path in comparison.options_used
+        if "source" in comparison.surface.items[path]
+    }
     for path, result in items.items():
-        if path in comparison.options_used and result.python is None:
+        is_options = path in comparison.options_used or comparison.surface.items[path].get("source") in sources
+        if is_options and result.python is None:
             comparison.findings = [f for f in comparison.findings if not (f.path == path and f.detail == "no Python name")]
             result.findings, result.status = comparison.own_members(path), "options"
         elif path in exceptions and any(finding.path == path for finding in result.findings):
