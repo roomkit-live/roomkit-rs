@@ -1,12 +1,13 @@
 //! Public application wiring, including the independent worker's last room context.
 mod ordinary_tools;
+mod public_ports;
 
 mod observed;
 use super::{Link, link};
 use roomkit::model::{ChannelId, RoomContext, RoomEvent, RoomId};
 use roomkit::testing::{EchoAgent, EchoAgentOptions};
-use roomkit::turns::{ChannelControl, TurnFuture, WiringEnv};
-use roomkit::{Channel, FrameworkEvent, RoomKit, RoomKitError, TurnExecutor, TurnExecutorOptions};
+use roomkit::turns::{ChannelControl, EmitOptions, TurnFuture, WiringEnv};
+use roomkit::{Channel, RoomKit, RoomKitError, TurnExecutor, TurnExecutorOptions};
 use roomkit_ai::testing::ScriptedProvider;
 use roomkit_ai::{AiChannel, AiChannelOptions};
 use std::sync::{Arc, Mutex};
@@ -87,7 +88,9 @@ struct Env {
     tasks: Vec<roomkit::model::Metadata>,
     row_reads: Mutex<Vec<Option<u64>>>,
     context: RoomContext,
-    events: Mutex<Vec<String>>,
+    events: Arc<Mutex<Vec<String>>>,
+    reads: std::sync::atomic::AtomicUsize,
+    fields: Arc<Mutex<Vec<EmitOptions>>>,
 }
 
 impl Env {
@@ -95,7 +98,9 @@ impl Env {
         Self {
             context,
             realtime: None,
-            events: Mutex::default(),
+            events: Arc::default(),
+            reads: std::sync::atomic::AtomicUsize::new(0),
+            fields: Arc::default(),
             rows: Vec::new(),
             tasks: Vec::new(),
             row_reads: Mutex::default(),
@@ -174,10 +179,20 @@ impl WiringEnv for Env {
     ) -> TurnFuture<'a, Result<Option<u64>, RoomKitError>> {
         Box::pin(async { Ok(None) })
     }
-    fn emit(&self, event: FrameworkEvent) -> TurnFuture<'_, ()> {
-        Box::pin(async move {
-            self.events.lock().unwrap().push(event.r#type);
-        })
+    fn emitter(&self) -> Option<roomkit::turns::FrameworkEmitter> {
+        self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let (events, fields) = (Arc::clone(&self.events), Arc::clone(&self.fields));
+        Some(Arc::new(move |kind, options| {
+            let (events, fields) = (Arc::clone(&events), Arc::clone(&fields));
+            Box::pin(async move {
+                if kind == "failed" {
+                    return Err(RoomKitError::Runtime("sink refused".into()));
+                }
+                events.lock().unwrap().push(kind);
+                fields.lock().unwrap().push(options);
+                Ok(())
+            })
+        }))
     }
 }
 
@@ -209,14 +224,16 @@ async fn wiring_before_registration_retains_the_environment_selected_for_the_cha
     channel
         .turn_wiring()
         .unwrap()
-        .emit(FrameworkEvent::new("first"))
-        .await;
+        .emit("first", EmitOptions::default())
+        .await
+        .unwrap();
     kit.register_channel(channel.clone()).unwrap();
     channel
         .turn_wiring()
         .unwrap()
-        .emit(FrameworkEvent::new("second"))
-        .await;
+        .emit("second", EmitOptions::default())
+        .await
+        .unwrap();
     assert_eq!(*first.events.lock().unwrap(), ["first"]);
     assert_eq!(*second.events.lock().unwrap(), ["second"]);
     kit.close().await.unwrap();
@@ -473,6 +490,32 @@ async fn wired_ai_generation_and_response_fire_without_a_turn_host() {
     assert_eq!(
         *env.events.lock().unwrap(),
         ["before_ai_generation", "ai_response"]
+    );
+    worker.close().await;
+}
+
+#[tokio::test]
+async fn an_application_supplies_the_emitter_for_each_call_with_its_original_arguments() {
+    let (link, _, _) = link(false);
+    let env = Arc::new(Env::new(link.request.context.clone()));
+    let worker = worker();
+    worker.use_wiring(Arc::<Env>::clone(&env));
+    let wiring = worker.wiring();
+    wiring.emit("first", EmitOptions::default()).await.unwrap();
+    let explicit = EmitOptions {
+        room_id: Some(link.request.room_id.clone()),
+        channel_id: Some(link.request.channel_id.clone()),
+        event_id: Some(link.request.event.id.clone()),
+        data: Some(roomkit::model::Metadata::new()),
+    };
+    wiring.emit("second", explicit.clone()).await.unwrap();
+    assert!(
+        matches!(wiring.emit("failed", EmitOptions::default()).await, Err(RoomKitError::Runtime(reason)) if reason == "sink refused")
+    );
+    assert_eq!(env.reads.load(std::sync::atomic::Ordering::SeqCst), 3);
+    assert_eq!(
+        *env.fields.lock().unwrap(),
+        [EmitOptions::default(), explicit]
     );
     worker.close().await;
 }

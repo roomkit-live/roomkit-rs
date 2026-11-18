@@ -1,10 +1,10 @@
 //! The kit's executor reads its store and publishes to the kit it belongs to.
 use super::{RoomKitError, TurnFuture, WiringEnv};
+use crate::ConversationStore;
 use crate::kit::Inner;
 use crate::model::{ChannelId, Metadata, RoomContext, RoomEvent, RoomId, Timestamp};
 use crate::realtime::RealtimeBackend;
 use crate::turn::TurnKit;
-use crate::{ConversationStore, FrameworkEvent};
 use std::sync::{Arc, Weak};
 
 pub(crate) struct KitWiringEnv<S>(pub(crate) Weak<Inner<S>>);
@@ -83,15 +83,23 @@ impl<S: ConversationStore> WiringEnv for KitWiringEnv<S> {
             .filter(|kit| kit.open().is_ok())
             .map(|kit| Arc::clone(&kit.realtime))
     }
-    fn emit(&self, event: FrameworkEvent) -> TurnFuture<'_, ()> {
-        Box::pin(async move {
-            if let Some(kit) = self.0.upgrade() {
-                let floor = crate::context::ExecutionContext::current().turn_depth();
-                if let Some(done) = kit.events.emit_at(&kit.tasks, event, floor) {
-                    done.wait().await;
+    fn emitter(&self) -> Option<super::FrameworkEmitter> {
+        let owner = Weak::clone(&self.0);
+        Some(Arc::new(move |event_type, options| {
+            let owner = Weak::clone(&owner);
+            Box::pin(async move {
+                if let Some(kit) = owner.upgrade() {
+                    let floor = crate::context::ExecutionContext::current().turn_depth();
+                    if let Some(done) =
+                        kit.events
+                            .emit_at(&kit.tasks, options.event(event_type), floor)
+                    {
+                        done.wait().await;
+                    }
                 }
-            }
-        })
+                Ok(())
+            })
+        }))
     }
     fn can_publish_direct<'a>(
         &'a self,

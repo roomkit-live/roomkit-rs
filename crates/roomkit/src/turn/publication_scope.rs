@@ -17,6 +17,10 @@ impl TurnHost {
     /// Captured hosts retain this bound in tasks created with `keep_context`.
     #[doc(hidden)]
     pub fn publish_from_channel(&self, event: EphemeralEvent) {
+        self.publish_scoped(None, event);
+    }
+
+    pub(crate) fn publish_scoped(&self, channel: Option<&str>, event: EphemeralEvent) {
         if !self.answer_unscoped
             || event.room_id != self.shared.room_id
             || event
@@ -26,6 +30,6 @@ impl TurnHost {
         {
             return;
         }
-        self.publish_ephemeral(event);
+        self.publish_on(channel, event);
     }
 }

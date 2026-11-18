@@ -112,6 +112,10 @@ impl TurnHost {
     /// loop, whose caller reads the turn's own scope.
     #[doc(hidden)]
     pub fn publish_ephemeral(&self, event: EphemeralEvent) {
+        self.publish_on(None, event);
+    }
+
+    pub(super) fn publish_on(&self, channel: Option<&str>, event: EphemeralEvent) {
         let publisher = &self.shared.publisher;
         if self.shared.link.uses_worker_link() {
             // Only the owner knows whether its reader is tracing this turn.
@@ -122,10 +126,16 @@ impl TurnHost {
                 self.shared
                     .link
                     .publish_remote(crate::turns::wire::Frame::Ephemeral {
-                        channel: format!("room:{}", self.shared.room_id),
+                        channel: channel
+                            .map_or_else(|| format!("room:{}", self.shared.room_id), str::to_owned),
                         event: serde_json::Value::Object(event.to_dict()),
                     });
             }
+            return;
+        }
+        if channel
+            .is_some_and(|topic| topic.strip_prefix("room:") != Some(self.shared.room_id.as_str()))
+        {
             return;
         }
         if !publisher.may_publish(&event) {

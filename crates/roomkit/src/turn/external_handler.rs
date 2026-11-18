@@ -276,11 +276,9 @@ impl Notification {
     }
 
     async fn emit(&self, kind: &str, data: Metadata) {
-        let mut event = crate::FrameworkEvent::new(kind);
-        event.room_id = Some(self.room.clone());
-        event.channel_id = Some(self.channel.clone());
-        event.data = data;
-        self.wiring.emit(event).await;
+        self.wiring
+            .notify(kind, &self.room, &self.channel, data)
+            .await;
     }
 
     fn timeout(&self, spec: &HookSpec, ran: &HookOutcome<ToolCallEvent>) {

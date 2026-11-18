@@ -1,9 +1,9 @@
 //! A channel can fire its executor's hooks before joining a registry.
 use super::TurnWiring;
+use crate::HookTrigger;
 use crate::channel::BoxFuture;
 use crate::model::{ChannelId, ChannelType, Metadata, RoomContext, RoomId};
 use crate::turn::{TurnHost, TurnKit};
-use crate::{FrameworkEvent, HookTrigger};
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::HookSpec;
 use std::sync::Arc;
@@ -134,11 +134,10 @@ impl ChannelTurnHooks {
         match &self.0 {
             Binding::Turn(host) => host.emit_turn_event(kind, data),
             Binding::Wired(bound) => {
-                let mut event = FrameworkEvent::new(kind);
-                event.room_id = Some(bound.room.clone());
-                event.channel_id = Some(bound.channel.clone());
-                event.data = data;
-                bound.wiring.emit(event).await;
+                bound
+                    .wiring
+                    .notify(kind, &bound.room, &bound.channel, data)
+                    .await;
             }
         }
     }

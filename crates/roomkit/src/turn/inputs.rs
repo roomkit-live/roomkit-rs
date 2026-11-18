@@ -252,11 +252,7 @@ async fn emit(
         return;
     }
     if let Some(wiring) = wiring {
-        let mut event = crate::FrameworkEvent::new(event_type);
-        event.room_id = Some(room_id.clone());
-        event.channel_id = Some(channel_id.clone());
-        event.data = data;
-        wiring.emit(event).await;
+        wiring.notify(event_type, room_id, channel_id, data).await;
         return;
     }
     let ids = (Some(room_id.clone()), Some(channel_id.clone()), None);

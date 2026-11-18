@@ -1,18 +1,22 @@
 //! The room reads and outlets an executor gives the channels it wires (RFC §10.6.2).
+mod emitter;
+pub use emitter::{EmitOptions, FrameworkEmitter};
 mod direct;
 pub use direct::DirectPrompt;
 mod hooks;
 mod kit;
 pub use hooks::ChannelTurnHooks;
+mod realtime;
 mod rows;
+pub use realtime::TurnRealtime;
 mod worker;
 pub(crate) use kit::KitWiringEnv;
 pub(crate) use worker::WorkerWiringEnv;
 
 use super::{TurnFuture, TurnRequest};
 use crate::model::{ChannelId, Metadata, RoomContext, RoomEvent, RoomId, Timestamp};
-use crate::realtime::{EphemeralEvent, EphemeralEventType, RealtimeBackend};
-use crate::{Channel, FrameworkEvent, HookTrigger, RoomKitError};
+use crate::realtime::{EphemeralEvent, RealtimeBackend};
+use crate::{Channel, HookTrigger, RoomKitError};
 use std::sync::Arc;
 
 /// Room data available to an executor independently of its transport.
@@ -60,9 +64,9 @@ pub trait WiringEnv: Send + Sync + 'static {
     fn realtime(&self) -> Option<Arc<dyn RealtimeBackend>> {
         None
     }
-    /// Emit a framework event outside a turn.
-    fn emit(&self, _event: FrameworkEvent) -> TurnFuture<'_, ()> {
-        Box::pin(async {})
+    /// Return the current application callback for a framework event emitted outside a turn.
+    fn emitter(&self) -> Option<FrameworkEmitter> {
+        None
     }
     /// Creation mark used to scope a publication to the right incarnation of its room.
     fn room_mark<'a>(&'a self, _room: &'a RoomId) -> TurnFuture<'a, Option<Timestamp>> {
@@ -176,27 +180,10 @@ impl TurnWiring {
         }
     }
 
-    pub(crate) async fn publish_outside(&self, mut event: EphemeralEvent) {
-        if event.r#type == EphemeralEventType::TextDelta {
-            return;
-        }
-        if let Some(backend) = self.env.realtime() {
-            let room = event.room_id.clone();
-            if event.room_created_at.is_none() {
-                event.room_created_at = self.env.room_mark(&room).await;
-            }
-            if let Err(error) = backend.publish_to_room(&room, event).await {
-                tracing::debug!(%room, %error, "publishing a channel notification failed");
-            }
-        }
-    }
-
-    /// Emit a framework event to the owner of the turn or the environment outside it.
-    pub async fn emit(&self, event: FrameworkEvent) {
-        if let Some(host) = crate::turn::turn_in_scope() {
-            host.emit_framework_event(event);
-        } else {
-            self.env.emit(event).await;
+    pub(crate) async fn publish_outside(&self, event: EphemeralEvent) {
+        let room = event.room_id.clone();
+        if let Err(error) = self.realtime().outside_room(&room, event).await {
+            tracing::debug!(%room, %error, "publishing a channel notification failed");
         }
     }
 
