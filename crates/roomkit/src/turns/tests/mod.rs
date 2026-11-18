@@ -17,3 +17,4 @@ mod verb_reentry;
 mod window;
 mod worker;
 mod worker_controls;
+mod worker_pool;

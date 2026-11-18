@@ -27,6 +27,7 @@ pub(super) struct Generation {
 pub(crate) struct WorkerChannel {
     pub(crate) channel: Arc<dyn DynChannel>,
     _lease: Option<(Arc<Generation>, OwnedRwLockReadGuard<()>)>,
+    _pool: Option<super::pool::InUse>,
 }
 
 impl WorkerChannel {
@@ -34,12 +35,17 @@ impl WorkerChannel {
         Self {
             channel,
             _lease: None,
+            _pool: None,
         }
     }
 }
 
 impl Generation {
-    pub(super) async fn using(self: &Arc<Self>, channel: Arc<dyn DynChannel>) -> WorkerChannel {
+    pub(super) async fn using(
+        self: &Arc<Self>,
+        channel: Arc<dyn DynChannel>,
+        pool: Option<super::pool::InUse>,
+    ) -> WorkerChannel {
         // Called under the build lock. A release replaces the lock before
         // taking it for writing, so the current generation is always readable.
         let readers = self
@@ -51,6 +57,7 @@ impl Generation {
         WorkerChannel {
             channel,
             _lease: Some((Arc::clone(self), guard)),
+            _pool: pool,
         }
     }
 
@@ -72,7 +79,7 @@ impl Generations {
         current
     }
 
-    fn remember(&self, task: JoinHandle<()>) {
+    pub(super) fn remember(&self, task: JoinHandle<()>) {
         let mut retiring = self.retiring.lock().unwrap_or_else(PoisonError::into_inner);
         retiring.retain(|task| !task.is_finished());
         retiring.push(task);
@@ -92,21 +99,37 @@ impl<S: ConversationStore> TurnExecutor<S> {
         let Some(worker) = &self.standalone else {
             return self.kit.inner.channel(id).map(WorkerChannel::registered);
         };
+        if !worker.owns_channels {
+            return match worker.lookup(id.clone()).await {
+                Ok(channel) => channel.map(WorkerChannel::registered),
+                Err(error) => {
+                    tracing::warn!(channel_id = %id, message = %error.message, "could not look up the channel");
+                    None
+                }
+            };
+        }
         let generation = worker.generations.of(id);
         let _pending = generation.building.write().await;
+        let used = worker.pool.as_ref().map(|pool| pool.hold(id));
         worker.wait_for_build(id).await;
         let channel = self.kit.inner.channel(id)?;
-        Some(generation.using(channel).await)
+        Some(generation.using(channel, used).await)
     }
 
     pub(super) async fn release_channel(&self, id: &ChannelId) -> Result<(), RoomKitError> {
         let Some(worker) = &self.standalone else {
             return Ok(());
         };
+        if !worker.owns_channels {
+            return Ok(());
+        }
         let generation = worker.generations.of(id);
         let (retired, readers) = {
             let _pending = generation.building.write().await;
             worker.wait_for_build(id).await;
+            if let Some(pool) = &worker.pool {
+                pool.forget(id);
+            }
             let Some(channel) = self.kit.unregister_channel(id)? else {
                 return Ok(());
             };

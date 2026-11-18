@@ -1,7 +1,6 @@
 //! Construction, declarations and lazy channel registration of a worker executor.
 
 use std::collections::{BTreeSet, HashMap};
-use std::future::Future;
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use roomkit_core::model::ChannelId;
@@ -11,25 +10,14 @@ use crate::channel::{BoxFuture, DynChannel};
 use crate::turn::TurnKit;
 use crate::turns::wire::WireError;
 use crate::turns::{CarriedRequest, WorkerTurn, executor};
-use crate::{
-    Channel, ConversationStore, InMemoryStore, RoomKit, RoomKitError, RoomKitOptions, TurnTimeouts,
-};
+use crate::{ConversationStore, RoomKitError};
 
 use super::channels::Generations;
+use super::pool::Pool;
 use super::{TurnExecutor, WorkerChannel};
 
-/// The executor's advertised identity, tenant/host scope, and liveness bounds.
-#[derive(Clone, Debug, Default)]
-pub struct TurnExecutorOptions {
-    /// Exact channel IDs and terminal-wildcard prefixes. Omit for a local-only open declaration.
-    pub hosts: Option<BTreeSet<String>>,
-    /// Exact organizations, or "*" for all. Omit to serve only rooms without an organization.
-    pub organizations: Option<BTreeSet<String>>,
-    /// The identity advertised to owners. Defaults to a freshly generated executor ID.
-    pub executor_id: Option<String>,
-    /// The heartbeat bounds for work on this executor.
-    pub timeouts: TurnTimeouts,
-}
+mod constructor;
+pub use constructor::TurnExecutorOptions;
 
 type Built = Result<Option<Arc<dyn DynChannel>>, Box<WireError>>;
 struct Building(watch::Receiver<Option<Built>>);
@@ -49,6 +37,7 @@ impl Building {
             })
     }
 }
+type HostPredicate = dyn Fn(&ChannelId) -> bool + Send + Sync;
 type Factory = dyn Fn(ChannelId) -> BoxFuture<'static, Built> + Send + Sync;
 
 pub(super) struct Standalone {
@@ -57,7 +46,10 @@ pub(super) struct Standalone {
     organizations: Option<BTreeSet<String>>,
     factory: Box<Factory>,
     building: Mutex<HashMap<ChannelId, Weak<Building>>>,
-    pub(super) generations: Generations,
+    pub(super) generations: Arc<Generations>,
+    pub(super) owns_channels: bool,
+    pub(super) pool: Option<Arc<Pool>>,
+    predicate: Option<Box<HostPredicate>>,
 }
 
 impl Standalone {
@@ -66,6 +58,9 @@ impl Standalone {
     }
 
     pub(super) fn hosts(&self, id: &ChannelId) -> bool {
+        if let Some(predicate) = &self.predicate {
+            return predicate(id);
+        }
         self.hosts.as_ref().is_none_or(|hosts| {
             hosts.iter().any(|name| {
                 name.strip_suffix('*')
@@ -113,7 +108,11 @@ impl Standalone {
         }
     }
 
-    async fn build(&self, id: ChannelId) -> Built {
+    pub(super) fn lookup(&self, id: ChannelId) -> BoxFuture<'static, Built> {
+        (self.factory)(id)
+    }
+
+    async fn build(&self, id: ChannelId, recent: bool) -> Built {
         let entry = {
             let mut pending = self.building.lock().unwrap_or_else(PoisonError::into_inner);
             pending.retain(|_, state| state.strong_count() != 0);
@@ -124,95 +123,20 @@ impl Standalone {
                 let entry = Arc::new(Building(received));
                 pending.insert(id.clone(), Arc::downgrade(&entry));
                 let keep = Arc::clone(&entry);
+                let building = self.pool.as_ref().map(|pool| pool.hold(&id));
                 let build = (self.factory)(id);
                 tokio::spawn(async move {
-                    answer.send_replace(Some(build.await));
+                    let result = build.await;
+                    if let (Some(used), Ok(Some(_))) = (&building, &result) {
+                        used.record(recent);
+                    }
+                    answer.send_replace(Some(result));
                     drop(keep);
                 });
                 entry
             }
         };
         entry.result().await
-    }
-}
-
-impl TurnExecutor<InMemoryStore> {
-    /// Construct an independent executor whose factory builds a channel the first
-    /// time a turn needs it. A successful build is shared by turns of that channel.
-    ///
-    /// # Errors
-    /// Refuses a misplaced host wildcard, an empty organization declaration or a
-    /// wildcard in an organization ID other than "*".
-    pub fn new<F, Fut, C>(
-        build_channel: F,
-        options: TurnExecutorOptions,
-    ) -> Result<Self, RoomKitError>
-    where
-        F: Fn(ChannelId) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<Option<C>, RoomKitError>> + Send + 'static,
-        C: Channel,
-    {
-        if options
-            .hosts
-            .iter()
-            .flatten()
-            .any(|name| name.strip_suffix('*').unwrap_or(name).contains('*'))
-        {
-            return Err(RoomKitError::Value(
-                "a host pattern may contain '*' only at its end".into(),
-            ));
-        }
-        if options.organizations.as_ref().is_some_and(|names| {
-            names.is_empty() || names.iter().any(|name| name.contains('*') && name != "*")
-        }) {
-            return Err(RoomKitError::Value(
-                "organizations must be nonempty and contain exact IDs or '*'".into(),
-            ));
-        }
-        let kit = RoomKit::new(RoomKitOptions::default());
-        kit.inner.turns.set_timeouts(options.timeouts.bounded());
-        let id = options
-            .executor_id
-            .filter(|id| !id.is_empty())
-            .unwrap_or_else(|| kit.inner.turns.executor_id().to_owned());
-        let registry = kit.clone();
-        let build_channel = Arc::new(build_channel);
-        let factory = move |id: ChannelId| -> BoxFuture<'static, Built> {
-            let kit = registry.clone();
-            let factory = Arc::clone(&build_channel);
-            Box::pin(async move {
-                if let Some(channel) = kit.inner.channel(&id) {
-                    return Ok(Some(channel));
-                }
-                let Some(channel) = factory(id.clone())
-                    .await
-                    .map_err(|error| executor::factory_error(&error))?
-                else {
-                    return Ok(None);
-                };
-                if channel.channel_id() != id {
-                    return Err(executor::factory_error(&RoomKitError::Value(format!(
-                        "the factory returned {} for {id}",
-                        channel.channel_id()
-                    ))));
-                }
-                kit.register_channel(channel)
-                    .map_err(|error| executor::factory_error(&error))?;
-                Ok(kit.inner.channel(&id))
-            })
-        };
-        let standalone = Standalone {
-            id,
-            hosts: options.hosts,
-            organizations: options.organizations,
-            factory: Box::new(factory),
-            building: Mutex::default(),
-            generations: Generations::default(),
-        };
-        Ok(Self {
-            kit,
-            standalone: Some(Arc::new(standalone)),
-        })
     }
 }
 
@@ -228,6 +152,7 @@ impl<S: ConversationStore> TurnExecutor<S> {
         &self,
         id: ChannelId,
         organization: Option<&str>,
+        recent: bool,
     ) -> Result<WorkerChannel, Box<WireError>> {
         if !self.serves(organization) {
             return Err(executor::refused(&id, self.executor_id(), organization));
@@ -238,14 +163,25 @@ impl<S: ConversationStore> TurnExecutor<S> {
             )));
         }
         let channel = match &self.standalone {
+            Some(worker) if !worker.owns_channels => worker
+                .lookup(id.clone())
+                .await?
+                .map(WorkerChannel::registered),
             Some(worker) => {
                 let generation = worker.generations.of(&id);
                 let _build = generation.building.read().await;
-                if let Some(channel) = self.kit.inner.channel(&id) {
-                    return Ok(generation.using(channel).await);
-                }
-                match worker.build(id.clone()).await? {
-                    Some(channel) => Some(generation.using(channel).await),
+                let used = worker.pool.as_ref().map(|pool| pool.hold(&id));
+                let channel = match self.kit.inner.channel(&id) {
+                    Some(channel) => Some(channel),
+                    None => worker.build(id.clone(), recent).await?,
+                };
+                match channel {
+                    Some(channel) => {
+                        if let Some(used) = &used {
+                            used.record(recent);
+                        }
+                        Some(generation.using(channel, used).await)
+                    }
                     None => None,
                 }
             }
@@ -283,7 +219,7 @@ impl<S: ConversationStore> TurnExecutor<S> {
                 hooks.use_room_hooks(&room, names);
             }
             facade
-                .worker_channel(channel_id, organization.as_deref())
+                .worker_channel(channel_id, organization.as_deref(), true)
                 .await
         });
         let kit: Arc<dyn TurnKit> = Arc::new(Arc::downgrade(&self.kit.inner));

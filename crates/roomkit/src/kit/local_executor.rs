@@ -2,6 +2,7 @@
 mod channels;
 mod control;
 pub(crate) use channels::WorkerChannel;
+mod pool;
 mod standalone;
 pub use standalone::TurnExecutorOptions;
 

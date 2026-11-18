@@ -15,7 +15,8 @@ use crate::{Channel, ChannelError, TurnExecutor, TurnExecutorOptions};
 
 type Events = Arc<Mutex<Vec<(usize, &'static str)>>>;
 
-struct Observed {
+pub(super) struct Observed {
+    id: ChannelId,
     instance: usize,
     events: Events,
     state: Mutex<Metadata>,
@@ -23,6 +24,16 @@ struct Observed {
 }
 
 impl Observed {
+    pub(super) fn built(id: ChannelId, instance: usize, events: Events) -> Self {
+        Self {
+            id,
+            instance,
+            events,
+            state: Mutex::default(),
+            wait: None,
+        }
+    }
+
     fn note(&self, action: &'static str) {
         self.events.lock().unwrap().push((self.instance, action));
     }
@@ -30,7 +41,7 @@ impl Observed {
 
 impl Channel for Observed {
     fn channel_id(&self) -> ChannelId {
-        super::support::channel("ai")
+        self.id.clone()
     }
     fn channel_type(&self) -> ChannelType {
         ChannelType::AI
@@ -110,7 +121,7 @@ impl Channel for Observed {
     }
 }
 
-fn envelope(kind: &str, update: impl FnOnce(&mut Value)) -> ChannelControlEnvelope {
+pub(super) fn envelope(kind: &str, update: impl FnOnce(&mut Value)) -> ChannelControlEnvelope {
     let mut value = include_str!("../../../tests/fixtures/turns/python-rpc.jsonl")
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).unwrap())
@@ -133,6 +144,7 @@ async fn genuine_controls_prepare_call_restore_and_release_the_built_channel() {
             let events = Arc::clone(&events);
             move |_| {
                 std::future::ready(Ok(Some(Observed {
+                    id: super::support::channel("ai"),
                     instance: builds.fetch_add(1, Ordering::SeqCst),
                     events: Arc::clone(&events),
                     state: Mutex::default(),
@@ -242,6 +254,7 @@ async fn a_release_lets_the_next_build_run_before_the_old_turn_finishes() {
             let wait = (Arc::clone(&started), Arc::clone(&finish));
             move |_| {
                 std::future::ready(Ok(Some(Observed {
+                    id: super::support::channel("ai"),
                     instance: builds.fetch_add(1, Ordering::SeqCst),
                     events: Arc::clone(&events),
                     state: Mutex::default(),

@@ -20,7 +20,11 @@ impl<S: ConversationStore> TurnExecutor<S> {
         match &message {
             ChannelControl::ChannelCall(call) => {
                 let answer = match self
-                    .worker_channel(call.channel_id.clone(), call.organization_id.as_deref())
+                    .worker_channel(
+                        call.channel_id.clone(),
+                        call.organization_id.as_deref(),
+                        true,
+                    )
                     .await
                 {
                     Ok(channel) => {
@@ -51,14 +55,7 @@ impl<S: ConversationStore> TurnExecutor<S> {
                 ..
             } => {
                 if self.serves(organization_id.as_deref()) {
-                    let channel = self.built_channel(channel_id).await;
-                    crate::turns::apply(
-                        channel
-                            .as_ref()
-                            .map(|built| std::sync::Arc::clone(&built.channel)),
-                        message,
-                    )
-                    .await;
+                    self.notify_built(channel_id.clone(), message).await;
                 }
                 Ok(None)
             }
@@ -68,14 +65,7 @@ impl<S: ConversationStore> TurnExecutor<S> {
                 ..
             } => {
                 self.kit.inner.turns.forget_worker_room(channel_id, room_id);
-                let channel = self.built_channel(channel_id).await;
-                crate::turns::apply(
-                    channel
-                        .as_ref()
-                        .map(|built| std::sync::Arc::clone(&built.channel)),
-                    message,
-                )
-                .await;
+                self.notify_built(channel_id.clone(), message).await;
                 Ok(None)
             }
             ChannelControl::CommittedEvent {
@@ -88,7 +78,7 @@ impl<S: ConversationStore> TurnExecutor<S> {
                     && self.hooks().defines_room_hooks(room_hooks)
                 {
                     match self
-                        .worker_channel(channel_id.clone(), organization_id.as_deref())
+                        .worker_channel(channel_id.clone(), organization_id.as_deref(), false)
                         .await
                     {
                         Ok(channel) => {
@@ -106,5 +96,15 @@ impl<S: ConversationStore> TurnExecutor<S> {
                 Ok(None)
             }
         }
+    }
+    async fn notify_built(&self, id: roomkit_core::model::ChannelId, message: ChannelControl) {
+        let built = self.built_channel(&id).await;
+        crate::turns::apply(
+            built
+                .as_ref()
+                .map(|entry| std::sync::Arc::clone(&entry.channel)),
+            message,
+        )
+        .await;
     }
 }
