@@ -14,7 +14,7 @@ use crate::turns::RoomOwner;
 use crate::{ConversationStore, RoomKit, RoomKitError, TurnExecutor, WeakRoomKit};
 
 struct OwnerExecutor<S> {
-    kit: WeakRoomKit<S>,
+    kit: Arc<WeakRoomKit<S>>,
     id: String,
     timeouts: TurnTimeouts,
     #[cfg(feature = "redis")]
@@ -29,7 +29,7 @@ pub(crate) fn owner_executor<S: ConversationStore>(kit: &RoomKit<S>) -> Arc<dyn 
         #[cfg(not(feature = "redis"))]
         let _ = identity;
         OwnerExecutor {
-            kit: kit.downgrade(),
+            kit: Arc::new(kit.downgrade()),
             id: executor.executor_id().to_owned(),
             timeouts: executor.timeouts(),
             #[cfg(feature = "redis")]
@@ -141,7 +141,7 @@ impl<S: ConversationStore> crate::turns::LocalHosts for WeakRoomKit<S> {
 #[cfg(feature = "redis")]
 impl<S: ConversationStore> super::native::Native for OwnerExecutor<S> {
     fn local_hosts(&self) -> Arc<dyn crate::turns::LocalHosts> {
-        Arc::new(self.kit.clone())
+        Arc::<WeakRoomKit<S>>::clone(&self.kit)
     }
 
     fn look_up(&self) -> crate::turns::redis::WorkerLookup {
@@ -199,7 +199,9 @@ mod tests {
             let recovered = native.look_up()().unwrap();
             assert!(Arc::ptr_eq(&recovered, &view));
             assert!(native.lifecycle().ptr_eq(&kit.turn_executor().lifecycle()));
-            native.local_hosts()
+            let selector = native.local_hosts();
+            assert!(Arc::ptr_eq(&selector, &native.local_hosts()));
+            selector
         };
         view.close().await;
         assert!(view.closed() && view.hosts_channel(&agent) && !view.declares(&agent));
