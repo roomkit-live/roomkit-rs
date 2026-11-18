@@ -161,11 +161,31 @@ pub struct RoomPublication {
     pub frame: Box<PublicationFrame>,
 }
 
+impl RoomPublication {
+    /// A publication from a worker after the end of its turn.
+    pub fn new(
+        channel_id: ChannelId,
+        room_id: RoomId,
+        executor_id: impl Into<String>,
+        turn_id: impl Into<String>,
+        frame: PublicationFrame,
+    ) -> Self {
+        Self {
+            channel_id,
+            room_id,
+            executor_id: executor_id.into(),
+            turn_id: turn_id.into(),
+            frame: Box::new(frame),
+        }
+    }
+}
+
 /// A host verb made after its turn ended, answered by a `host_result`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename = "room_call")]
 pub struct RoomCall {
     /// Identifier used to correlate the call and its answer.
+    #[serde(default = "new_call_id")]
     pub call_id: String,
     /// Channel whose work the message carries.
     pub channel_id: ChannelId,
@@ -183,6 +203,32 @@ pub struct RoomCall {
     /// Arguments supplied to the call.
     #[serde(default)]
     pub arguments: Metadata,
+}
+
+pub(crate) fn new_call_id() -> String {
+    format!("call-{}", uuid::Uuid::new_v4().simple())
+}
+
+impl RoomCall {
+    /// Start a host call from a worker after its turn, with a fresh correlation ID.
+    pub fn new(
+        channel_id: ChannelId,
+        room_id: RoomId,
+        executor_id: impl Into<String>,
+        turn_id: impl Into<String>,
+        verb: impl Into<String>,
+    ) -> Self {
+        Self {
+            call_id: new_call_id(),
+            channel_id,
+            room_id,
+            executor_id: executor_id.into(),
+            turn_id: turn_id.into(),
+            verb: verb.into(),
+            chain_depth: 0,
+            arguments: Metadata::new(),
+        }
+    }
 }
 
 /// Only the two publication frames are valid outside a turn.

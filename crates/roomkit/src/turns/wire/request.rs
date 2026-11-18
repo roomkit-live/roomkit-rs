@@ -21,6 +21,17 @@ pub struct OwnerTool {
     pub ends_turn: bool,
 }
 
+impl OwnerTool {
+    /// A tool served by the owner with the default waiting and completion policies.
+    pub fn new(tool: Value) -> Self {
+        Self {
+            tool,
+            waits_by_design: false,
+            ends_turn: false,
+        }
+    }
+}
+
 /// The room's previous turn of the channel (RFC §10.6.2).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PreviousTurn {
@@ -35,10 +46,10 @@ pub struct PreviousTurn {
 
 impl PreviousTurn {
     /// The last turn handed to an executor, with its executor ID when known.
-    pub fn new(turn_id: impl Into<String>, executor_id: Option<String>) -> Self {
+    pub fn new(turn_id: impl Into<String>) -> Self {
         Self {
             turn_id: turn_id.into(),
-            executor_id,
+            executor_id: None,
             scopes: std::collections::VecDeque::new(),
         }
     }

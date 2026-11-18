@@ -8,7 +8,7 @@ use super::{GetRoomOptions, RoomKit};
 use crate::RoomKitError;
 use crate::store::{ConversationStore, PatchRoomMetadataOptions};
 use crate::tasks::{Kind, Marks, Phase, Unit};
-use crate::turns::{ChannelCall, Handover, state_key, stored_state};
+use crate::turns::{ChannelCall, state_key, stored_state};
 
 /// Python's `channel_call(..., *, organization_id=None, **arguments)`.
 #[derive(Clone, Debug, Default)]
@@ -149,15 +149,10 @@ impl<S: ConversationStore> RoomKit<S> {
         // previous turn, by this process or another, follows none (RFC §17.2).
         let room_created_at = room.created_at;
         let call = ChannelCall {
-            call_id: format!("call-{}", uuid::Uuid::new_v4().simple()),
             room_state: stored_state(&room.metadata, &channel_id),
             organization_id: room.organization_id,
-            channel_id: channel_id.clone(),
-            room_id: room_id.clone(),
-            verb,
             arguments: options.arguments,
-            previous_turn: None,
-            handover: Handover::default(),
+            ..ChannelCall::new(channel_id.clone(), room_id.clone(), verb)
         };
         let answer = self
             .inner

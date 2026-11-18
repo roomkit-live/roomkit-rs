@@ -157,3 +157,64 @@ fn an_input_request_keeps_one_type_in_every_wire_form() {
         expected
     );
 }
+
+#[test]
+fn both_call_kinds_generate_independent_ids_and_preserve_an_explicit_id() {
+    use roomkit::turns::{ChannelCall, RoomCall};
+
+    let channel = roomkit::model::ChannelId::new("agent").unwrap();
+    let room = roomkit::model::RoomId::new("room").unwrap();
+    let first = ChannelCall::new(channel.clone(), room.clone(), "freeze");
+    let second = RoomCall::new(channel, room, "worker", "turn", "freeze");
+    let mut raw = json!({"channel_id":"agent","room_id":"room","verb":"freeze"});
+    let decoded: ChannelCall = serde_json::from_value(raw.clone()).unwrap();
+    raw["turn_id"] = json!("turn");
+    raw["executor_id"] = json!("worker");
+    let recalled: RoomCall = serde_json::from_value(raw.clone()).unwrap();
+    let ids = [
+        &first.call_id,
+        &second.call_id,
+        &decoded.call_id,
+        &recalled.call_id,
+    ];
+    for id in ids {
+        let suffix = id.strip_prefix("call-").unwrap();
+        assert_eq!(suffix.len(), 32);
+        assert!(suffix.bytes().all(|b| b.is_ascii_hexdigit()));
+    }
+    assert_eq!(std::collections::BTreeSet::from(ids).len(), 4);
+    assert_eq!(second.chain_depth, 0);
+    assert!(second.arguments.is_empty());
+    raw["call_id"] = json!("chosen");
+    assert_eq!(
+        serde_json::from_value::<RoomCall>(raw).unwrap().call_id,
+        "chosen"
+    );
+}
+
+#[test]
+fn an_application_can_construct_the_public_models_with_the_python_defaults() {
+    use roomkit::turns::{OwnerTool, PreviousTurn, RoomPublication};
+
+    assert_eq!(
+        serde_json::to_value(ChannelResult::new()).unwrap(),
+        json!({
+            "type":"channel_result", "result":null, "error":null, "executor_id":null, "room_state":null
+        })
+    );
+    let tool = OwnerTool::new(json!({"name":"search"}));
+    assert!(!tool.waits_by_design && !tool.ends_turn);
+    assert_eq!(PreviousTurn::new("turn").executor_id, None);
+    let frame = json!({"type":"framework_event","event_type":"seen","room_id":"r","channel_id":"c","event_id":null,"data":{}});
+    let publication = RoomPublication::new(
+        "c".parse().unwrap(),
+        "r".parse().unwrap(),
+        "worker",
+        "turn",
+        serde_json::from_value(frame.clone()).unwrap(),
+    );
+    assert_eq!(
+        serde_json::to_value(publication).unwrap(),
+        json!({"type":"room_publication","channel_id":"c","room_id":"r","executor_id":"worker","turn_id":"turn","frame":frame})
+    );
+}

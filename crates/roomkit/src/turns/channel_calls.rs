@@ -44,6 +44,7 @@ impl Handover {
 #[serde(tag = "type", rename = "channel_call")]
 pub struct ChannelCall {
     /// Identifier used to correlate the call and its answer.
+    #[serde(default = "super::wire::new_call_id")]
     pub call_id: String,
     /// Channel whose work the message carries.
     pub channel_id: roomkit_core::model::ChannelId,
@@ -66,15 +67,14 @@ pub struct ChannelCall {
 }
 
 impl ChannelCall {
-    /// An unsubmitted verb call with empty arguments and room state (RFC §10.6.3).
+    /// Start a channel verb with a fresh correlation ID and empty state (RFC §10.6.3).
     pub fn new(
-        call_id: impl Into<String>,
         channel_id: roomkit_core::model::ChannelId,
         room_id: roomkit_core::model::RoomId,
         verb: impl Into<String>,
     ) -> Self {
         Self {
-            call_id: call_id.into(),
+            call_id: super::wire::new_call_id(),
             channel_id,
             room_id,
             verb: verb.into(),
@@ -103,7 +103,7 @@ impl ChannelCall {
 }
 
 /// A channel verb's result, error and state after the call (RFC §10.6.3).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename = "channel_result")]
 pub struct ChannelResult {
     /// Result returned by the call.
@@ -115,6 +115,13 @@ pub struct ChannelResult {
     pub room_state: Option<Metadata>,
     /// Executor that accepted the work.
     pub executor_id: Option<String>,
+}
+
+impl ChannelResult {
+    /// The empty answer to a channel call, with no error or state change.
+    pub fn new() -> Self {
+        Self::default()
+    }
 }
 
 impl Turns {

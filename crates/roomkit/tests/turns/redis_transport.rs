@@ -65,7 +65,6 @@ async fn submit_and_read(owner: &dyn TurnBackend, worker_node: &dyn TurnBackend)
             .unwrap()
     );
     let call = roomkit::turns::ChannelCall::new(
-        "query",
         request.channel_id.clone(),
         request.room_id.clone(),
         "unknown",
