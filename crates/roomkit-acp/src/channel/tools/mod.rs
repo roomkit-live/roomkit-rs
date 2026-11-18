@@ -10,6 +10,7 @@ use std::sync::{Mutex, PoisonError};
 
 use roomkit::model::{ChannelId, RoomId};
 use roomkit::realtime::{EphemeralEvent, EphemeralEventType};
+use roomkit::turns::ChannelTurnHooks;
 use roomkit::{ResponseItem, TurnHost};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -50,7 +51,7 @@ impl State {
 
 pub(super) struct Tools {
     state: Mutex<State>,
-    host: Option<TurnHost>,
+    outlet: Option<ChannelTurnHooks>,
     room_id: RoomId,
     channel_id: ChannelId,
     reports: Reports,
@@ -62,14 +63,14 @@ impl Tools {
         host: Option<TurnHost>,
         room_id: RoomId,
         channel_id: ChannelId,
-        answers_room: bool,
+        outlet: Option<ChannelTurnHooks>,
         publishes_text: bool,
         handler: Option<std::sync::Arc<dyn roomkit_ai::ExternalToolHandler>>,
     ) -> Self {
-        let reports = Reports::new(host.clone(), handler, room_id.clone());
+        let reports = Reports::new(host, handler, room_id.clone());
         Self {
             state: Mutex::default(),
-            host: host.filter(|_| answers_room),
+            outlet,
             room_id,
             channel_id,
             reports,
@@ -206,14 +207,14 @@ impl Tools {
     }
 
     fn publish(&self, kind: EphemeralEventType, value: Value) {
-        let Some(host) = &self.host else {
+        let Some(outlet) = &self.outlet else {
             return;
         };
         let Value::Object(mut data) = value else {
             return;
         };
         data.insert("channel_id".to_owned(), json!(self.channel_id));
-        host.publish_ephemeral(EphemeralEvent {
+        outlet.publish_ephemeral(EphemeralEvent {
             channel_id: Some(self.channel_id.clone()),
             data,
             ..EphemeralEvent::new(self.room_id.clone(), kind, self.channel_id.to_string())

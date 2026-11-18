@@ -171,7 +171,9 @@ async fn wired_thinking_and_plan_updates_reach_the_executor_without_a_turn_host(
         Kind::ThinkingStart,
         Kind::ThinkingDelta,
         Kind::ThinkingEnd,
+        Kind::ToolCallStart,
         Kind::Custom,
+        Kind::ToolCallEnd,
     ];
     let published = tokio::time::timeout(Duration::from_secs(2), async {
         let mut published = Vec::new();
@@ -181,7 +183,11 @@ async fn wired_thinking_and_plan_updates_reach_the_executor_without_a_turn_host(
                 assert_eq!(event.room_created_at, Some(r.context.room.created_at));
                 assert_eq!(event.channel_id.as_ref(), Some(&r.channel_id));
                 assert!(!event.data.contains_key("thinking"));
-                if event.r#type == Kind::Custom {
+                if event.r#type == Kind::ToolCallStart {
+                    assert!(event.data["tool_calls"][0].get("arguments").is_none());
+                } else if event.r#type == Kind::ToolCallEnd {
+                    assert!(event.data["tool_calls"][0].get("result").is_none());
+                } else if event.r#type == Kind::Custom {
                     assert_eq!(event.data["type"], "plan_updated");
                 }
                 published.push(event.r#type);

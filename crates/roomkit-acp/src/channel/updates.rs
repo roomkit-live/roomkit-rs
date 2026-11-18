@@ -2,9 +2,10 @@
 
 use std::sync::{Arc, Mutex, PoisonError};
 
+use roomkit::ResponseItem;
 use roomkit::model::{ChannelId, Metadata, RoomEvent, RoomId, Visibility};
 use roomkit::realtime::{EphemeralEvent, EphemeralEventType};
-use roomkit::{ResponseItem, TurnHost};
+use roomkit::turns::ChannelTurnHooks;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
@@ -78,7 +79,7 @@ enum State {
 /// A late callback cannot reopen a window after the reader has gone.
 pub(super) struct ThinkingWindow {
     state: Mutex<State>,
-    host: Option<TurnHost>,
+    outlet: Option<ChannelTurnHooks>,
     room_id: RoomId,
     channel_id: ChannelId,
     publishes_text: bool,
@@ -86,14 +87,14 @@ pub(super) struct ThinkingWindow {
 
 impl ThinkingWindow {
     pub(super) fn new(
-        host: Option<TurnHost>,
+        outlet: Option<ChannelTurnHooks>,
         room_id: RoomId,
         channel_id: ChannelId,
         publishes_text: bool,
     ) -> Self {
         Self {
             state: Mutex::default(),
-            host,
+            outlet,
             room_id,
             channel_id,
             publishes_text,
@@ -123,7 +124,7 @@ impl ThinkingWindow {
     }
 
     fn publish(&self, kind: EphemeralEventType, delta: Option<&str>) {
-        let Some(host) = &self.host else {
+        let Some(outlet) = &self.outlet else {
             return;
         };
         let mut data = Metadata::new();
@@ -147,7 +148,7 @@ impl ThinkingWindow {
             // ACP's start/end carry an empty string, never the accumulated thought.
             data.insert("thinking".to_owned(), Value::from(""));
         }
-        host.publish_ephemeral(EphemeralEvent {
+        outlet.publish_ephemeral(EphemeralEvent {
             channel_id: Some(self.channel_id.clone()),
             data,
             ..EphemeralEvent::new(self.room_id.clone(), kind, self.channel_id.to_string())

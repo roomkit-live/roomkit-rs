@@ -101,8 +101,9 @@ impl<T: AcpTransport> TurnStream<T> {
                 })
         });
         let generation = shared.connector.generation(&room_id);
+        let outlet = callbacks.clone().filter(|_| ask.answers_room);
         let thinking_window = Arc::new(ThinkingWindow::new(
-            host.clone().filter(|_| ask.answers_room),
+            outlet.clone(),
             room_id.clone(),
             channel_id.clone(),
             shared.publish_thinking_text,
@@ -111,7 +112,7 @@ impl<T: AcpTransport> TurnStream<T> {
             host.clone(),
             room_id.clone(),
             channel_id.clone(),
-            ask.answers_room,
+            outlet,
             shared.connector.publication.publishes_tool_text,
             shared.connector.handler.handler.clone(),
         ));

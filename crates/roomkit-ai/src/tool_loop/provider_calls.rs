@@ -40,7 +40,7 @@ impl Loop {
         ProviderCalls {
             turn: self.turn.clone(),
             events: ToolEvents::new(
-                self.turn.as_ref(),
+                self.context.callbacks.as_ref(),
                 (&self.context.room_id, &self.context.channel_id),
                 round,
                 (

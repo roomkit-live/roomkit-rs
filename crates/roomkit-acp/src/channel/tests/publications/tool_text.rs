@@ -55,3 +55,103 @@ async fn check_idle(publish_tool_call_text: bool) {
     assert_eq!(channel.active_turns(), 0);
     kit.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn a_directly_wired_acp_prompt_publishes_its_thinking_and_tools_in_order() {
+    for publish_text in [false, true] {
+        tokio::time::timeout(PATIENCE, check_direct(publish_text))
+            .await
+            .unwrap();
+    }
+}
+
+async fn check_direct(publish_text: bool) {
+    let (channel, state) = fixture::with_options(
+        Stage::Prompt,
+        crate::AcpChannelOptions {
+            publish_thinking_text: publish_text,
+            publish_tool_call_text: publish_text,
+            ..Default::default()
+        },
+    );
+    let room = RoomId::new("r1").unwrap();
+    let realtime = Arc::new(AwaitedRealtime::default());
+    let kit = RoomKit::new(RoomKitOptions {
+        realtime: Some(Arc::<AwaitedRealtime>::clone(&realtime)),
+        ..Default::default()
+    });
+    let created = kit
+        .create_room(roomkit::CreateRoomOptions {
+            room_id: Some(room.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    kit.register_channel(roomkit::DeclaredChannel::new(channel.declaration()).unwrap())
+        .unwrap();
+    kit.attach_channel(
+        &room,
+        &channel.channel_id(),
+        roomkit::AttachChannelOptions::default(),
+    )
+    .await
+    .unwrap();
+    kit.turn_executor().wire(&channel).unwrap();
+    let (seen, mut events) = tokio::sync::mpsc::unbounded_channel();
+    realtime
+        .subscribe_to_room(
+            &room,
+            Arc::new(move |event| {
+                seen.send(event).unwrap();
+                Box::pin(std::future::ready(()))
+            }),
+        )
+        .await;
+    let active = channel.clone();
+    let pending = tokio::spawn(async move { direct_turn(&active).await });
+    state.reached.notified().await;
+    notify(
+        &state,
+        "session-2",
+        json!({"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"thinking"}}),
+    )
+    .await;
+    notify(&state, "session-2", json!({"sessionUpdate":"tool_call","toolCallId":"t1","title":"lookup","rawInput":{"q":"value"},"status":"in_progress"})).await;
+    notify(&state, "session-2", json!({"sessionUpdate":"tool_call_update","toolCallId":"t1","status":"completed","rawOutput":"done"})).await;
+    state.resume.notify_one();
+    let output = pending.await.unwrap();
+    assert!(output.responded);
+    let wanted = [
+        EphemeralEventType::ThinkingStart,
+        EphemeralEventType::ThinkingDelta,
+        EphemeralEventType::ToolCallStart,
+        EphemeralEventType::ToolCallEnd,
+        EphemeralEventType::ThinkingEnd,
+    ];
+    let mut observed = Vec::new();
+    while observed.len() < wanted.len() {
+        let event = events.recv().await.unwrap();
+        if !wanted.contains(&event.r#type) {
+            continue;
+        }
+        assert_eq!(event.room_created_at, Some(created.created_at));
+        assert_eq!(event.channel_id.as_ref(), Some(&channel.channel_id()));
+        if event.r#type == EphemeralEventType::ThinkingDelta {
+            assert_eq!(event.data.contains_key("thinking"), publish_text);
+        } else if event.r#type == EphemeralEventType::ToolCallStart {
+            assert_eq!(
+                event.data["tool_calls"][0].get("arguments").is_some(),
+                publish_text
+            );
+        } else if event.r#type == EphemeralEventType::ToolCallEnd {
+            assert_eq!(
+                event.data["tool_calls"][0].get("result").is_some(),
+                publish_text
+            );
+        }
+        observed.push(event.r#type);
+    }
+    assert_eq!(observed, wanted);
+    channel.close().await;
+    kit.close().await.unwrap();
+}

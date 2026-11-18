@@ -10,9 +10,9 @@
 //! scopes its answers publishes nothing, and the kit publishes only while
 //! the agent's binding lets its answers reach the room.
 
-use roomkit::TurnHost;
 use roomkit::model::{ChannelId, Metadata, RoomId, ToolCall};
 use roomkit::realtime::{EphemeralEvent, EphemeralEventType};
+use roomkit::turns::ChannelTurnHooks;
 use serde_json::{Map, Value, json};
 
 /// The characters of a result a `TOOL_CALL_END` previews: Python's
@@ -47,7 +47,7 @@ impl Ended {
 /// kit that runs the turn.
 #[derive(Clone)]
 pub(super) struct ToolEvents {
-    turn: TurnHost,
+    turn: ChannelTurnHooks,
     room_id: RoomId,
     channel_id: ChannelId,
     round: u32,
@@ -67,7 +67,7 @@ impl ToolEvents {
     /// trigger scopes its answers (`answers_room` false, RFC §8.4); `text`
     /// whether its events carry each call's arguments and result.
     pub(super) fn new(
-        turn: Option<&TurnHost>,
+        turn: Option<&ChannelTurnHooks>,
         (room_id, channel_id): (&RoomId, &ChannelId),
         round: u32,
         (answers_room, text): (bool, bool),
