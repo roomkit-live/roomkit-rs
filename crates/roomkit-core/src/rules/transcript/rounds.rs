@@ -22,8 +22,8 @@
 //! from turn to turn: a compaction does, when a provider refuses the context
 //! as too long (RFC §6.4 "A turn compacted").
 
+use super::open_calls::OpenCalls;
 use std::borrow::Cow;
-use std::collections::{BTreeMap, VecDeque};
 
 use serde_json::Value;
 
@@ -101,57 +101,6 @@ fn own_rows<'a>(
     })
 }
 
-/// A turn and a call's id in it.
-type CallKey<'a> = (Option<&'a str>, &'a str);
-
-/// A call waiting for its end row: the round of its turn it came in, and
-/// where [`rounds`] holds it.
-#[derive(Clone, Copy)]
-struct Held {
-    of_turn: u32,
-    round: usize,
-    position: usize,
-}
-
-/// The calls waiting for their end rows, first in, first out per turn and
-/// id. A round of a turn is over at that turn's first row that is no start,
-/// whatever another turn wrote among its starts. A call an earlier round
-/// left without its end stays so: the next end row under its id is a later
-/// call's.
-#[derive(Default)]
-struct Waiting<'a> {
-    calls: BTreeMap<CallKey<'a>, VecDeque<Held>>,
-    rounds: BTreeMap<Option<&'a str>, u32>,
-}
-
-impl<'a> Waiting<'a> {
-    /// The call at `position` of `round` waits behind its round's calls
-    /// under its id.
-    fn hold(&mut self, key: CallKey<'a>, round: usize, position: usize) {
-        let of_turn = self.rounds.get(&key.0).copied().unwrap_or(0);
-        let calls = self.calls.entry(key).or_default();
-        if calls.back().is_some_and(|held| held.of_turn != of_turn) {
-            calls.clear();
-        }
-        calls.push_back(Held {
-            of_turn,
-            round,
-            position,
-        });
-    }
-
-    /// A row of `turn` that is no start was read: its round is over.
-    fn round_over(&mut self, turn: Option<&'a str>) {
-        let number = self.rounds.entry(turn).or_default();
-        *number = number.saturating_add(1);
-    }
-
-    /// The call an end row under `key` closes, if any.
-    fn take(&mut self, key: CallKey<'a>) -> Option<Held> {
-        self.calls.get_mut(&key).and_then(VecDeque::pop_front)
-    }
-}
-
 /// The calls `rows` hold, round by round: a round is a run of start rows
 /// of one turn, each call completed by the end row of the same turn and
 /// id, the first of a round's calls under an id by the first such row. A
@@ -163,7 +112,7 @@ fn rounds<'a>(
     rows: impl Iterator<Item = (&'a RoomEvent, Option<&'a ToolCallContent>)>,
 ) -> Vec<Vec<Call<'a>>> {
     let mut rounds: Vec<Vec<Call<'a>>> = Vec::new();
-    let mut waiting = Waiting::default();
+    let mut waiting = OpenCalls::new();
     let mut last_turn: Option<&str> = None;
     let mut opened = false;
     for (event, row) in rows {
@@ -180,7 +129,7 @@ fn rounds<'a>(
             }
             let round = rounds.len().saturating_sub(1);
             if let Some(calls) = rounds.last_mut() {
-                waiting.hold(key, round, calls.len());
+                waiting.hold(key, (round, calls.len()));
                 calls.push(Call {
                     index: event.index,
                     turn,
@@ -193,12 +142,12 @@ fn rounds<'a>(
         }
         opened = false;
         waiting.round_over(turn);
-        let Some(held) = waiting.take(key) else {
+        let Some((round, position)) = waiting.take(key) else {
             continue;
         };
         if let Some(call) = rounds
-            .get_mut(held.round)
-            .and_then(|calls| calls.get_mut(held.position))
+            .get_mut(round)
+            .and_then(|calls| calls.get_mut(position))
         {
             call.end = Some(row);
         }

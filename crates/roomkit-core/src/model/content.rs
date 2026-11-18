@@ -815,6 +815,18 @@ pub struct ToolCallContent {
 }
 
 impl ToolCallContent {
+    /// Whether this call supplied an answer the channel keeps in its tool memory.
+    /// Historical end rows without an outcome also count as answered.
+    #[must_use]
+    pub fn kept_in_tool_memory(&self) -> bool {
+        matches!(
+            self.outcome,
+            None | Some(
+                ToolCallOutcome::Served | ToolCallOutcome::Failed | ToolCallOutcome::Blocked
+            )
+        )
+    }
+
     /// The call `tool_id` of `tool_name`, pending, with no argument and no
     /// result yet.
     pub fn new(tool_name: impl Into<String>, tool_id: impl Into<String>) -> Self {

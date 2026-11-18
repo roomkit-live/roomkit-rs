@@ -19,7 +19,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Mutex, PoisonError};
 
-use roomkit::model::{EventContent, EventType, Metadata, RoomEvent, RoomId, ToolCallOutcome};
+use roomkit::model::{EventContent, EventType, Metadata, RoomEvent, RoomId};
 use roomkit_core::rules::transcript::{
     TURN_IMAGES_HEADER, identifier, media_type, quoted, without_mark_copies,
 };
@@ -262,14 +262,7 @@ pub(crate) fn used_tools<'a>(
                 None
             }
         })
-        .filter(|call| {
-            matches!(
-                call.outcome,
-                None | Some(
-                    ToolCallOutcome::Served | ToolCallOutcome::Failed | ToolCallOutcome::Blocked
-                )
-            )
-        })
+        .filter(|call| call.kept_in_tool_memory())
         .map(|call| call.tool_name.as_str())
 }
 

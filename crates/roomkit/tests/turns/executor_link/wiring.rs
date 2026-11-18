@@ -3,6 +3,7 @@ mod application_channel;
 mod ordinary_tools;
 mod public_ports;
 mod text_callbacks;
+mod text_loaders;
 mod tool_callbacks;
 
 mod observed;

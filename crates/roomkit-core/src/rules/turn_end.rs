@@ -16,27 +16,18 @@ pub fn recorded_turn_end(record: &Metadata) -> Option<Value> {
         return Some(reason.clone());
     }
     let acp = record.get("acp")?.as_object()?;
-    if let Some(reason) = acp.get("stop_reason").filter(|reason| truthy(reason)) {
+    if let Some(reason) = acp
+        .get("stop_reason")
+        .filter(|reason| super::json_truthy(reason))
+    {
         return Some(reason.clone());
     }
-    if acp.get("interrupted").is_some_and(truthy) {
+    if acp.get("interrupted").is_some_and(super::json_truthy) {
         return Some(Value::from("interrupted"));
     }
     acp.get("prompt_returned")
-        .is_some_and(truthy)
+        .is_some_and(super::json_truthy)
         .then(|| Value::from("completed"))
-}
-
-/// Whether `value` reads as true, as Python's `bool()` reads it.
-fn truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(flag) => *flag,
-        Value::Number(number) => number.as_f64().is_some_and(|number| number != 0.0),
-        Value::String(text) => !text.is_empty(),
-        Value::Array(items) => !items.is_empty(),
-        Value::Object(members) => !members.is_empty(),
-    }
 }
 
 #[cfg(test)]

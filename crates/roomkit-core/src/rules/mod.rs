@@ -75,3 +75,16 @@ pub mod verification;
 pub use self::permissions::{received_events, visibility_allows, visible_events, withheld_history};
 #[doc(hidden)]
 pub use self::unicode::{casefold, is_alnum, python_repr};
+
+/// Whether `value` reads as true, as Python's `bool()` reads it.
+fn json_truthy(value: &serde_json::Value) -> bool {
+    use serde_json::Value;
+    match value {
+        Value::Null => false,
+        Value::Bool(flag) => *flag,
+        Value::Number(number) => number.as_f64().is_some_and(|number| number != 0.0),
+        Value::String(text) => !text.is_empty(),
+        Value::Array(items) => !items.is_empty(),
+        Value::Object(members) => !members.is_empty(),
+    }
+}
