@@ -57,6 +57,26 @@ impl PreparedAnswer {
 }
 
 impl<P: AiProvider> AiChannel<P> {
+    /// The registered environment supplies the channel's own replay rows.
+    pub(super) async fn wired_rows(
+        &self,
+        event: &RoomEvent,
+        context: RoomContext,
+        host: Option<&TurnHost>,
+    ) -> RoomContext {
+        let wiring = self
+            .wiring
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some(wiring) = wiring {
+            return wiring
+                .channel_context(event, &self.channel_id, context)
+                .await;
+        }
+        with_channel_rows(context, host.map_or(&[], TurnHost::channel_rows))
+    }
+
     /// Refresh exact ownership before per-turn host admission.
     pub(super) fn admission_toolbox(&self) -> Result<Arc<Toolbox>, ChannelError> {
         let Some(sandbox) = &self.sandbox else {

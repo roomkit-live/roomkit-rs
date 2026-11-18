@@ -19,18 +19,7 @@ pub(crate) async fn distributed_rows(
     if binding.category != ChannelCategory::Intelligence {
         return Vec::new();
     }
-    // A turn context loaded by this SDK adds the agent's replay rows to its
-    // conversation. Its triggering event, even a tool row, is part of that
-    // conversation in its own right; other channels' rows are untouched.
-    context.recent_events.retain(|row| {
-        row.id == event.id
-            || row.source.channel_id != binding.channel_id
-            || !matches!(
-                row.r#type,
-                EventType::ToolCallStart | EventType::ToolCallEnd | EventType::InstructionRead
-            )
-    });
-    let first = history_start(event, context);
+    let first = take_conversation(context, &binding.channel_id, event);
     match kit
         .read_channel_rows(binding.clone(), event.room_id.clone(), first)
         .await
@@ -41,6 +30,26 @@ pub(crate) async fn distributed_rows(
             Vec::new()
         }
     }
+}
+
+/// Separate the channel's private replay rows from the room's conversation.
+pub(crate) fn take_conversation(
+    context: &mut RoomContext,
+    channel: &roomkit_core::model::ChannelId,
+    event: &RoomEvent,
+) -> Option<u64> {
+    // A turn context loaded by this SDK adds the agent's replay rows to its
+    // conversation. Its triggering event, even a tool row, is part of that
+    // conversation in its own right; other channels' rows are untouched.
+    context.recent_events.retain(|row| {
+        row.id == event.id
+            || row.source.channel_id != *channel
+            || !matches!(
+                row.r#type,
+                EventType::ToolCallStart | EventType::ToolCallEnd | EventType::InstructionRead
+            )
+    });
+    history_start(event, context)
 }
 
 pub(crate) fn history_start(event: &RoomEvent, context: &RoomContext) -> Option<u64> {

@@ -36,14 +36,20 @@ const ENDINGS: [&str; 3] = ["completed", "failed", "cancelled"];
 /// of the room's discussion is named by its handle (`metadata`, the room's).
 pub(super) async fn tasks_notes(
     turn: Option<&TurnHost>,
-    metadata: &Metadata,
+    wiring: Option<roomkit::turns::TurnWiring>,
+    context: &roomkit::model::RoomContext,
     stands_alone: bool,
 ) -> Vec<String> {
-    let Some(turn) = turn.filter(|turn| !stands_alone && turn.open()) else {
+    if stands_alone {
         return Vec::new();
+    }
+    let tasks = match (turn.filter(|host| host.open()), wiring) {
+        (Some(host), _) => host.room_tasks().await,
+        (_, Some(wiring)) => wiring.env.room_tasks(&context.room.id).await,
+        (None, None) => return Vec::new(),
     };
-    match turn.room_tasks().await {
-        Ok(tasks) => render_tasks_note(&tasks, SystemEnvironment.now(), metadata)
+    match tasks {
+        Ok(tasks) => render_tasks_note(&tasks, SystemEnvironment.now(), &context.room.metadata)
             .into_iter()
             .collect(),
         Err(error) => {

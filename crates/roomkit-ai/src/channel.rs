@@ -1852,10 +1852,7 @@ impl<P: AiProvider> AiChannel<P> {
         let live = self.admission_toolbox()?;
         let owned = crate::tools::owner::with_owner_tools(&live, turn.as_ref())?;
         let configured = self.turn_configs.resolve(&binding, &context).await?;
-        let context = context::with_channel_rows(
-            context,
-            turn.as_ref().map_or(&[], roomkit::TurnHost::channel_rows),
-        );
+        let context = self.wired_rows(&event, context, turn.as_ref()).await;
         let owned = self.host_toolbox(&owned);
         let configured = configured.as_ref();
         let mut settings = self.turn_settings(&binding, configured)?;
@@ -1977,7 +1974,12 @@ impl<P> AiChannel<P> {
         let mut notes = self.planner.as_ref().map_or_else(Vec::new, |planner| {
             planner.notes(&context.room.id, standalone)
         });
-        notes.extend(tasks_note::tasks_notes(turn, &context.room.metadata, standalone).await);
+        let wiring = self
+            .wiring
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        notes.extend(tasks_note::tasks_notes(turn, wiring, context, standalone).await);
         notes.extend(roomkit::discussion_notes(event));
         notes
     }

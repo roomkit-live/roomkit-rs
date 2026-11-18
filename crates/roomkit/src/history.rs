@@ -33,11 +33,11 @@ use crate::store::{ConversationStore, EventFilter, ListEventsOptions, StoreError
 /// How many of the channel's latest tool-call rows a turn reads for its tool
 /// memory: a start and an end for each of the 30 calls the Python
 /// implementation reads (`TOOL_MEMORY_CALLS`).
-const TOOL_ROWS: u64 = 60;
+pub(crate) const TOOL_ROWS: u64 = 60;
 
 /// How many of the channel's own rows a turn's history reads from the store
 /// at a time (Python's `_HISTORY_ROWS_PAGE`).
-const HISTORY_ROWS_PAGE: u64 = 500;
+pub(crate) const HISTORY_ROWS_PAGE: u64 = 500;
 
 /// `context`, the one the pipeline hands `binding`'s channel for its turn
 /// on `event`, with its history read from `store`: the room's latest
@@ -197,8 +197,22 @@ async fn private_rows<S: ConversationStore>(
         newest_first: true,
         ..ListEventsOptions::default()
     };
-    let replays = |index: u64| from.is_some_and(|after| after.is_none_or(|after| index > after));
     let latest = store.list_events(room, latest_rows).await?;
+    Ok(merged_rows(latest, replayed, from.and_then(replay_start)))
+}
+
+/// The first index after a cursor, starting at zero with no earlier message.
+pub(crate) fn replay_start(after: Option<u64>) -> Option<u64> {
+    after.map_or(Some(0), |index| index.checked_add(1))
+}
+
+/// Merge the agent's recent tool memory with its replayable history once, in index order.
+pub(crate) fn merged_rows(
+    latest: Vec<RoomEvent>,
+    replayed: Vec<RoomEvent>,
+    first_replayed: Option<u64>,
+) -> Vec<RoomEvent> {
+    let replays = |index: u64| first_replayed.is_some_and(|first| index >= first);
     let mut rows: Vec<_> = latest
         .into_iter()
         .map(|mut row| {
@@ -214,7 +228,7 @@ async fn private_rows<S: ConversationStore>(
     rows.extend(replayed);
     rows.sort_by_key(|row| row.index);
     rows.dedup_by(|later, earlier| later.id == earlier.id);
-    Ok(rows)
+    rows
 }
 
 async fn read_messages<S: ConversationStore>(
@@ -286,17 +300,32 @@ async fn replayed_rows<S: ConversationStore>(
     store: &S,
     binding: &ChannelBinding,
     room_id: &RoomId,
-    mut after: Option<u64>,
+    after: Option<u64>,
 ) -> Result<Vec<RoomEvent>, StoreError> {
-    let mut rows = Vec::new();
-    loop {
+    replay_pages(after, |after| {
         let page = ListEventsOptions {
             limit: HISTORY_ROWS_PAGE,
             event_filter: Some(history_rows(&binding.channel_id)),
             after_index: after,
             ..ListEventsOptions::default()
         };
-        let page = store.list_events(room_id, page).await?;
+        store.list_events(room_id, page)
+    })
+    .await
+}
+
+/// Read an agent's replay rows in bounded pages, dropping private SDK markers.
+pub(crate) async fn replay_pages<E, F, Fut>(
+    mut after: Option<u64>,
+    mut read: F,
+) -> Result<Vec<RoomEvent>, E>
+where
+    F: FnMut(Option<u64>) -> Fut,
+    Fut: Future<Output = Result<Vec<RoomEvent>, E>>,
+{
+    let mut rows = Vec::new();
+    loop {
+        let page = read(after).await?;
         let full = u64::try_from(page.len()).is_ok_and(|read| read >= HISTORY_ROWS_PAGE);
         after = page.last().map(|last| last.index).or(after);
         rows.extend(page.into_iter().map(|mut row| {

@@ -79,8 +79,23 @@ async fn wiring_retains_the_last_admitted_room_until_its_last_channel_detaches()
 }
 
 struct Env {
+    rows: Vec<RoomEvent>,
+    tasks: Vec<roomkit::model::Metadata>,
+    row_reads: Mutex<Vec<Option<u64>>>,
     context: RoomContext,
     events: Mutex<Vec<String>>,
+}
+
+impl Env {
+    fn new(context: RoomContext) -> Self {
+        Self {
+            context,
+            events: Mutex::default(),
+            rows: Vec::new(),
+            tasks: Vec::new(),
+            row_reads: Mutex::default(),
+        }
+    }
 }
 
 impl WiringEnv for Env {
@@ -103,10 +118,25 @@ impl WiringEnv for Env {
         &'a self,
         _: &'a RoomId,
         _: &'a ChannelId,
-        _: Option<u64>,
-        _: u64,
+        after: Option<u64>,
+        limit: u64,
     ) -> TurnFuture<'a, Result<Vec<RoomEvent>, RoomKitError>> {
-        Box::pin(async { Ok(Vec::new()) })
+        Box::pin(async move {
+            self.row_reads.lock().unwrap().push(after);
+            Ok(self
+                .rows
+                .iter()
+                .filter(|row| after.is_none_or(|i| row.index > i))
+                .take(usize::try_from(limit).unwrap())
+                .cloned()
+                .collect())
+        })
+    }
+    fn room_tasks<'a>(
+        &'a self,
+        _: &'a RoomId,
+    ) -> TurnFuture<'a, Result<Vec<roomkit::model::Metadata>, RoomKitError>> {
+        Box::pin(async { Ok(self.tasks.clone()) })
     }
     fn message_before<'a>(
         &'a self,
@@ -135,12 +165,7 @@ async fn wiring_before_registration_retains_the_environment_selected_for_the_cha
     .await
     .unwrap();
     assert_eq!(&local.env.context(room, None).await.unwrap().room.id, room);
-    let select = || {
-        Arc::new(Env {
-            context: link.request.context.clone(),
-            events: Mutex::default(),
-        })
-    };
+    let select = || Arc::new(Env::new(link.request.context.clone()));
     let first = select();
     let second = select();
     let channel = AiChannel::new(
@@ -176,10 +201,7 @@ async fn wiring_an_unregistered_ai_channel_activates_its_external_tool_gate() {
 
     let (link, _, _) = link(false);
     let worker = worker();
-    let env = Arc::new(Env {
-        context: link.request.context.clone(),
-        events: Mutex::default(),
-    });
+    let env = Arc::new(Env::new(link.request.context.clone()));
     worker.use_wiring(Arc::<Env>::clone(&env));
     worker
         .hook(
@@ -222,5 +244,60 @@ async fn wiring_an_unregistered_ai_channel_activates_its_external_tool_gate() {
     assert!(!decision.approved);
     assert!(decision.reason.contains("approval in r1"));
     assert_eq!(*env.events.lock().unwrap(), ["before_tool_use"]);
+    worker.close().await;
+}
+
+#[tokio::test]
+async fn wiring_reads_own_history_in_pages_and_the_ai_reads_tasks_before_registration() {
+    use roomkit::model::{EventId, EventType};
+    use roomkit_ai::testing::ScriptedRound;
+    let (link, _, _) = link(false);
+    let request = &link.request;
+    let mut env = Env::new(request.context.clone());
+    env.rows = (0..501)
+        .map(|index| {
+            let mut row = request.event.clone();
+            row.id = EventId::new(format!("instruction-{index}")).unwrap();
+            row.index = index;
+            row.source.channel_id = request.channel_id.clone();
+            row.r#type = EventType::InstructionRead;
+            row
+        })
+        .collect();
+    let task =
+        serde_json::json!({"agent":"helper","task":"prepare the wiring audit","status":"running"});
+    env.tasks.push(task.as_object().unwrap().clone());
+    let env = Arc::new(env);
+    let worker = worker();
+    worker.use_wiring(Arc::<Env>::clone(&env));
+    let rows = worker
+        .wiring()
+        .tool_history(&request.channel_id, &request.room_id, None)
+        .await
+        .unwrap();
+    assert_eq!(rows, env.rows);
+    assert_eq!(*env.row_reads.lock().unwrap(), [None, Some(499)]);
+    let provider = ScriptedProvider::new([ScriptedRound::writing(["done"])]);
+    let ai = AiChannel::new(
+        request.channel_id.clone(),
+        provider.clone(),
+        AiChannelOptions::default(),
+    )
+    .unwrap();
+    worker.wire(&ai);
+    ai.on_event(
+        request.event.clone(),
+        request.binding.clone(),
+        request.context.clone(),
+    )
+    .await
+    .unwrap();
+    let calls = provider.requests();
+    assert_eq!(calls.len(), 1);
+    assert!(format!("{:?}", calls.first().unwrap().messages).contains("prepare the wiring audit"));
+    assert_eq!(
+        *env.row_reads.lock().unwrap(),
+        [None, Some(499), None, Some(499)]
+    );
     worker.close().await;
 }
