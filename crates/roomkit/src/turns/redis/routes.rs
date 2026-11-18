@@ -2,7 +2,7 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
-use tokio::time::Instant;
+mod history;
 
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
@@ -21,8 +21,7 @@ pub(super) struct Routes {
     answers: HashMap<String, (String, oneshot::Sender<String>)>,
     turns: HashMap<String, TurnEndpoint>,
     observing: bool,
-    handled: HashMap<(String, String), Option<String>>,
-    expires: VecDeque<(Instant, (String, String))>,
+    history: history::Histories,
 }
 
 struct TurnEndpoint {
@@ -60,24 +59,6 @@ impl Routes {
             .filter(|(_, e)| e.worker)
             .map(|(id, _)| id.clone())
             .collect()
-    }
-
-    fn first(&mut self, msg: &Message) -> Result<(), Option<String>> {
-        let now = Instant::now();
-        while self.expires.front().is_some_and(|(at, _)| {
-            now.duration_since(*at) >= Duration::from_secs(600) || self.expires.len() >= 100_000
-        }) {
-            if let Some((_, key)) = self.expires.pop_front() {
-                self.handled.remove(&key);
-            }
-        }
-        let key = (msg.sender.clone(), msg.reference.clone());
-        if let Some(answer) = self.handled.get(&key) {
-            return Err(answer.clone());
-        }
-        self.expires.push_back((now, key.clone()));
-        self.handled.insert(key, None);
-        Ok(())
     }
 
     /// Subscribe this accepted handover. Only the first subscription starts a reader.
@@ -218,10 +199,7 @@ impl RedisTurnBackend {
 
     pub(super) fn answer(&self, msg: &Message, body: String) -> Result<(), RoomKitError> {
         let body = crate::turns::wire::peer_error_payload(body).map_err(RoomKitError::Value)?;
-        let key = (msg.sender.clone(), msg.reference.clone());
-        if let Some(slot) = lock(&self.0.routes).handled.get_mut(&key) {
-            *slot = Some(body.clone());
-        }
+        lock(&self.0.routes).answered(msg, &body);
         self.post_unconfirmed(
             &msg.sender,
             &Message::new("answer", self.node_id(), body, "", &msg.reference),
@@ -353,3 +331,6 @@ async fn receive(node: Weak<Node>, mut stop: watch::Receiver<bool>) {
         }
     }
 }
+
+#[cfg(test)]
+mod history_tests;
