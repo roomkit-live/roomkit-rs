@@ -1637,3 +1637,30 @@ python = "roomkit.TurnCutShortError.__init__"
 params = ["message"]
 approved = "2026-11-17"
 reason = "the constructor captures Python's exception message, which Display reads (HITL on the five public error types)"
+
+[[exception]]
+rust = "roomkit::turns::ServedExecutor"
+approved = "2026-11-18"
+reason = "A backend receives the store-independent view of the same executor that owns the channel hooks (HITL 905d797e)."
+
+[[exception]]
+rust = "roomkit::TurnExecutor"
+members = ["new_with_host_predicate"]
+approved = "2026-11-18"
+reason = "Python accepts a callable in hosts. A named constructor accepts the Rust closure and retains its identity on local snapshots (HITL 32eff891)."
+
+[[exception]]
+rust = "roomkit::turns::ErrorClasses"
+approved = "2026-11-18"
+reason = "Registers native encoders and decoders for the application error classes Python accepts in error_classes (HITL aaf23149)."
+
+[[exception]]
+rust = "roomkit::turns::RemoteTurnDetails"
+approved = "2026-11-18"
+reason = "Retains the received record, the decoded native error and its typed causes for inspection and forwarding (HITL aaf23149)."
+
+[[exception]]
+rust = "roomkit::RoomKitError::RemoteTurn"
+members = ["detail"]
+approved = "2026-11-18"
+reason = "Carries the received exception's wire record and native type through a Rust error variant (HITL aaf23149)."
