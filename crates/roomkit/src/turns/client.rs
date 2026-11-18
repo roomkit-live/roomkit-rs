@@ -15,7 +15,7 @@ pub(super) use services::Services;
 
 use super::wire::{HostResult, OwnerMessage, OwnerMessageEnvelope};
 use super::{ChannelControl, ChannelResult};
-use super::{ErrorClasses, ServedExecutor, SteerAddress, TurnBackend, TurnTimeouts, Turns};
+use super::{ErrorClasses, ServedExecutor, SteerAddress, TurnBackendHandle, TurnTimeouts, Turns};
 use crate::human_input::PendingInputEvent;
 use crate::steering::SteeringDirective;
 use crate::telemetry::TelemetryProvider;
@@ -70,7 +70,7 @@ pub struct TurnClient {
 
 struct State {
     calls: calls::Calls,
-    backend: Arc<dyn TurnBackend>,
+    backend: TurnBackendHandle,
     services: Arc<Services>,
     turns: Arc<Turns>,
     // Supplies task ownership and cancellation to the existing frame reader.
@@ -98,10 +98,10 @@ impl fmt::Debug for TurnClient {
 
 impl TurnClient {
     /// Create the owner. The first run or control registers it with the backend.
-    pub fn new(backend: Arc<dyn TurnBackend>, options: TurnClientOptions) -> Self {
+    pub fn new(backend: TurnBackendHandle, options: TurnClientOptions) -> Self {
         let timeouts = options.timeouts;
         let services = Arc::new(Services::new(options));
-        let application = super::application::Application::new(Arc::clone(&backend));
+        let application = super::application::Application::new(backend.clone());
         let turns = Arc::new(Turns {
             application: Some(application),
             client: Some(Arc::clone(&services)),
@@ -122,7 +122,7 @@ impl TurnClient {
         Self { state }
     }
     /// The configured turn transport.
-    pub fn backend(&self) -> &Arc<dyn TurnBackend> {
+    pub fn backend(&self) -> &TurnBackendHandle {
         &self.state.backend
     }
     /// The executor served at first use, when supplied.
@@ -189,7 +189,7 @@ impl TurnClient {
         self.state.turns.ready().await?;
         self.state
             .turns
-            .client_control(self.backend().as_ref(), message)
+            .client_control(self.backend(), message)
             .await
     }
     /// Read and settle human-input requests of this owner.

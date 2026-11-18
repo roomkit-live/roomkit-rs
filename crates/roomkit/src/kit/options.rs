@@ -51,7 +51,7 @@ const DELIVERY_GAP_TIMEOUT: Duration = Duration::from_secs(30);
 /// `RoomKit::new(RoomKitOptions { process_timeout, ..RoomKitOptions::with_store(store) })`.
 pub struct RoomKitOptions<S = InMemoryStore> {
     /// Python `turn_backend=None`: transport for the kit’s turns and channel controls.
-    pub turn_backend: Option<Arc<dyn crate::turns::TurnBackend>>,
+    pub turn_backend: Option<crate::turns::TurnBackendHandle>,
     /// Application errors reconstructed on the owner and its own executor.
     pub error_classes: crate::turns::ErrorClasses,
     /// Python `store=None`: where rooms and their timelines live (RFC §14),

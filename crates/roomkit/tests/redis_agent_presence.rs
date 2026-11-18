@@ -92,7 +92,7 @@ impl Room {
         let kit = RoomKit::new(RoomKitOptions {
             realtime: Some(Arc::<InMemoryRealtime>::clone(&self.realtime)),
             store: Arc::clone(&self.store),
-            turn_backend: Some(Arc::new(node)),
+            turn_backend: Some(roomkit::turns::TurnBackendHandle::new(Arc::new(node))),
             ..Default::default()
         });
         kit.register_channel(ChannelDeclaration {
@@ -440,7 +440,9 @@ async fn attaching_a_live_agent_identifies_an_executor_already_served() {
     };
     let backend = node();
     let owner = RoomKit::new(RoomKitOptions {
-        turn_backend: Some(Arc::new(backend.clone())),
+        turn_backend: Some(roomkit::turns::TurnBackendHandle::new(Arc::new(
+            backend.clone(),
+        ))),
         ..Default::default()
     });
     let own = owner.turn_executor();

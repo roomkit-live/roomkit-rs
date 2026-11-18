@@ -192,7 +192,9 @@ async fn peer(role: &str) -> TestResult {
         return executor(&backend, timeouts).await;
     }
     let kit = RoomKit::new(RoomKitOptions {
-        turn_backend: Some(std::sync::Arc::new(backend)),
+        turn_backend: Some(roomkit::turns::TurnBackendHandle::new(std::sync::Arc::new(
+            backend,
+        ))),
         ..RoomKitOptions::default()
     });
     let observations = match role {

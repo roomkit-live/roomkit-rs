@@ -56,7 +56,7 @@ fn output(streams: bool) -> Frame {
 async fn runs_without_a_local_worker_and_keeps_previous_turns_and_hooks() {
     let backend = Arc::new(Backend::default());
     let client = TurnClient::new(
-        Arc::<Backend>::clone(&backend),
+        roomkit::turns::TurnBackendHandle::new(Arc::<Backend>::clone(&backend)),
         TurnClientOptions::default(),
     );
     let r = fixture();
@@ -108,7 +108,10 @@ async fn rebuilds_the_original_error_before_output_and_during_a_pulled_stream() 
         error_classes: classes,
         ..TurnClientOptions::default()
     };
-    let client = TurnClient::new(Arc::<Backend>::clone(&backend), options);
+    let client = TurnClient::new(
+        roomkit::turns::TurnBackendHandle::new(Arc::<Backend>::clone(&backend)),
+        options,
+    );
     let mut error = ErrorRecord::new("example:Unavailable", "retry after the backup");
     error.bases = vec!["example:Recoverable".into()];
     error.args = vec![json!(3)];

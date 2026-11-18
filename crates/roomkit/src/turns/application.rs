@@ -3,7 +3,9 @@ mod bridge;
 pub(super) use bridge::{ActiveLink, run_link};
 
 use super::wire::{HostResult, OwnerMessage, OwnerMessageEnvelope};
-use super::{RoomCall, RoomOwner, RoomPublication, ServedExecutor, TurnBackend, TurnFuture, Turns};
+use super::{
+    RoomCall, RoomOwner, RoomPublication, ServedExecutor, TurnBackendHandle, TurnFuture, Turns,
+};
 use crate::kit::Inner;
 use crate::{ConversationStore, RoomKit, RoomKitError};
 use std::fmt;
@@ -11,7 +13,7 @@ use std::sync::{Arc, OnceLock, Weak};
 use tokio::sync::OnceCell;
 
 pub(crate) struct Application {
-    pub(crate) backend: Arc<dyn TurnBackend>,
+    pub(crate) backend: TurnBackendHandle,
     owner: OnceLock<Arc<dyn RoomOwner>>,
     attending: OnceCell<()>,
     serving: OnceCell<()>,
@@ -24,7 +26,7 @@ impl fmt::Debug for Application {
 }
 
 impl Application {
-    pub(super) fn new(backend: Arc<dyn TurnBackend>) -> Self {
+    pub(super) fn new(backend: TurnBackendHandle) -> Self {
         Self {
             backend,
             owner: OnceLock::new(),

@@ -42,9 +42,11 @@ pub use public_options::{HookOptions, RoomHookOptions, TakesOptions};
 pub(crate) mod redis;
 #[cfg(feature = "redis")]
 pub use redis::{RedisTurnBackend, RedisTurnBackendOptions};
+mod backend_handle;
+pub use backend_handle::TurnBackendHandle;
 mod local_presence_claims;
 mod presence;
-pub use local_presence_claims::LocalPresenceClaims;
+use local_presence_claims::LocalPresenceClaims;
 pub(crate) use presence::LocalHosts;
 pub use presence::{AgentPresence, ExecutorInfo, ExecutorInfoOptions};
 
@@ -264,7 +266,7 @@ impl Drop for Reading {
 }
 
 impl Turns {
-    pub(crate) fn with_backend(backend: Option<Arc<dyn TurnBackend>>) -> Self {
+    pub(crate) fn with_backend(backend: Option<TurnBackendHandle>) -> Self {
         let mut turns = Self::default();
         if let Some(backend) = backend {
             if let Some(timeouts) = backend.timeouts() {
@@ -272,7 +274,7 @@ impl Turns {
             }
             #[cfg(feature = "redis")]
             if let Some(redis) =
-                (backend.as_ref() as &dyn std::any::Any).downcast_ref::<RedisTurnBackend>()
+                (&*backend as &dyn std::any::Any).downcast_ref::<RedisTurnBackend>()
             {
                 turns.remote = Some(redis.clone());
             }
@@ -281,8 +283,8 @@ impl Turns {
         turns
     }
 
-    pub(crate) fn configured_backend(&self) -> Option<&dyn TurnBackend> {
-        self.application.as_ref().map(|app| app.backend.as_ref())
+    pub(crate) fn configured_backend(&self) -> Option<&TurnBackendHandle> {
+        self.application.as_ref().map(|app| &app.backend)
     }
 
     /// Native Redis hands the already-carried request directly to its bridge.

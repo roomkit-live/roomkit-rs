@@ -53,7 +53,11 @@ async fn the_public_backend_publishes_each_agent_transition_before_returning() {
         events: sent,
     });
     let kit = RoomKit::new(RoomKitOptions {
-        turn_backend: Some(Arc::<InMemoryTurnBackend>::clone(&backend)),
+        turn_backend: Some(roomkit::turns::TurnBackendHandle::new(Arc::<
+            InMemoryTurnBackend,
+        >::clone(
+            &backend
+        ))),
         realtime: Some(realtime),
         ..Default::default()
     });

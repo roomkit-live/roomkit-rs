@@ -115,7 +115,9 @@ async fn room_turn_on_local_node(loop_back: bool, own_channel: bool) {
         node.serve(worker("in-process")).await.unwrap();
     }
     let kit = RoomKit::new(RoomKitOptions {
-        turn_backend: Some(std::sync::Arc::new(node.clone())),
+        turn_backend: Some(crate::turns::TurnBackendHandle::new(std::sync::Arc::new(
+            node.clone(),
+        ))),
         ..Default::default()
     });
     let room: RoomId = "r".parse().unwrap();

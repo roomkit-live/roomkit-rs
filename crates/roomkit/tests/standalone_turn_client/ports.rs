@@ -145,7 +145,7 @@ async fn custom_ports_read_the_submitted_request_and_reject_an_unrelated_room() 
     let backend = Arc::new(Backend::default());
     let service = Arc::new(Services::default());
     let client = TurnClient::new(
-        Arc::<Backend>::clone(&backend),
+        roomkit::turns::TurnBackendHandle::new(Arc::<Backend>::clone(&backend)),
         TurnClientOptions {
             host: Some(Arc::<Services>::clone(&service)),
             tools: Some(Arc::<Services>::clone(&service)),

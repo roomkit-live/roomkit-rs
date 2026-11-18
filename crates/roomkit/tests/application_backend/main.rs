@@ -1,5 +1,6 @@
 //! An application supplies the transport of a kit backed by memory.
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
+mod presence;
 mod scenario;
 
 #[tokio::test]

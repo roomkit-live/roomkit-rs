@@ -2,13 +2,13 @@
 use super::{Claim, Watch};
 use crate::kit::{Inner, RoomKit};
 use crate::tasks::Kind;
-use crate::turns::TurnBackend;
+use crate::turns::TurnBackendHandle;
 use crate::{ConversationStore, RoomKitError};
 use roomkit_core::model::{ChannelCategory, ChannelId, RoomId};
 use std::sync::{Arc, PoisonError, Weak, atomic::Ordering};
 
 pub(super) async fn reserve(
-    backend: &dyn TurnBackend,
+    backend: &TurnBackendHandle,
     claim: &Claim,
     room: &RoomId,
     channel: &ChannelId,
@@ -27,7 +27,7 @@ pub(super) async fn reserve(
     result
 }
 
-pub(super) async fn forget(backend: &dyn TurnBackend, room: &RoomId, channel: &ChannelId) {
+pub(super) async fn forget(backend: &TurnBackendHandle, room: &RoomId, channel: &ChannelId) {
     if let Err(error) = backend
         .claim_presence(channel.as_str(), room.as_str(), None)
         .await
@@ -72,7 +72,7 @@ impl Watch {
         }));
     }
 
-    async fn finish_forgets<S: ConversationStore>(&self, store: &S, backend: &dyn TurnBackend) {
+    async fn finish_forgets<S: ConversationStore>(&self, store: &S, backend: &TurnBackendHandle) {
         let rooms = std::mem::take(
             &mut *self
                 .remote
@@ -108,7 +108,7 @@ impl<S: ConversationStore> RoomKit<S> {
         }
     }
 
-    pub(in crate::kit) async fn release_pending_presence(&self, backend: &dyn TurnBackend) {
+    pub(in crate::kit) async fn release_pending_presence(&self, backend: &TurnBackendHandle) {
         let watch = &self.inner.agent_presence;
         // A realtime publisher may itself close the kit while it holds the publication gate.
         let keys: Vec<_> = watch

@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use roomkit::testing::{EchoAgent, EchoAgentOptions};
 use roomkit::turns::wire::{Control, Frame};
-use roomkit::turns::{TurnBackend, TurnRequest};
+use roomkit::turns::{TurnBackendHandle, TurnRequest};
 use roomkit::{
     RedisTurnBackend, RedisTurnBackendOptions, RoomKitError, TurnExecutor, TurnExecutorOptions,
 };
@@ -17,8 +17,8 @@ fn request() -> TurnRequest {
     serde_json::from_value(row["message"].clone()).unwrap()
 }
 
-fn backend(prefix: &str) -> Arc<dyn TurnBackend> {
-    Arc::new(
+fn backend(prefix: &str) -> TurnBackendHandle {
+    TurnBackendHandle::new(Arc::new(
         RedisTurnBackend::new(
             Some(&std::env::var("REDIS_URL").unwrap()),
             RedisTurnBackendOptions {
@@ -27,10 +27,10 @@ fn backend(prefix: &str) -> Arc<dyn TurnBackend> {
             },
         )
         .unwrap(),
-    )
+    ))
 }
 
-async fn submit_and_read(owner: &dyn TurnBackend, worker_node: &dyn TurnBackend) {
+async fn submit_and_read(owner: &TurnBackendHandle, worker_node: &TurnBackendHandle) {
     let worker = TurnExecutor::new(
         |id| {
             std::future::ready(Ok(Some(EchoAgent::new(
@@ -108,13 +108,14 @@ async fn the_public_redis_backend_carries_an_admitted_turn_locally_and_across_no
         for remote in [false, true] {
             let prefix = format!("test:roomkit:public-link:{}", Uuid::new_v4());
             let owner = backend(&prefix);
-            let worker = if remote {backend(&prefix)} else {Arc::clone(&owner)};
+            let worker = if remote {backend(&prefix)} else {owner.clone()};
             let missing = request();
             assert!(matches!(owner.submit(missing.clone()).await, Err(RoomKitError::TurnLink {reason, ..}) if reason == "no_executor"));
             assert!(!missing.handed());
-            submit_and_read(&*owner, &*worker).await;
+            submit_and_read(&owner, &worker).await;
             worker.close().await.unwrap();
             owner.close().await.unwrap();
+            assert!(owner.claim_presence("ai", "r1", None).await.is_err());
             let closed = request();
             assert!(matches!(owner.submit(closed.clone()).await, Err(RoomKitError::TurnLink {reason,..}) if reason == "backend_closed"));
             assert!(!closed.handed());

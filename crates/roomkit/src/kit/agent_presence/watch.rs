@@ -44,7 +44,7 @@ impl Watch {
         &self,
         room: &RoomId,
         channel: &ChannelId,
-        backend: Option<&dyn crate::turns::TurnBackend>,
+        backend: Option<&crate::turns::TurnBackendHandle>,
     ) {
         // The room mutation has finished and released its lock. An earlier
         // publication finishes before this detach forgets its claim.

@@ -54,7 +54,7 @@ async fn closing_a_client_interrupts_other_calls_but_retains_the_call_which_clos
             entered: Mutex::new(Some(entered)),
         });
         let client = Arc::new(TurnClient::new(
-            Arc::<Backend>::clone(&backend),
+            roomkit::turns::TurnBackendHandle::new(Arc::<Backend>::clone(&backend)),
             TurnClientOptions {
                 host: Some(Arc::<Host>::clone(&host)),
                 ..TurnClientOptions::default()

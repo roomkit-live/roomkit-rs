@@ -182,7 +182,9 @@ mod tests {
         )
         .unwrap();
         let kit = RoomKit::new(RoomKitOptions {
-            turn_backend: Some(std::sync::Arc::new(backend)),
+            turn_backend: Some(crate::turns::TurnBackendHandle::new(std::sync::Arc::new(
+                backend,
+            ))),
             ..Default::default()
         });
         let candidates = ["ana", "bob"].map(|name| ChannelId::new(name).unwrap());

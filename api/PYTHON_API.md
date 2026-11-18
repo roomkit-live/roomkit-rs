@@ -58,6 +58,7 @@ the mapping and its tests. The check does not generate or update this document.
 | `roomkit_ai::speaking::SpeakMode` | `SpeakDecision.mode` | Literal `speak`, `offer`, `silent`; no implicit mode. |
 | `roomkit::TurnHost::room_vision` | `roomkit.TurnHost.room_vision` | Reads the owner's optional camera note while the turn is open. A Rust text-only owner returns `None`; video analysis is outside the text SDK. |
 | `roomkit::TurnHost::room_context` | `roomkit.TurnHost.room_context` | `Result<Metadata, RoomKitError>` reads fresh owned JSON, including history despite a zero channel window; failures keep the existing kit mapping and store causes. |
+| `roomkit::turns::TurnBackendHandle` | `roomkit.turns.TurnBackend` instance | Clone the handle for each kit and client to share the transport and its default presence claims. Distributed transports may supply their own claims (HITL a12b3f92). |
 | `roomkit::RedisTurnBackend::new`, `roomkit::turns::RedisTurnBackend::new`, `roomkit::RedisTurnBackendOptions` | `roomkit.RedisTurnBackend(url=None)` | With the `redis` feature, pass `None` for an omitted URL. Both omission and an empty string select `redis://localhost:6379`. Pass the application's `redis::aio::ConnectionManager` as `client` to retain its data connection and timeouts. Supplying a client requires a URL for the independent heartbeat and inbox connections. Clones share the same backend identity. |
 | `roomkit::TurnExecutor::new`, `roomkit::TurnExecutorOptions` | `roomkit.TurnExecutor.__init__` | The factory asynchronously returns an optional channel. The listed hosts, organizations and executor ID are supplied through options. A worker starts serving when its backend's `serve` completes. |
 | `roomkit::turns::ServedExecutor` | `roomkit.TurnBackend.serve(executor)` | A backend accepts an executor backed by any conversation store. The application keeps the typed executor to register hooks. |
@@ -562,7 +563,8 @@ request, frames, controls and envelopes are in `roomkit::turns::wire`. The
 request and channel call track handover locally. Their serialized copies
 start with a fresh handover marker.
 
-Set `RoomKitOptions::turn_backend` to `Some(Arc::new(backend))` to run the
+Create a `roomkit::turns::TurnBackendHandle::new(Arc::new(transport))` and set
+`RoomKitOptions::turn_backend` to `Some(backend.clone())` to run the
 kit's turns and channel controls through an application implementation of
 `roomkit::turns::TurnBackend`. On first use the kit calls `attend(owner)`,
 then `serve(executor)`. The `ServedExecutor` view is independent of the
@@ -574,9 +576,12 @@ after the turn by calling `reach_owner`.
 kit returns a set containing `"*"`. A standalone worker can serve rooms without
 an organization by leaving its declaration at `None`.
 
-A backend implements `submit`, `serve`, `control`, `claim_presence` and
-`close`. A single-process transport can delegate `claim_presence` to a
-`LocalPresenceClaims` field. A transport that tracks executor availability
+A backend implements `submit`, `serve`, `control` and `close`. Clone the same
+handle for the kit, the standalone `TurnClient` and direct calls. Its default
+`claim_presence` remembers a change once per room and channel. Detach forgets
+the pair. Independent handles each own their default claims. A distributed
+transport can return `Some(future)` from its trait override to share claims
+across processes, as the Redis backend does. A transport that tracks executor availability
 implements `executors` and returns true from `lists_executors`. It can
 override `executors_now` for a fresh read when a decision would skip a turn.
 The Redis feature provides this interface for a Redis deployment.

@@ -6,11 +6,11 @@ use std::sync::Mutex;
 /// Hold one instance per backend. A distributed backend implements the same
 /// operation in the store shared by its room owners.
 #[derive(Debug, Default)]
-pub struct LocalPresenceClaims(Mutex<BTreeMap<(String, String), bool>>);
+pub(super) struct LocalPresenceClaims(Mutex<BTreeMap<(String, String), bool>>);
 
 impl LocalPresenceClaims {
     /// Claim a transition once. Forgetting a detached room/channel pair returns false.
-    pub fn claim(&self, channel_id: &str, room_id: &str, online: Option<bool>) -> bool {
+    pub(super) fn claim(&self, channel_id: &str, room_id: &str, online: Option<bool>) -> bool {
         let mut claims = super::lock(&self.0);
         let key = (channel_id.to_owned(), room_id.to_owned());
         if let Some(value) = online {

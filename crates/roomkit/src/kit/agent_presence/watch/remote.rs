@@ -34,7 +34,7 @@ impl<S: ConversationStore> RoomKit<S> {
             return;
         };
         if let Some(memory) =
-            (backend as &dyn std::any::Any).downcast_ref::<crate::InMemoryTurnBackend>()
+            (&**backend as &dyn std::any::Any).downcast_ref::<crate::InMemoryTurnBackend>()
         {
             let weak = self.downgrade();
             memory.coverage.subscribe(Arc::new(move || {

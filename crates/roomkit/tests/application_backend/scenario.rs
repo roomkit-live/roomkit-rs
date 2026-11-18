@@ -13,8 +13,8 @@ use roomkit::testing::{
 };
 use roomkit::turns::wire::{Control, Frame, WireOutput};
 use roomkit::turns::{
-    ChannelControl, ChannelResult, LocalPresenceClaims, RoomOwner, ServedExecutor, TurnBackend,
-    TurnFuture, TurnLink, TurnRequest,
+    ChannelControl, ChannelResult, RoomOwner, ServedExecutor, TurnBackend, TurnFuture, TurnLink,
+    TurnRequest,
 };
 use roomkit::{
     AttachChannelOptions, ChannelCallOptions, ConversationStore, CreateRoomOptions,
@@ -27,7 +27,7 @@ struct Backend {
     calls: Mutex<Vec<&'static str>>,
     owner: Mutex<Option<Arc<dyn RoomOwner>>>,
     attended_executor: Mutex<Option<Weak<dyn ServedExecutor>>>,
-    claims: LocalPresenceClaims,
+    presence: Mutex<Option<bool>>,
     releases: Arc<AtomicUsize>,
 }
 
@@ -116,10 +116,11 @@ impl TurnBackend for Backend {
         channel_id: &'a str,
         room_id: &'a str,
         online: Option<bool>,
-    ) -> TurnFuture<'a, Result<bool, RoomKitError>> {
-        Box::pin(async move {
+    ) -> Option<TurnFuture<'a, Result<bool, RoomKitError>>> {
+        Some(Box::pin(async move {
             assert_eq!((channel_id, room_id), ("agent", "room"));
-            let changed = self.claims.claim(channel_id, room_id, online);
+            let previous = std::mem::replace(&mut *self.presence.lock().unwrap(), online);
+            let changed = online.is_some() && online != previous;
             if changed || online.is_none() {
                 let operation = match online {
                     Some(true) => "online",
@@ -129,7 +130,7 @@ impl TurnBackend for Backend {
                 self.calls.lock().unwrap().push(operation);
             }
             Ok(changed)
-        })
+        }))
     }
 
     fn close(&self) -> TurnFuture<'_, Result<(), RoomKitError>> {
@@ -272,7 +273,7 @@ async fn assert_history<S: ConversationStore>(kit: &RoomKit<S>, room: &RoomId) {
 
 fn new_kit<S: ConversationStore>(store: S) -> (RoomKit<S>, Arc<Backend>) {
     let backend = Arc::new(Backend::default());
-    let application: Arc<dyn TurnBackend> = Arc::<Backend>::clone(&backend);
+    let application = roomkit::turns::TurnBackendHandle::new(Arc::<Backend>::clone(&backend));
     let kit = RoomKit::new(RoomKitOptions {
         turn_backend: Some(application),
         ..RoomKitOptions::with_store(store)

@@ -51,8 +51,8 @@ impl TurnBackend for RedisTurnBackend {
         channel_id: &'a str,
         room_id: &'a str,
         online: Option<bool>,
-    ) -> TurnFuture<'a, Result<bool, RoomKitError>> {
-        Box::pin(self.claim_presence(channel_id, room_id, online))
+    ) -> Option<TurnFuture<'a, Result<bool, RoomKitError>>> {
+        Some(Box::pin(self.claim_presence(channel_id, room_id, online)))
     }
 
     fn executors(&self) -> TurnFuture<'_, Result<Vec<ExecutorInfo>, RoomKitError>> {

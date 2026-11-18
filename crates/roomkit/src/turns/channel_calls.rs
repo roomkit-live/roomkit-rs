@@ -293,7 +293,7 @@ impl Turns {
 impl Turns {
     pub(super) async fn client_control(
         &self,
-        backend: &dyn super::TurnBackend,
+        backend: &super::TurnBackendHandle,
         mut message: ChannelControl,
     ) -> Result<Option<ChannelResult>, RoomKitError> {
         match &mut message {

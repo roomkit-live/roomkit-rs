@@ -11,7 +11,7 @@ use roomkit::model::{
 };
 use roomkit::store::ListEventsOptions;
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
-use roomkit::turns::{InMemoryTurnBackend, TurnBackend};
+use roomkit::turns::{InMemoryTurnBackend, TurnBackendHandle};
 use roomkit::{
     AgentIdentity, AgentPresenceOptions, AttachChannelOptions, ChannelDeclaration,
     ConversationStore, CreateRoomOptions, ProcessInboundOptions, RoomKit, RoomKitError,
@@ -37,7 +37,7 @@ fn worker(
 }
 
 async fn run() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
-    let backend = Arc::new(InMemoryTurnBackend::new());
+    let backend = TurnBackendHandle::new(Arc::new(InMemoryTurnBackend::new()));
     let tenant = worker("acme-pool", Some("acme"), &[("Hi.", "Hello from acme.")])?;
     let platform = worker("platform-pool", None, &[("Hi.", "Hello from platform.")])?;
     for worker in [&tenant, &platform] {

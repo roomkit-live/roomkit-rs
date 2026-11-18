@@ -13,7 +13,7 @@ use std::time::Duration;
 async fn steering_waits_for_the_worker_to_finish_admission_and_close_releases_an_unread_stream() {
     let backend = Arc::new(Backend::default());
     let client = TurnClient::new(
-        Arc::<Backend>::clone(&backend),
+        roomkit::turns::TurnBackendHandle::new(Arc::<Backend>::clone(&backend)),
         TurnClientOptions::default(),
     );
     let r = fixture();
@@ -66,7 +66,7 @@ async fn only_the_requests_tenant_reads_its_inputs_and_an_answer_or_close_withdr
     use serde_json::json;
     let backend = Arc::new(Backend::default());
     let client = TurnClient::new(
-        Arc::<Backend>::clone(&backend),
+        roomkit::turns::TurnBackendHandle::new(Arc::<Backend>::clone(&backend)),
         TurnClientOptions::default(),
     );
     let mut worker = backend.connect();

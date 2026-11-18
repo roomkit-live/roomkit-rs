@@ -53,6 +53,16 @@ impl InMemoryTurnBackend {
         Self::default()
     }
 
+    /// Claim a process-local presence change shared by clones of this transport.
+    pub fn claim_presence<'a>(
+        &'a self,
+        channel_id: &'a str,
+        room_id: &'a str,
+        online: Option<bool>,
+    ) -> TurnFuture<'a, Result<bool, RoomKitError>> {
+        Box::pin(async move { Ok(self.claims.claim(channel_id, room_id, online)) })
+    }
+
     fn open(&self) -> Result<(), RoomKitError> {
         if lock(&self.state).closed {
             return Err(closed());
@@ -184,8 +194,8 @@ impl TurnBackend for InMemoryTurnBackend {
         channel_id: &'a str,
         room_id: &'a str,
         online: Option<bool>,
-    ) -> TurnFuture<'a, Result<bool, RoomKitError>> {
-        Box::pin(async move { Ok(self.claims.claim(channel_id, room_id, online)) })
+    ) -> Option<TurnFuture<'a, Result<bool, RoomKitError>>> {
+        Some(self.claim_presence(channel_id, room_id, online))
     }
 
     fn close(&self) -> TurnFuture<'_, Result<(), RoomKitError>> {

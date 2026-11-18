@@ -23,9 +23,9 @@ async fn the_owner_routes_all_five_controls_to_the_organization_worker() {
     let executor = worker_observing(&events);
     hosting.serve(executor.clone()).await.unwrap();
     let kit = RoomKit::new(RoomKitOptions {
-        turn_backend: Some(Arc::new(
+        turn_backend: Some(crate::turns::TurnBackendHandle::new(Arc::new(
             RedisTurnBackend::new(Some(&url), options).unwrap(),
-        )),
+        ))),
         ..Default::default()
     });
     let agent = support::channel("ai");

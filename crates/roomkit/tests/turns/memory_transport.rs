@@ -222,7 +222,7 @@ async fn a_standalone_turn_client_runs_a_real_worker_on_the_builtin_memory_trans
     let backend = Arc::new(InMemoryTurnBackend::new());
     let worker = echo("actual memory worker");
     let client = TurnClient::new(
-        Arc::<InMemoryTurnBackend>::clone(&backend),
+        roomkit::turns::TurnBackendHandle::new(Arc::<InMemoryTurnBackend>::clone(&backend)),
         TurnClientOptions {
             executor: Some(Arc::<TurnExecutor>::clone(&worker)),
             ..Default::default()

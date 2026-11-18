@@ -9,7 +9,7 @@ use roomkit::store::ListEventsOptions;
 use roomkit::testing::{
     EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
 };
-use roomkit::turns::TurnBackend;
+use roomkit::turns::TurnBackendHandle;
 use roomkit::turns::wire::Frame;
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, ProcessInboundOptions, RoomKit,
@@ -17,9 +17,9 @@ use roomkit::{
 };
 use uuid::Uuid;
 
-fn kit(backend: &Arc<dyn TurnBackend>, name: &str) -> RoomKit {
+fn kit(backend: &TurnBackendHandle, name: &str) -> RoomKit {
     let kit = RoomKit::new(RoomKitOptions {
-        turn_backend: Some(Arc::clone(backend)),
+        turn_backend: Some(backend.clone()),
         ..Default::default()
     });
     let request = super::request();
@@ -53,7 +53,7 @@ async fn attach(kit: &RoomKit, name: &str) {
     .unwrap();
 }
 
-async fn assert_chosen(backend: &dyn TurnBackend, expected: &str) {
+async fn assert_chosen(backend: &TurnBackendHandle, expected: &str) {
     let mut request = super::request();
     request.turn_id = Uuid::new_v4().to_string();
     let link = backend.submit(request).await.unwrap();
@@ -92,13 +92,13 @@ async fn a_kits_first_attach_reserves_its_live_channel_even_with_other_workers()
     )
     .unwrap();
     backend.serve(Arc::new(peer.clone())).await.unwrap();
-    assert_chosen(&*backend, "already-served").await;
+    assert_chosen(&backend, "already-served").await;
     let first = kit(&backend, "first");
     attach(&first, "first").await;
     let second = kit(&backend, "second");
     attach(&second, "second").await;
     assert_reply(&second, "second", "first").await;
-    assert_chosen(&*backend, first.turn_executor().executor_id()).await;
+    assert_chosen(&backend, first.turn_executor().executor_id()).await;
     let rows = backend.executors().await.unwrap();
     assert!(
         rows.iter()

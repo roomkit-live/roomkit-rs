@@ -117,7 +117,9 @@ pub(crate) async fn exercise<S: ConversationStore>(url: &str, worker: RoomKit<S>
     );
 
     let owner = RoomKit::new(RoomKitOptions {
-        turn_backend: Some(Arc::new(node.clone())),
+        turn_backend: Some(roomkit::turns::TurnBackendHandle::new(Arc::new(
+            node.clone(),
+        ))),
         ..Default::default()
     });
     let (room, source) = owner_room(&owner, &agent).await;

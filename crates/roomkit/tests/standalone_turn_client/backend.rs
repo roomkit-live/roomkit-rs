@@ -102,14 +102,6 @@ impl TurnBackend for Backend {
             Ok(None)
         })
     }
-    fn claim_presence<'a>(
-        &'a self,
-        _: &'a str,
-        _: &'a str,
-        _: Option<bool>,
-    ) -> TurnFuture<'a, Result<bool, RoomKitError>> {
-        Box::pin(async { Ok(false) })
-    }
     fn close(&self) -> TurnFuture<'_, Result<(), RoomKitError>> {
         Box::pin(async {
             self.registrations.lock().unwrap().push("close");

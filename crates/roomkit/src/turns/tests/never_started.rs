@@ -237,7 +237,7 @@ async fn a_turn_no_redis_worker_can_take_leaves_the_previous_turn_in_place() {
     )
     .unwrap();
     let kit = RoomKit::new(RoomKitOptions {
-        turn_backend: Some(Arc::new(backend)),
+        turn_backend: Some(crate::turns::TurnBackendHandle::new(Arc::new(backend))),
         ..RoomKitOptions::default()
     });
     let agent = channel("ai");

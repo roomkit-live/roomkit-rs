@@ -1415,6 +1415,12 @@ approved = "2026-11-17"
 reason = "Python's retained environment dictionary: named cloned handle with atomic new/get/replace/insert/remove and owned snapshots; connections copy the current overrides (HITL e4ef09db)"
 
 
+# The shared handle owns the Python backend instance's default presence state.
+[[exception]]
+rust = "roomkit::turns::TurnBackendHandle"
+approved = "2026-11-18"
+reason = "A trait object cannot store the backend instance's inherited presence state. Kits, clients and direct calls share a cloned handle; the transport can override distributed claims (HITL a12b3f92)."
+
 # An optional positional URL uses explicit None in Rust. Both exported paths are callable.
 [[exception]]
 rust = "roomkit::RedisTurnBackend::new"
