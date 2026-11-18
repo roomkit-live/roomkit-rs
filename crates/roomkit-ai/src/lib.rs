@@ -100,6 +100,8 @@ pub mod sandbox;
 mod server_instructions;
 mod shared;
 mod shared_context;
+mod turn_wiring;
+pub use turn_wiring::TurnWiringExt;
 mod shutdown;
 mod skills;
 pub mod speaking;

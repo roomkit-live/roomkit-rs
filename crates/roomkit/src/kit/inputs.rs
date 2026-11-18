@@ -3,7 +3,7 @@
 //! `ON_USER_INPUT_REQUIRED` hooks a request fires (RFC §9.3), made in a
 //! turn or outside the kit's turns.
 
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
 use roomkit_core::model::{ChannelId, ChannelType, RoomId};
 use roomkit_core::rules::hook_registry::{HookSpec, HookSubject, HookTrigger};
@@ -15,7 +15,7 @@ use crate::hooks::{HookHandler, Kept};
 use crate::human_input::{HumanInputHandler, PendingInputEvent};
 use crate::store::ConversationStore;
 use crate::telemetry::within_kit;
-use crate::turn::{InputNotification, TurnKit};
+
 use crate::turns::TurnWiring;
 
 impl<S: ConversationStore> RoomKit<S> {
@@ -131,62 +131,21 @@ impl<S: ConversationStore> Inner<S> {
         handler: &HumanInputHandler,
         wiring: TurnWiring,
     ) {
-        let kit = Arc::downgrade(self);
         let registered = channel_id.clone();
         let telemetry = self.telemetry.clone();
         handler.set_on_input_required(
             channel_id.as_str(),
             Arc::new(move |event| -> BoxFuture<'static, bool> {
-                let required = user_input_required(
-                    Weak::clone(&kit),
-                    registered.clone(),
-                    wiring.clone(),
-                    event,
-                );
-                // Outside a turn, under the kit's telemetry all the same.
+                let (wiring, channel) = (wiring.clone(), registered.clone());
+                let required = async move {
+                    let Some(notification) = wiring.input_notification(&channel, &event).await
+                    else {
+                        return true;
+                    };
+                    notification.run(event).await
+                };
                 Box::pin(within_kit(&telemetry, None, required))
             }),
         );
     }
-}
-
-/// The kit's `ON_USER_INPUT_REQUIRED` hooks on `event`, a request of the
-/// agent `registered` made outside the kit's turns, as
-/// [`InputNotification::run`] says, about the request's room and agent:
-/// Python's `build_on_user_input_required_hook`. Whether the request
-/// stands; it stands, nothing fired, for a request naming no room, a kit
-/// gone, or a room whose context its hooks cannot read.
-async fn user_input_required<S: ConversationStore>(
-    kit: Weak<Inner<S>>,
-    registered: ChannelId,
-    wiring: TurnWiring,
-    event: PendingInputEvent,
-) -> bool {
-    let (Some(inner), Ok(room_id)) = (kit.upgrade(), RoomId::new(&event.room_id)) else {
-        return true;
-    };
-    let channel_id = ChannelId::new(&event.channel_id).unwrap_or(registered);
-    let hooks = inner.input_hooks((&room_id, &channel_id), &event.channel_type);
-    // A context is store reads: built only for a hook that reads it.
-    let hooks = if hooks.is_empty() {
-        None
-    } else {
-        let Some(context) = wiring
-            .hook_context(&room_id, HookTrigger::OnUserInputRequired, None)
-            .await
-        else {
-            return true;
-        };
-        Some((hooks, context))
-    };
-    drop(inner);
-    let kit: Arc<dyn TurnKit> = Arc::new(kit);
-    let notification = InputNotification {
-        kit,
-        ids: (room_id, channel_id),
-        hooks,
-        turn: None,
-        wiring: Some(wiring),
-    };
-    notification.run(event).await
 }

@@ -3,6 +3,9 @@
 //! `BEFORE_AI_GENERATION` and `ON_AI_RESPONSE`, whose payloads roomkit-ai
 //! defines, fired on the turn's executor.
 
+mod collect;
+use collect::collect_effects;
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -13,6 +16,7 @@ use roomkit_core::rules::hook_registry::{HookExecution, HookSpec};
 use super::{TURN, TurnHost};
 use crate::context::ExecutionContext;
 use crate::hooks::{self, HookHandler, TurnPayload};
+use crate::turns::SyncPipelineResult;
 
 type TurnHooks<P> = Vec<(HookSpec, Arc<dyn HookHandler<P>>)>;
 
@@ -111,6 +115,29 @@ impl crate::turns::ChannelTurnHooks {
     /// # Errors
     /// Returns the original payload when a registered hook cannot read its room.
     pub async fn run_if_reachable<P: TurnPayload>(&self, payload: P) -> Result<TurnChain<P>, P> {
+        self.run_reachable(payload, None).await
+    }
+
+    /// Return the synchronous result exposed by the executor's callback.
+    pub async fn sync_pipeline<P: TurnPayload>(&self, payload: P) -> SyncPipelineResult<P> {
+        let mut result = SyncPipelineResult::default();
+        if let Ok(chain) = self.run_reachable(payload, Some(&mut result)).await {
+            result.event = Some(chain.payload);
+            if let Some((name, reason)) = chain.blocked {
+                result.allowed = false;
+                result.blocked_by = Some(name);
+                result.reason = result.reason.or(reason);
+                result.failed_closed = chain.failed_closed;
+            }
+        }
+        result
+    }
+
+    async fn run_reachable<P: TurnPayload>(
+        &self,
+        payload: P,
+        effects: Option<&mut SyncPipelineResult<P>>,
+    ) -> Result<TurnChain<P>, P> {
         let hooks = self.hooks::<P>();
         if hooks.is_empty() {
             return Ok(TurnChain::unchanged(payload));
@@ -118,7 +145,7 @@ impl crate::turns::ChannelTurnHooks {
         let Some(context) = self.context(P::TRIGGER).await else {
             return Err(payload);
         };
-        let chain = self.chain(&hooks, payload, &context).await;
+        let chain = self.chain(&hooks, payload, &context, effects).await;
         if chain.blocked.is_none() {
             self.observe_with(&hooks, &chain.payload, &context, None);
         }
@@ -167,8 +194,32 @@ impl crate::turns::ChannelTurnHooks {
             }
             return (decision, None);
         };
-        let decision = self.chain(&hooks, payload, &context).await;
+        let decision = self.chain(&hooks, payload, &context, None).await;
         (decision, Some((hooks, context)))
+    }
+
+    /// Whether this executor has a matching hook for the payload.
+    pub fn has_turn_hooks<P: TurnPayload>(&self) -> bool {
+        !self.hooks::<P>().is_empty()
+    }
+
+    /// Read the room before scheduling observers. The observers' work runs independently.
+    pub async fn observe_after_context<P: TurnPayload>(&self, payload: &P) {
+        self.observe_after_context_then(payload, || {}).await;
+    }
+
+    /// Start observers after reading the room, with an action once all have finished.
+    pub async fn observe_after_context_then<P: TurnPayload>(
+        &self,
+        payload: &P,
+        then: impl FnOnce() + Send + 'static,
+    ) {
+        let hooks = self.hooks::<P>();
+        if hooks.is_empty() {
+            then();
+        } else if let Some(context) = self.context(P::TRIGGER).await {
+            self.observe_with(&hooks, payload, &context, Some(Box::new(then)));
+        }
     }
 
     /// Schedule every observer, then the completion action once all finish.
@@ -197,13 +248,14 @@ impl crate::turns::ChannelTurnHooks {
         hooks: &TurnHooks<P>,
         payload: P,
         context: &crate::model::RoomContext,
+        mut effects: Option<&mut SyncPipelineResult<P>>,
     ) -> TurnChain<P> {
         let mut chain = TurnChain::unchanged(payload);
         for (spec, handler) in hooks
             .iter()
             .filter(|(spec, _)| spec.execution == HookExecution::Sync)
         {
-            let ran = hooks::run_traced(
+            let mut ran = hooks::run_traced(
                 spec,
                 Arc::clone(handler),
                 chain.payload.clone(),
@@ -212,6 +264,9 @@ impl crate::turns::ChannelTurnHooks {
             )
             .await;
             self.timeout(spec, &ran);
+            if let Some(result) = effects.as_deref_mut() {
+                collect_effects(spec, &mut ran, result);
+            }
             let failure = match ran {
                 HookOutcome::Returned(result) => match (result.action, result.event) {
                     (HookAction::Block, _) => {

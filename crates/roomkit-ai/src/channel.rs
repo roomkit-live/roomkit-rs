@@ -69,7 +69,7 @@ use crate::turn_settings::{ReasoningLevels, TurnSettings, VALUE_ERROR};
 
 mod context;
 mod mind;
-mod speaking;
+pub(crate) mod speaking;
 mod targets;
 mod tasks_note;
 mod thinking;

@@ -148,7 +148,7 @@ impl<P: AiProvider> AiChannel<P> {
     }
 }
 
-async fn hooked(
+pub(crate) async fn hooked(
     report: SpeakDecisionEvent,
     callbacks: Option<roomkit::turns::ChannelTurnHooks>,
 ) -> SpeakDecision {

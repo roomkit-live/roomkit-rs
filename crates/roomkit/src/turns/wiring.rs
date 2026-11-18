@@ -1,5 +1,6 @@
 //! The room reads and outlets an executor gives the channels it wires (RFC §10.6.2).
 mod emitter;
+mod inputs;
 pub use emitter::{EmitOptions, FrameworkEmitter};
 mod direct;
 pub use direct::DirectPrompt;

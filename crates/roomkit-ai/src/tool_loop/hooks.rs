@@ -282,10 +282,7 @@ impl Loop {
             usage_complete: spent.complete,
             ..AiResponseEvent::new(self.context.channel_id.clone(), content)
         };
-        let mut data = Metadata::new();
-        data.insert("tool_calls_count".to_owned(), Value::from(spent.calls));
-        data.insert("latency_ms".to_owned(), Value::from(latency_ms));
-        data.insert("streaming".to_owned(), Value::Bool(true));
+        let data = crate::turn_wiring::response_data(&event);
         let host = turn.clone();
         turn.observe(&event, move || host.emit_later("ai_response", data));
     }

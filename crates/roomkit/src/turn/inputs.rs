@@ -92,6 +92,20 @@ impl InputNotification {
     /// modify made of it (RFC §8.2, Python's
     /// `build_on_user_input_required_hook`). Whether the request stands.
     pub(crate) async fn run(self, event: PendingInputEvent) -> bool {
+        let (allowed, data) = self.verdict(&event).await;
+        emit(
+            &self.kit,
+            &self.ids,
+            self.depth(),
+            (self.turn.as_ref(), self.wiring.as_ref()),
+            "user_input_required",
+            data,
+        )
+        .await;
+        allowed
+    }
+
+    pub(crate) async fn verdict(&self, event: &PendingInputEvent) -> (bool, Metadata) {
         let (current, blocked) = self.chain(event.clone()).await;
         let allowed = blocked.is_none();
         if allowed {
@@ -115,16 +129,7 @@ impl InputNotification {
             "reason".to_owned(),
             blocked.flatten().map_or(Value::Null, Value::from),
         );
-        emit(
-            &self.kit,
-            &self.ids,
-            self.depth(),
-            (self.turn.as_ref(), self.wiring.as_ref()),
-            "user_input_required",
-            data,
-        )
-        .await;
-        allowed
+        (allowed, data)
     }
 
     /// The SYNC chain on `event`: the request as the last hook left it, and
