@@ -75,3 +75,10 @@ workspace = true
 name = "content_logging"
 path = "tests/content_logging.rs"
 harness = false
+
+# One real Redis, separate owner and executor processes, either SDK in either role.
+[[test]]
+name = "redis_interop"
+path = "tests/redis_interop/main.rs"
+harness = false
+required-features = ["redis"]
