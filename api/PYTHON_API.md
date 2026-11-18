@@ -599,12 +599,15 @@ the exact class and then its nearest registered base. For application errors
 error in its details. Its `causes()` exposes each cause with its registered
 type. Forwarding a remote error carries its original record.
 
-The following application contracts remain open for text API parity.
+`TurnClient::new(backend, options)` creates a standalone owner. Supply the
+executor, host verbs, tools and event sink in `TurnClientOptions` as needed.
+`run` returns the channel output and an optional response stream. Reading the
+stream advances the worker. A client can also apply channel controls, steer
+its active turns and handle human input.
 
-| Python contract | Current Rust behavior |
-| --- | --- |
-| `TurnClient` | Standalone application construction of the owner client remains open. |
-| `TurnExecutor.wire`, `use_wiring`, `wiring` | The SDK wires the channels it registers. Inspection and replacement of that environment by the application remain open. |
+`TurnExecutor::wiring()` returns a handle to the environment used to wire channels. Supply an `Arc<dyn WiringEnv>` to `use_wiring` to change
+the environment used for subsequent channels. Call `wire(&channel)?` to bind
+a channel before registration.
 
 The signature snapshot lists methods and properties. The parity check also
 reads turn attributes such as `link.request` and `RedisTurnBackend.node_id`,
