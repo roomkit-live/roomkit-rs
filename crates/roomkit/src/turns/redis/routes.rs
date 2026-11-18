@@ -1,7 +1,8 @@
 //! Reply references and the two directions of each active remote turn.
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, Weak};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tokio::time::Instant;
 
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
@@ -185,7 +186,7 @@ impl RedisTurnBackend {
                     .is_some_and(|(peer, _)| peer == &msg.sender)
                     && let Some((_, tx)) = routes.answers.remove(&msg.reference)
                 {
-                    let _ = tx.send(msg.body);
+                    drop(tx.send(msg.body));
                 }
             }
             "frame" | "control" | "released" => {
@@ -194,7 +195,7 @@ impl RedisTurnBackend {
                     && route.peer == msg.sender
                     && route.worker == (msg.kind != "frame")
                 {
-                    let _ = route.tx.send(msg);
+                    drop(route.tx.send(msg));
                 }
             }
             "request" | "channel" | "owner" | "work" => {
@@ -236,12 +237,11 @@ async fn receive(node: Weak<Node>, mut stop: watch::Receiver<bool>) {
         let Some(owner) = node.upgrade() else { break };
         let backend = RedisTurnBackend(owner);
         let read = async {
-            if connection.is_none() {
-                connection = Some(backend.inbox_connection().await?);
-            }
-            backend
-                .read(connection.as_mut().expect("connected"), &last)
-                .await
+            let connection = match &mut connection {
+                Some(connection) => connection,
+                slot @ None => slot.insert(backend.inbox_connection().await?),
+            };
+            backend.read(connection, &last).await
         };
         let entries = tokio::select! {
             () = async { let _ = stop.changed().await; } => break,

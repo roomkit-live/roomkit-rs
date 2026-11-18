@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::RoomKitError;
-use crate::turns::pipe::PipeReceiver;
+use crate::turns::pipe::{LinkFailure, PipeReceiver};
 use crate::turns::wire::{Control, Frame, RequestRest};
 use crate::turns::{CarriedRequest, MemoryTurn};
 
@@ -22,10 +22,10 @@ impl RedisTurnBackend {
         match result {
             Ok((peer, route)) => self.forward_owner(peer, memory, controls, route).await,
             Err(error) => {
-                let _ = memory.frames.put(&Frame::Error {
+                drop(memory.frames.put(&Frame::Error {
                     error: crate::turns::error::kit_error(&error),
-                });
-                let _ = memory.frames.put(&Frame::End);
+                }));
+                drop(memory.frames.put(&Frame::End));
             }
         }
     }
@@ -76,13 +76,18 @@ impl RedisTurnBackend {
                         &memory.turn_id,
                         "",
                     );
-                    let _ = self.post(&target.node, &release).await;
+                    drop(self.post(&target.node, &release).await);
                     return Err(answer
                         .err()
                         .unwrap_or_else(|| invalid("invalid turn handover answer".into())));
                 }
             }
         }
+    }
+
+    async fn release_turn(&self, peer: &str, turn: &str) {
+        let release = Message::new("released", self.node_id(), turn.to_owned(), turn, "");
+        drop(self.post(peer, &release).await);
     }
 
     async fn forward_owner(
@@ -100,15 +105,22 @@ impl RedisTurnBackend {
                 }
                 raw = controls.next_raw() => {
                     let Some(body) = raw else {
-                        let release = Message::new("released", self.node_id(), memory.turn_id.to_string(), &memory.turn_id, "");
-                        let _ = self.post(&peer, &release).await;
+                        self.release_turn(&peer, &memory.turn_id).await;
                         break;
                     };
-                    let Ok(body) = crate::turns::wire::peer_error_payload(body) else { memory.frames.shut(); break; };
+                    let body = match crate::turns::wire::peer_error_payload(body) {
+                        Ok(body) => body,
+                        Err(why) => {
+                            memory.frames.end(LinkFailure::Invalid(why));
+                            self.release_turn(&peer, &memory.turn_id).await;
+                            break;
+                        }
+                    };
                     let msg = Message::new("control", self.node_id(), body, &memory.turn_id, "");
                     if let Err(error) = self.post(&peer, &msg).await {
                         tracing::warn!(%error, "Sending the turn control failed");
-                        memory.frames.shut();
+                        memory.frames.end(LinkFailure::WriteRefused);
+                        self.release_turn(&peer, &memory.turn_id).await;
                         break;
                     }
                 }
@@ -143,7 +155,7 @@ impl RedisTurnBackend {
         }));
     }
 
-    pub(super) async fn owner_message(&self, message: &Message) -> Result<(), RoomKitError> {
+    pub(super) fn owner_message(&self, message: &Message) -> Result<(), RoomKitError> {
         use crate::turns::wire::{OwnerMessage, OwnerMessageEnvelope, RoomCallResult};
         let parsed: OwnerMessageEnvelope =
             serde_json::from_str(&message.body).map_err(|e| invalid(e.to_string()))?;
@@ -177,3 +189,6 @@ impl RedisTurnBackend {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod control_failure;

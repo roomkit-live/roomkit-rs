@@ -12,7 +12,10 @@ pub(crate) fn peer_error_payload(raw: String) -> Result<String, String> {
     }
     let mut root: Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
     let message = if root.get("seq").is_some() {
-        &mut root["message"]
+        let Some(message) = root.get_mut("message") else {
+            return Ok(raw);
+        };
+        message
     } else {
         &mut root
     };

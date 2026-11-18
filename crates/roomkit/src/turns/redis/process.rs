@@ -93,15 +93,13 @@ impl RedisTurnBackend {
                                 };
                                 let backend = Self(owner);
                                 let result = async {
-                                    if conn.is_none() {
-                                        conn = Some(backend.beat_connection().await?);
-                                    }
-                                    write_beat(
-                                        &backend,
-                                        conn.as_mut().expect("connected"),
-                                        &backend.snapshot(),
-                                    )
-                                    .await
+                                    let connection = match &mut conn {
+                                        Some(connection) => connection,
+                                        slot @ None => {
+                                            slot.insert(backend.beat_connection().await?)
+                                        }
+                                    };
+                                    write_beat(&backend, connection, &backend.snapshot()).await
                                 }
                                 .await;
                                 if let Err(error) = result {
@@ -127,7 +125,7 @@ impl RedisTurnBackend {
             .address
             .get_multiplexed_async_connection_with_config(&cfg)
             .await
-            .map_err(redis_error)
+            .map_err(|error| redis_error(&error))
     }
 
     fn snapshot(&self) -> Beat {
@@ -174,6 +172,7 @@ impl RedisTurnBackend {
             return Ok(());
         }
         self.0.quitting.store(true, Ordering::Release);
+        self.drain_outbox(self.timeouts().bounded().cancel).await;
         self.0.stop.send_replace(true);
         lock(&self.0.routes).close();
         if self.0.data.get().is_none() {
@@ -193,7 +192,7 @@ impl RedisTurnBackend {
             .arg(self.node_id())
             .exec_async(&mut conn)
             .await
-            .map_err(redis_error)
+            .map_err(|error| redis_error(&error))
     }
 }
 

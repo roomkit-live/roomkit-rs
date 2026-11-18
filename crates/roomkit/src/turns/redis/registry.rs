@@ -70,7 +70,7 @@ pub(super) async fn executors(
         .arg(timeout.saturating_mul(10))
         .query_async(&mut connection)
         .await
-        .map_err(redis_error)?;
+        .map_err(|error| redis_error(&error))?;
     let view: View =
         serde_json::from_str(&body).map_err(|e| RoomKitError::Runtime(e.to_string()))?;
     Ok(view.declared(timeout))
@@ -109,7 +109,7 @@ pub(super) async fn write_beat(
         .arg(payload)
         .exec_async(connection)
         .await
-        .map_err(redis_error)
+        .map_err(|error| redis_error(&error))
 }
 
 /// Python's urllib quote(safe="") applied to one key component.
@@ -148,7 +148,6 @@ impl RedisTurnBackend {
         refused: &BTreeSet<String>,
         spread: bool,
     ) -> Result<Target, RoomKitError> {
-        use std::sync::atomic::Ordering;
         let mut takers = BTreeMap::new();
         for info in self.executors().await? {
             if info.covers(channel, hooks, organization)?
@@ -170,46 +169,19 @@ impl RedisTurnBackend {
             .arg(&holder)
             .query_async(&mut conn)
             .await
-            .map_err(redis_error)?;
-        let target = if let Some(target) = held.and_then(|member| takers.remove(&member)) {
-            target
-        } else if !takers.is_empty() {
-            let previous = if spread {
-                self.0.choice.fetch_add(1, Ordering::Relaxed)
-            } else {
-                self.0.choice.load(Ordering::Relaxed)
-            };
-            let offset = previous.wrapping_add(1) % takers.len();
-            takers
-                .into_values()
-                .nth(offset)
-                .expect("choice modulo a nonempty collection")
-        } else {
-            return Err(RoomKitError::TurnLink {
-                reason: "no_executor".into(),
-                message: Some({
-                    let hooks = if hooks.is_empty() {
-                        String::new()
-                    } else {
-                        format!(
-                            " with room hooks [{}]",
-                            hooks
-                                .iter()
-                                .map(|s| crate::error::repr(s))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        )
-                    };
-                    let org = organization.map_or_else(String::new, |o| {
-                        format!(" in organization {}", crate::error::repr(o))
-                    });
-                    format!(
-                        "No executor serves channel {}{hooks}{org}",
-                        crate::error::repr(channel)
-                    )
-                }),
-            });
-        };
+            .map_err(|error| redis_error(&error))?;
+        let target = held
+            .and_then(|member| takers.remove(&member))
+            .or_else(|| {
+                let count = std::num::NonZeroUsize::new(takers.len())?;
+                let mut next = crate::turns::lock(&self.0.choice);
+                let following = next.wrapping_add(1) % count;
+                if spread {
+                    *next = following;
+                }
+                takers.into_values().nth(following)
+            })
+            .ok_or_else(|| no_executor(channel, hooks, organization))?;
         if spread {
             redis::cmd("SET")
                 .arg(holder)
@@ -218,7 +190,7 @@ impl RedisTurnBackend {
                 .arg(7 * 24 * 3600)
                 .exec_async(&mut conn)
                 .await
-                .map_err(redis_error)?;
+                .map_err(|error| redis_error(&error))?;
         }
         Ok(target)
     }
@@ -236,6 +208,29 @@ impl RedisTurnBackend {
             .arg(holder)
             .exec_async(&mut conn)
             .await
-            .map_err(redis_error)
+            .map_err(|error| redis_error(&error))
+    }
+}
+
+fn no_executor(channel: &str, hooks: &[String], organization: Option<&str>) -> RoomKitError {
+    let hooks = if hooks.is_empty() {
+        String::new()
+    } else {
+        let names = hooks
+            .iter()
+            .map(|s| crate::error::repr(s))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(" with room hooks [{names}]")
+    };
+    let org = organization.map_or_else(String::new, |o| {
+        format!(" in organization {}", crate::error::repr(o))
+    });
+    RoomKitError::TurnLink {
+        reason: "no_executor".into(),
+        message: Some(format!(
+            "No executor serves channel {}{hooks}{org}",
+            crate::error::repr(channel)
+        )),
     }
 }

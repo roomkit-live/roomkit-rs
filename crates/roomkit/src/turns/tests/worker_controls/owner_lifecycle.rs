@@ -8,7 +8,7 @@ use crate::{
     RoomKitError, RoomKitOptions, TurnExecutor, TurnExecutorOptions,
 };
 use serde_json::json;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires REDIS_URL pointing to a test Redis server"]
@@ -23,14 +23,7 @@ async fn the_owner_routes_all_five_controls_to_the_organization_worker() {
     let executor = TurnExecutor::new(
         {
             let events = Arc::clone(&events);
-            move |_| {
-                std::future::ready(Ok(Some(Observed {
-                    instance: 1,
-                    events: Arc::clone(&events),
-                    state: Mutex::default(),
-                    wait: None,
-                })))
-            }
+            move |id| std::future::ready(Ok(Some(Observed::built(id, 1, Arc::clone(&events)))))
         },
         TurnExecutorOptions {
             hosts: Some(["ai".to_owned()].into()),
@@ -76,19 +69,14 @@ async fn the_owner_routes_all_five_controls_to_the_organization_worker() {
     kit.attach_channel(&room, &agent, AttachChannelOptions::default())
         .await
         .unwrap();
-    let answer = kit
-        .channel_call(
-            &agent,
-            &room,
-            "keep",
-            ChannelCallOptions {
-                arguments: [("a".to_owned(), json!("ok"))].into_iter().collect(),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-    assert_eq!(answer, json!([null, "ok"]));
+    let arguments = ChannelCallOptions {
+        arguments: [("a".to_owned(), json!("ok"))].into_iter().collect(),
+        ..Default::default()
+    };
+    assert!(matches!(
+        kit.channel_call(&agent, &room, "fail", arguments.clone()).await,
+        Err(RoomKitError::Value(message)) if message == "failed verb"
+    ));
     let key = crate::turns::state_key(&agent);
     assert_eq!(
         kit.get_room(&room, GetRoomOptions::default())
@@ -97,6 +85,11 @@ async fn the_owner_routes_all_five_controls_to_the_organization_worker() {
             .metadata[&key],
         json!({"cursor":17})
     );
+    let answer = kit
+        .channel_call(&agent, &room, "keep", arguments)
+        .await
+        .unwrap();
+    assert_eq!(answer, json!([17, "ok"]));
     assert!(
         kit.detach_channel(&room, &agent, DetachChannelOptions::default())
             .await
@@ -115,6 +108,7 @@ async fn the_owner_routes_all_five_controls_to_the_organization_worker() {
         [
             (1, "event"),
             (1, "attach"),
+            (1, "call"),
             (1, "call"),
             (1, "detach"),
             (1, "close")

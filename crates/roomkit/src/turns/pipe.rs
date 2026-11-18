@@ -34,6 +34,9 @@ pub(crate) enum LinkFailure {
     Closed,
     /// A message was lost: the next one carried another number.
     Lost { expected: u64, got: u64 },
+    /// The transport refused to write a numbered message.
+    #[cfg(feature = "redis")]
+    WriteRefused,
     /// A message could not be read.
     Invalid(String),
 }
@@ -44,6 +47,8 @@ impl LinkFailure {
         match self {
             Self::Closed => "backend_closed",
             Self::Lost { .. } => "frame_lost",
+            #[cfg(feature = "redis")]
+            Self::WriteRefused => "frame_lost",
             Self::Invalid(_) => "frame_invalid",
         }
     }
@@ -54,6 +59,8 @@ impl LinkFailure {
             // Python's `TurnLinkError` words (RMK-1106).
             Self::Closed => "The turn ended: its turn backend closed".to_owned(),
             Self::Lost { expected, .. } => format!("Message {expected} of the turn was lost"),
+            #[cfg(feature = "redis")]
+            Self::WriteRefused => "The turn ended without its executor: frame_lost".to_owned(),
             Self::Invalid(why) => format!("The turn's frames could not be read: {why}"),
         }
     }
@@ -89,7 +96,7 @@ impl MessageOrder {
 #[derive(Debug)]
 enum Packet {
     Message(String),
-    Shut,
+    End(LinkFailure),
 }
 
 /// The writing end of one direction of a turn's link.
@@ -198,8 +205,12 @@ impl<M> Pipe<M> {
     /// Stops the pipe: its reader learns it at once, and later messages are
     /// dropped.
     pub(crate) fn shut(&self) {
+        self.end(LinkFailure::Closed);
+    }
+
+    pub(crate) fn end(&self, failure: LinkFailure) {
         if self.open.swap(false, Ordering::AcqRel) {
-            drop(self.queue.send(Packet::Shut));
+            drop(self.queue.send(Packet::End(failure)));
         }
     }
 }
@@ -209,7 +220,7 @@ impl<M> PipeReceiver<M> {
     pub(crate) async fn next_raw(&mut self) -> Option<String> {
         match self.queue.recv().await? {
             Packet::Message(raw) => Some(raw),
-            Packet::Shut => None,
+            Packet::End(_) => None,
         }
     }
 }
@@ -220,7 +231,8 @@ impl<M: DeserializeOwned> PipeReceiver<M> {
         loop {
             let raw = match self.queue.recv().await {
                 Some(Packet::Message(raw)) => raw,
-                Some(Packet::Shut) | None => return Err(LinkFailure::Closed),
+                Some(Packet::End(failure)) => return Err(failure),
+                None => return Err(LinkFailure::Closed),
             };
             if let Some(admitted) = self.admit(&raw)? {
                 return Ok(admitted);

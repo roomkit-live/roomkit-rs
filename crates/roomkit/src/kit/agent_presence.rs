@@ -22,11 +22,14 @@ impl<S: ConversationStore> RoomKit<S> {
     /// (RFC §10.6.7, §10.6.8). A local kit lists no other executors.
     ///
     /// # Errors
-    /// The local backend has no executor registry read that can fail.
-    #[expect(
-        clippy::unused_async,
-        clippy::unused_async_trait_impl,
-        reason = "Python's public registry reader is asynchronous, including the empty local backend"
+    /// The distributed executor registry could not be read.
+    #[cfg_attr(
+        not(feature = "redis"),
+        expect(
+            clippy::unused_async,
+            clippy::unused_async_trait_impl,
+            reason = "Python's public registry reader is asynchronous, including the empty local backend"
+        )
     )]
     pub async fn executors(&self) -> Result<Vec<ExecutorInfo>, RoomKitError> {
         #[cfg(feature = "redis")]

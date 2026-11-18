@@ -67,11 +67,12 @@ mod pipe;
 mod pulls;
 mod records;
 mod rooms;
-pub(crate) use channel_calls::{ChannelCall, ChannelResult};
+pub(crate) use channel_calls::{ChannelCall, ChannelResult, Handover};
 pub(crate) use error::rebuild_kit_error;
 pub(crate) use rooms::{state_key, stored_state};
 pub(crate) mod served;
 mod started;
+mod submission;
 #[cfg(test)]
 mod tests;
 mod timeouts;
@@ -93,28 +94,26 @@ pub(crate) use self::error::{
 };
 pub(crate) use self::error::{TurnError, TurnFailure, to_record};
 pub(crate) use self::executor::{ExecutorInputs, HostLink, InputSettler, WorkerTurn};
-use self::memory::Request;
 pub(crate) use self::memory::{CarriedRequest, MemoryTurn};
 use self::observe::Observers;
 pub(crate) use self::observe::{Carried, Tap};
 pub(crate) use self::owner::{Canceller, OwedEnd, OwnerTurn, RemoteItem, WeakCanceller};
 pub(crate) use self::owner_inputs::InputTurn;
 use self::owner_inputs::OwnerInputs;
-use self::pipe::{MAX_MESSAGE_BYTES, pipe};
+use self::pipe::MAX_MESSAGE_BYTES;
 use self::records::RoomRecords;
 use self::started::StartedTurns;
 pub(crate) use self::started::SteerAddress;
 pub use self::timeouts::TurnTimeouts;
 pub(crate) use self::wire::SEND_EVENT;
 use self::wire::{
-    ChannelControl, ChannelControlEnvelope, OwnerMessage, OwnerMessageEnvelope, PreviousTurn,
-    RoomCall, RoomCallResult,
+    ChannelControl, ChannelControlEnvelope, OwnerMessage, OwnerMessageEnvelope, RoomCall,
+    RoomCallResult,
 };
 use crate::channel::DynChannel;
 use crate::error::RoomKitError;
 use crate::steering::SteeringDirective;
 use crate::tasks::{Marks, Unit};
-use crate::telemetry::current_trace;
 use crate::turn::TurnKit;
 
 /// What a turn answered on the owner.
@@ -351,13 +350,15 @@ impl Turns {
         let channel_rows = Vec::new();
         let unit = Unit::new();
         let (mut turn, _following) = Marks::current().with(unit).sync_scope(|| {
-            self.submit(
+            self.start_turn(
                 kit,
                 binding,
-                event,
-                context,
-                strategy_turn,
-                channel_rows,
+                submission::Input {
+                    event,
+                    context,
+                    strategy_turn,
+                    channel_rows,
+                },
                 submitted,
             )
         })?;
@@ -367,148 +368,6 @@ impl Turns {
         } else {
             Answer::Output(Box::new(output))
         })
-    }
-
-    /// Hands a turn to the kit's own executor, and opens its owner's side,
-    /// the turn's tasks in the unit the current code runs in.
-    fn submit<G>(
-        self: &Arc<Self>,
-        kit: &Arc<dyn TurnKit>,
-        binding: &ChannelBinding,
-        event: RoomEvent,
-        mut context: RoomContext,
-        strategy_turn: bool,
-        channel_rows: Vec<RoomEvent>,
-        submitted: impl FnOnce(Canceller) -> G,
-    ) -> Result<(OwnerTurn, G), ErrorRecord> {
-        if self.closed.load(Ordering::Acquire) || *self.cut.borrow() {
-            return Err(closed());
-        }
-        let room_hooks = request_room_hooks(&**kit, &event.room_id, &binding.channel_id)?;
-        let turn_id: Arc<str> = Arc::from(format!("turn-{}", Uuid::new_v4().simple()));
-        let declared = kit
-            .channel(&binding.channel_id)
-            .is_some_and(|c| c.is_declaration_only());
-        let running = if declared {
-            None
-        } else {
-            Some(
-                self.executor_lifecycle
-                    .admit(Arc::clone(&turn_id))
-                    .ok_or_else(|| {
-                        TurnError::new("no_executor", "the kit's local executor has closed")
-                            .to_record()
-                    })?,
-            )
-        };
-        let mut records = self.records();
-        // The records of another room of the id, deleted since and created
-        // again in another process, name no previous turn (RFC §17.2).
-        if records
-            .room_mark(&event.room_id)
-            .is_some_and(|mark| mark != context.room.created_at)
-        {
-            records.pop_room(&event.room_id);
-        }
-        let previous = records.get(&binding.channel_id, &event.room_id).cloned();
-        let history = std::mem::take(&mut context.recent_events);
-        let observers = self.observers();
-        let owner_tools = kit.owner_tools(&binding.channel_id, &event.room_id);
-        let trace = current_trace();
-        let request = Request {
-            strategy_turn,
-            room_hooks: &room_hooks,
-            turn_id: &turn_id,
-            binding,
-            event: &event,
-            context: &context,
-            history: &history,
-            previous: previous.as_ref(),
-            owner_tools: &owner_tools,
-            trace: trace.as_ref(),
-        };
-        let rest = request.write(&observers).map_err(|why| uncarried(&why))?;
-        records.put(
-            &binding.channel_id,
-            &event.room_id,
-            PreviousTurn::after(&turn_id, previous.as_ref(), Some(&event)),
-        );
-        records.mark_room(&event.room_id, context.room.created_at);
-        let stale = !declared
-            && kit.channel(&binding.channel_id).is_some_and(|channel| {
-                self.rooms.enter(
-                    &channel,
-                    (binding.channel_id.clone(), event.room_id.clone()),
-                    &turn_id,
-                    previous.as_ref(),
-                )
-            });
-        drop(records);
-        let timeouts = self.timeouts();
-        let (frames, frames_read) = pipe(Arc::clone(&turn_id), Carried::Frame, observers.clone());
-        let (controls, controls_read) = pipe(Arc::clone(&turn_id), Carried::Control, observers);
-        let memory = Arc::new(MemoryTurn::new(turn_id, frames, controls, timeouts));
-        let facts = owner::Facts::of(binding, &event, &context.room);
-        let (room_id, organization_id) = (facts.room_id.clone(), facts.organization_id.clone());
-        let (turn, pump) = owner::open(
-            Arc::clone(&memory),
-            frames_read,
-            facts,
-            Arc::clone(kit),
-            Arc::clone(self),
-        );
-        let carried = CarriedRequest {
-            rest,
-            event,
-            history,
-            channel_rows,
-        };
-        // Register the delivery's cut before the executor can run its first
-        // step on another worker. An earlier cut is already in its pipe.
-        let following = submitted(turn.canceller());
-        let taken = kit.spawn(pump)
-            && match running {
-                Some(running) => executor::take(
-                    self,
-                    running,
-                    Arc::clone(&memory),
-                    controls_read,
-                    carried,
-                    stale,
-                    kit,
-                ),
-                None => {
-                    #[cfg(feature = "redis")]
-                    if let Some(backend) = self.remote.clone() {
-                        let link = Arc::clone(&memory);
-                        kit.spawn(Box::pin(async move {
-                            backend.submit_remote(carried, link, controls_read).await;
-                        }))
-                    } else {
-                        return Err(TurnError::new(
-                            "no_executor",
-                            format!("No executor serves channel '{}'", binding.channel_id),
-                        )
-                        .to_record());
-                    }
-                    #[cfg(not(feature = "redis"))]
-                    return Err(TurnError::new(
-                        "no_executor",
-                        format!("No executor serves channel '{}'", binding.channel_id),
-                    )
-                    .to_record());
-                }
-            };
-        if !taken {
-            memory.shut();
-            return Err(closed());
-        }
-        lock(&self.started).start(
-            (&memory.turn_id, &room_id, &binding.channel_id),
-            organization_id.as_deref(),
-            turn.steerable(),
-        );
-        Ok((turn, following))
     }
 
     /// Steers the running turns `address` names (RFC §21.3, §10.6.8): a

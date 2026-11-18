@@ -45,7 +45,7 @@ impl Message {
 }
 
 impl RedisTurnBackend {
-    pub(super) async fn post(&self, destination: &str, msg: &Message) -> Result<(), RoomKitError> {
+    pub(super) async fn write(&self, destination: &str, msg: &Message) -> Result<(), RoomKitError> {
         let key = self.key(&format!("inbox:{destination}"));
         let mut connection = self.connection().await?;
         // A crash between adding a message and setting the TTL would leave an orphaned inbox.
@@ -71,7 +71,7 @@ impl RedisTurnBackend {
             .ignore()
             .query_async(&mut connection)
             .await
-            .map_err(redis_error)
+            .map_err(|error| redis_error(&error))
     }
 
     pub(super) fn ttl_ms(&self) -> u64 {
@@ -94,7 +94,7 @@ impl RedisTurnBackend {
             .address
             .get_multiplexed_async_connection_with_config(&config)
             .await
-            .map_err(redis_error)
+            .map_err(|error| redis_error(&error))
     }
 
     pub(super) fn read_block(&self) -> Duration {
@@ -121,7 +121,7 @@ impl RedisTurnBackend {
             .arg(last)
             .query_async(connection)
             .await
-            .map_err(redis_error)?;
+            .map_err(|error| redis_error(&error))?;
         Ok(batch
             .into_iter()
             .flat_map(|r| r.keys)
@@ -137,6 +137,6 @@ impl RedisTurnBackend {
             .arg(ids)
             .exec_async(&mut connection)
             .await
-            .map_err(redis_error)
+            .map_err(|error| redis_error(&error))
     }
 }

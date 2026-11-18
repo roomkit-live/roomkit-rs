@@ -57,7 +57,7 @@ impl RedisTurnBackend {
                 });
                 Ok(())
             }
-            _ => self.owner_message(msg).await,
+            _ => self.owner_message(msg),
         }
     }
 

@@ -8,7 +8,7 @@ use super::{GetRoomOptions, RoomKit};
 use crate::RoomKitError;
 use crate::store::{ConversationStore, PatchRoomMetadataOptions};
 use crate::tasks::{Kind, Marks, Phase, Unit};
-use crate::turns::{ChannelCall, state_key, stored_state};
+use crate::turns::{ChannelCall, Handover, state_key, stored_state};
 
 /// Python's `channel_call(..., *, organization_id=None, **arguments)`.
 #[derive(Clone, Debug, Default)]
@@ -157,7 +157,7 @@ impl<S: ConversationStore> RoomKit<S> {
             verb,
             arguments: options.arguments,
             previous_turn: None,
-            handover: Default::default(),
+            handover: Handover::default(),
         };
         let answer = self
             .inner

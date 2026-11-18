@@ -623,6 +623,8 @@ fn apply(
 /// What a broken link from the owner is to the executor.
 fn lost(failure: &LinkFailure) -> TurnError {
     match failure {
+        #[cfg(feature = "redis")]
+        LinkFailure::WriteRefused => TurnError::link(failure),
         LinkFailure::Lost { .. } | LinkFailure::Invalid(_) => TurnError::link(failure),
         LinkFailure::Closed => TurnError::new("owner_lost", "the turn's owner let go of it"),
     }

@@ -5,8 +5,21 @@ use std::collections::BTreeSet;
 use super::RedisTurnBackend;
 use super::registry::Target;
 use crate::RoomKitError;
-use crate::turns::channel_calls::ChannelResult;
+use crate::turns::channel_calls::{ChannelCall, ChannelResult};
 use crate::turns::wire::{ChannelControl, ChannelControlEnvelope};
+
+struct Placement<'a> {
+    channel: &'a str,
+    room: &'a str,
+    hooks: &'a [String],
+    organization: Option<&'a str>,
+    call: Option<&'a ChannelCall>,
+}
+
+enum Audience<'a> {
+    Room(Option<&'a str>),
+    AllOrganizations,
+}
 
 impl RedisTurnBackend {
     pub(crate) async fn control_remote(
@@ -22,11 +35,13 @@ impl RedisTurnBackend {
             ChannelControl::ChannelCall(call) => {
                 self.apply_one(
                     &raw,
-                    call.channel_id.as_str(),
-                    call.room_id.as_str(),
-                    &[],
-                    call.organization_id.as_deref(),
-                    true,
+                    Placement {
+                        channel: call.channel_id.as_str(),
+                        room: call.room_id.as_str(),
+                        hooks: &[],
+                        organization: call.organization_id.as_deref(),
+                        call: Some(call),
+                    },
                 )
                 .await
             }
@@ -39,11 +54,13 @@ impl RedisTurnBackend {
             } => {
                 self.apply_one(
                     &raw,
-                    channel_id.as_str(),
-                    room_id.as_str(),
-                    room_hooks,
-                    organization_id.as_deref(),
-                    false,
+                    Placement {
+                        channel: channel_id.as_str(),
+                        room: room_id.as_str(),
+                        hooks: room_hooks,
+                        organization: organization_id.as_deref(),
+                        call: None,
+                    },
                 )
                 .await?;
                 Ok(None)
@@ -53,8 +70,12 @@ impl RedisTurnBackend {
                 organization_id,
                 ..
             } => {
-                self.tell_all(&raw, channel_id.as_str(), Some(organization_id.as_deref()))
-                    .await?;
+                self.tell_all(
+                    &raw,
+                    channel_id.as_str(),
+                    Audience::Room(organization_id.as_deref()),
+                )
+                .await?;
                 Ok(None)
             }
             ChannelControl::RoomDetached {
@@ -64,12 +85,17 @@ impl RedisTurnBackend {
             } => {
                 self.forget_holder(channel_id.as_str(), room_id.as_str())
                     .await?;
-                self.tell_all(&raw, channel_id.as_str(), Some(organization_id.as_deref()))
-                    .await?;
+                self.tell_all(
+                    &raw,
+                    channel_id.as_str(),
+                    Audience::Room(organization_id.as_deref()),
+                )
+                .await?;
                 Ok(None)
             }
             ChannelControl::ChannelReleased { channel_id } => {
-                self.tell_all(&raw, channel_id.as_str(), None).await?;
+                self.tell_all(&raw, channel_id.as_str(), Audience::AllOrganizations)
+                    .await?;
                 Ok(None)
             }
         }
@@ -78,19 +104,28 @@ impl RedisTurnBackend {
     async fn apply_one(
         &self,
         raw: &str,
-        channel: &str,
-        room: &str,
-        hooks: &[String],
-        org: Option<&str>,
-        spread: bool,
+        placement: Placement<'_>,
     ) -> Result<Option<ChannelResult>, RoomKitError> {
         let mut refused = BTreeSet::new();
         loop {
             let target = self
-                .place(channel, room, hooks, org, &refused, spread)
+                .place(
+                    placement.channel,
+                    placement.room,
+                    placement.hooks,
+                    placement.organization,
+                    &refused,
+                    placement.call.is_some(),
+                )
                 .await?;
+            if let Some(call) = placement.call {
+                call.hand_over();
+            }
             if let Some(answer) = self.apply_to(&target, raw).await? {
                 return Ok(Some(answer));
+            }
+            if let Some(call) = placement.call {
+                call.refused();
             }
             refused.insert(target.member());
         }
@@ -119,16 +154,18 @@ impl RedisTurnBackend {
         &self,
         raw: &str,
         channel: &str,
-        room_org: Option<Option<&str>>,
+        audience: Audience<'_>,
     ) -> Result<(), RoomKitError> {
         let mut pending = tokio::task::JoinSet::new();
         for info in self.executors().await? {
-            let matches_org = room_org.unwrap_or_else(|| {
-                info.organizations
+            let matches_org = match audience {
+                Audience::Room(org) => org,
+                Audience::AllOrganizations => info
+                    .organizations
                     .as_ref()
                     .and_then(|names| names.first())
-                    .map(String::as_str)
-            });
+                    .map(String::as_str),
+            };
             if !info.covers(channel, &[], matches_org)? {
                 continue;
             }
@@ -147,7 +184,7 @@ impl RedisTurnBackend {
                 Ok(Ok(Some(_))) => {}
                 Ok(Ok(None)) => tracing::warn!("A closing executor refused channel control"),
                 Ok(Err(error)) => {
-                    tracing::warn!(%error, "Executor failed to apply channel control")
+                    tracing::warn!(%error, "Executor failed to apply channel control");
                 }
                 Err(error) => tracing::warn!(%error, "Channel control task failed"),
             }

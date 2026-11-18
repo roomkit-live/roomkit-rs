@@ -1,0 +1,92 @@
+//! Exercise real Redis write refusal without interfering with any other inbox.
+use std::time::Duration;
+
+use redis::AsyncCommands;
+use redis::streams::StreamRangeReply;
+use uuid::Uuid;
+
+use super::*;
+use crate::turns::RedisTurnBackendOptions;
+
+fn backend() -> RedisTurnBackend {
+    let url = std::env::var("REDIS_URL").expect("Set REDIS_URL to the test service");
+    RedisTurnBackend::new(
+        Some(&url),
+        RedisTurnBackendOptions {
+            key_prefix: format!("test:roomkit:outbox:{}", Uuid::new_v4()),
+            ..RedisTurnBackendOptions::default()
+        },
+    )
+    .unwrap()
+}
+
+fn envelope(kind: &str) -> Message {
+    Message::new(kind, "sender", kind.to_owned(), "turn", "ref")
+}
+
+#[tokio::test]
+#[ignore = "requires REDIS_URL"]
+async fn a_retried_answer_outlives_its_caller_and_precedes_later_frames() {
+    let backend = backend();
+    let mut conn = backend.connection().await.unwrap();
+    let key = backend.key("inbox:peer");
+    conn.set_ex::<_, _, ()>(&key, "not a stream", 60)
+        .await
+        .unwrap();
+    drop(backend.enqueue("peer", &envelope("answer")).unwrap());
+    let later = backend.enqueue("peer", &envelope("frame")).unwrap();
+
+    // XADD fails on this string, but Redis still executes PEXPIRE in the transaction.
+    // Wait for this evidence before repairing the destination.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let ttl: i64 = conn.pttl(&key).await.unwrap();
+            if ttl <= i64::try_from(backend.ttl_ms()).unwrap() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    backend
+        .post("independent", &envelope("control"))
+        .await
+        .unwrap();
+    conn.del::<_, ()>(&key).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), later)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let messages: StreamRangeReply = conn.xrange_all(&key).await.unwrap();
+    let bodies: Vec<String> = messages
+        .ids
+        .iter()
+        .map(|msg| msg.get("body").unwrap())
+        .collect();
+    assert_eq!(bodies, ["answer", "frame"]);
+    backend.drain_outbox(Duration::from_secs(1)).await;
+    conn.del::<_, ()>((&key, backend.key("inbox:independent")))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires REDIS_URL"]
+async fn a_failed_frame_returns_once_and_shutdown_bounds_retriable_work() {
+    let backend = backend();
+    let mut conn = backend.connection().await.unwrap();
+    let key = backend.key("inbox:peer");
+    conn.set_ex::<_, _, ()>(&key, "wrong type", 60)
+        .await
+        .unwrap();
+    let refused = backend.post("peer", &envelope("frame")).await.unwrap_err();
+    assert!(matches!(refused, RoomKitError::TurnLink {ref reason,..} if reason=="frame_lost"));
+    let work = backend.enqueue("peer", &envelope("work")).unwrap();
+    backend.drain_outbox(Duration::from_millis(20)).await;
+    assert!(work.await.is_err());
+    assert!(matches!(backend.post("peer", &envelope("answer")).await,
+        Err(RoomKitError::TurnLink {ref reason,..}) if reason=="backend_closed"));
+    conn.del::<_, ()>(&key).await.unwrap();
+}

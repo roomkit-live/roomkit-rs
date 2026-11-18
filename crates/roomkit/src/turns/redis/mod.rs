@@ -1,13 +1,14 @@
 //! Redis Streams transport for text turns between processes (RFC §10.6).
 mod control;
 mod dispatch;
+mod outbox;
 mod owner;
 mod process;
 mod registry;
 mod routes;
 mod stream;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use redis::aio::{ConnectionManager, ConnectionManagerConfig};
@@ -52,11 +53,12 @@ impl fmt::Debug for RedisTurnBackendOptions {
 pub struct RedisTurnBackend(Arc<Node>);
 
 struct Node {
-    node_id: String,
+    outbox: Mutex<outbox::Outbox>,
+    id: String,
     prefix: String,
-    owner: std::sync::Mutex<Option<owner::OwnerPort>>,
-    routes: std::sync::Mutex<routes::Routes>,
-    serving: std::sync::Mutex<process::Serving>,
+    owner: Mutex<Option<owner::OwnerPort>>,
+    routes: Mutex<routes::Routes>,
+    serving: Mutex<process::Serving>,
     reader: OnceCell<()>,
     heartbeat: OnceCell<()>,
     quitting: Arc<std::sync::atomic::AtomicBool>,
@@ -64,7 +66,7 @@ struct Node {
     closing: tokio::sync::Mutex<()>,
     timeouts: TurnTimeouts,
     client: redis::Client,
-    choice: std::sync::atomic::AtomicUsize,
+    choice: Mutex<usize>,
     address: redis::Client,
     data: OnceCell<ConnectionManager>,
 }
@@ -72,7 +74,7 @@ struct Node {
 impl fmt::Debug for RedisTurnBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RedisTurnBackend")
-            .field("node_id", &self.0.node_id)
+            .field("node_id", &self.0.id)
             .field("key_prefix", &self.0.prefix)
             .finish_non_exhaustive()
     }
@@ -93,11 +95,17 @@ impl RedisTurnBackend {
         let client = redis::Client::open(url.unwrap_or("redis://localhost:6379"))
             .map_err(|_| RoomKitError::Value("invalid Redis turn backend URL".into()))?;
         Ok(Self(Arc::new(Node {
-            node_id: Uuid::new_v4().simple().to_string()[..12].into(),
+            outbox: Mutex::default(),
+            id: Uuid::new_v4()
+                .simple()
+                .to_string()
+                .chars()
+                .take(12)
+                .collect(),
             prefix: options.key_prefix,
-            owner: Default::default(),
-            routes: Default::default(),
-            serving: Default::default(),
+            owner: Mutex::default(),
+            routes: Mutex::default(),
+            serving: Mutex::default(),
             reader: OnceCell::new(),
             heartbeat: OnceCell::new(),
             quitting: Arc::default(),
@@ -105,7 +113,7 @@ impl RedisTurnBackend {
             closing: tokio::sync::Mutex::new(()),
             timeouts: options.timeouts,
             client: options.client.unwrap_or_else(|| client.clone()),
-            choice: std::sync::atomic::AtomicUsize::new(0),
+            choice: Mutex::new(0),
             address: client,
             data: OnceCell::new(),
         })))
@@ -113,7 +121,7 @@ impl RedisTurnBackend {
 
     /// This process's node identifier.
     pub fn node_id(&self) -> &str {
-        &self.0.node_id
+        &self.0.id
     }
 
     /// The time bounds given to the backend.
@@ -140,7 +148,7 @@ impl RedisTurnBackend {
                     .set_number_of_retries(0);
                 ConnectionManager::new_with_config(node.client.clone(), config)
                     .await
-                    .map_err(redis_error)
+                    .map_err(|error| redis_error(&error))
             })
             .await
             .cloned()
@@ -151,6 +159,6 @@ impl RedisTurnBackend {
     }
 }
 
-fn redis_error(error: redis::RedisError) -> RoomKitError {
+fn redis_error(error: &redis::RedisError) -> RoomKitError {
     RoomKitError::Runtime(error.to_string())
 }
