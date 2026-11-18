@@ -55,6 +55,7 @@ mod error;
 pub(crate) mod executor;
 mod memory;
 mod observe;
+mod outside;
 mod owner;
 mod owner_inputs;
 mod pipe;
@@ -372,10 +373,7 @@ impl Turns {
         records.put(
             &binding.channel_id,
             &event.room_id,
-            PreviousTurn {
-                turn_id: turn_id.to_string(),
-                executor_id: None,
-            },
+            PreviousTurn::after(&turn_id, previous.as_ref(), Some(&event)),
         );
         records.mark_room(&event.room_id, context.room.created_at);
         let stale = kit.channel(&binding.channel_id).is_some_and(|channel| {
@@ -490,13 +488,10 @@ impl Turns {
                 message: OwnerMessage::RoomCall(message),
             },
         )?;
-        let OwnerMessage::RoomCall(call) = parsed.message else {
-            return Err(RoomKitError::Value("expected a room call".into()));
-        };
-        let (channel_id, room_id) = (call.channel_id.clone(), call.room_id.clone());
-        let last = || owner::last_turn(&self.records(), &channel_id, &room_id);
-        let answering = owner::answer_room_call(&kit, last, call);
-        let answered = context::TurnContext::default().scope(answering).await;
+        let answered = self
+            .receive_owner_message(kit, parsed)
+            .await
+            .ok_or_else(|| RoomKitError::Value("a room call did not receive its result".into()))?;
         let answered: RoomCallResult = cross(&observers, Carried::RoomCallResult, &answered)?;
         match answered.error {
             Some(error) => Err(rebuild_kit_error(&error)),

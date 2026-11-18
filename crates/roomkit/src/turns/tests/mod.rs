@@ -6,6 +6,7 @@ mod cut_reads;
 mod executor_close;
 mod liveness;
 mod never_started;
+mod outside;
 mod owner_tools;
 mod records;
 mod rpc_wire;

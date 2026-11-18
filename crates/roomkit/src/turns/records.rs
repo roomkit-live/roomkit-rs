@@ -8,12 +8,56 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use roomkit_core::model::{ChannelId, RoomId, Timestamp};
+use roomkit_core::model::{ChannelId, RoomEvent, RoomId, Timestamp, Visibility};
 
 use super::wire::PreviousTurn;
 
 /// How many (channel, room) pairs the owner keeps a record for.
 pub(crate) const ROOMS_KEPT: usize = 10_000;
+
+/// The bounds the submitted trigger set on publication after its turn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct AnswerScope {
+    pub(crate) unscoped: bool,
+    pub(crate) depth: u32,
+}
+
+impl PreviousTurn {
+    /// Start an entry, carrying the last 32 scopes held by the owner.
+    /// A channel call leaves room state but does not create an answer scope.
+    pub(crate) fn after(id: &str, previous: Option<&Self>, event: Option<&RoomEvent>) -> Self {
+        let mut scopes = previous
+            .map(|record| record.scopes.clone())
+            .unwrap_or_default();
+        if let Some(event) = event {
+            let scope = AnswerScope {
+                unscoped: event
+                    .response_visibility
+                    .as_ref()
+                    .is_none_or(|v| *v == Visibility::All),
+                depth: roomkit_core::rules::chain_depth::response_depth(event),
+            };
+            scopes.retain(|(turn, _)| turn != id);
+            scopes.push_back((id.to_owned(), scope));
+            if scopes.len() > 32 {
+                scopes.pop_front();
+            }
+        }
+        Self {
+            turn_id: id.to_owned(),
+            executor_id: None,
+            scopes,
+        }
+    }
+
+    pub(crate) fn scope(&self, turn: &str) -> AnswerScope {
+        self.scopes
+            .iter()
+            .find(|(id, _)| id == turn)
+            .map(|(_, scope)| *scope)
+            .unwrap_or_default()
+    }
+}
 
 type Key = (ChannelId, RoomId);
 
@@ -161,10 +205,7 @@ mod tests {
     use super::*;
 
     fn turn(id: &str) -> PreviousTurn {
-        PreviousTurn {
-            turn_id: id.to_owned(),
-            executor_id: None,
-        }
+        PreviousTurn::after(id, None, None)
     }
 
     /// Python: `tests/test_turns_channel_control.py::test_the_first_turn_of_a_room_created_again_names_no_previous_turn`:

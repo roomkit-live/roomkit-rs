@@ -62,6 +62,7 @@ impl Turns {
             call.previous_turn = records.get(&call.channel_id, &call.room_id).cloned();
             // Serialize before changing the owner's record: an unsent call
             // must leave the previous turn untouched.
+            let submitted = PreviousTurn::after(&call.call_id, call.previous_turn.as_ref(), None);
             let envelope = ChannelControlEnvelope {
                 message: ChannelControl::ChannelCall(Box::new(call)),
             };
@@ -71,14 +72,7 @@ impl Turns {
             let ChannelControl::ChannelCall(call) = parsed.message else {
                 unreachable!()
             };
-            records.put(
-                &call.channel_id,
-                &call.room_id,
-                PreviousTurn {
-                    turn_id: call.call_id.clone(),
-                    executor_id: None,
-                },
-            );
+            records.put(&call.channel_id, &call.room_id, submitted);
             records.mark_room(&call.room_id, room_created_at);
             let key = (call.channel_id.clone(), call.room_id.clone());
             let stale = self.rooms.enter(

@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use roomkit_core::model::{EventId, Metadata};
+use roomkit_core::model::{ChannelId, EventId, Metadata, RoomId};
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -62,38 +62,48 @@ fn publish_for_turn(
     (room_id, channel_id, event_id): (Option<&str>, Option<&str>, Option<String>),
     data: Metadata,
 ) {
-    if !emitted_by_its_turn(facts, &event_type, room_id, channel_id) {
-        tracing::warn!(
-            target: "roomkit::turns",
-            room_id = %facts.room_id,
-            channel_id = %facts.channel_id,
-            %event_type,
-            "a turn emitted a framework event outside its room or kind: dropped"
-        );
+    publish_for_room(
+        kit,
+        (&facts.room_id, &facts.channel_id, facts.response_depth),
+        event_type,
+        (room_id, channel_id, event_id),
+        data,
+    );
+}
+
+/// Publish a framework event during or after its turn within the owner's scope.
+pub(in crate::turns) fn publish_for_room(
+    kit: &dyn TurnKit,
+    (room, channel, depth): (&RoomId, &ChannelId, u32),
+    event_type: String,
+    (room_id, channel_id, event_id): (Option<&str>, Option<&str>, Option<String>),
+    data: Metadata,
+) {
+    if !emitted_by_its_turn(room, channel, &event_type, room_id, channel_id) {
+        tracing::warn!(target: "roomkit::turns", room_id = %room, channel_id = %channel, %event_type,
+            "a turn emitted a framework event outside its room or kind: dropped");
         return;
     }
     let ids = (
-        Some(facts.room_id.clone()),
-        Some(facts.channel_id.clone()),
+        Some(room.clone()),
+        Some(channel.clone()),
         event_id.and_then(|id| EventId::new(id).ok()),
     );
     ExecutionContext::current()
-        .at_least(facts.response_depth)
+        .at_least(depth)
         .sync_scope(|| kit.emit(event_type, ids, data));
 }
 
-/// Whether a turn of `facts` may emit `event_type` naming `room_id` and
-/// `channel_id`: one of [`TURN_FRAMEWORK_EVENTS`], about its own room and
-/// channel or none (Python's `names_its_room`).
 fn emitted_by_its_turn(
-    facts: &Facts,
+    room: &RoomId,
+    channel: &ChannelId,
     event_type: &str,
     room_id: Option<&str>,
     channel_id: Option<&str>,
 ) -> bool {
     TURN_FRAMEWORK_EVENTS.contains(&event_type)
-        && room_id.is_none_or(|named| named == facts.room_id.as_str())
-        && channel_id.is_none_or(|named| named == facts.channel_id.as_str())
+        && room_id.is_none_or(|named| named == room.as_str())
+        && channel_id.is_none_or(|named| named == channel.as_str())
 }
 
 /// A handler's own unit, excluding the turn unit its siblings share.
@@ -617,7 +627,13 @@ mod tests {
         ];
         assert_eq!(
             cases.map(|(event_type, room_id, channel_id)| {
-                emitted_by_its_turn(&facts, event_type, room_id, channel_id)
+                emitted_by_its_turn(
+                    &facts.room_id,
+                    &facts.channel_id,
+                    event_type,
+                    room_id,
+                    channel_id,
+                )
             }),
             [true, true, false, false, false]
         );

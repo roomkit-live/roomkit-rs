@@ -61,10 +61,7 @@ fn key(room: &str) -> Key {
     (channel(), RoomId::new(room).unwrap())
 }
 fn previous(id: &str) -> PreviousTurn {
-    PreviousTurn {
-        turn_id: id.to_owned(),
-        executor_id: None,
-    }
+    PreviousTurn::after(id, None, None)
 }
 
 // Python: test_a_record_that_falls_out_drops_the_state_it_vouched_for.

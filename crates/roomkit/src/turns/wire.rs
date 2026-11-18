@@ -44,6 +44,8 @@ pub(crate) struct PreviousTurn {
     pub(crate) turn_id: String,
     #[serde(default)]
     pub(crate) executor_id: Option<String>,
+    #[serde(skip)]
+    pub(crate) scopes: std::collections::VecDeque<(String, super::records::AnswerScope)>,
 }
 
 /// What the owner sends an executor to start one turn (RFC §10.6.3).
@@ -582,6 +584,10 @@ impl TryFrom<Frame> for PublicationFrame {
     type Error = &'static str;
 
     fn try_from(frame: Frame) -> Result<Self, Self::Error> {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "only these two publication kinds may cross outside a turn"
+        )]
         match frame {
             Frame::Ephemeral { .. } | Frame::FrameworkEvent { .. } => Ok(Self(frame)),
             _ => Err("a room publication must carry an ephemeral or a framework event"),
