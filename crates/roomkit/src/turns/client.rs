@@ -166,16 +166,16 @@ impl TurnClient {
     }
 
     /// Enable the named executor hook for the room, in registration order.
-    pub fn enable_room_hook(&self, room: &RoomId, name: &str) {
-        self.state.services.enable(room, name);
+    pub fn enable_room_hook(&self, room_id: &RoomId, name: &str) {
+        self.state.services.enable(room_id, name);
     }
     /// Disable a named executor hook, returning whether it was enabled.
-    pub fn disable_room_hook(&self, room: &RoomId, name: &str) -> bool {
-        self.state.services.disable(room, name)
+    pub fn disable_room_hook(&self, room_id: &RoomId, name: &str) -> bool {
+        self.state.services.disable(room_id, name)
     }
     /// Return the hooks carried by the next turn in this room.
-    pub fn room_hook_names(&self, room: &RoomId) -> Vec<String> {
-        self.state.services.hook_names(room)
+    pub fn room_hook_names(&self, room_id: &RoomId) -> Vec<String> {
+        self.state.services.hook_names(room_id)
     }
 
     /// Send a channel control, preserving this owner's previous-turn record.
@@ -200,13 +200,13 @@ impl TurnClient {
     /// Read an open human-input request in the requested organization.
     pub fn input_request(
         &self,
-        id: &str,
+        request_id: &str,
         options: &InputRequestOptions,
     ) -> Option<PendingInputEvent> {
         self.state
             .turns
             .inputs
-            .request(id, options.organization_id.as_deref())
+            .request(request_id, options.organization_id.as_deref())
     }
     /// Answer an input request, including an answer that arrived just before it opened.
     pub async fn answer_input(&self, id: &str, value: &str) -> bool {
@@ -219,14 +219,14 @@ impl TurnClient {
     /// Steer this owner's running turns in the room and return the number of loops reached.
     pub async fn steer(
         &self,
-        room: &RoomId,
-        channel: &ChannelId,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
         directive: impl Into<SteeringDirective>,
         options: SteerOptions,
     ) -> usize {
         let address = SteerAddress {
-            room,
-            channel,
+            room: room_id,
+            channel: channel_id,
             turn: options.turn_id.as_deref(),
             organization: options.organization_id.as_deref(),
         };

@@ -65,7 +65,7 @@ class PinTargets(unittest.TestCase):
         (tests / "public_api_signatures.json").write_text(json.dumps({f"roomkit.Name{version}": {}}), encoding="utf-8")
         turns = self.roomkit / "src/roomkit/turns"
         turns.mkdir(parents=True, exist_ok=True)
-        for module in ("base", "redis", "wire"):
+        for module in ("base", "redis", "owner", "executor", "wire"):
             (turns / f"{module}.py").write_text("", encoding="utf-8")
         (turns / "base.py").write_text(f"class TurnLink:\n    request{version}: TurnRequest\n", encoding="utf-8")
         self._git("add", "tests", "src")

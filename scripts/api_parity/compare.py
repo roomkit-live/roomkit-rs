@@ -557,7 +557,8 @@ class Comparison:
     def _rust_params(self, rust_path: str, method: dict, item: str) -> list[_RustParam]:
         """A method's parameters, an options struct's fields standing for
         the defaulted ones: `<Method>Options`, or `<Type>Options` for `new`."""
-        wanted = {f"{_camel(method['name'])}Options"}
+        method_options = f"{_camel(method['name'])}Options"
+        wanted = {method_options}
         if method["name"] == "new":
             wanted.add(f"{item.rpartition('::')[2]}Options")
         links = method.get("links", {})
@@ -565,6 +566,12 @@ class Comparison:
         for param in method["params"]:
             base = _base_type(param["type"])
             options = self._options_struct(base, links, rust_path) if base in wanted else None
+            if options is None and param["name"] == "options" and base.endswith(method_options):
+                # A scoped name such as TurnRunOptions still carries run's keywords.
+                # Require the linked, defaultable record; its fields are checked below.
+                linked = self.surface.items.get(links.get(base, ""))
+                if linked and linked["kind"] == "struct" and linked.get("fields") and "Default" in linked.get("impls", []):
+                    options = linked
             if options is None:
                 found.append(_RustParam(param["name"].lstrip("_"), param["type"], True, f"{rust_path}({param['name']})"))
                 continue

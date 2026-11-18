@@ -13,6 +13,16 @@
     "roomkit.TurnBackend": [
       "timeouts"
     ],
+    "roomkit.TurnClient": [
+      "backend",
+      "errors",
+      "executor",
+      "inputs",
+      "telemetry"
+    ],
+    "roomkit.TurnExecutor": [
+      "executor_id"
+    ],
     "roomkit.TurnLink": [
       "request"
     ]
@@ -92,6 +102,17 @@
         "*",
         "written=<factory>",
         "removed=<factory>"
+      ]
+    },
+    "roomkit.turns.wire.ToolCall": {
+      "__init__": [
+        "def",
+        "*",
+        "type='tool_call'",
+        "call_id",
+        "name",
+        "arguments",
+        "context"
       ]
     },
     "roomkit.turns.wire.WireOutput": {

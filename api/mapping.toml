@@ -946,10 +946,10 @@ approved = "2026-11-11"
 reason = "The engine is built with its kit; its chains and observer tasks run in core/runtime operations, registration identity stays private, and fail-closed triggers are fixed. The six named-hook operations are public (HITL 6f09bcba, option b)."
 
 [[missing]]
-python = "roomkit.TurnExecutor"
-members = ["wire", "use_wiring", "wiring"]
-scope = "text"
-reason = "The worker accepts application links, channel controls and an owner port for work after a turn. The caller still needs access to the channel wiring environment."
+python = "roomkit.TurnExecutor.__init__"
+params = ["media_resolver", "attached_media"]
+scope = "media"
+reason = "The worker's media resolver and attached-media reader ship with media support."
 
 [[exception]]
 rust = "roomkit::TurnExecutor::hook"
@@ -1016,12 +1016,6 @@ python = "roomkit.RoomKit.__init__"
 params = ["stt", "tts", "voice"]
 scope = "media"
 reason = "not in 0.x: voice"
-
-[[missing]]
-python = "roomkit.RoomKit.__init__"
-params = ["error_classes"]
-scope = "text"
-reason = "The kit still needs the application-provided error classes used to reconstruct errors crossing a turn link (RFC 10.6.8)."
 
 [[missing]]
 python = "roomkit.RoomKit.create_room"
@@ -1420,6 +1414,19 @@ rust = "roomkit_mcp::McpEnvironment"
 approved = "2026-11-17"
 reason = "Python's retained environment dictionary: named cloned handle with atomic new/get/replace/insert/remove and owned snapshots; connections copy the current overrides (HITL e4ef09db)"
 
+
+# An optional positional URL uses explicit None in Rust. Both exported paths are callable.
+[[exception]]
+rust = "roomkit::RedisTurnBackend::new"
+params = ["url"]
+approved = "2026-11-18"
+reason = "Rust callers supply None for Python's omitted positional URL. The constructor checks client injection before resolving the default endpoint."
+
+[[exception]]
+rust = "roomkit::turns::RedisTurnBackend::new"
+params = ["url"]
+approved = "2026-11-18"
+reason = "Re-export of the same optional positional URL constructor. None and an empty URL use localhost:6379; an injected client requires a supplied URL."
 
 [[exception]]
 rust = "roomkit_mcp::McpToolProvider::new"

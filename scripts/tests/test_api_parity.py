@@ -162,6 +162,16 @@ class Members(unittest.TestCase):
         self.assertEqual(report.items["roomkit::RoomKit"].status, "matches")
         self.assertEqual(report.items["roomkit::SendEventOptions"].status, "options")
 
+    def test_a_linked_defaultable_options_struct_can_prefix_the_method_name(self) -> None:
+        client = struct("roomkit::TurnClient", methods=["pub fn run(&self, options: TurnRunOptions)"])
+        options = struct("roomkit::TurnRunOptions", fields=[("strategy_turn", "bool")], impls=["Default"])
+        client["methods"][0]["links"] = {"TurnRunOptions": options["path"]}
+        python = {"roomkit.TurnClient": {"run": ["def", "*", "strategy_turn=False"]}}
+        self.assertEqual(found(run([client, options], python)), [])
+        wrong_field = {**options, "fields": [{"name": "other", "type": "bool"}]}
+        self.assertIn(("python", "roomkit.TurnClient.run(strategy_turn)"), found(run([client, wrong_field], python)))
+        self.assertIn(("rust", options["path"]), found(run([client, {**options, "impls": []}], python)))
+
     def test_an_options_struct_is_the_one_its_signature_links_to(self) -> None:
         # Two `CommitEventOptions`, the kit's and the store's: the link
         # rustdoc writes on the parameter's type tells them apart.

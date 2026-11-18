@@ -16,10 +16,12 @@ from pathlib import Path
 ATTRIBUTE_CLASSES = {
     "base": {"ExecutorLink", "TurnLink", "RoomOwner", "TurnBackend"},
     "redis": {"RedisTurnBackend"},
+    "owner": {"TurnClient"},
+    "executor": {"TurnExecutor"},
 }
 WIRE_RECORDS = {
     "CallContext", "ChannelControlEnvelope", "ErrorRecord", "HostResult",
-    "InputRequest", "OwnerMessageEnvelope", "RecordChanges", "WireOutput",
+    "InputRequest", "OwnerMessageEnvelope", "RecordChanges", "ToolCall", "WireOutput",
 }
 
 
