@@ -1,4 +1,6 @@
-//! Address ranges used by the supported Python ipaddress releases.
+//! Address policy follows `CPython` `ipaddress` 3.12.12, 3.13.3 and 3.14.9.
+//! The Python helper also applies these special-purpose ranges and mapped
+//! IPv4 semantics on earlier patch releases.
 //! The explicit exceptions distinguish special-purpose networks from their public subranges.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -104,5 +106,34 @@ fn ipv6_reason(address: Ipv6Addr) -> Option<&'static str> {
         Some("multicast")
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn special_ranges_preserve_their_public_exceptions_and_mapped_ipv4_policy() {
+        for (literal, public) in [
+            ("2001:db8::1", false),
+            ("3fff::1", false),
+            ("ff02::1", false),
+            ("fe80::1", false),
+            ("2001:1::1", true),
+            ("2001:3::1", true),
+            ("2002::1", false),
+            ("64:ff9b:1::1", false),
+            ("192.0.0.8", false),
+            ("192.0.0.9", true),
+            ("::ffff:192.0.0.9", true),
+            ("::ffff:127.0.0.1", false),
+        ] {
+            assert_eq!(
+                check("service.example", literal.parse().unwrap()).is_ok(),
+                public,
+                "{literal}"
+            );
+        }
     }
 }

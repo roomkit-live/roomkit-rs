@@ -1,6 +1,7 @@
 //! Check an outbound HTTP destination before handing it to a transport.
 
 mod addresses;
+mod authority;
 
 use std::net::{IpAddr, ToSocketAddrs};
 
@@ -27,6 +28,10 @@ impl Default for ValidatePublicUrlOptions<'_> {
 /// Check an outbound URL and return the original spelling on success.
 ///
 /// The default accepts HTTP and HTTPS and performs synchronous DNS resolution.
+/// Supply internationalized hostnames as ASCII (Punycode), and IPv6 literals
+/// without a zone identifier. Paths and queries may contain Unicode. Both
+/// implementations use the same special-purpose address policy across the
+/// supported Python patch releases.
 /// Validation observes the answers at the time of the call. A transport that
 /// needs to pin the connection must dial an address it has checked.
 ///
@@ -52,7 +57,7 @@ fn validate<'u>(
 ) -> Result<&'u str, String> {
     let invalid = || "URL must have a scheme and host".to_owned();
     let (scheme, rest) = original
-        .trim_start()
+        .trim_start_matches([' ', '\t', '\r', '\n'])
         .split_once("://")
         .ok_or_else(invalid)?;
     let mut letters = scheme.bytes();
@@ -72,6 +77,7 @@ fn validate<'u>(
             options.allowed_schemes
         ));
     }
+    authority::check(rest)?;
     // Custom allowed schemes use the same hostname and address checks, even
     // when the generic URL parser would treat their host as an opaque string.
     let url = if matches!(scheme.as_str(), "http" | "https") {
@@ -134,5 +140,78 @@ mod tests {
             validate(uri, &options, |_, _| vec!["93.184.216.34".parse().unwrap()]),
             Ok(uri)
         );
+    }
+    #[test]
+    fn the_raw_authority_is_checked_before_resolution() {
+        for authority in [
+            r"name\part.example",
+            "name\tpart.example",
+            "name%2Epart.example",
+            "one@two@service.example",
+            "[2001:db8::1%25example]",
+            "café.example",
+            "\u{212a}.example",
+        ] {
+            for scheme in ["https", "service"] {
+                for resolve_dns in [false, true] {
+                    let options = ValidatePublicUrlOptions {
+                        allowed_schemes: &[scheme],
+                        resolve_dns,
+                    };
+                    let uri = format!("{scheme}://{authority}/");
+                    assert!(
+                        validate(&uri, &options, |_, _| panic!(
+                            "invalid authority reached DNS"
+                        ))
+                        .is_err()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ascii_dns_spelling_preserves_userinfo_path_and_query() {
+        let uri = "service://user%40mail@XN--CAF-DMA.example/café?q=été";
+        let options = ValidatePublicUrlOptions {
+            allowed_schemes: &["service"],
+            resolve_dns: true,
+        };
+        assert_eq!(
+            validate(uri, &options, |host, port| {
+                assert_eq!((host, port), ("xn--caf-dma.example", 80));
+                vec!["93.184.216.34".parse().unwrap()]
+            }),
+            Ok(uri)
+        );
+    }
+
+    #[test]
+    fn mixed_dns_answers_include_the_ipv6_policy() {
+        let result = validate(
+            "https://service.example/",
+            &ValidatePublicUrlOptions::default(),
+            |_, _| {
+                vec![
+                    "93.184.216.34".parse().unwrap(),
+                    std::net::Ipv6Addr::LOCALHOST.into(),
+                ]
+            },
+        );
+        assert!(result.unwrap_err().contains("loopback"));
+    }
+    #[test]
+    fn custom_schemes_share_the_same_leading_whitespace_rule() {
+        let options = ValidatePublicUrlOptions {
+            allowed_schemes: &["service"],
+            resolve_dns: false,
+        };
+        for prefix in [" ", "\t", "\r", "\n", "\u{00a0}"] {
+            let uri = format!("{prefix}service://service.example/");
+            assert_eq!(
+                validate(&uri, &options, |_, _| unreachable!()).is_ok(),
+                prefix != "\u{00a0}"
+            );
+        }
     }
 }
