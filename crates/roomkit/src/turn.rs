@@ -1377,6 +1377,18 @@ pub(crate) trait TurnKit: Send + Sync {
         crate::turns::ErrorClasses::default()
     }
 
+    fn wire_external_tools(
+        &self,
+        channel: &ChannelId,
+        bridge: &crate::external_tools::ExternalToolBridge,
+        wiring: crate::turns::TurnWiring,
+    );
+    fn wire_human_input(
+        &self,
+        channel: &ChannelId,
+        handler: &crate::human_input::HumanInputHandler,
+        wiring: crate::turns::TurnWiring,
+    );
     fn wiring(&self) -> Option<crate::turns::TurnWiring>;
     fn declared_verb(&self, name: &str) -> Option<crate::turns::declared::Declaration>;
     fn external_tool_context(&self, room_id: RoomId) -> BoxFuture<'static, Option<RoomContext>>;
@@ -1573,6 +1585,26 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
             .unwrap_or_default()
     }
 
+    fn wire_external_tools(
+        &self,
+        channel: &ChannelId,
+        bridge: &crate::external_tools::ExternalToolBridge,
+        wiring: crate::turns::TurnWiring,
+    ) {
+        if let Some(kit) = self.upgrade() {
+            kit.wire_external_tools(channel, bridge, wiring);
+        }
+    }
+    fn wire_human_input(
+        &self,
+        channel: &ChannelId,
+        handler: &crate::human_input::HumanInputHandler,
+        wiring: crate::turns::TurnWiring,
+    ) {
+        if let Some(kit) = self.upgrade() {
+            kit.wire_human_input(channel, handler, wiring);
+        }
+    }
     fn wiring(&self) -> Option<crate::turns::TurnWiring> {
         Some(self.upgrade()?.wiring())
     }

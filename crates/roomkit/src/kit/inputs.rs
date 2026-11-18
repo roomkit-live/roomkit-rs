@@ -5,18 +5,18 @@
 
 use std::sync::{Arc, Weak};
 
-use roomkit_core::model::{ChannelId, ChannelType, RoomContext, RoomId};
+use roomkit_core::model::{ChannelId, ChannelType, RoomId};
 use roomkit_core::rules::hook_registry::{HookSpec, HookSubject, HookTrigger};
 
 use super::{Inner, RoomKit, read};
 use crate::channel::BoxFuture;
-use crate::driver;
 use crate::error::RoomKitError;
 use crate::hooks::{HookHandler, Kept};
 use crate::human_input::{HumanInputHandler, PendingInputEvent};
 use crate::store::ConversationStore;
 use crate::telemetry::within_kit;
 use crate::turn::{InputNotification, TurnKit};
+use crate::turns::TurnWiring;
 
 impl<S: ConversationStore> RoomKit<S> {
     /// Reads an open human-input request of a turn this kit started
@@ -129,6 +129,7 @@ impl<S: ConversationStore> Inner<S> {
         self: &Arc<Self>,
         channel_id: &ChannelId,
         handler: &HumanInputHandler,
+        wiring: TurnWiring,
     ) {
         let kit = Arc::downgrade(self);
         let registered = channel_id.clone();
@@ -136,29 +137,16 @@ impl<S: ConversationStore> Inner<S> {
         handler.set_on_input_required(
             channel_id.as_str(),
             Arc::new(move |event| -> BoxFuture<'static, bool> {
-                let required = user_input_required(Weak::clone(&kit), registered.clone(), event);
+                let required = user_input_required(
+                    Weak::clone(&kit),
+                    registered.clone(),
+                    wiring.clone(),
+                    event,
+                );
                 // Outside a turn, under the kit's telemetry all the same.
                 Box::pin(within_kit(&telemetry, None, required))
             }),
         );
-    }
-
-    /// The context a room's `ON_USER_INPUT_REQUIRED` hooks read, as
-    /// Python's `hook_context` builds it; `None`, logged, for a room the
-    /// store lacks, or a store that fails the read.
-    async fn input_context(&self, room_id: &RoomId) -> Option<RoomContext> {
-        let recent_events = self.config().recent_events();
-        match driver::load_context(&*self.store, room_id, recent_events).await {
-            Ok(Some(context)) => Some(context),
-            Ok(None) => {
-                tracing::warn!(target: "roomkit::hooks", %room_id, "the room of a human-input request is not found: its hooks do not run");
-                None
-            }
-            Err(error) => {
-                tracing::warn!(target: "roomkit::hooks", %room_id, %error, "the hooks of a human-input request could not run");
-                None
-            }
-        }
     }
 }
 
@@ -171,6 +159,7 @@ impl<S: ConversationStore> Inner<S> {
 async fn user_input_required<S: ConversationStore>(
     kit: Weak<Inner<S>>,
     registered: ChannelId,
+    wiring: TurnWiring,
     event: PendingInputEvent,
 ) -> bool {
     let (Some(inner), Ok(room_id)) = (kit.upgrade(), RoomId::new(&event.room_id)) else {
@@ -182,7 +171,10 @@ async fn user_input_required<S: ConversationStore>(
     let hooks = if hooks.is_empty() {
         None
     } else {
-        let Some(context) = inner.input_context(&room_id).await else {
+        let Some(context) = wiring
+            .hook_context(&room_id, HookTrigger::OnUserInputRequired, None)
+            .await
+        else {
             return true;
         };
         Some((hooks, context))
@@ -194,6 +186,7 @@ async fn user_input_required<S: ConversationStore>(
         ids: (room_id, channel_id),
         hooks,
         turn: None,
+        wiring: Some(wiring),
     };
     notification.run(event).await
 }

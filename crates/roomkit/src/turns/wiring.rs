@@ -69,7 +69,7 @@ pub trait WiringEnv: Send + Sync + 'static {
 /// A snapshot of the environment selected for wiring channels on an executor.
 #[derive(Clone)]
 pub struct TurnWiring {
-    tools: Arc<dyn BindTools>,
+    pub(crate) kit: Arc<dyn crate::turn::TurnKit>,
     pub(crate) kit_defaults: bool,
     /// Reads and outlets supplied by the host.
     pub env: Arc<dyn WiringEnv>,
@@ -81,28 +81,6 @@ impl std::fmt::Debug for TurnWiring {
     }
 }
 
-trait BindTools: Send + Sync {
-    fn bind(
-        &self,
-        channel: &ChannelId,
-        bridge: &crate::external_tools::ExternalToolBridge,
-        wiring: TurnWiring,
-    );
-}
-
-impl<S: crate::ConversationStore> BindTools for std::sync::Weak<crate::kit::Inner<S>> {
-    fn bind(
-        &self,
-        channel: &ChannelId,
-        bridge: &crate::external_tools::ExternalToolBridge,
-        wiring: TurnWiring,
-    ) {
-        if let Some(kit) = self.upgrade() {
-            kit.wire_external_tools(channel, bridge, wiring);
-        }
-    }
-}
-
 impl TurnWiring {
     pub(crate) fn for_kit<S: crate::ConversationStore>(
         kit: std::sync::Weak<crate::kit::Inner<S>>,
@@ -110,7 +88,7 @@ impl TurnWiring {
         Self {
             kit_defaults: true,
             env: Arc::new(KitWiringEnv(std::sync::Weak::clone(&kit))),
-            tools: Arc::new(kit),
+            kit: Arc::new(kit),
         }
     }
 
@@ -120,22 +98,40 @@ impl TurnWiring {
         channel: &ChannelId,
         bridge: &crate::external_tools::ExternalToolBridge,
     ) {
-        self.tools.bind(channel, bridge, self.clone());
+        self.kit.wire_external_tools(channel, bridge, self.clone());
     }
 
-    /// The channel keeps the bindings supplied when it is wired.
-    pub fn wire(&self, channel: &impl Channel) {
-        self.bind(channel);
+    /// Wire the channel's callbacks and its input handler before registration.
+    ///
+    /// # Errors
+    /// A human-input handler closed as a whole refuses new registrations.
+    pub fn wire(&self, channel: &impl Channel) -> Result<(), RoomKitError> {
+        self.bind(
+            channel,
+            &channel.channel_id(),
+            channel.human_input_handler(),
+        )
     }
 
-    pub(crate) fn bind(&self, channel: &dyn crate::channel::DynChannel) {
+    pub(crate) fn bind(
+        &self,
+        channel: &dyn crate::channel::DynChannel,
+        id: &ChannelId,
+        input: Option<crate::human_input::HumanInputHandler>,
+    ) -> Result<(), RoomKitError> {
         channel.set_turn_wiring(self.clone());
         if let Some(handler) = channel.external_tool_bridge() {
-            self.wire_external_tool_handler(&channel.declaration().channel_id, &handler);
+            self.wire_external_tool_handler(id, &handler);
         }
         if let Some(publication) = channel.channel_publication() {
             publication.wire_to(self.clone());
         }
+        if let Some(handler) = input {
+            let registration = handler.register(id.as_str())?;
+            channel.human_input_registered(registration);
+            self.kit.wire_human_input(id, &handler, self.clone());
+        }
+        Ok(())
     }
 
     /// Read the hook's room. A failed read leaves the hook without a context.

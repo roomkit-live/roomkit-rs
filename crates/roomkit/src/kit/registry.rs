@@ -72,8 +72,6 @@ impl<S: ConversationStore> RoomKit<S> {
         let channel_id = declaration.channel_id.clone();
         let to_wire = Arc::clone(&channel);
         let auto_greeting = greeting::auto_greeting_agent(&declaration, channel.as_ref());
-        let human_input =
-            human_input.map(|handler| (channel_id.clone(), handler, Arc::clone(&channel)));
         self.inner.try_change_config(|config| {
             config.register_channel(declaration)?;
             if channel.is_declaration_only() {
@@ -86,22 +84,13 @@ impl<S: ConversationStore> RoomKit<S> {
             // The channel is in place before an operation can see its
             // declaration.
             write(&self.inner.channel_order).push(channel_id.clone());
-            write(&self.inner.channels).insert(channel_id, channel);
+            write(&self.inner.channels).insert(channel_id.clone(), channel);
             Ok::<(), RoomKitError>(())
         })?;
         self.wire_registration(auto_greeting, inject, || {
-            if let Some((channel_id, handler, channel)) = human_input {
-                // Registered on its handler once the kit holds it, the channel
-                // a kit registered last owning its id's requests (RMK-1201).
-                // A handler closed whole refuses it, and the call fails with its
-                // RuntimeError, the kit holding the channel unannounced, as
-                // Python's register_channel raises once it holds it (RMK-1255).
-                let registration = handler.register(channel_id.as_str())?;
-                channel.human_input_registered(registration);
-                self.inner.wire_human_input(&channel_id, &handler);
-            }
-            self.turn_executor().wiring().bind(&*to_wire);
-            Ok(())
+            self.turn_executor()
+                .wiring()
+                .bind(&*to_wire, &channel_id, human_input)
         })?;
         self.start_presence_watch();
         drop(self.inner.emit(registered));

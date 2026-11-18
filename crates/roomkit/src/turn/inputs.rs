@@ -48,6 +48,7 @@ impl TurnHost {
             ids: (self.shared.room_id.clone(), self.shared.channel_id.clone()),
             hooks: Some((self.input_hooks(&event), self.shared.context.clone())),
             turn: Some(self.clone()),
+            wiring: None,
         };
         notification.run(event).await
     }
@@ -77,6 +78,7 @@ pub(crate) struct InputNotification {
     pub(crate) hooks: Option<(InputHooks, RoomContext)>,
     /// The turn its observers run within, if any.
     pub(crate) turn: Option<TurnHost>,
+    pub(crate) wiring: Option<crate::turns::TurnWiring>,
 }
 
 impl InputNotification {
@@ -117,10 +119,11 @@ impl InputNotification {
             &self.kit,
             &self.ids,
             self.depth(),
-            self.turn.as_ref(),
+            (self.turn.as_ref(), self.wiring.as_ref()),
             "user_input_required",
             data,
-        );
+        )
+        .await;
         allowed
     }
 
@@ -149,10 +152,11 @@ impl InputNotification {
                 &self.kit,
                 &self.ids,
                 self.depth(),
-                self.turn.as_ref(),
+                (self.turn.as_ref(), self.wiring.as_ref()),
                 spec,
                 &ran,
-            );
+            )
+            .await;
             match ran {
                 HookOutcome::Returned(result) => match result.action {
                     HookAction::Block => return (event, Some(result.reason)),
@@ -200,9 +204,18 @@ impl InputNotification {
             let (kit, ids, spec) = (Arc::clone(&self.kit), self.ids.clone(), spec.clone());
             let depth = self.depth();
             let turn = self.turn.clone();
+            let wiring = self.wiring.clone();
             let bounded = async move {
                 let observed = observing.await;
-                report_timeout(&kit, &ids, depth, turn.as_ref(), &spec, &observed);
+                report_timeout(
+                    &kit,
+                    &ids,
+                    depth,
+                    (turn.as_ref(), wiring.as_ref()),
+                    &spec,
+                    &observed,
+                )
+                .await;
                 if let HookOutcome::Raised(error) = observed {
                     tracing::warn!(target: "roomkit::hooks", hook = %spec.name, error = %error.message, "a human-input request's observer raised");
                 }
@@ -226,16 +239,24 @@ impl InputNotification {
 /// Emits the framework event `event_type` about the room and agent `ids`:
 /// its handlers keep `depth`, the response depth of the turn the request
 /// was made in, if any, during the turn or after it (RFC §8.3).
-fn emit(
+async fn emit(
     kit: &Arc<dyn TurnKit>,
     (room_id, channel_id): &(RoomId, ChannelId),
     depth: Option<u32>,
-    turn: Option<&TurnHost>,
+    (turn, wiring): (Option<&TurnHost>, Option<&crate::turns::TurnWiring>),
     event_type: &str,
     data: Metadata,
 ) {
     if let Some(turn) = turn {
         turn.emit(event_type, data);
+        return;
+    }
+    if let Some(wiring) = wiring {
+        let mut event = crate::FrameworkEvent::new(event_type);
+        event.room_id = Some(room_id.clone());
+        event.channel_id = Some(channel_id.clone());
+        event.data = data;
+        wiring.emit(event).await;
         return;
     }
     let ids = (Some(room_id.clone()), Some(channel_id.clone()), None);
@@ -251,11 +272,11 @@ fn emit(
 /// Emits the `hook_timeout` framework event of the hook `spec` when it ran
 /// past its timeout, SYNC or ASYNC (RFC §8.2, §9.1), about the room and
 /// agent `ids`, as `TurnHost` reports a tool hook's.
-fn report_timeout<P>(
+async fn report_timeout<P>(
     kit: &Arc<dyn TurnKit>,
     ids: &(RoomId, ChannelId),
     depth: Option<u32>,
-    turn: Option<&TurnHost>,
+    outlet: (Option<&TurnHost>, Option<&crate::turns::TurnWiring>),
     spec: &HookSpec,
     ran: &HookOutcome<P>,
 ) {
@@ -272,7 +293,7 @@ fn report_timeout<P>(
         "timeout".to_owned(),
         Value::from(spec.timeout.as_secs_f64()),
     );
-    emit(kit, ids, depth, turn, "hook_timeout", data);
+    emit(kit, ids, depth, outlet, "hook_timeout", data).await;
 }
 
 #[cfg(test)]
@@ -308,10 +329,11 @@ mod tests {
             &turn_kit,
             &ids,
             Some(2),
-            None,
+            (None, None),
             &spec,
             &HookOutcome::TimedOut,
-        );
+        )
+        .await;
         assert_eq!(depths.recv().await, Some(Some(2)));
         kit.close().await.unwrap();
     }

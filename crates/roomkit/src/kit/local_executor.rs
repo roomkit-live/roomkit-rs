@@ -115,8 +115,11 @@ impl<S: ConversationStore> TurnExecutor<S> {
     }
 
     /// Wire a channel even before it is registered or built for a turn.
-    pub fn wire(&self, channel: &impl crate::Channel) {
-        self.wiring().wire(channel);
+    ///
+    /// # Errors
+    /// Propagates a closed human-input handler's registration error.
+    pub fn wire(&self, channel: &impl crate::Channel) -> Result<(), RoomKitError> {
+        self.wiring().wire(channel)
     }
 
     /// The engine on which this executor's hooks are registered.

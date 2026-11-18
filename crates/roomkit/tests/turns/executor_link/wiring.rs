@@ -175,7 +175,7 @@ async fn wiring_before_registration_retains_the_environment_selected_for_the_cha
     )
     .unwrap();
     kit.turn_executor().use_wiring(Arc::<Env>::clone(&first));
-    kit.turn_executor().wire(&channel);
+    kit.turn_executor().wire(&channel).unwrap();
     kit.turn_executor().use_wiring(Arc::<Env>::clone(&second));
     channel
         .turn_wiring()
@@ -236,7 +236,7 @@ async fn wiring_an_unregistered_ai_channel_activates_its_external_tool_gate() {
             .unwrap()
             .approved
     );
-    worker.wire(&ai);
+    worker.wire(&ai).unwrap();
     let decision = handler
         .process_tool_call("search", &Metadata::new(), options)
         .await
@@ -284,7 +284,7 @@ async fn wiring_reads_own_history_in_pages_and_the_ai_reads_tasks_before_registr
         AiChannelOptions::default(),
     )
     .unwrap();
-    worker.wire(&ai);
+    worker.wire(&ai).unwrap();
     ai.on_event(
         request.event.clone(),
         request.binding.clone(),
@@ -298,6 +298,73 @@ async fn wiring_reads_own_history_in_pages_and_the_ai_reads_tasks_before_registr
     assert_eq!(
         *env.row_reads.lock().unwrap(),
         [None, Some(499), None, Some(499)]
+    );
+    worker.close().await;
+}
+
+#[tokio::test]
+async fn wiring_before_registration_arms_human_input_and_propagates_a_closed_handler() {
+    use roomkit::human_input::{
+        CloseOptions, CreateOptions, PendingInputEvent, PendingInputStatus, WaitOptions,
+    };
+    use roomkit::model::{HookResult, Metadata, hook::BlockOptions};
+    use roomkit::{HookTrigger, turns::HookOptions};
+    use roomkit_ai::{HumanInputToolHandler, HumanInputToolHandlerOptions};
+
+    let (link, _, _) = link(false);
+    let request = &link.request;
+    let worker = worker();
+    let env = Arc::new(Env::new(request.context.clone()));
+    worker.use_wiring(Arc::<Env>::clone(&env));
+    worker
+        .hook(
+            HookTrigger::OnUserInputRequired,
+            |_: PendingInputEvent, ctx: RoomContext| async move {
+                assert_eq!(ctx.room.id.as_str(), "r1");
+                HookResult::block("not allowed", BlockOptions::default())
+            },
+            HookOptions::default(),
+        )
+        .unwrap();
+    let tool =
+        HumanInputToolHandler::new(["Ask"], HumanInputToolHandlerOptions::default()).unwrap();
+    let handler = tool.handler().clone();
+    let ai = AiChannel::new(
+        request.channel_id.clone(),
+        ScriptedProvider::new([]),
+        AiChannelOptions {
+            human_input_handler: Some(tool),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    worker.wire(&ai).unwrap();
+    let pending = handler
+        .create(
+            "Ask",
+            Metadata::new(),
+            CreateOptions {
+                channel_id: request.channel_id.to_string(),
+                room_id: request.room_id.to_string(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let answer = handler
+        .wait(
+            &pending.pending_id,
+            WaitOptions {
+                timeout: std::time::Duration::from_secs(2),
+            },
+        )
+        .await;
+    assert!(answer.is_err());
+    assert_eq!(pending.status(), PendingInputStatus::Rejected);
+    assert_eq!(*env.events.lock().unwrap(), ["user_input_required"]);
+    handler.close(CloseOptions::default()).await;
+    assert!(
+        matches!(worker.wire(&ai),Err(RoomKitError::Runtime(message)) if message.contains("closed"))
     );
     worker.close().await;
 }
