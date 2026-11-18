@@ -229,7 +229,10 @@ pub use self::kit::{
     CancelDeliveryOptions, CancelTaskOptions, SetupBackgroundOptions, StartTaskOptions,
     SteerOptions,
 };
-pub use self::kit::{ChannelCallOptions, TurnExecutor};
+pub use self::kit::{
+    ChannelCallOptions, ChannelRegistration, FrameworkAware, FrameworkAwareChannel, TurnExecutor,
+    framework_aware,
+};
 pub use self::kit::{
     CompleteVerificationOptions, RecordFailedAttemptOptions, RequestVerificationOptions,
     RevokeVerificationOptions, VerificationOfOptions,

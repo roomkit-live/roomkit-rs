@@ -32,6 +32,7 @@ pub(crate) mod channel_detach;
 mod channel_release;
 pub(crate) mod channel_state;
 pub use channel_state::ChannelCallOptions;
+mod channel_registration;
 mod delivery;
 mod delivery_keys;
 pub(crate) mod discussions;
@@ -39,6 +40,9 @@ mod engine;
 mod entry_window;
 mod ephemeral;
 mod events;
+pub use channel_registration::{
+    ChannelRegistration, FrameworkAware, FrameworkAwareChannel, framework_aware,
+};
 mod greeting;
 mod handoff;
 mod identity;

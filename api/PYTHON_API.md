@@ -118,6 +118,10 @@ the mapping and its tests. The check does not generate or update this document.
 | `roomkit::RoomKitError::Realtime` | Backend exception | A recoverable explicit publication failure; preserves the backend error |
 | `roomkit::TurnHost` | — | `respond_with_stream` |
 | `roomkit::WeakRoomKit` | — | Whole type |
+| `roomkit::FrameworkAwareChannel::set_framework` | `roomkit.FrameworkAwareChannel.set_framework` | Receives `WeakRoomKit<S>`; upgrading reaches the registering kit and its actual store. |
+| `roomkit::framework_aware` | — | Explicit opt-in at `register_channel` (approved 2026-11-17). |
+| `roomkit::FrameworkAware` | — | Whole type |
+| `roomkit::ChannelRegistration` | — | Whole type |
 | `roomkit::default_inbound_event` | — | Whole type |
 | `roomkit::keep_context` | — | Whole type |
 | `roomkit::RoomKitError` | — | `Store`, `Lock`, `Channel`, `Router`, `Identity` |
@@ -591,3 +595,14 @@ explicitly approved Rust constructor domain. Instructions default to the
 reference prompt when absent or empty, and `reasoning_effort` defaults to None.
 `CutReply` is a text carrier; this does not implement audio interruption,
 realtime admission, remote/offline turn scheduling or vendor classifiers.
+
+### Framework injection for application channels
+
+An application channel implementing `FrameworkAwareChannel<S>` opts in with
+`kit.register_channel(framework_aware(channel))` (approved 2026-11-17).
+Ordinary registration accepts the same channels as before. The callback can
+look up the inserted channel and upgrade its `WeakRoomKit<S>` to use the
+original store. It runs synchronously before the registration event. An error
+reaches the caller unchanged and leaves the channel registered without that
+event. A duplicate registration fails before injection. Retaining the weak
+reference allows the kit and its registered channels to be released together.

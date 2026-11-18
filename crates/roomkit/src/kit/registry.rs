@@ -9,15 +9,19 @@ use roomkit_core::model::{ChannelId, RoomContext};
 use roomkit_core::ops::FrameworkEvent as CoreEvent;
 use roomkit_core::rules::hook_registry::HookTrigger;
 
+use super::channel_registration::{ChannelRegistration, InjectFramework};
 use super::{RoomKit, greeting, read, write};
-use crate::channel::{Channel, DynChannel, config_of};
+use crate::channel::DynChannel;
 use crate::error::{RoomKitError, repr};
 use crate::hooks::{HookHandler, HookOptions, HookPayload, IntoHookReturn, closure_kept};
 use crate::registered::{Registered, RegisteredChannel};
 use crate::store::ConversationStore;
 
 impl<S: ConversationStore> RoomKit<S> {
-    /// Registers a channel, then emits `channel_registered`.
+    /// Registers a channel, then emits `channel_registered`. Wrap a
+    /// [`FrameworkAwareChannel`](crate::FrameworkAwareChannel) with
+    /// [`framework_aware`](crate::framework_aware) to receive this kit.
+    /// An injection error leaves the channel registered and unannounced.
     ///
     /// # Errors
     ///
@@ -31,10 +35,11 @@ impl<S: ConversationStore> RoomKit<S> {
     /// claiming the type `system` (RFC §5.3); [`RoomKitError::Runtime`] for
     /// an agent whose human-input handler is closed whole, the kit then
     /// holding the channel unannounced, as Python's does.
-    pub fn register_channel(&self, channel: impl Channel) -> Result<(), RoomKitError> {
-        let declaration = config_of(&channel);
-        let human_input = channel.human_input_handler();
-        self.register_dyn(Arc::new(channel), declaration, human_input)
+    pub fn register_channel(
+        &self,
+        channel: impl ChannelRegistration<S>,
+    ) -> Result<(), RoomKitError> {
+        channel.register_on(self)
     }
 
     /// [`register_channel`](Self::register_channel) for a channel already
@@ -45,6 +50,16 @@ impl<S: ConversationStore> RoomKit<S> {
         channel: Arc<dyn DynChannel>,
         declaration: roomkit_core::ops::ChannelConfig,
         human_input: Option<crate::human_input::HumanInputHandler>,
+    ) -> Result<(), RoomKitError> {
+        self.register_dyn_with(channel, declaration, human_input, None)
+    }
+
+    pub(super) fn register_dyn_with(
+        &self,
+        channel: Arc<dyn DynChannel>,
+        declaration: roomkit_core::ops::ChannelConfig,
+        human_input: Option<crate::human_input::HumanInputHandler>,
+        inject: Option<InjectFramework<S>>,
     ) -> Result<(), RoomKitError> {
         self.inner.open()?;
         declaration.capabilities.check()?;
@@ -69,25 +84,25 @@ impl<S: ConversationStore> RoomKit<S> {
             write(&self.inner.channels).insert(channel_id, channel);
             Ok::<(), RoomKitError>(())
         })?;
-        if let Some(agent_id) = auto_greeting {
-            self.register_auto_greet_hook(agent_id)?;
-        }
-        if let Some((channel_id, handler, channel)) = human_input {
-            // Registered on its handler once the kit holds it, the channel
-            // a kit registered last owning its id's requests (RMK-1201).
-            // A handler closed whole refuses it, and the call fails with its
-            // RuntimeError, the kit holding the channel unannounced, as
-            // Python's register_channel raises once it holds it (RMK-1255).
-            let registration = handler.register(channel_id.as_str())?;
-            channel.human_input_registered(registration);
-            self.inner.wire_human_input(&channel_id, &handler);
-        }
-        if let Some((channel_id, bridge)) = external {
-            self.inner.wire_external_tools(&channel_id, &bridge);
-        }
-        if let Some(publication) = publication {
-            publication.wire(self);
-        }
+        self.wire_registration(auto_greeting, inject, || {
+            if let Some((channel_id, handler, channel)) = human_input {
+                // Registered on its handler once the kit holds it, the channel
+                // a kit registered last owning its id's requests (RMK-1201).
+                // A handler closed whole refuses it, and the call fails with its
+                // RuntimeError, the kit holding the channel unannounced, as
+                // Python's register_channel raises once it holds it (RMK-1255).
+                let registration = handler.register(channel_id.as_str())?;
+                channel.human_input_registered(registration);
+                self.inner.wire_human_input(&channel_id, &handler);
+            }
+            if let Some((channel_id, bridge)) = external {
+                self.inner.wire_external_tools(&channel_id, &bridge);
+            }
+            if let Some(publication) = publication {
+                publication.wire(self);
+            }
+            Ok(())
+        })?;
         drop(self.inner.emit(registered));
         Ok(())
     }

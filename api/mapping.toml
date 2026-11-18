@@ -527,6 +527,21 @@ approved = "2026-10-27"
 reason = "an Arc cycle: a hook holding the kit; Python has a garbage collector (decision 18)"
 
 [[exception]]
+rust = "roomkit::FrameworkAware"
+approved = "2026-11-17"
+reason = "the store-typed opt-in value accepted by register_channel (HITL db150ad6)"
+
+[[exception]]
+rust = "roomkit::framework_aware"
+approved = "2026-11-17"
+reason = "a channel opts in explicitly at registration; Rust cannot specialize registration for a second trait implemented by the same channel (HITL db150ad6)"
+
+[[exception]]
+rust = "roomkit::ChannelRegistration"
+approved = "2026-11-17"
+reason = "sealed bound allowing register_channel to accept both ordinary channels and the store-typed framework_aware opt-in (HITL db150ad6)"
+
+[[exception]]
 rust = "roomkit::default_inbound_event"
 approved = "2026-10-27"
 reason = "an override cannot call a trait's default body (convention 8)"
