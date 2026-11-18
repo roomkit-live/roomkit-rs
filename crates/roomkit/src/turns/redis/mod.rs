@@ -9,6 +9,9 @@ mod jobs;
 mod liveness;
 mod outbox;
 mod owner;
+mod placement;
+#[cfg(test)]
+mod placement_tests;
 mod process;
 mod registry;
 mod routes;

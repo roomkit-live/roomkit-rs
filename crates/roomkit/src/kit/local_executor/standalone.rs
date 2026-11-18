@@ -190,31 +190,20 @@ impl<S: ConversationStore> TurnExecutor<S> {
 
     #[cfg(test)]
     pub(crate) fn take_carried(&self, carried: CarriedRequest) -> Result<WorkerTurn, RoomKitError> {
-        self.take_from(
-            carried,
-            #[cfg(feature = "redis")]
-            None,
-        )
+        self.take_from(carried, executor::WorkerOrigin::default())
     }
 
     #[cfg(any(test, feature = "redis"))]
     pub(crate) fn take_from(
         &self,
         carried: CarriedRequest,
-        #[cfg(feature = "redis")] owner: Option<crate::turns::redis::PeerOwner>,
+        origin: executor::WorkerOrigin,
     ) -> Result<WorkerTurn, RoomKitError> {
         let request = executor::parse(carried).map_err(|why| RoomKitError::TurnLink {
             reason: "frame_invalid".into(),
             message: Some(why),
         })?;
-        self.start_request(
-            request,
-            executor::WorkerOrigin {
-                #[cfg(feature = "redis")]
-                owner,
-                ..executor::WorkerOrigin::default()
-            },
-        )
+        self.start_request(request, origin)
     }
 
     pub(super) fn start_request(

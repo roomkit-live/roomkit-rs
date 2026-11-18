@@ -3,13 +3,16 @@
 use std::collections::BTreeSet;
 
 use super::RedisTurnBackend;
+use super::placement::Placed;
 use super::registry::Target;
 use crate::RoomKitError;
+use crate::TurnExecutor;
 use crate::turns::channel_calls::{ChannelCall, ChannelResult};
 use crate::turns::wire::{ChannelControl, ChannelControlEnvelope};
+use roomkit_core::model::ChannelId;
 
 struct Placement<'a> {
-    channel: &'a str,
+    channel: &'a ChannelId,
     room: &'a str,
     hooks: &'a [String],
     organization: Option<&'a str>,
@@ -36,7 +39,7 @@ impl RedisTurnBackend {
                 self.apply_one(
                     &raw,
                     Placement {
-                        channel: call.channel_id.as_str(),
+                        channel: &call.channel_id,
                         room: call.room_id.as_str(),
                         hooks: &[],
                         organization: call.organization_id.as_deref(),
@@ -55,7 +58,7 @@ impl RedisTurnBackend {
                 self.apply_one(
                     &raw,
                     Placement {
-                        channel: channel_id.as_str(),
+                        channel: channel_id,
                         room: room_id.as_str(),
                         hooks: room_hooks,
                         organization: organization_id.as_deref(),
@@ -70,12 +73,8 @@ impl RedisTurnBackend {
                 organization_id,
                 ..
             } => {
-                self.tell_all(
-                    &raw,
-                    channel_id.as_str(),
-                    Audience::Room(organization_id.as_deref()),
-                )
-                .await?;
+                self.tell_all(&raw, channel_id, Audience::Room(organization_id.as_deref()))
+                    .await?;
                 Ok(None)
             }
             ChannelControl::RoomDetached {
@@ -85,16 +84,12 @@ impl RedisTurnBackend {
             } => {
                 self.forget_holder(channel_id.as_str(), room_id.as_str())
                     .await?;
-                self.tell_all(
-                    &raw,
-                    channel_id.as_str(),
-                    Audience::Room(organization_id.as_deref()),
-                )
-                .await?;
+                self.tell_all(&raw, channel_id, Audience::Room(organization_id.as_deref()))
+                    .await?;
                 Ok(None)
             }
             ChannelControl::ChannelReleased { channel_id } => {
-                self.tell_all(&raw, channel_id.as_str(), Audience::AllOrganizations)
+                self.tell_all(&raw, channel_id, Audience::AllOrganizations)
                     .await?;
                 Ok(None)
             }
@@ -121,13 +116,18 @@ impl RedisTurnBackend {
             if let Some(call) = placement.call {
                 call.hand_over();
             }
-            if let Some(answer) = self.apply_to(&target, raw).await? {
+            let applied = match &target {
+                Placed::Here(worker) if worker.closed() => None,
+                Placed::Here(worker) => Some(apply_here(worker, raw).await?),
+                Placed::Elsewhere(peer) => self.apply_to(peer, raw).await?,
+            };
+            if let Some(answer) = applied {
                 return Ok(Some(answer));
             }
             if let Some(call) = placement.call {
                 call.refused();
             }
-            refused.insert(target.member());
+            refused.insert(target.member(self.node_id()));
         }
     }
 
@@ -153,11 +153,25 @@ impl RedisTurnBackend {
     async fn tell_all(
         &self,
         raw: &str,
-        channel: &str,
+        channel: &ChannelId,
         audience: Audience<'_>,
     ) -> Result<(), RoomKitError> {
+        let workers = crate::turns::lock(&self.0.serving).workers.clone();
+        for worker in workers {
+            if worker.declares(channel)
+                && match audience {
+                    Audience::Room(org) => worker.serves(org),
+                    Audience::AllOrganizations => true,
+                }
+            {
+                apply_here(&worker, raw).await?;
+            }
+        }
         let mut pending = tokio::task::JoinSet::new();
         for info in self.executors().await? {
+            if info.node.as_deref() == Some(self.node_id()) {
+                continue;
+            }
             let matches_org = match audience {
                 Audience::Room(org) => org,
                 Audience::AllOrganizations => info
@@ -166,7 +180,7 @@ impl RedisTurnBackend {
                     .and_then(|names| names.first())
                     .map(String::as_str),
             };
-            if !info.covers(channel, &[], matches_org)? {
+            if !info.covers(channel.as_str(), &[], matches_org)? {
                 continue;
             }
             if let Some(node) = info.node {
@@ -190,5 +204,21 @@ impl RedisTurnBackend {
             }
         }
         Ok(())
+    }
+}
+
+/// The same serialized control and result as a worker on another node.
+async fn apply_here(worker: &TurnExecutor, raw: &str) -> Result<ChannelResult, RoomKitError> {
+    let parse_error = |error: serde_json::Error| RoomKitError::Value(error.to_string());
+    let envelope: ChannelControlEnvelope = serde_json::from_str(raw).map_err(parse_error)?;
+    let answer = worker.control(envelope.message).await?;
+    let raw = encode_answer(answer).map_err(parse_error)?;
+    serde_json::from_str(&raw).map_err(parse_error)
+}
+
+pub(super) fn encode_answer(answer: Option<ChannelResult>) -> Result<String, serde_json::Error> {
+    match answer {
+        Some(answer) => serde_json::to_string(&answer),
+        None => Ok(r#"{"type":"channel_result","result":null,"room_state":null,"error":null,"executor_id":null}"#.to_owned()),
     }
 }

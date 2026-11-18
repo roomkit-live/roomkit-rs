@@ -4,14 +4,14 @@ use super::routes::TurnRoute;
 use super::stream::Message;
 use crate::RoomKitError;
 use crate::turns::wire::ChannelControlEnvelope;
-use crate::turns::{CarriedRequest, WorkerTurn, lock};
+use crate::turns::{CarriedRequest, WorkerTurn};
 
 impl RedisTurnBackend {
     pub(super) fn handle(&self, msg: &Message) -> Result<(), RoomKitError> {
         if *self.0.draining.borrow() {
             return self.refuse_closing(msg);
         }
-        let executor = lock(&self.0.serving).workers.get(&msg.target).cloned();
+        let executor = self.worker(&msg.target);
         match (msg.kind.as_str(), executor) {
             ("request", Some(worker)) if !worker.closed() => self.accept_request(msg, worker),
             ("channel", Some(worker)) if !worker.closed() => self.accept_channel(msg, worker),
@@ -60,7 +60,13 @@ impl RedisTurnBackend {
         let backend = self.clone();
         let message = msg.clone();
         let admitted = self.dispatch(async move {
-            let turn = worker.take_from(carried, Some(backend.remember_owner(&message.sender)));
+            let turn = worker.take_from(
+                carried,
+                crate::turns::executor::WorkerOrigin {
+                    owner: Some(backend.remember_owner(&message.sender)),
+                    ..Default::default()
+                },
+            );
             let reply = if turn.is_ok() { "taken" } else { "refused" };
             if let Err(error) = backend.answer(&message, reply.into()) {
                 tracing::warn!(%error, "Sending the turn handover result failed");
@@ -95,14 +101,16 @@ impl RedisTurnBackend {
         let message = msg.clone();
         let admitted = self.dispatch(async move {
             let body = match worker.control(control.message).await {
-                Ok(Some(answer)) => serde_json::to_string(&answer),
-                Ok(None) => Ok(r#"{"type":"channel_result","result":null,"room_state":null,"error":null,"executor_id":null}"#.to_owned()),
+                Ok(answer) => super::control::encode_answer(answer),
                 Err(error) => Ok(serde_json::json!({
                     "type":"channel_result", "result":null, "room_state":null,
                     "executor_id":worker.executor_id(),"error":crate::turns::record_of(&error)
-                }).to_string()),
+                })
+                .to_string()),
             };
-            if let Ok(body) = body && let Err(error) = backend.answer(&message, body) {
+            if let Ok(body) = body
+                && let Err(error) = backend.answer(&message, body)
+            {
                 tracing::warn!(%error, "Sending the channel control result failed");
             }
         });

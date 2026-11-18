@@ -1,5 +1,4 @@
 //! The process heartbeat continues while a turn occupies its runtime.
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -10,7 +9,8 @@ use crate::{RoomKitError, TurnExecutor};
 
 #[derive(Default)]
 pub(super) struct Serving {
-    pub(super) workers: BTreeMap<String, TurnExecutor>,
+    /// Registration order resolves the first eligible worker in this process.
+    pub(super) workers: Vec<TurnExecutor>,
     pub(super) owner: bool,
     generation: u64,
     retiring: Vec<String>,
@@ -18,6 +18,14 @@ pub(super) struct Serving {
 }
 
 impl RedisTurnBackend {
+    pub(super) fn worker(&self, id: &str) -> Option<TurnExecutor> {
+        lock(&self.0.serving)
+            .workers
+            .iter()
+            .find(|worker| worker.executor_id() == id)
+            .cloned()
+    }
+
     /// Advertise and serve this executor. A later registration can replace a closed executor.
     ///
     /// # Errors
@@ -29,20 +37,22 @@ impl RedisTurnBackend {
                 return Err(super::routes::closed());
             }
             executor.served_by(self);
-            let retired: Vec<_> = serving
-                .workers
-                .values()
-                .filter(|w| w.closed())
-                .map(|w| w.executor_id().to_owned())
-                .collect();
-            for id in retired {
-                serving.workers.remove(&id);
-                serving.retiring.push(id);
-            }
-            serving.retiring.retain(|id| id != executor.executor_id());
-            serving
-                .workers
-                .insert(executor.executor_id().into(), executor);
+            let id = executor.executor_id();
+            let Serving {
+                workers, retiring, ..
+            } = &mut *serving;
+            retiring.retain(|old| old != id);
+            workers.retain(|previous| {
+                if previous.executor_id() == id {
+                    return false;
+                }
+                if previous.closed() {
+                    retiring.push(previous.executor_id().to_owned());
+                    return false;
+                }
+                true
+            });
+            workers.push(executor);
             serving.generation = serving.generation.saturating_add(1);
         }
         self.start().await?;
@@ -178,7 +188,8 @@ impl RedisTurnBackend {
             running: lock(&self.0.routes).running(),
             ..Beat::default()
         };
-        for (id, worker) in &scope.workers {
+        for worker in &scope.workers {
+            let id = worker.executor_id();
             let member = format!("{node}:{id}");
             if scope.closing && !worker.closed() {
                 beat.undeclared.push(member);
@@ -191,7 +202,7 @@ impl RedisTurnBackend {
             if let Some(channels) = worker.hosted() {
                 let decl = Declaration {
                     node: node.into(),
-                    executor_id: id.clone(),
+                    executor_id: id.to_owned(),
                     channels,
                     room_hooks: worker.hooks().defined_room_hooks(),
                     organizations: worker.advertised_organizations(),

@@ -1,4 +1,5 @@
 //! Deliver a declaration-only channel's turn, and forward its numbered messages.
+mod local;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -6,11 +7,18 @@ use crate::RoomKitError;
 use crate::turns::pipe::{LinkFailure, PipeReceiver};
 use crate::turns::submission::Handover;
 use crate::turns::wire::{Control, Frame, RequestRest};
-use crate::turns::{CarriedRequest, MemoryTurn};
+use crate::turns::{CarriedRequest, MemoryTurn, WorkerTurn};
 
 use super::RedisTurnBackend;
+use super::placement::Placed;
+use super::registry::Target;
 use super::routes::TurnRoute;
 use super::stream::Message;
+
+enum Delivered {
+    Here(WorkerTurn),
+    Elsewhere(String, TurnRoute),
+}
 
 impl RedisTurnBackend {
     pub(in crate::turns) async fn submit_remote(
@@ -23,7 +31,10 @@ impl RedisTurnBackend {
         let result = self.hand_over(carried, &memory, &mut handover).await;
         drop(handover);
         match result {
-            Ok((peer, route)) => self.forward_owner(peer, memory, controls, route).await,
+            Ok(Delivered::Here(worker)) => self.serve_here(worker, &memory, controls),
+            Ok(Delivered::Elsewhere(peer, route)) => {
+                self.forward_owner(peer, memory, controls, route).await
+            }
             Err(error) => {
                 drop(memory.frames.put(&Frame::Error {
                     error: crate::turns::error::kit_error(&error),
@@ -38,16 +49,16 @@ impl RedisTurnBackend {
         carried: CarriedRequest,
         memory: &Arc<MemoryTurn>,
         handover: &mut Handover,
-    ) -> Result<(String, TurnRoute), RoomKitError> {
+    ) -> Result<Delivered, RoomKitError> {
         self.attend().await?;
         let rest: RequestRest =
             crate::turns::wire::validate_rest(&carried.rest).map_err(invalid)?;
-        let body = carried.to_wire().map_err(invalid)?;
+        let mut wire = None;
         let mut refused = BTreeSet::new();
         loop {
             let target = self
                 .place(
-                    rest.channel_id.as_str(),
+                    &rest.channel_id,
                     rest.room_id.as_str(),
                     &rest.room_hooks,
                     rest.context.room.organization_id.as_deref(),
@@ -55,47 +66,69 @@ impl RedisTurnBackend {
                     true,
                 )
                 .await?;
-            let route = self
-                .route_turn(&memory.turn_id, &target.node, false)
-                .ok_or_else(|| {
-                    if *self.0.draining.borrow() {
-                        super::routes::closed()
-                    } else {
-                        invalid("turn already submitted".into())
-                    }
-                })?;
-            handover.handed = true;
-            let answer = self
-                .ask(
-                    &target.node,
-                    "request",
-                    body.clone(),
-                    &target.executor_id,
-                    self.timeouts().accept,
-                )
-                .await;
-            match answer.as_deref() {
-                Ok("taken") => {
-                    self.watch_process(&target, memory);
-                    return Ok((target.node, route));
+            let target = match target {
+                Placed::Here(worker) if worker.closed() => {
+                    refused.insert(format!("{}:{}", self.node_id(), worker.executor_id()));
+                    continue;
                 }
-                Ok("refused") => {
-                    handover.handed = false;
-                    refused.insert(target.member());
+                Placed::Here(worker) => {
+                    let turn = self.take_here(&worker, carried, memory)?;
+                    handover.handed = true;
+                    return Ok(Delivered::Here(turn));
                 }
-                _ => {
-                    let release = Message::new(
-                        "released",
-                        self.node_id(),
-                        memory.turn_id.to_string(),
-                        &memory.turn_id,
-                        "",
-                    );
-                    drop(self.post(&target.node, &release).await);
-                    return Err(answer
-                        .err()
-                        .unwrap_or_else(|| invalid("invalid turn handover answer".into())));
+                Placed::Elsewhere(target) => target,
+            };
+            let body = wire
+                .get_or_insert_with(|| carried.to_wire())
+                .as_ref()
+                .map_err(|why| invalid(why.clone()))?;
+            if let Some(delivered) = self.hand_elsewhere(&target, memory, handover, body).await? {
+                return Ok(delivered);
+            }
+            refused.insert(target.member());
+        }
+    }
+
+    async fn hand_elsewhere(
+        &self,
+        target: &Target,
+        memory: &Arc<MemoryTurn>,
+        handover: &mut Handover,
+        body: &str,
+    ) -> Result<Option<Delivered>, RoomKitError> {
+        let route = self
+            .route_turn(&memory.turn_id, &target.node, false)
+            .ok_or_else(|| {
+                if *self.0.draining.borrow() {
+                    super::routes::closed()
+                } else {
+                    invalid("turn already submitted".into())
                 }
+            })?;
+        handover.handed = true;
+        let answer = self
+            .ask(
+                &target.node,
+                "request",
+                body.to_owned(),
+                &target.executor_id,
+                self.timeouts().accept,
+            )
+            .await;
+        match answer.as_deref() {
+            Ok("taken") => {
+                self.watch_process(target, memory);
+                Ok(Some(Delivered::Elsewhere(target.node.clone(), route)))
+            }
+            Ok("refused") => {
+                handover.handed = false;
+                Ok(None)
+            }
+            _ => {
+                self.release_turn(&target.node, &memory.turn_id).await;
+                Err(answer
+                    .err()
+                    .unwrap_or_else(|| invalid("invalid turn handover answer".into())))
             }
         }
     }

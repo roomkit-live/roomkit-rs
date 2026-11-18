@@ -1,0 +1,170 @@
+//! The current holder keeps the room. Fresh rooms prefer the first eligible
+//! worker served here; only rooms whose candidates are all remote are spread.
+use std::collections::{BTreeMap, BTreeSet};
+
+use roomkit_core::model::ChannelId;
+
+use super::registry::{Target, quoted};
+use super::{RedisTurnBackend, redis_error};
+use crate::turns::{TakesOptions, lock};
+use crate::{RoomKitError, TurnExecutor};
+
+pub(super) enum Placed {
+    Here(TurnExecutor),
+    Elsewhere(Target),
+}
+
+impl Placed {
+    pub(super) fn member(&self, node: &str) -> String {
+        match self {
+            Self::Here(worker) => format!("{node}:{}", worker.executor_id()),
+            Self::Elsewhere(target) => target.member(),
+        }
+    }
+}
+
+struct Candidates {
+    here: Vec<(String, TurnExecutor)>,
+    elsewhere: BTreeMap<String, Target>,
+}
+
+impl Candidates {
+    fn choose(
+        mut self,
+        held: Option<&str>,
+        backend: &RedisTurnBackend,
+        spread: bool,
+    ) -> Option<Placed> {
+        if let Some(held) = held {
+            if let Some(index) = self.here.iter().position(|(member, _)| member == held) {
+                return Some(Placed::Here(self.here.swap_remove(index).1));
+            }
+            if let Some(target) = self.elsewhere.remove(held) {
+                return Some(Placed::Elsewhere(target));
+            }
+        }
+        if let Some((_, first)) = self.here.into_iter().next() {
+            return Some(Placed::Here(first));
+        }
+        let count = std::num::NonZeroUsize::new(self.elsewhere.len())?;
+        let mut next = lock(&backend.0.choice);
+        let following = next.wrapping_add(1) % count;
+        if spread {
+            *next = following;
+        }
+        self.elsewhere
+            .into_values()
+            .nth(following)
+            .map(Placed::Elsewhere)
+    }
+}
+
+impl RedisTurnBackend {
+    pub(super) async fn place(
+        &self,
+        channel: &ChannelId,
+        room: &str,
+        hooks: &[String],
+        organization: Option<&str>,
+        refused: &BTreeSet<String>,
+        spread: bool,
+    ) -> Result<Placed, RoomKitError> {
+        let candidates = self
+            .candidates(channel, hooks, organization, refused)
+            .await?;
+        let holder = self.key(&format!(
+            "holder:{}:{}",
+            quoted(channel.as_str()),
+            quoted(room)
+        ));
+        let mut conn = self.connection().await?;
+        let held: Option<String> = redis::cmd("GET")
+            .arg(&holder)
+            .query_async(&mut conn)
+            .await
+            .map_err(|error| redis_error(&error))?;
+        let chosen = candidates
+            .choose(held.as_deref(), self, spread)
+            .ok_or_else(|| no_executor(channel.as_str(), hooks, organization))?;
+        if spread {
+            redis::cmd("SET")
+                .arg(holder)
+                .arg(chosen.member(self.node_id()))
+                .arg("EX")
+                .arg(7 * 24 * 3600)
+                .exec_async(&mut conn)
+                .await
+                .map_err(|error| redis_error(&error))?;
+        }
+        Ok(chosen)
+    }
+
+    async fn candidates(
+        &self,
+        channel: &ChannelId,
+        hooks: &[String],
+        organization: Option<&str>,
+        refused: &BTreeSet<String>,
+    ) -> Result<Candidates, RoomKitError> {
+        let options = TakesOptions {
+            room_hooks: hooks.to_vec(),
+            organization_id: organization.map(str::to_owned),
+        };
+        // Evaluate application predicates outside the backend lock. Keep the selected
+        // instance: a concurrent serve of the same id must not retarget the turn.
+        let workers = lock(&self.0.serving).workers.clone();
+        let here = workers
+            .into_iter()
+            .filter(|worker| worker.takes(channel, options.clone()))
+            .map(|worker| {
+                (
+                    format!("{}:{}", self.node_id(), worker.executor_id()),
+                    worker,
+                )
+            })
+            .filter(|(member, _)| !refused.contains(member))
+            .collect();
+        let mut elsewhere = BTreeMap::new();
+        for info in self.executors().await? {
+            if info.node.as_deref() == Some(self.node_id())
+                || !info.covers(channel.as_str(), hooks, organization)?
+            {
+                continue;
+            }
+            if let Some(node) = info.node {
+                let target = Target {
+                    node,
+                    executor_id: info.executor_id,
+                };
+                let member = target.member();
+                if !refused.contains(&member) {
+                    elsewhere.insert(member, target);
+                }
+            }
+        }
+        Ok(Candidates { here, elsewhere })
+    }
+}
+
+fn no_executor(channel: &str, hooks: &[String], organization: Option<&str>) -> RoomKitError {
+    let hooks = if hooks.is_empty() {
+        String::new()
+    } else {
+        let names = hooks
+            .iter()
+            .map(|s| crate::error::repr(s))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(" with room hooks [{names}]")
+    };
+    let org = organization.map_or_else(String::new, |o| {
+        format!(" in organization {}", crate::error::repr(o))
+    });
+    RoomKitError::TurnLink {
+        reason: "no_executor".into(),
+        message: Some(format!(
+            "No executor serves channel {}{hooks}{org}",
+            crate::error::repr(channel)
+        )),
+    }
+}

@@ -109,6 +109,16 @@ impl WorkerTurn {
         self.cut.send_replace(Some("backend_closed"));
     }
 
+    /// Forward a local control with the first stream reader's context, once its
+    /// pull has been issued. Remote Redis turns receive no process-local context.
+    #[cfg(feature = "redis")]
+    pub(crate) fn local_control(&self, envelope: String, owner: &MemoryTurn) {
+        if let Some(context) = crate::turns::lock(&owner.contexts).stream.clone() {
+            self.memory.first_stream_context(context);
+        }
+        self.control(envelope);
+    }
+
     /// The next numbered frame for the owner, through the terminal frame.
     #[cfg(any(test, feature = "redis"))]
     pub(crate) async fn next_frame(&mut self) -> Option<String> {

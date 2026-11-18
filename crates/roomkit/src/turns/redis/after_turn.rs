@@ -15,15 +15,22 @@ use crate::turns::wire::{OwnerMessage, OwnerMessageEnvelope, RoomCall, RoomCallR
 #[derive(Debug)]
 pub(crate) struct PeerOwner {
     node: Weak<Node>,
-    peer: Weak<str>,
+    peer: Option<Weak<str>>,
 }
 
 impl RedisTurnBackend {
+    pub(super) fn local_owner(&self) -> PeerOwner {
+        PeerOwner {
+            node: Arc::downgrade(&self.0),
+            peer: None,
+        }
+    }
+
     pub(super) fn remember_owner(&self, peer: &str) -> PeerOwner {
         let peer: Arc<str> = Arc::from(peer);
         let port = PeerOwner {
             node: Arc::downgrade(&self.0),
-            peer: Arc::downgrade(&peer),
+            peer: Some(Arc::downgrade(&peer)),
         };
         let mut routes = lock(&self.0.routes);
         routes.turn_owners.push_back(peer);
@@ -44,7 +51,7 @@ impl PeerOwner {
         let envelope = OwnerMessageEnvelope {
             message: OwnerMessage::RoomCall(call),
         };
-        let result = if let Some(peer) = self.peer.upgrade() {
+        let result = if let Some(peer) = self.peer.as_ref().and_then(Weak::upgrade) {
             let body = serde_json::to_string(&envelope).map_err(|error| invalid(&error))?;
             let exchange = backend.exchange(&peer, "owner", body, "");
             tokio::pin!(exchange);
@@ -97,7 +104,7 @@ impl PeerOwner {
             return;
         }
         let envelope = OwnerMessageEnvelope { message };
-        if let Some(peer) = self.peer.upgrade() {
+        if let Some(peer) = self.peer.as_ref().and_then(Weak::upgrade) {
             let body = match serde_json::to_string(&envelope) {
                 Ok(body) => body,
                 Err(error) => {

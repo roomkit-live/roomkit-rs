@@ -177,7 +177,7 @@ pub(super) async fn write_beat(
 }
 
 /// Python's urllib quote(safe="") applied to one key component.
-fn quoted(input: &str) -> String {
+pub(super) fn quoted(input: &str) -> String {
     use std::fmt::Write;
     let mut encoded = String::new();
     for byte in input.bytes() {
@@ -234,64 +234,6 @@ impl RedisTurnBackend {
             .map_err(|error| redis_error(&error))
     }
 
-    pub(super) async fn place(
-        &self,
-        channel: &str,
-        room: &str,
-        hooks: &[String],
-        organization: Option<&str>,
-        refused: &BTreeSet<String>,
-        spread: bool,
-    ) -> Result<Target, RoomKitError> {
-        let mut takers = BTreeMap::new();
-        for info in self.executors().await? {
-            if info.covers(channel, hooks, organization)?
-                && let Some(node) = info.node
-            {
-                let target = Target {
-                    node,
-                    executor_id: info.executor_id,
-                };
-                let member = target.member();
-                if !refused.contains(&member) {
-                    takers.insert(member, target);
-                }
-            }
-        }
-        let holder = self.key(&format!("holder:{}:{}", quoted(channel), quoted(room)));
-        let mut conn = self.connection().await?;
-        let held: Option<String> = redis::cmd("GET")
-            .arg(&holder)
-            .query_async(&mut conn)
-            .await
-            .map_err(|error| redis_error(&error))?;
-        let target = held
-            .and_then(|member| takers.remove(&member))
-            .or_else(|| {
-                let count = std::num::NonZeroUsize::new(takers.len())?;
-                let mut next = crate::turns::lock(&self.0.choice);
-                let following = next.wrapping_add(1) % count;
-                if spread {
-                    *next = following;
-                }
-                takers.into_values().nth(following)
-            })
-            .ok_or_else(|| no_executor(channel, hooks, organization))?;
-        if spread {
-            redis::cmd("SET")
-                .arg(holder)
-                .arg(target.member())
-                .arg("EX")
-                .arg(7 * 24 * 3600)
-                .exec_async(&mut conn)
-                .await
-                .map_err(|error| redis_error(&error))?;
-        }
-        Ok(target)
-    }
-}
-
-impl RedisTurnBackend {
     pub(super) async fn forget_holder(
         &self,
         channel: &str,
@@ -304,28 +246,5 @@ impl RedisTurnBackend {
             .exec_async(&mut conn)
             .await
             .map_err(|error| redis_error(&error))
-    }
-}
-
-fn no_executor(channel: &str, hooks: &[String], organization: Option<&str>) -> RoomKitError {
-    let hooks = if hooks.is_empty() {
-        String::new()
-    } else {
-        let names = hooks
-            .iter()
-            .map(|s| crate::error::repr(s))
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!(" with room hooks [{names}]")
-    };
-    let org = organization.map_or_else(String::new, |o| {
-        format!(" in organization {}", crate::error::repr(o))
-    });
-    RoomKitError::TurnLink {
-        reason: "no_executor".into(),
-        message: Some(format!(
-            "No executor serves channel {}{hooks}{org}",
-            crate::error::repr(channel)
-        )),
     }
 }
