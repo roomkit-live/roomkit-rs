@@ -1,20 +1,22 @@
 //! Adapt a public owner link to the driver's numbered, bounded pipes.
 use std::fmt;
 use std::sync::Arc;
+#[cfg(test)]
+mod tests;
 
 use super::super::pipe::{MessageOrder, PipeReceiver};
 use super::super::wire::{Control, Frame};
 use super::super::{MemoryTurn, TurnLink};
 use crate::RoomKitError;
 
-pub(crate) struct ActiveLink(Arc<dyn TurnLink>);
+pub(crate) struct ActiveLink(std::sync::Weak<dyn TurnLink>);
 
 impl ActiveLink {
     pub(in crate::turns) fn taken(&self) -> bool {
-        self.0.taken()
+        self.0.upgrade().is_some_and(|link| link.taken())
     }
     pub(in crate::turns) fn beat_heard(&self) -> bool {
-        self.0.beat_heard()
+        self.0.upgrade().is_some_and(|link| link.beat_heard())
     }
 }
 
@@ -40,12 +42,14 @@ pub(in crate::turns) fn run_link(
 ) -> impl Future<Output = ()> + Send + 'static {
     // Own the release before spawning: shutdown may refuse to start this task.
     let release = Release(Arc::clone(&link));
-    let _installed = memory.application_link.set(ActiveLink(Arc::clone(&link)));
+    let _installed = memory
+        .application_link
+        .set(ActiveLink(Arc::downgrade(&link)));
     async move {
         let bridge = async {
             let result = tokio::select! {
                 result = receive(&*link, &memory) => result,
-                result = send(&*link, controls) => result,
+                result = send(&*link, &memory, controls) => result,
             };
             if let Err(error) = result {
                 drop(memory.frames.put(&Frame::Error {
@@ -86,9 +90,17 @@ async fn receive(link: &dyn TurnLink, memory: &MemoryTurn) -> Result<(), RoomKit
 
 async fn send(
     link: &dyn TurnLink,
+    memory: &MemoryTurn,
     mut controls: PipeReceiver<Control>,
 ) -> Result<(), RoomKitError> {
     while let Ok((_, control)) = controls.get().await {
+        if matches!(control, Control::Pull { .. }) {
+            let reader = crate::turns::lock(&memory.contexts).stream.clone();
+            if let Some(context) = reader {
+                context.scope(async { link.send(control).await }).await?;
+                continue;
+            }
+        }
         link.send(control).await?;
     }
     Ok(())

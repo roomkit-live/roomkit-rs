@@ -89,6 +89,15 @@ impl MemoryTurn {
         }
     }
 
+    pub(super) fn heard_executor(&self) -> bool {
+        self.process_beat
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
+            || self
+                .application_link
+                .get()
+                .is_some_and(super::application::ActiveLink::beat_heard)
+    }
+
     /// The context the turn's `on_event()` runs in.
     pub(crate) fn turn_context(&self) -> TurnContext {
         lock(&self.contexts)

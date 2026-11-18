@@ -181,7 +181,7 @@ impl Pump {
                 }
                 () = until(deadline) => break Ending::GaveUp,
                 silent = beat.tick_with(|| {
-                    self.accepted && (self.state.turn.process_beat.swap(false, Ordering::AcqRel) || self.state.turn.application_link.get().is_some_and(super::super::application::ActiveLink::beat_heard))
+                    self.accepted && self.state.turn.heard_executor()
                 }) => {
                     let limit = if self.accepted {
                         timeouts.silent_intervals()

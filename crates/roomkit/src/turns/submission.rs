@@ -301,6 +301,17 @@ impl Turns {
             _ = closing.wait_for(|closing| *closing) => return Err(closed()),
             link = app.backend.submit(request) => link.map_err(|e| super::to_record(&super::error::kit_error(&e)))?,
         };
+        if link.request().turn_id.as_str() != turn_id.as_ref()
+            || link.request().room_id != facts.room_id
+            || link.request().channel_id != binding.channel_id
+        {
+            link.release();
+            return Err(TurnError::new(
+                "frame_invalid",
+                "the backend returned a link for a different turn",
+            )
+            .to_record());
+        }
         handover.handed = true;
         drop(handover);
         let (turn, memory, controls, pump) =
