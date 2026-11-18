@@ -8,7 +8,13 @@ use super::topology::Topology;
 pub(super) struct Site {
     pub(super) hosting: RedisTurnBackend,
     pub(super) executor: TurnExecutor,
-    isolated: Option<Runtime>,
+    mode: Mode,
+}
+
+enum Mode {
+    Ordinary,
+    Isolated(Runtime),
+    Silent(super::silent::Silent),
 }
 
 impl Site {
@@ -18,23 +24,46 @@ impl Site {
         isolated: bool,
     ) -> Result<Self, RoomKitError> {
         let hosting = topology.worker()?;
-        let runtime = if isolated {
-            Some(Runtime::start(hosting.clone(), executor.clone()).await?)
+        let mode = if isolated {
+            Mode::Isolated(Runtime::start(hosting.clone(), executor.clone()).await?)
         } else {
             hosting.serve(executor.clone()).await?;
-            None
+            Mode::Ordinary
         };
         Ok(Self {
             hosting,
             executor,
-            isolated: runtime,
+            mode,
+        })
+    }
+
+    pub(super) async fn silent(
+        topology: &Topology,
+        executor: TurnExecutor,
+        worker: &super::Worker,
+        run: std::sync::Arc<crate::run::Run>,
+    ) -> Result<Self, RoomKitError> {
+        let hosting = topology.worker()?;
+        let silent = super::silent::Silent::start(
+            &topology.url,
+            &topology.options.key_prefix,
+            hosting.node_id(),
+            executor.clone(),
+            worker,
+            run,
+        )
+        .await?;
+        Ok(Self {
+            hosting,
+            executor,
+            mode: Mode::Silent(silent),
         })
     }
 
     pub(super) async fn advertise(&self, executor: TurnExecutor) -> Result<(), RoomKitError> {
         let hosting = self.hosting.clone();
         let served = async move { hosting.serve(executor).await };
-        if let Some(runtime) = &self.isolated {
+        if let Mode::Isolated(runtime) = &self.mode {
             runtime.handle.spawn(served).await.map_err(runtime_error)?
         } else {
             served.await
@@ -42,8 +71,13 @@ impl Site {
     }
 
     pub(super) async fn close(self, topology: &Topology) -> Result<(), RoomKitError> {
+        if let Mode::Silent(silent) = self.mode {
+            let stopped = silent.close().await;
+            self.executor.close().await;
+            return stopped;
+        }
         let result = topology.close_worker(&self.hosting, &self.executor).await;
-        if let Some(runtime) = self.isolated {
+        if let Mode::Isolated(runtime) = self.mode {
             runtime.stop().await?;
         }
         result
@@ -53,9 +87,11 @@ impl Site {
         let id = self.executor.executor_id().to_owned();
         drop(self.executor);
         drop(self.hosting);
-        let runtime = self
-            .isolated
-            .ok_or_else(|| RoomKitError::Value(format!("executor {id} has no isolated runtime")))?;
+        let Mode::Isolated(runtime) = self.mode else {
+            return Err(RoomKitError::Value(format!(
+                "executor {id} has no isolated runtime"
+            )));
+        };
         runtime.stop().await?;
         // A new turn may follow the kill in the next step. Let the public registry
         // discover this loss as it would after the process disappeared.
@@ -97,16 +133,22 @@ impl Runtime {
         let (ready, serving) = oneshot::channel();
         let (stop, stopping) = oneshot::channel();
         let (ended, stopped) = oneshot::channel();
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(runtime_error)?;
-        let handle = runtime.handle().clone();
         std::thread::Builder::new()
             .name("roomkit-scenario-executor".into())
             .spawn(move || {
+                let runtime = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(runtime) => runtime,
+                    Err(err) => {
+                        drop(ready.send(Err(runtime_error(err))));
+                        return;
+                    }
+                };
+                let handle = runtime.handle().clone();
                 runtime.block_on(async move {
-                    let result = hosting.serve(executor).await;
+                    let result = hosting.serve(executor).await.map(|()| handle);
                     let served = result.is_ok();
                     if ready.send(result).is_ok() && served {
                         let _ = stopping.await;
@@ -116,7 +158,7 @@ impl Runtime {
                 let _ = ended.send(());
             })
             .map_err(runtime_error)?;
-        serving.await.map_err(runtime_error)??;
+        let handle = serving.await.map_err(runtime_error)??;
         Ok(Self {
             handle,
             stop,

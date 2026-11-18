@@ -17,8 +17,8 @@ pub(super) fn is_presence(id: &str) -> bool {
 
 pub(super) struct Topology {
     owner: RedisTurnBackend,
-    url: String,
-    options: RedisTurnBackendOptions,
+    pub(super) url: String,
+    pub(super) options: RedisTurnBackendOptions,
     shared: bool,
 }
 
@@ -65,6 +65,10 @@ impl Topology {
 
 #[derive(Default, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "the scenario schema names the unit on every timeout"
+)]
 struct Bounds {
     heartbeat_interval_ms: Option<u64>,
     heartbeat_timeout_ms: Option<u64>,

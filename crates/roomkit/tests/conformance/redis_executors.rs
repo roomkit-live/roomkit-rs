@@ -1,6 +1,7 @@
 //! RFC §6.4 and §10.6. The normal runner places declared channels on workers
 //! with independent Redis nodes and compares the complete scenario expectations.
 mod channel;
+mod silent;
 mod site;
 mod topology;
 
@@ -20,6 +21,7 @@ const SUPPORTED: &[&str] = &[
     "discussion/an-offline-agent-s-turn-is-skipped-not-failed",
     "executors/after-a-lost-executor-the-room-s-next-turn-runs-elsewhere",
     "executors/an-executor-closed-during-a-turn-ends-it",
+    "executors/an-executor-that-never-answers-loses-the-turn-and-no-other-gets-it",
     "executors/an-executor-killed-mid-answer-loses-its-turn-and-what-was-shown-stays",
     "executors/a-channel-call-no-executor-takes-fails-no-executor",
     "executors/a-channel-call-runs-on-the-executor-holding-the-room",
@@ -100,6 +102,8 @@ struct Worker {
     hosts: BTreeSet<String>,
     organizations: Option<BTreeSet<String>>,
     started: Option<bool>,
+    answers: Option<bool>,
+    gate: Option<String>,
     builds: Option<BTreeSet<String>>,
     max_channels: Option<usize>,
     #[serde(default)]
@@ -197,7 +201,11 @@ impl Workers {
                     .map_err(RoomKitError::Value)??;
             }
         }
-        let site = site::Site::start(&self.topology, executor, self.mortal.contains(id)).await?;
+        let site = if worker.answers == Some(false) {
+            site::Site::silent(&self.topology, executor, worker, run).await?
+        } else {
+            site::Site::start(&self.topology, executor, self.mortal.contains(id)).await?
+        };
         active.insert(id.to_owned(), site);
         Ok(())
     }

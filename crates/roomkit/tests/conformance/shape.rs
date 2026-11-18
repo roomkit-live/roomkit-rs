@@ -595,6 +595,8 @@ fn executor_setup(setup: &Value, found: &mut Vec<String>) {
                 "hosts",
                 "organizations",
                 "started",
+                "answers",
+                "gate",
                 "builds",
                 "max_channels",
                 "hooks",
