@@ -257,3 +257,49 @@ async fn a_local_serve_and_close_publish_without_waiting_for_a_heartbeat() {
     assert!(events.try_recv().is_err());
     kit.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn each_node_lists_local_workers_directly_and_only_advertised_peers() {
+    let Some((_, node)) = test_nodes(Duration::from_millis(50)) else {
+        return;
+    };
+    let (hosting, elsewhere) = (node(), node());
+    let named = worker();
+    let dynamic = TurnExecutor::new_with_host_predicate(
+        |_| async { Ok(None::<EchoAgent>) },
+        |id| id.as_str().starts_with("agent-"),
+        TurnExecutorOptions {
+            executor_id: Some("dynamic".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    hosting.serve(named.clone()).await.unwrap();
+    hosting.serve(dynamic.clone()).await.unwrap();
+    let here = hosting.executors().await.unwrap();
+    let remote = elsewhere.executors().await.unwrap();
+    dynamic.close().await;
+    let after = hosting.executors().await.unwrap();
+    named.close().await;
+    hosting.close().await.unwrap();
+    elsewhere.close().await.unwrap();
+
+    assert_eq!(here.len(), 2);
+    assert!(
+        here.iter()
+            .all(|row| row.node.as_deref() == Some(hosting.node_id())
+                && row.last_beat.is_none()
+                && row.online)
+    );
+    let local = here
+        .iter()
+        .find(|row| row.executor_id == "dynamic")
+        .unwrap();
+    assert!(local.hosts.is_none());
+    assert_eq!(remote.len(), 1);
+    let peer = remote.first().unwrap();
+    assert_eq!(peer.executor_id, named.executor_id());
+    assert!(peer.last_beat.is_some() && peer.covers("worker", &[], None).unwrap());
+    assert_eq!(after.len(), 1);
+    assert_eq!(after.first().unwrap().executor_id, named.executor_id());
+}

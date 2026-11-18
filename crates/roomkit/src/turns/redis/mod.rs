@@ -141,7 +141,7 @@ impl RedisTurnBackend {
         self.0.timeouts
     }
 
-    /// The executors still declared in Redis, including the time of their last heartbeat.
+    /// Locally served executors and other nodes' declarations. Only remote entries have a last heartbeat.
     ///
     /// # Errors
     /// The registry must be reachable and answer within its configured timeout.
