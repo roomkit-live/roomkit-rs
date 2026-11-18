@@ -65,6 +65,8 @@ mod member_calls;
 mod memory;
 #[path = "../../../roomkit/tests/conformance/normalize.rs"]
 mod normalize;
+#[path = "../../../roomkit/tests/conformance/redis_executors.rs"]
+mod redis_executors;
 #[path = "../../../roomkit/tests/conformance/report_claims.rs"]
 mod report_claims;
 #[path = "../../../roomkit/tests/conformance/room_calls.rs"]
@@ -80,7 +82,7 @@ mod sandbox;
 #[path = "../../../roomkit/tests/conformance/scenarios.rs"]
 mod scenarios;
 
-const EXECUTOR_PASS: Option<scenarios::ExecutorPass> = None;
+const EXECUTOR_PASS: Option<scenarios::ExecutorPass> = Some(redis_executors::run);
 
 #[path = "../../../roomkit/tests/conformance/scripted.rs"]
 mod scripted;

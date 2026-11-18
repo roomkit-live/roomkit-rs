@@ -86,6 +86,15 @@ jobs:
     name: Postgres
     runs-on: ubuntu-latest
     services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
       postgres:
         image: postgres:16
         env:
@@ -98,6 +107,7 @@ jobs:
           --health-timeout 5s
           --health-retries 20
     env:
+      REDIS_URL: redis://127.0.0.1:6379
       POSTGRES_DSN: postgresql://postgres:ci-throwaway@127.0.0.1:5432/postgres?sslmode=disable
     steps:
       - uses: actions/checkout@v7

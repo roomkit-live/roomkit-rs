@@ -1,8 +1,12 @@
 //! RFC §6.4 and §10.6. The normal runner places declared channels on workers
 //! with independent Redis nodes and compares the complete scenario expectations.
+#[path = "redis_executors/channel.rs"]
 mod channel;
+#[path = "redis_executors/silent.rs"]
 mod silent;
+#[path = "redis_executors/site.rs"]
 mod site;
+#[path = "redis_executors/topology.rs"]
 mod topology;
 
 use futures_core::future::BoxFuture;
