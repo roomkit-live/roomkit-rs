@@ -33,7 +33,10 @@ section shows. A SQLite file opened by 0.2.0 moves to schema version 14, which
   sequence of store calls; a pool you supply must provide
   `PostgresStoreOptions::cancel_query`. **Applications must [pin the patched
   driver in their root manifest](README.md#postgresql-driver)** until the
-  cancellation fix ships upstream.
+  cancellation fix ships upstream. `init` refuses a database still on Python's
+  legacy v1 (JSONB-blob) schema; `migrate` moves it to the current schema only
+  with `MigrateOptions::confirm` set, and drops every v1 table: back that
+  database up first.
 - **PostgreSQL connection strings read as Python's asyncpg reads them**: Unix
   sockets before `localhost`, host lists, `PGHOST`/`PGPORT`, `~/.pgpass` and
   `PGPASSFILE`, and a 60-second bound per connection. Parameters asyncpg does
