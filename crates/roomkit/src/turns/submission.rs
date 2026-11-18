@@ -175,6 +175,8 @@ impl Turns {
         if self.is_closed() || *self.cut.borrow() {
             return Err(closed());
         }
+        #[cfg(feature = "redis")]
+        self.identify_redis_owner();
         let turn_id: Arc<str> = Arc::from(format!("turn-{}", Uuid::new_v4().simple()));
         let destination = self.destination(&turn_id, &**kit, binding)?;
         let observers = self.observers();

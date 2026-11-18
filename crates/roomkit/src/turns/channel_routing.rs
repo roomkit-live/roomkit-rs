@@ -42,6 +42,8 @@ impl Turns {
         channel: Option<Arc<dyn DynChannel>>,
     ) -> Result<(), RoomKitError> {
         #[cfg(feature = "redis")]
+        self.identify_redis_owner();
+        #[cfg(feature = "redis")]
         if let Some(backend) = self.remote_for_channel(channel.as_deref()) {
             backend.control_remote(&message).await?;
             return Ok(());

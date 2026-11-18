@@ -130,6 +130,8 @@ impl Turns {
             return Err(TurnError::link_reason("backend_closed").into_kit_error());
         }
         #[cfg(feature = "redis")]
+        self.identify_redis_owner();
+        #[cfg(feature = "redis")]
         if let Some(backend) = self.remote_for_channel(Some(&*channel)) {
             return self
                 .remote_channel_call(backend, call, room_created_at)

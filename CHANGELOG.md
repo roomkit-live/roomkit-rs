@@ -8,6 +8,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Run text turns on separately hosted Python or Rust workers with the optional Redis turn backend. The room owner retains the conversation history and can continue a later turn after a worker is lost.
 
+- The Redis executor list excludes the room owner's own executor while listing independently served workers, including a replacement with the same executor ID.
+
 - **Breaking (Rust source):** `ErrorRecord` now includes the worker's ordered `causes`. Exhaustive literals and patterns must include the new field or use a struct update or rest pattern. Older JSON records and calls to `ErrorRecord::new` read with no causes. Buffered and streamed worker errors expose the same chain in the task result.
 
 - Expose the five text error types for channel refusals, elapsed tool deadlines, interrupted turns and delegated worker failures. Applications can inspect the original worker error through the standard error source.

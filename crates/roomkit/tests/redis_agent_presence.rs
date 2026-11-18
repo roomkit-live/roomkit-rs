@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use roomkit::model::{ChannelCategory, ChannelId, RoomId};
 use roomkit::realtime::{EphemeralEventType, InMemoryRealtime, RealtimeBackend};
-use roomkit::testing::EchoAgent;
+use roomkit::testing::{EchoAgent, EchoAgentOptions};
 use roomkit::{
     AgentIdentity, AttachChannelOptions, ChannelDeclaration, CreateRoomOptions, InMemoryStore,
     RoomKit, RoomKitOptions, TurnExecutor, TurnExecutorOptions, TurnTimeouts,
@@ -146,11 +146,11 @@ impl Room {
     }
 }
 
-fn worker() -> TurnExecutor {
+fn worker(id: &str) -> TurnExecutor {
     TurnExecutor::new(
         |_id| async { Ok(None::<EchoAgent>) },
         TurnExecutorOptions {
-            executor_id: Some("host-1".into()),
+            executor_id: Some(id.into()),
             hosts: Some(BTreeSet::from(["worker".into()])),
             ..Default::default()
         },
@@ -200,7 +200,7 @@ async fn two_room_owners_publish_each_remote_worker_change_once() {
     let room = Room::new();
     let (first, second) = (room.owner(node()), room.owner(node()));
     let peer = node();
-    let worker = worker();
+    let worker = worker("host-1");
     peer.serve(worker.clone()).await.unwrap();
     let mut events = room.create(&first).await;
     expect_event(&mut events, PresenceOnline).await;
@@ -234,7 +234,7 @@ async fn a_local_serve_and_close_publish_without_waiting_for_a_heartbeat() {
     let kit = room.owner(backend.clone());
     let mut events = room.create(&kit).await;
     expect_event(&mut events, PresenceOffline).await;
-    let worker = worker();
+    let worker = worker("host-1");
     backend.serve(worker.clone()).await.unwrap();
     assert!(
         !backend
@@ -264,7 +264,7 @@ async fn each_node_lists_local_workers_directly_and_only_advertised_peers() {
         return;
     };
     let (hosting, elsewhere) = (node(), node());
-    let named = worker();
+    let named = worker("host-1");
     let dynamic = TurnExecutor::new_with_host_predicate(
         |_| async { Ok(None::<EchoAgent>) },
         |id| id.as_str().starts_with("agent-"),
@@ -302,4 +302,79 @@ async fn each_node_lists_local_workers_directly_and_only_advertised_peers() {
     assert!(peer.last_beat.is_some() && peer.covers("worker", &[], None).unwrap());
     assert_eq!(after.len(), 1);
     assert_eq!(after.first().unwrap().executor_id, named.executor_id());
+}
+
+#[tokio::test]
+async fn the_catalogue_excludes_only_the_attached_owners_executor() {
+    let Some((_, node)) = test_nodes(Duration::from_millis(50)) else {
+        return;
+    };
+    let backend = node();
+    let room = Room::new();
+    let owner = room.owner(backend.clone());
+    let _events = room.create(&owner).await;
+    let own = owner.turn_executor();
+    let other = RoomKit::new(RoomKitOptions::default());
+    let other_worker = other.turn_executor();
+
+    backend.serve(own.clone()).await.unwrap();
+    let own_listing = owner.executors().await.unwrap();
+
+    backend.serve(other_worker.clone()).await.unwrap();
+    let foreign_listing = owner.executors().await.unwrap();
+
+    let same_id = worker(own.executor_id());
+    backend.serve(same_id.clone()).await.unwrap();
+    let replaced = owner.executors().await.unwrap();
+    owner.close().await.unwrap();
+    other.close().await.unwrap();
+    same_id.close().await;
+
+    assert!(own_listing.is_empty(), "{own_listing:?}");
+    assert_eq!(foreign_listing.len(), 1);
+    assert_eq!(
+        foreign_listing.first().unwrap().executor_id,
+        other_worker.executor_id()
+    );
+    assert_eq!(replaced.len(), 2);
+    assert!(
+        replaced
+            .iter()
+            .any(|info| info.executor_id == other_worker.executor_id())
+    );
+    assert!(
+        replaced
+            .iter()
+            .any(|info| info.executor_id == own.executor_id()
+                && info.covers("worker", &[], None).unwrap())
+    );
+}
+
+#[tokio::test]
+async fn attaching_a_live_agent_identifies_an_executor_already_served() {
+    let Some((_, node)) = test_nodes(Duration::from_millis(50)) else {
+        return;
+    };
+    let backend = node();
+    let owner = RoomKit::new(RoomKitOptions {
+        turn_backend: Some(backend.clone()),
+        ..Default::default()
+    });
+    let own = owner.turn_executor();
+    backend.serve(own.clone()).await.unwrap();
+    let before = owner.executors().await.unwrap();
+    let room = Room::new();
+    owner
+        .register_channel(EchoAgent::new(
+            room.agent.clone(),
+            "hi",
+            EchoAgentOptions::default(),
+        ))
+        .unwrap();
+    let _events = room.create(&owner).await;
+    let after = owner.executors().await.unwrap();
+    owner.close().await.unwrap();
+    assert_eq!(before.len(), 1);
+    assert_eq!(before.first().unwrap().executor_id, own.executor_id());
+    assert!(after.is_empty(), "{after:?}");
 }

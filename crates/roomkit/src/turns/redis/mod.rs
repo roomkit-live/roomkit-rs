@@ -19,7 +19,7 @@ mod routes;
 mod shutdown_tests;
 mod stream;
 use std::fmt;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
 use redis::aio::{ConnectionManager, ConnectionManagerConfig};
@@ -28,6 +28,7 @@ use uuid::Uuid;
 
 use super::{ExecutorInfo, TurnTimeouts};
 use crate::RoomKitError;
+use crate::turns::executor::Lifecycle;
 
 /// Keyword arguments of Python's `RedisTurnBackend(url, *, client, key_prefix, timeouts)`.
 #[derive(Clone)]
@@ -68,6 +69,7 @@ struct Node {
     id: String,
     prefix: String,
     owner: Mutex<Option<owner::OwnerPort>>,
+    own_executor: OnceLock<Weak<Lifecycle>>,
     routes: Mutex<routes::Routes>,
     serving: Mutex<process::Serving>,
     reader: OnceCell<tokio::task::AbortHandle>,
@@ -117,6 +119,7 @@ impl RedisTurnBackend {
                 .collect(),
             prefix: options.key_prefix,
             owner: Mutex::default(),
+            own_executor: OnceLock::new(),
             routes: Mutex::default(),
             serving: Mutex::default(),
             watchers: Mutex::default(),

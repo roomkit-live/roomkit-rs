@@ -1,5 +1,6 @@
 //! Executor declarations and heartbeats use Redis server time in milliseconds.
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use roomkit_core::model::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -56,14 +57,28 @@ impl View {
     }
 }
 
+impl crate::turns::Turns {
+    /// Python's room owner identifies its own executor on the first turn or
+    /// channel control, including work that stays on the local executor.
+    pub(in crate::turns) fn identify_redis_owner(&self) {
+        if let Some(backend) = &self.remote {
+            backend
+                .0
+                .own_executor
+                .get_or_init(|| Arc::downgrade(&self.executor_lifecycle));
+        }
+    }
+}
+
 pub(super) async fn executors(
     backend: &RedisTurnBackend,
 ) -> Result<Vec<ExecutorInfo>, RoomKitError> {
     let elsewhere = peers(backend).await?;
+    let own = backend.0.own_executor.get();
     let mut rows: Vec<_> = crate::turns::lock(&backend.0.serving)
         .workers
         .iter()
-        .filter(|worker| !worker.closed())
+        .filter(|worker| !worker.closed() && !own.is_some_and(|owner| worker.is_owner(owner)))
         .map(|worker| local_info(worker, backend.node_id()))
         .collect();
     rows.extend(elsewhere);

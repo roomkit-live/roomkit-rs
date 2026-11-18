@@ -57,6 +57,14 @@ impl<S: ConversationStore> RoomKit<S> {
 
 impl<S: ConversationStore> TurnExecutor<S> {
     #[cfg(feature = "redis")]
+    pub(crate) fn is_owner(
+        &self,
+        owner: &std::sync::Weak<crate::turns::executor::Lifecycle>,
+    ) -> bool {
+        owner.ptr_eq(&Arc::downgrade(&self.kit.inner.turns.executor_lifecycle))
+    }
+
+    #[cfg(feature = "redis")]
     pub(crate) fn serving_backends(&self) -> &crate::turns::redis::ServingBackends {
         &self.kit.inner.turns.serving_backends
     }
