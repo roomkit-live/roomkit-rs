@@ -595,7 +595,10 @@ fn variant_of(error: &RoomKitError) -> (&'static str, Metadata) {
         RoomKitError::Router(_) => "Router",
         RoomKitError::Identity(_) => "Identity",
         RoomKitError::RemoteTurn { .. } => "RemoteTurn",
-        RoomKitError::TurnLink { .. } => "TurnLink",
+        RoomKitError::TurnLink { reason, .. } => {
+            fields.insert("reason".into(), Value::from(reason.clone()));
+            "TurnLink"
+        }
         RoomKitError::Internal(_) => "Internal",
         RoomKitError::HumanInputRejected(_) => "HumanInputRejected",
         RoomKitError::Runtime(_) => "Runtime",

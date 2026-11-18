@@ -1,7 +1,6 @@
 //! The process heartbeat continues while a turn occupies its runtime.
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use super::registry::{Beat, Declaration, write_beat};
@@ -15,6 +14,7 @@ pub(super) struct Serving {
     pub(super) owner: bool,
     generation: u64,
     retiring: Vec<String>,
+    closing: bool,
 }
 
 impl RedisTurnBackend {
@@ -23,11 +23,11 @@ impl RedisTurnBackend {
     /// # Errors
     /// A registration on a closed backend fails, as does publishing its first Redis heartbeat.
     pub async fn serve(&self, executor: TurnExecutor) -> Result<(), RoomKitError> {
-        if *self.0.stop.borrow() {
-            return Err(super::routes::closed());
-        }
         {
             let mut serving = lock(&self.0.serving);
+            if serving.closing {
+                return Err(super::routes::closed());
+            }
             let retired: Vec<_> = serving
                 .workers
                 .values()
@@ -48,11 +48,11 @@ impl RedisTurnBackend {
     }
 
     pub(super) async fn attend(&self) -> Result<(), RoomKitError> {
-        if *self.0.stop.borrow() {
-            return Err(super::routes::closed());
-        }
         {
             let mut serving = lock(&self.0.serving);
+            if serving.closing {
+                return Err(super::routes::closed());
+            }
             if !serving.owner {
                 serving.owner = true;
                 serving.generation = serving.generation.saturating_add(1);
@@ -62,6 +62,15 @@ impl RedisTurnBackend {
     }
 
     async fn start(&self) -> Result<(), RoomKitError> {
+        let mut draining = self.0.draining.subscribe();
+        tokio::select! {
+            biased;
+            _ = draining.wait_for(|closing| *closing) => Err(super::routes::closed()),
+            started = self.announce() => started,
+        }
+    }
+
+    async fn announce(&self) -> Result<(), RoomKitError> {
         self.listen().await;
         let mut conn = self.connection().await?;
         write_beat(self, &mut conn, &self.snapshot()).await?;
@@ -69,7 +78,8 @@ impl RedisTurnBackend {
             .heartbeat
             .get_or_try_init(|| async {
                 let node = Arc::downgrade(&self.0);
-                let quitting = Arc::clone(&self.0.quitting);
+                let mut stop = self.0.stop.subscribe();
+                let (exited, done) = tokio::sync::watch::channel(());
                 let interval = self
                     .timeouts()
                     .heartbeat_interval
@@ -81,12 +91,13 @@ impl RedisTurnBackend {
                 std::thread::Builder::new()
                     .name("roomkit-redis-heartbeat".into())
                     .spawn(move || {
+                        let _exited = exited;
                         runtime.block_on(async {
                             let mut conn = None;
-                            while !quitting.load(Ordering::Acquire) {
-                                tokio::time::sleep(interval).await;
-                                if quitting.load(Ordering::Acquire) {
-                                    break;
+                            while !*stop.borrow() {
+                                tokio::select! {
+                                    _ = stop.changed() => break,
+                                    () = tokio::time::sleep(interval) => {},
                                 }
                                 let Some(owner) = node.upgrade() else {
                                     break;
@@ -100,8 +111,11 @@ impl RedisTurnBackend {
                                         }
                                     };
                                     write_beat(&backend, connection, &backend.snapshot()).await
-                                }
-                                .await;
+                                };
+                                let result = tokio::select! {
+                                    _ = stop.changed() => break,
+                                    result = result => result,
+                                };
                                 if let Err(error) = result {
                                     conn = None;
                                     tracing::warn!(%error, "Turn backend heartbeat failed");
@@ -110,7 +124,7 @@ impl RedisTurnBackend {
                         });
                     })
                     .map_err(|e| RoomKitError::Runtime(e.to_string()))?;
-                Ok::<(), RoomKitError>(())
+                Ok::<_, RoomKitError>(done)
             })
             .await?;
         Ok(())
@@ -140,6 +154,10 @@ impl RedisTurnBackend {
         };
         for (id, worker) in &scope.workers {
             let member = format!("{node}:{id}");
+            if scope.closing && !worker.closed() {
+                beat.undeclared.push(member);
+                continue;
+            }
             if worker.closed() {
                 beat.gone.push(member);
                 continue;
@@ -167,37 +185,70 @@ impl RedisTurnBackend {
     /// # Errors
     /// Redis may be unavailable when withdrawing. Expired heartbeats are forgotten by readers.
     pub async fn close(&self) -> Result<(), RoomKitError> {
-        let _closed = self.0.closing.lock().await;
-        if *self.0.stop.borrow() {
+        let mut closed = self.0.closing.lock().await;
+        if *closed {
             return Ok(());
         }
-        self.0.quitting.store(true, Ordering::Release);
-        self.drain_outbox(self.timeouts().bounded().cancel).await;
+        let served_workers = {
+            let mut serving = lock(&self.0.serving);
+            serving.closing = true;
+            serving.generation = serving.generation.saturating_add(1);
+            lock(&self.0.routes).begin_close();
+            self.0.draining.send_replace(true);
+            !serving.workers.is_empty()
+        };
+        let bound = self.timeouts().bounded().cancel;
+        // An owner can still be placing from its previous heartbeat view. Give the
+        // request an interval to arrive and be refused, so it can be placed again.
+        let grace = async {
+            if served_workers {
+                tokio::time::sleep(self.timeouts().interval()).await;
+            }
+        };
+        let undeclared = self.publish_shutdown(false).await;
+        tokio::join!(self.drain_jobs(), grace);
+        self.drain_outbox(bound).await;
         self.0.stop.send_replace(true);
-        lock(&self.0.routes).close();
-        if self.0.data.get().is_none() {
-            return Ok(());
+        if let Some(reader) = self.0.reader.get() {
+            reader.abort();
         }
-        let mut conn = self.connection().await?;
-        let mut snapshot = self.snapshot();
-        snapshot.generation = snapshot.generation.saturating_add(1);
-        snapshot
-            .gone
-            .extend(std::mem::take(&mut snapshot.declared).into_keys());
-        snapshot.owner = false;
-        snapshot.running.clear();
-        write_beat(self, &mut conn, &snapshot).await?;
-        redis::cmd("ZREM")
-            .arg(self.key("owners"))
-            .arg(self.node_id())
-            .exec_async(&mut conn)
-            .await
-            .map_err(|error| redis_error(&error))
+        if let Some(done) = self.0.heartbeat.get() {
+            let mut done = done.clone();
+            let _ = tokio::time::timeout(bound, done.changed()).await;
+        }
+        let withdrawn = self.publish_shutdown(true).await;
+        *closed = withdrawn.is_ok();
+        undeclared.and(withdrawn)
     }
-}
 
-impl Drop for super::Node {
-    fn drop(&mut self) {
-        self.quitting.store(true, Ordering::Release);
+    async fn publish_shutdown(&self, finished: bool) -> Result<(), RoomKitError> {
+        let Some(conn) = self.0.data.get() else {
+            return Ok(());
+        };
+        let mut conn = conn.clone();
+        let mut beat = self.snapshot();
+        if finished {
+            beat.generation = beat.generation.saturating_add(1);
+            beat.gone.append(&mut beat.undeclared);
+            beat.owner = false;
+            beat.running.clear();
+        }
+        let publish = async {
+            write_beat(self, &mut conn, &beat).await?;
+            if finished {
+                redis::cmd("ZREM")
+                    .arg(self.key("owners"))
+                    .arg(self.node_id())
+                    .exec_async(&mut conn)
+                    .await
+                    .map_err(|error| redis_error(&error))?;
+            }
+            Ok(())
+        };
+        tokio::time::timeout(self.timeouts().bounded().cancel, publish)
+            .await
+            .map_err(|_| {
+                RoomKitError::Runtime("Timed out withdrawing the Redis turn backend".into())
+            })?
     }
 }

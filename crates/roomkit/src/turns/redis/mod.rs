@@ -3,12 +3,15 @@ mod after_turn;
 pub(crate) use after_turn::PeerOwner;
 mod control;
 mod dispatch;
+mod jobs;
 mod liveness;
 mod outbox;
 mod owner;
 mod process;
 mod registry;
 mod routes;
+#[cfg(test)]
+mod shutdown_tests;
 mod stream;
 use std::fmt;
 use std::sync::{Arc, Mutex};
@@ -62,11 +65,12 @@ struct Node {
     owner: Mutex<Option<owner::OwnerPort>>,
     routes: Mutex<routes::Routes>,
     serving: Mutex<process::Serving>,
-    reader: OnceCell<()>,
-    heartbeat: OnceCell<()>,
-    quitting: Arc<std::sync::atomic::AtomicBool>,
+    reader: OnceCell<tokio::task::AbortHandle>,
+    heartbeat: OnceCell<tokio::sync::watch::Receiver<()>>,
+    draining: tokio::sync::watch::Sender<bool>,
+    jobs_changed: tokio::sync::Notify,
     stop: tokio::sync::watch::Sender<bool>,
-    closing: tokio::sync::Mutex<()>,
+    closing: tokio::sync::Mutex<bool>,
     timeouts: TurnTimeouts,
     client: redis::Client,
     choice: Mutex<usize>,
@@ -111,9 +115,10 @@ impl RedisTurnBackend {
             serving: Mutex::default(),
             reader: OnceCell::new(),
             heartbeat: OnceCell::new(),
-            quitting: Arc::default(),
+            draining: tokio::sync::watch::channel(false).0,
+            jobs_changed: tokio::sync::Notify::new(),
             stop: tokio::sync::watch::channel(false).0,
-            closing: tokio::sync::Mutex::new(()),
+            closing: tokio::sync::Mutex::new(false),
             timeouts: options.timeouts,
             client: options.client.unwrap_or_else(|| client.clone()),
             choice: Mutex::new(0),

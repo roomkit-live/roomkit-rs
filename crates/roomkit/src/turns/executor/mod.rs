@@ -340,11 +340,11 @@ impl Executor {
             let accepts_control = !steering.pending();
             tokio::select! {
                 biased;
-                () = executor_closing(&mut closing) => {
+                reason = executor_closing(&mut closing) => {
                     // Independent executor close has no owner-side cancellation:
                     // finish its pending calls and stream, then send the end.
                     drop(work.take());
-                    return Some(Cut::Cancelled("cancelled".to_owned()));
+                    return Some(Cut::Cancelled(reason.to_owned()));
                 }
                 control = controls.get(), if accepts_control => {
                     beat.heard();
@@ -411,8 +411,8 @@ impl Executor {
             let mut closing = self.running.cutting();
             tokio::select! {
                 biased;
-                () = executor_closing(&mut closing) => {
-                    return Cut::Cancelled("cancelled".to_owned());
+                reason = executor_closing(&mut closing) => {
+                    return Cut::Cancelled(reason.to_owned());
                 }
                 () = work => {}
             }
@@ -665,10 +665,12 @@ pub(crate) fn parse(carried: CarriedRequest) -> Result<TurnRequest, String> {
 }
 
 /// Wait for an independent close to cut this turn.
-async fn executor_closing(closing: &mut tokio::sync::watch::Receiver<bool>) {
+async fn executor_closing(
+    closing: &mut tokio::sync::watch::Receiver<Option<&'static str>>,
+) -> &'static str {
     loop {
-        if *closing.borrow_and_update() {
-            return;
+        if let Some(reason) = *closing.borrow_and_update() {
+            return reason;
         }
         if closing.changed().await.is_err() {
             pending::<()>().await;

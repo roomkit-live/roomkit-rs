@@ -16,6 +16,8 @@ use crate::turns::{MemoryTurn, lock};
 #[derive(Default)]
 pub(super) struct Routes {
     pub(super) turn_owners: VecDeque<Arc<str>>,
+    pub(super) closing: bool,
+    pub(super) jobs: super::jobs::Jobs,
     answers: HashMap<String, (String, oneshot::Sender<String>)>,
     turns: HashMap<String, TurnEndpoint>,
     observing: bool,
@@ -108,9 +110,10 @@ impl Routes {
         nodes
     }
 
-    pub(super) fn close(&mut self) {
+    pub(super) fn begin_close(&mut self) {
+        self.closing = true;
         self.answers.clear();
-        self.turns.clear();
+        self.turns.retain(|_, route| route.worker);
     }
 }
 
@@ -118,6 +121,9 @@ impl RedisTurnBackend {
     pub(super) fn route_turn(&self, id: &str, peer: &str, worker: bool) -> Option<TurnRoute> {
         use std::collections::hash_map::Entry;
         let mut routes = lock(&self.0.routes);
+        if routes.closing {
+            return None;
+        }
         let Entry::Vacant(slot) = routes.turns.entry(id.into()) else {
             return None;
         };
@@ -157,6 +163,7 @@ impl RedisTurnBackend {
         body: String,
         target: &str,
     ) -> Result<String, RoomKitError> {
+        let member = format!("{peer}:{target}");
         let question = self.exchange(peer, "channel", body, target);
         tokio::pin!(question);
         loop {
@@ -164,10 +171,13 @@ impl RedisTurnBackend {
                 result = &mut question => return result,
                 () = tokio::time::sleep(self.timeouts().heartbeat_interval.max(Duration::from_millis(1))) => {}
             }
-            let alive = self.executors().await?.iter().any(|info| {
-                info.node.as_deref() == Some(peer) && info.executor_id == target && info.online
-            });
-            if !alive {
+            // An answer and the final withdrawal can land in the same heartbeat.
+            let live = tokio::select! {
+                biased;
+                answer = &mut question => return answer,
+                live = super::registry::member_alive(self, &member) => live?,
+            };
+            if !live {
                 return Err(RoomKitError::TurnLink {
                     reason: "executor_lost".into(),
                     message: None,
@@ -183,18 +193,26 @@ impl RedisTurnBackend {
         body: String,
         target: &str,
     ) -> Result<String, RoomKitError> {
-        if *self.0.stop.borrow() {
+        if *self.0.draining.borrow() {
             return Err(closed());
         }
         self.listen().await;
         let id = Uuid::new_v4().simple().to_string();
-        let (tx, rx) = oneshot::channel();
-        lock(&self.0.routes)
-            .answers
-            .insert(id.clone(), (peer.into(), tx));
+        let (tx, mut rx) = oneshot::channel();
+        {
+            let mut routes = lock(&self.0.routes);
+            if routes.closing {
+                return Err(closed());
+            }
+            routes.answers.insert(id.clone(), (peer.into(), tx));
+        }
         let _registration = Question(&self.0.routes, id.clone());
         let question = Message::new(kind, self.node_id(), body, target, &id);
-        self.post(peer, &question).await?;
+        tokio::select! {
+            biased;
+            answer = &mut rx => return answer.map_err(|_| closed()),
+            result = self.post(peer, &question) => result?,
+        }
         rx.await.map_err(|_| closed())
     }
 
@@ -252,7 +270,7 @@ impl RedisTurnBackend {
             .get_or_init(|| async {
                 let node = Arc::downgrade(&self.0);
                 let stop = self.0.stop.subscribe();
-                tokio::spawn(receive(node, stop));
+                tokio::spawn(receive(node, stop)).abort_handle()
             })
             .await;
     }

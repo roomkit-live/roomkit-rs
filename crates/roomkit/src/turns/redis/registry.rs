@@ -59,9 +59,28 @@ impl View {
 pub(super) async fn executors(
     backend: &RedisTurnBackend,
 ) -> Result<Vec<ExecutorInfo>, RoomKitError> {
+    let (view, timeout) = read_view(backend).await?;
+    Ok(view.declared(timeout))
+}
+
+/// A draining executor still answers work it accepted after its declaration was withdrawn.
+pub(super) async fn member_alive(
+    backend: &RedisTurnBackend,
+    member: &str,
+) -> Result<bool, RoomKitError> {
+    let (view, timeout) = read_view(backend).await?;
+    Ok(view
+        .executors
+        .get(member)
+        .and_then(|row| row.get(0))
+        .and_then(Value::as_i64)
+        .is_some_and(|last| view.now.saturating_sub(last) < timeout))
+}
+
+async fn read_view(backend: &RedisTurnBackend) -> Result<(View, i64), RoomKitError> {
     let timeout =
         i64::try_from(backend.timeouts().heartbeat_timeout.as_millis()).unwrap_or(i64::MAX);
-    Ok(view(backend, timeout).await?.declared(timeout))
+    Ok((view(backend, timeout).await?, timeout))
 }
 
 /// Check against Redis server time, the same clock that wrote the owner heartbeat.

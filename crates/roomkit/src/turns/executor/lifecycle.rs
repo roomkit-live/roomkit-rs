@@ -24,7 +24,7 @@ struct State {
 
 #[derive(Debug)]
 struct Active {
-    cut: watch::Sender<bool>,
+    cut: watch::Sender<Option<&'static str>>,
     // A self-close keeps work alive if its owner later cancels or disappears.
     // A later external executor close still cuts that work directly.
     spared_by_owner: Arc<AtomicBool>,
@@ -42,19 +42,19 @@ impl Lifecycle {
         if state.closed || state.running.contains_key(&turn) {
             return None;
         }
-        let (cut, cutting) = watch::channel(false);
+        let (cut, _) = watch::channel(None);
         let spared_by_owner = Arc::new(AtomicBool::new(false));
         state.running.insert(
             Arc::clone(&turn),
             Active {
-                cut,
+                cut: cut.clone(),
                 spared_by_owner: Arc::clone(&spared_by_owner),
             },
         );
         Some(Running {
             lifecycle: Arc::clone(self),
             turn,
-            cutting,
+            cut,
             spared_by_owner,
         })
     }
@@ -70,7 +70,7 @@ impl Lifecycle {
                 if spared.contains(turn) {
                     active.spared_by_owner.store(true, Ordering::Release);
                 } else {
-                    active.cut.send_replace(true);
+                    active.cut.send_replace(Some("cancelled"));
                 }
             }
         }
@@ -95,7 +95,7 @@ impl Lifecycle {
 pub(crate) struct Running {
     lifecycle: Arc<Lifecycle>,
     turn: Arc<str>,
-    cutting: watch::Receiver<bool>,
+    cut: watch::Sender<Option<&'static str>>,
     spared_by_owner: Arc<AtomicBool>,
 }
 
@@ -104,8 +104,13 @@ impl Running {
         self.spared_by_owner.load(Ordering::Acquire)
     }
 
-    pub(super) fn cutting(&self) -> watch::Receiver<bool> {
-        self.cutting.clone()
+    pub(super) fn cutting(&self) -> watch::Receiver<Option<&'static str>> {
+        self.cut.subscribe()
+    }
+
+    #[cfg(feature = "redis")]
+    pub(super) fn cutter(&self) -> watch::Sender<Option<&'static str>> {
+        self.cut.clone()
     }
 }
 

@@ -16,6 +16,8 @@ use crate::turns::{MemoryTurn, Turns};
 pub(crate) struct WorkerTurn {
     memory: Arc<MemoryTurn>,
     frames: PipeReceiver<Frame>,
+    #[cfg(feature = "redis")]
+    cut: tokio::sync::watch::Sender<Option<&'static str>>,
 }
 
 impl WorkerTurn {
@@ -49,6 +51,8 @@ impl WorkerTurn {
         #[cfg(feature = "redis")]
         let memory = MemoryTurn { owner, ..memory };
         let memory = Arc::new(memory);
+        #[cfg(feature = "redis")]
+        let cut = running.cutter();
         let executor = Executor {
             running,
             stale: false,
@@ -71,12 +75,20 @@ impl WorkerTurn {
         Ok(Self {
             memory,
             frames: received,
+            #[cfg(feature = "redis")]
+            cut,
         })
     }
 
     /// Accept the owner's numbered control envelope.
     pub(crate) fn control(&self, envelope: String) {
         self.memory.controls.deliver_raw(envelope);
+    }
+
+    /// A backend close cuts local work without consuming a sequence number of the owner.
+    #[cfg(feature = "redis")]
+    pub(crate) fn cut_for_shutdown(&self) {
+        self.cut.send_replace(Some("backend_closed"));
     }
 
     /// The next numbered frame for the owner, through the terminal frame.

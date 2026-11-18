@@ -53,7 +53,13 @@ impl RedisTurnBackend {
                 .await?;
             let route = self
                 .route_turn(&memory.turn_id, &target.node, false)
-                .ok_or_else(|| invalid("turn already submitted".into()))?;
+                .ok_or_else(|| {
+                    if *self.0.draining.borrow() {
+                        super::routes::closed()
+                    } else {
+                        invalid("turn already submitted".into())
+                    }
+                })?;
             let answer = self
                 .ask(
                     &target.node,
@@ -158,14 +164,14 @@ impl RedisTurnBackend {
         }));
     }
 
-    pub(super) fn owner_message(&self, message: &Message) -> Result<(), RoomKitError> {
+    pub(super) async fn owner_message(&self, incoming: &Message) -> Result<(), RoomKitError> {
         use crate::turns::wire::{OwnerMessage, OwnerMessageEnvelope, RoomCallResult};
         let parsed: OwnerMessageEnvelope =
-            serde_json::from_str(&message.body).map_err(|e| invalid(e.to_string()))?;
+            serde_json::from_str(&incoming.body).map_err(|e| invalid(e.to_string()))?;
         let owner = crate::turns::lock(&self.0.owner).clone();
         let backend = self.clone();
-        let message = message.clone();
-        tokio::spawn(async move {
+        let message = incoming.clone();
+        let admitted = self.dispatch(async move {
             let result = if let Some(owner) = owner {
                 owner(parsed).await
             } else if let OwnerMessage::RoomCall(call) = parsed.message {
@@ -189,6 +195,9 @@ impl RedisTurnBackend {
                 tracing::warn!(%error, "Sending the room call result failed");
             }
         });
+        if !admitted {
+            return self.refuse_closing(incoming).await;
+        }
         Ok(())
     }
 }
