@@ -693,31 +693,40 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         organization: Option<&str>,
     ) -> Result<(), RoomKitError> {
         let kit = self.kit()?;
-        for agent in &self.config().agents {
+        let config = self.config();
+        let names = kit.inner.config().hooks.enabled_room_hooks(&self.room_id);
+        let mut memories = Vec::new();
+        for agent in &config.agents {
             if *agent == event.source.channel_id || !reach.contains(agent) {
                 continue;
             }
             let Some(channel) = kit.inner.channel(agent) else {
                 continue;
             };
-            let names = kit.inner.config().hooks.enabled_room_hooks(&self.room_id);
-            if let Err(error) = kit
-                .inner
-                .turns
-                .committed(
-                    agent,
-                    &self.room_id,
-                    event,
-                    organization.map(str::to_owned),
-                    names,
-                    Some(channel),
-                )
-                .await
-            {
-                tracing::warn!(target: "roomkit::turns", agent=%agent, room=%self.room_id, %error, "the agent's memory was not handed a committed event");
-            }
+            let delivery = kit.inner.turns.committed(
+                agent,
+                &self.room_id,
+                event,
+                organization.map(str::to_owned),
+                names.clone(),
+                Some(channel),
+            );
+            memories.push(async move {
+                match delivery.await {
+                    Ok(()) => {}
+                    Err(RoomKitError::TurnLink { reason, .. }) if reason == "no_executor" => {
+                        tracing::debug!(target: "roomkit::turns", %agent, room = %self.room_id, "offline agent missed a committed event");
+                    }
+                    Err(error) => {
+                        tracing::warn!(target: "roomkit::turns", %agent, room = %self.room_id, %error, "the agent's memory was not handed a committed event");
+                    }
+                }
+                Ok(())
+            });
         }
-        Ok(())
+        crate::orchestration::gather::gather_or_cut(memories)
+            .await
+            .map(drop)
     }
 
     /// A person's message: the agents it addresses first; with no address

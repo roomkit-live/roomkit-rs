@@ -38,6 +38,8 @@ use roomkit_ai::{AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse,
 mod clock;
 #[path = "discussion_processes/held.rs"]
 mod held;
+#[path = "discussion_processes/memory.rs"]
+mod memory;
 use held::{HeldLocks, HeldStore, Holds, LeaseClock};
 use roomkit_core::rules::transcoding::text_of;
 
