@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Accept application turn transports through `RoomKitOptions::turn_backend`. The transport receives the same executor interface for memory, SQLite and PostgreSQL kits, and can give a worker a room-owner port for work after its turn.
+
 - Run text turns on separately hosted Python or Rust workers with the optional Redis turn backend. The room owner retains the conversation history and can continue a later turn after a worker is lost.
 
 - The Redis executor list excludes the room owner's own executor while listing independently served workers, including a replacement with the same executor ID.

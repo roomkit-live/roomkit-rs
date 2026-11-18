@@ -558,9 +558,22 @@ request, frames, controls and envelopes are in `roomkit::turns::wire`. The
 request and channel call track handover locally. Their serialized copies
 start with a fresh handover marker.
 
-With the `redis` feature, the owner accepts a `RedisTurnBackend` in
-`RoomKitOptions::turn_backend`. The Redis backend exposes `serve`,
-`executors`, `claim_presence` and `close`. Each standalone factory returns a
+Set `RoomKitOptions::turn_backend` to `Some(Arc::new(backend))` to run the
+kit's turns and channel controls through an application implementation of
+`roomkit::turns::TurnBackend`. On first use the kit calls `attend(owner)`,
+then `serve(executor)`. The `ServedExecutor` view is independent of the
+conversation store. Application code still registers hooks on its typed
+`TurnExecutor<S>`. A worker can retain a `RoomOwner` for calls and publications
+after the turn by calling `reach_owner`.
+
+A backend implements `submit`, `serve`, `control`, `claim_presence` and
+`close`. A single-process transport can delegate `claim_presence` to a
+`LocalPresenceClaims` field. A transport that tracks executor availability
+implements `executors` and returns true from `lists_executors`. It can
+override `executors_now` for a fresh read when a decision would skip a turn.
+The Redis feature provides this interface for a Redis deployment.
+
+Each standalone factory returns a
 future yielding `Result<Option<C>, RoomKitError>` for one concrete
 `C: Channel`. `TurnExecutorOptions` supplies the executor ID, host
 declarations, organization scope, timeouts, channel ownership and cache
@@ -573,19 +586,14 @@ The following application contracts remain open for text API parity.
 
 | Python contract | Current Rust behavior |
 | --- | --- |
-| `TurnBackend`, `InMemoryTurnBackend`, `TurnClient` | The kit has built-in local routing and accepts the concrete Redis backend. An application still needs a public backend interface and a way to supply it to the owner. Redis submits requests, routes channel controls and attends the owner internally. |
-| `serve(executor)` | `TurnExecutor<S>` keeps the store type of its hooks. Redis currently takes `TurnExecutor<InMemoryStore>`. Serving the executor of a kit with a different store type through this public operation remains open. |
+| `InMemoryTurnBackend`, `TurnClient` | The kit runs turns locally by default. Standalone application construction of the built-in memory transport and the owner client remains open. |
 | `TurnExecutor.organizations` | The standalone constructor accepts `None` for rooms without an organization and rejects an explicitly empty collection. Its public getter returns an empty set in the former case. The Redis declaration preserves null. The kit's executor serves `"*"`. |
-| `TurnExecutor.reach_owner`, `RoomOwner` | Redis routes host calls and publications after a turn. Installing the destination for that work from an application-supplied transport remains open. |
 | `TurnExecutor.wire`, `use_wiring`, `wiring` | The SDK wires the channels it registers. Inspection and replacement of that environment by the application remain open. |
 | `TurnExecutor(..., telemetry=..., error_classes=...)`, `RoomKit(..., error_classes=...)` | Built-in remote errors use the SDK's codec. Supplying worker telemetry and an application error-class registry for the worker or kit remains open. |
 
 The Python snapshot lists methods and properties. It omits instance attributes
 such as `link.request` and `RedisTurnBackend.node_id`, which are accessors in
-Rust. A matching JSON message also leaves some constructor differences open.
-For example, `ChannelCall::new` takes a call ID while Python generates one by
-default, and the Rust `RoomCall` struct literal supplies the ID, depth and
-arguments. The discriminator is part of the serialized message.
+Rust. `ChannelCall::new` and `RoomCall::new` generate a fresh correlation ID. Applications can set an explicit ID. Reading either call from JSON uses the same defaults.
 
 The Python worker constructor also takes `media_resolver` and `attached_media`.
 These belong to the media API.

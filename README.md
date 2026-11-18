@@ -132,7 +132,7 @@ Applications normally depend on `roomkit` and the adapters they use.
 
 Enable the `redis` feature on the `roomkit` dependency. The room owner and
 each worker create their own `RedisTurnBackend` with the same Redis URL and
-key prefix. Give the owner's backend to `RoomKitOptions::turn_backend` and
+key prefix. Set `RoomKitOptions::turn_backend` to `Some(Arc::new(backend))` and
 register the remote agent with `ChannelDeclaration::new(channel_id)`.
 
 On the worker, build a `TurnExecutor` with a channel factory and set

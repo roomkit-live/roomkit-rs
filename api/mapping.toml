@@ -946,9 +946,9 @@ reason = "The engine is built with its kit; its chains and observer tasks run in
 
 [[missing]]
 python = "roomkit.TurnExecutor"
-members = ["reach_owner", "wire", "use_wiring", "wiring"]
+members = ["wire", "use_wiring", "wiring"]
 scope = "text"
-reason = "The worker accepts application links and channel controls. The caller still needs a public port for out-of-turn owner calls and publications, and access to the channel wiring environment."
+reason = "The worker accepts application links, channel controls and an owner port for work after a turn. The caller still needs access to the channel wiring environment."
 
 [[exception]]
 rust = "roomkit::TurnExecutor::hook"
