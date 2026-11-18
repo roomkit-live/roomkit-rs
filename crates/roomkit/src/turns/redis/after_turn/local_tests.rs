@@ -12,8 +12,7 @@ impl RoomOwner for Owner {
         Box::pin(async move {
             Ok(HostResult {
                 call_id: call.call_id,
-                result: current_turn_id()
-                    .map_or(Value::Null, |turn| Value::String(turn.to_string())),
+                result: current_turn_id().map_or(Value::Null, Value::String),
                 error: None,
                 record_changes: None,
             })

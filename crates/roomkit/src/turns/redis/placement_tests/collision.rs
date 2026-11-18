@@ -69,7 +69,7 @@ pub(super) fn replacement(id: &str, shared: bool) -> TurnExecutor {
 
 async fn setup(node: &RedisTurnBackend) -> (RoomKit, ChannelId, ChannelId, ChannelId) {
     let kit = RoomKit::new(RoomKitOptions {
-        turn_backend: Some(Arc::new(node.clone())),
+        turn_backend: Some(crate::turns::TurnBackendHandle::new(Arc::new(node.clone()))),
         ..Default::default()
     });
     let text = "text".parse().unwrap();

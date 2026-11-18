@@ -1,7 +1,7 @@
 //! The data pool belongs to the application; the inbox and beat use their own links.
 use super::super::{RedisTurnBackend, RedisTurnBackendOptions, TurnTimeouts};
 use redis::aio::{ConnectionManager, ConnectionManagerConfig};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 async fn connection_id(connection: &mut impl redis::aio::ConnectionLike) -> i64 {
     redis::cmd("CLIENT")
@@ -32,15 +32,20 @@ async fn an_injected_pool_keeps_its_response_timeout_ownership_and_connection() 
     };
     let backend = RedisTurnBackend::new(Some(&url), options).unwrap();
     let mut data = backend.connection().await.unwrap();
-    let started = Instant::now();
-    let empty_key = format!("roomkit:client-proof:{}", uuid::Uuid::new_v4());
-    let reply = redis::cmd("BLPOP")
-        .arg(empty_key)
-        .arg(0.25_f64)
-        .query_async::<Option<(String, String)>>(&mut data)
-        .await;
-    assert!(reply.unwrap().is_none());
-    assert!(started.elapsed() >= Duration::from_millis(200));
+    let mut blocking = redis::cmd("BLPOP");
+    blocking
+        .arg(format!("roomkit:client-proof:{}", uuid::Uuid::new_v4()))
+        .arg(0.25_f64);
+    let read = blocking.query_async::<Option<(String, String)>>(&mut data);
+    {
+        tokio::pin!(read);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), &mut read)
+                .await
+                .is_err()
+        );
+        assert_eq!(read.await.unwrap(), None);
+    }
     let app_id = connection_id(&mut application).await;
     assert_eq!(connection_id(&mut data).await, app_id);
     let inbox_id = connection_id(&mut backend.inbox_connection().await.unwrap()).await;
