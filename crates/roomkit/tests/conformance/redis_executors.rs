@@ -265,7 +265,7 @@ async fn exercise(url: &str, scenario: &Value) -> Result<Vec<String>, RoomKitErr
         workers.slot.clone(),
         Some(Arc::<Workers>::clone(&workers)),
         |mut options| {
-            options.turn_backend = Some(owner.clone());
+            options.turn_backend = Some(Arc::new(owner.clone()));
             options
         },
     )
