@@ -124,3 +124,15 @@ fn a_room_publication_only_accepts_a_publication_frame() {
     row["message"]["message"]["frame"] = json!({"type":"end"});
     assert!(serde_json::from_value::<OwnerMessageEnvelope>(row["message"].take()).is_err());
 }
+
+#[test]
+fn empty_pull_grants_and_incomplete_rpc_contexts_are_refused() {
+    assert!(serde_json::from_value::<Control>(json!({"type":"pull","count":0})).is_err());
+    assert!(serde_json::from_value::<Control>(json!({"type":"pull"})).is_ok());
+    for message in [
+        json!({"type":"host_call","call_id":"h","verb":"room_context","arguments":{}}),
+        json!({"type":"tool_call","call_id":"t","name":"lookup","arguments":{},"context":{"tool_call_id":"lookup","channel_id":"agent"}}),
+    ] {
+        assert!(serde_json::from_value::<Frame>(message).is_err());
+    }
+}

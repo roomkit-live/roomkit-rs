@@ -282,11 +282,11 @@ pub(crate) struct WireLoopEnd {
 
 /// What a call's handler reads of the turn it serves (RFC §10.6.5, §21.4).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
 pub(crate) struct CallContext {
     pub(crate) tool_call_id: String,
     pub(crate) room_id: String,
     pub(crate) channel_id: String,
+    #[serde(default)]
     pub(crate) chain_depth: u32,
     pub(crate) actor_id: Option<String>,
     pub(crate) allowed_names: Option<Vec<String>>,
@@ -337,9 +337,7 @@ pub(crate) enum Frame {
     HostCall {
         call_id: String,
         verb: String,
-        #[serde(default)]
         arguments: Metadata,
-        #[serde(default)]
         context: CallContext,
     },
     CallCancel {
@@ -350,9 +348,7 @@ pub(crate) enum Frame {
     ToolCall {
         call_id: String,
         name: String,
-        #[serde(default)]
         arguments: Metadata,
-        #[serde(default)]
         context: CallContext,
     },
     /// An ephemeral event a turn published, which no owner of 0.1 has a
@@ -408,7 +404,7 @@ pub(crate) enum Frame {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum Control {
     Pull {
-        #[serde(default = "one")]
+        #[serde(default = "one", deserialize_with = "pull_count")]
         count: u32,
         #[serde(default)]
         read: u64,
@@ -485,6 +481,10 @@ pub(crate) enum ToolOutcome {
 
 fn one() -> u32 {
     1
+}
+
+fn pull_count<'de, D: serde::Deserializer<'de>>(input: D) -> Result<u32, D::Error> {
+    std::num::NonZeroU32::deserialize(input).map(std::num::NonZeroU32::get)
 }
 
 /// A message of one direction of a turn link. The sender borrows its ID and

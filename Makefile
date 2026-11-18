@@ -211,6 +211,18 @@ turns-fixture:
 	PYTHONDONTWRITEBYTECODE=1 "$$ROOMKIT_DIR/.venv/bin/python" -I \
 		$(TURNS_FIXTURES)/read_rust.py $(TURNS_FIXTURES)/rust-case1.jsonl
 
+# Distributed RPC contract. The Python process must import the SDK at ROOMKIT_DIR.
+.PHONY: turns-rpc-fixture
+turns-rpc-fixture:
+	@test -n "$$ROOMKIT_DIR" && test -d "$$ROOMKIT_DIR/src/roomkit"
+	@git -C "$$ROOMKIT_DIR" diff --quiet HEAD -- src
+	PYTHONPATH="$$ROOMKIT_DIR/src" "$$ROOMKIT_DIR/.venv/bin/python" \
+		$(TURNS_FIXTURES)/rpc_contract.py write-python
+	ROOMKIT_WRITE_TURNS_FIXTURE=1 $(CARGO) test --locked -p roomkit --lib turns::tests::rpc_wire
+	PYTHONPATH="$$ROOMKIT_DIR/src" "$$ROOMKIT_DIR/.venv/bin/python" \
+		$(TURNS_FIXTURES)/rpc_contract.py read-rust
+	@git -C "$$ROOMKIT_DIR" rev-parse HEAD > $(TURNS_FIXTURES)/RPC_ROOMKIT_COMMIT
+
 # The Python implementation's public API, which this one mirrors (step 5,
 # docs/steps/step-05.md lot 0): roomkit's tests/public_api_signatures.json and
 # tests/public_api_names.json at one commit of roomkit's origin/main, copied

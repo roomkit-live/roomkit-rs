@@ -13,7 +13,8 @@ from pathlib import Path
 from typing import Any
 
 from roomkit.turns import wire
-from roomkit.turns._codec import request_json
+from roomkit.turns._codec import decode_end, decode_item, request_json
+from roomkit.turns.host import VERBS
 
 HERE = Path(__file__).parent
 MODELS = {
@@ -85,7 +86,59 @@ def corpus(peer: str) -> list[dict[str, Any]]:
     messages: list[tuple[str, Any]] = [
         ("request", wire.TurnRequest.model_validate(case))
     ]
+    end = {
+        "tool_name": "lookup",
+        "tool_id": "id",
+        "arguments": {"key": "42"},
+        "result": {"value": "answer"},
+        "status": "completed",
+        "duration_ms": 3,
+        "error": None,
+        "structured_content": {"found": True},
+        "outcome": "served",
+        "refused_but_ran": False,
+        "intent": "search",
+    }
     frames = [
+        {"type": "accepted", "executor_id": "executor"},
+        {"type": "heartbeat"},
+        {
+            "type": "output",
+            "output": wire.WireOutput(
+                responded=True, response_metadata={"round": 1}, error=error
+            ),
+            "streams": True,
+        },
+        {"type": "record", "record": {"step": "tool"}},
+        {"type": "item", "item": {"kind": "text", "text": "three pieces", "deltas": 3}},
+        {
+            "type": "item",
+            "item": {
+                "kind": "tool_start",
+                "tool_name": "lookup",
+                "tool_id": "id",
+                "ran_with": {"key": "42"},
+                "arguments": {"key": "x"},
+                "intent": "search",
+            },
+        },
+        {"type": "tool_args", "start": 6, "arguments": {"key": "42"}},
+        {"type": "tool_ended", "start": 6, "end": end},
+        {"type": "item", "item": {"kind": "tool_end", "start": 6, **end}},
+        {"type": "steer_result", "steer_id": "s", "loops": 0},
+        {
+            "type": "input_request",
+            "request_id": "input",
+            "tool_name": "ask_user",
+            "arguments": {"question": "Ready?"},
+            **route,
+            "tool_call_id": "lookup",
+            "actor_id": "alice",
+            "created_at": "2026-11-17T00:00:00Z",
+        },
+        {"type": "input_closed", "request_id": "input", "reason": "answered"},
+        {"type": "input_taken", "request_id": "input", "taken": True},
+        ephemeral,
         {
             "type": "tool_call",
             "call_id": call,
@@ -101,12 +154,29 @@ def corpus(peer: str) -> list[dict[str, Any]]:
             "context": context,
         },
         {"type": "call_cancel", "call_id": call},
-        {"type": "framework_event", **framework_event},
+        framework_event,
         {"type": "error", "error": error},
         {"type": "end"},
     ]
     controls = [
         {"type": "pull", "count": 3, "read": 1},
+        {"type": "heartbeat"},
+        {
+            "type": "steer",
+            "steer_id": "s",
+            "directive": {
+                "type": "inject_message",
+                "role": "user",
+                "content": "Please continue",
+            },
+        },
+        {
+            "type": "input_answer",
+            "request_id": "input",
+            "outcome": "answered",
+            "value": "yes",
+        },
+        {"type": "close"},
         {
             "type": "tool_result",
             "call_id": call,
@@ -135,7 +205,7 @@ def corpus(peer: str) -> list[dict[str, Any]]:
             (
                 family,
                 MODELS[family].model_validate(
-                    dict(turn_id=turn, seq=i, message=message)
+                    {"turn_id": turn, "seq": i, "message": message}
                 ),
             )
             for i, message in enumerate(entries, 1)
@@ -240,6 +310,13 @@ if __name__ == "__main__":
         for index, (item, wanted) in enumerate(zip(output, expected, strict=True)):
             family = item["direction"]
             model = MODELS[family].model_validate(item["message"])
+            message = item["message"].get("message", {})
+            if message.get("type") == "host_call":
+                VERBS[message["verb"]].model_validate(message["arguments"])
+            elif message.get("type") == "item":
+                decode_item(message["item"])
+            elif message.get("type") == "tool_ended":
+                decode_end(message["end"])
             assert (family, model.model_dump(mode="json")) == (
                 wanted["direction"],
                 wanted["message"],
