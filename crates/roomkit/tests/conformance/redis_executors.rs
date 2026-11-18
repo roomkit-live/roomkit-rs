@@ -260,12 +260,13 @@ async fn exercise(url: &str, scenario: &Value) -> Result<Vec<String>, RoomKitErr
             .collect(),
     });
     let owner = workers.topology.owner().clone();
+    let backend = roomkit::turns::TurnBackendHandle::new(Arc::new(owner.clone()));
     let problems = crate::harness::run_with(
         scenario,
         workers.slot.clone(),
         Some(Arc::<Workers>::clone(&workers)),
         |mut options| {
-            options.turn_backend = Some(Arc::new(owner.clone()));
+            options.turn_backend = Some(backend.clone());
             options
         },
     )
