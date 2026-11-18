@@ -55,11 +55,8 @@ impl TurnBackend for RedisTurnBackend {
         Some(Box::pin(self.claim_presence(channel_id, room_id, online)))
     }
 
-    fn executors(&self) -> TurnFuture<'_, Result<Vec<ExecutorInfo>, RoomKitError>> {
-        Box::pin(self.executors())
-    }
-    fn lists_executors(&self) -> bool {
-        true
+    fn executors(&self) -> Option<TurnFuture<'_, Result<Vec<ExecutorInfo>, RoomKitError>>> {
+        Some(Box::pin(self.executors()))
     }
     fn timeouts(&self) -> Option<TurnTimeouts> {
         Some(self.timeouts())

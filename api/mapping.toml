@@ -1670,3 +1670,19 @@ rust = "roomkit::RoomKitError::RemoteTurn"
 members = ["detail"]
 approved = "2026-11-18"
 reason = "Carries the received exception's wire record and native type through a Rust error variant (HITL aaf23149)."
+
+[[exception]]
+rust = "roomkit::turns::TurnFuture"
+approved = "2026-11-18"
+reason = "A named boxed, Send future makes Python's async link operations callable through a Rust trait object."
+
+[[exception]]
+rust = "roomkit::turns::TurnContext"
+approved = "2026-11-18"
+reason = "The executor link carries the execution context that Python exposes as contextvars.Context. A separate worker starts with a fresh context."
+
+[[exception]]
+rust = "roomkit::turns::TurnBackend"
+members = ["executors_now"]
+approved = "2026-11-18"
+reason = "Python's _executors_now refreshes a cached catalogue before placement skips a turn. A transport that uses its current catalogue inherits the ordinary read (HITL 708b5c5d)."

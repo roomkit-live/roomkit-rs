@@ -34,16 +34,16 @@ pub trait TurnBackend: std::any::Any + Send + Sync {
     ) -> Option<TurnFuture<'a, Result<bool, RoomKitError>>> {
         None
     }
-    /// Read the catalogue, excluding the owner's own executor.
-    fn executors(&self) -> TurnFuture<'_, Result<Vec<ExecutorInfo>, RoomKitError>> {
-        Box::pin(async { Ok(Vec::new()) })
+    /// Supply a catalogue read, excluding the owner's own executor. Return
+    /// `None` when this transport does not list workers. An empty catalogue
+    /// is `Some` with an empty list. Perform I/O only when the future is polled.
+    fn executors(&self) -> Option<TurnFuture<'_, Result<Vec<ExecutorInfo>, RoomKitError>>> {
+        None
     }
-    /// Whether the catalogue can establish that a declared channel is offline.
-    fn lists_executors(&self) -> bool {
-        false
-    }
-    /// Read current coverage before deciding to skip a turn.
-    fn executors_now(&self) -> TurnFuture<'_, Result<Vec<ExecutorInfo>, RoomKitError>> {
+
+    /// Refresh a cached catalogue before a turn would be skipped (§19.7.5).
+    /// The default reads the same catalogue as `executors`.
+    fn executors_now(&self) -> Option<TurnFuture<'_, Result<Vec<ExecutorInfo>, RoomKitError>>> {
         self.executors()
     }
     /// Bounds agreed by the participants, if supplied by this transport.

@@ -53,6 +53,14 @@ impl InMemoryTurnBackend {
         Self::default()
     }
 
+    /// Read the locally served workers in registration order.
+    ///
+    /// # Errors
+    /// The in-memory catalogue can always be read.
+    pub fn executors(&self) -> TurnFuture<'_, Result<Vec<ExecutorInfo>, RoomKitError>> {
+        Box::pin(async { Ok(self.catalogue()) })
+    }
+
     /// Claim a process-local presence change shared by clones of this transport.
     pub fn claim_presence<'a>(
         &'a self,
@@ -181,12 +189,8 @@ impl TurnBackend for InMemoryTurnBackend {
         Box::pin(self.apply(message))
     }
 
-    fn executors(&self) -> TurnFuture<'_, Result<Vec<ExecutorInfo>, RoomKitError>> {
-        Box::pin(async { Ok(self.catalogue()) })
-    }
-
-    fn lists_executors(&self) -> bool {
-        true
+    fn executors(&self) -> Option<TurnFuture<'_, Result<Vec<ExecutorInfo>, RoomKitError>>> {
+        Some(self.executors())
     }
 
     fn claim_presence<'a>(

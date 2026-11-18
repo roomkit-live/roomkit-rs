@@ -61,6 +61,9 @@ the mapping and its tests. The check does not generate or update this document.
 | `roomkit::turns::TurnBackendHandle` | `roomkit.turns.TurnBackend` instance | Clone the handle for each kit and client to share the transport and its default presence claims. Distributed transports may supply their own claims (HITL a12b3f92). |
 | `roomkit::RedisTurnBackend::new`, `roomkit::turns::RedisTurnBackend::new`, `roomkit::RedisTurnBackendOptions` | `roomkit.RedisTurnBackend(url=None)` | With the `redis` feature, pass `None` for an omitted URL. Both omission and an empty string select `redis://localhost:6379`. Pass the application's `redis::aio::ConnectionManager` as `client` to retain its data connection and timeouts. Supplying a client requires a URL for the independent heartbeat and inbox connections. Clones share the same backend identity. |
 | `roomkit::TurnExecutor::new`, `roomkit::TurnExecutorOptions` | `roomkit.TurnExecutor.__init__` | The factory asynchronously returns an optional channel. The listed hosts, organizations and executor ID are supplied through options. A worker starts serving when its backend's `serve` completes. |
+| `roomkit::turns::TurnFuture` | An awaitable returned by a link or a backend | A boxed future allows a trait object to call asynchronous application code. |
+| `roomkit::turns::TurnContext` | `contextvars.Context` from `ExecutorLink.turn_context` and `stream_context` | A local link can capture the current execution context. A distributed worker receives a fresh context. |
+| `roomkit::turns::TurnBackend::executors_now` | `TurnBackend._executors_now` | Refresh a cached catalogue before skipping a turn. The default delegates to the transport's ordinary catalogue read. |
 | `roomkit::turns::ServedExecutor` | `roomkit.TurnBackend.serve(executor)` | A backend accepts an executor backed by any conversation store. The application keeps the typed executor to register hooks. |
 | `roomkit::TurnExecutor::new_with_host_predicate` | `roomkit.TurnExecutor(..., hosts=predicate)` | A closure selects channels on its own node. Cloned local snapshots retain it. |
 | `roomkit::turns::ErrorClasses` | `RoomKit(..., error_classes=...)`, `TurnExecutor(..., error_classes=...)` | Register the native type's encoder and decoder. An exact class match takes precedence over its nearest registered base. |
@@ -581,9 +584,7 @@ handle for the kit, the standalone `TurnClient` and direct calls. Its default
 `claim_presence` remembers a change once per room and channel. Detach forgets
 the pair. Independent handles each own their default claims. A distributed
 transport can return `Some(future)` from its trait override to share claims
-across processes, as the Redis backend does. A transport that tracks executor availability
-implements `executors` and returns true from `lists_executors`. It can
-override `executors_now` for a fresh read when a decision would skip a turn.
+across processes, as the Redis backend does. A transport that lists workers supplies a future from `executors`. An empty list confirms no worker is available. The default, `None`, declares no catalogue. In either case, the handle returns a list to the caller. A transport can override `executors_now` for a fresh read when a decision would skip a turn.
 The Redis feature provides this interface for a Redis deployment.
 
 Each standalone factory returns a

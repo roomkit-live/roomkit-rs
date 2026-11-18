@@ -1,5 +1,5 @@
 //! The backend object shared by room owners and standalone clients.
-use super::{LocalPresenceClaims, TurnBackend};
+use super::{ExecutorInfo, LocalPresenceClaims, TurnBackend};
 use crate::RoomKitError;
 use std::{fmt, ops::Deref, sync::Arc};
 
@@ -20,6 +20,21 @@ impl TurnBackendHandle {
             transport,
             presence: LocalPresenceClaims::default(),
         }))
+    }
+
+    /// The workers listed by this transport. A backend without a catalogue returns an empty list.
+    ///
+    /// # Errors
+    /// Returns the transport's error if its catalogue could not be read.
+    pub async fn executors(&self) -> Result<Vec<ExecutorInfo>, RoomKitError> {
+        match self.0.transport.executors() {
+            Some(read) => read.await,
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) fn lists_executors(&self) -> bool {
+        self.0.transport.executors().is_some()
     }
 
     /// Claim a change once per room and channel. Passing `None` forgets the pair.

@@ -48,10 +48,10 @@ async fn submit_and_read(owner: &TurnBackendHandle, worker_node: &TurnBackendHan
     .unwrap();
     worker_node.serve(Arc::new(worker.clone())).await.unwrap();
     let request = request();
-    assert!(owner.lists_executors());
     assert!(
         owner
             .executors_now()
+            .unwrap()
             .await
             .unwrap()
             .iter()

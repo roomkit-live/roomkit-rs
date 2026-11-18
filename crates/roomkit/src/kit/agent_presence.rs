@@ -88,10 +88,10 @@ impl<S: ConversationStore> RoomKit<S> {
         }
         // Both built-in registries read current coverage. A failed read proves nothing.
         let infos = if let Some(app) = &self.inner.turns.application {
-            if !app.backend.lists_executors() {
+            let Some(read) = app.backend.executors_now() else {
                 return BTreeSet::new();
-            }
-            app.backend.executors_now().await
+            };
+            read.await
         } else {
             self.executors().await
         };

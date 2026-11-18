@@ -65,7 +65,7 @@ async fn moving_a_room_to_another_worker_keeps_it_there_until_detach() {
         .serve(Arc::<TurnExecutor>::clone(&second))
         .await
         .unwrap();
-    assert_eq!(backend.executors().await.unwrap().len(), 2);
+    assert_eq!(backend.executors().unwrap().await.unwrap().len(), 2);
     let mut special = request("needs-the-second");
     special.room_hooks.push("audit".into());
     second
@@ -128,7 +128,7 @@ async fn catalogue_preserves_local_predicates_and_channel_calls_follow_organizat
         .await
         .unwrap();
     let info = backend.executors().await.unwrap();
-    assert_eq!(info, backend.executors_now().await.unwrap());
+    assert_eq!(info, backend.executors_now().unwrap().await.unwrap());
     let [tenant, global] = <&[_; 2]>::try_from(info.as_slice()).unwrap();
     assert!(tenant.hosts.is_none() && tenant.node.is_none() && tenant.last_beat.is_none());
     assert!(tenant.covers("ai", &[], Some("acme")).unwrap());
