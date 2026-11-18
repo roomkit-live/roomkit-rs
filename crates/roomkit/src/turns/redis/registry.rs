@@ -157,6 +157,39 @@ impl Target {
 }
 
 impl RedisTurnBackend {
+    /// Record a room's agent presence (§10.6.7). Exactly one owner claims each change.
+    /// Passing `None` forgets the state and returns `false`, so the next attach publishes again.
+    ///
+    /// # Errors
+    /// The backend is closed, or the Redis registry cannot be reached.
+    pub async fn claim_presence(
+        &self,
+        channel_id: &str,
+        room_id: &str,
+        online: Option<bool>,
+    ) -> Result<bool, RoomKitError> {
+        if *self.0.stop.borrow() {
+            return Err(super::routes::closed());
+        }
+        self.listen().await;
+        let key = self.key(&format!(
+            "presence:{}:{}",
+            quoted(room_id),
+            quoted(channel_id)
+        ));
+        let state = online.map_or("", |value| if value { "online" } else { "offline" });
+        let mut connection = self.connection().await?;
+        redis::cmd("EVAL")
+            .arg(include_str!("claim_presence.lua"))
+            .arg(1)
+            .arg(key)
+            .arg(state)
+            .arg(7 * 24 * 60 * 60 * 1000)
+            .query_async(&mut connection)
+            .await
+            .map_err(|error| redis_error(&error))
+    }
+
     pub(super) async fn place(
         &self,
         channel: &str,
