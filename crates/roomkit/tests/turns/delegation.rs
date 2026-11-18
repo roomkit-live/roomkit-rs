@@ -846,3 +846,41 @@ async fn prewrapped_task_failures_keep_the_workers_cause_and_explicit_end() {
         kit.close().await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn a_base_turn_cut_keeps_the_worker_record_but_no_task_narration() {
+    let kit = kit_of(RefusedMidStream {
+        with_end: true,
+        failure: |_| {
+            Box::new(roomkit::TurnCutShortError::new(
+                "app cut",
+                Some("operator".into()),
+            ))
+        },
+    })
+    .await;
+    let task = kit
+        .delegate(
+            &room(),
+            &channel("worker"),
+            "Check it.",
+            DelegateOptions {
+                wait: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let result = task.result().unwrap();
+    assert_eq!(result.status, TaskStatus::Failed);
+    let error = result.exception.unwrap();
+    assert_eq!(error.error_type, "TurnCutShortError");
+    assert_eq!(error.attributes["reason"], "operator");
+    assert_eq!(
+        result.metadata["turns"]["worker"]["loop_end_reason"],
+        "error"
+    );
+    assert_eq!(result.output, None);
+    assert!(!result.metadata.contains_key("loop_end_reason"));
+    kit.close().await.unwrap();
+}

@@ -1231,7 +1231,9 @@ fn worker_failure(
                 .map(str::to_owned)
         };
         (attribute("reason"), attribute("narration"))
-    } else if end.is_some() {
+    } else if end.is_some() && error.error_type != "TurnCutShortError" {
+        // A bare turn cut stays the worker's error. Only a task cut or a
+        // task failure carries narration and an end into the task result.
         (end, text)
     } else {
         (None, None)
