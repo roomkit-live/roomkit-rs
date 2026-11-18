@@ -67,6 +67,10 @@ class PinTargets(unittest.TestCase):
         turns.mkdir(parents=True, exist_ok=True)
         for module in ("base", "redis", "owner", "executor", "wire"):
             (turns / f"{module}.py").write_text("", encoding="utf-8")
+        for path in ("turns/_codec", "turns/_executor_turn", "turns/_frame_sender", "models/streaming", "providers/ai/tool_intent"):
+            module = self.roomkit / f"src/roomkit/{path}.py"
+            module.parent.mkdir(parents=True, exist_ok=True)
+            module.write_text("", encoding="utf-8")
         (turns / "base.py").write_text(f"class TurnLink:\n    request{version}: TurnRequest\n", encoding="utf-8")
         self._git("add", "tests", "src")
         self._git("commit", "-q", "-m", message)

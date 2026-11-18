@@ -17,6 +17,9 @@ such case is a row of the public reference in api/PYTHON_API.md. This script rea
   the entries, and the Python names they cover.
 
 The rules, which apply with no entry:
+- `[rules.wire]` checks each named turn wire representation against the fields, tags,
+  literals or envelope type from the pinned Python implementation. The turn fixtures
+  verify the JSON serializer, the accepted publication subset and the aliases;
 - a Rust type's name is Python's with an acronym in Rust's casing (the
   acronyms of `[rules]`); a function or a constant keeps its name; a variant
   `CamelCase` is a member `UPPER_SNAKE`, and an associated constant a member
@@ -89,7 +92,8 @@ The rules, which apply with no entry:
   comparison reads, is a finding (`listed in [rules] ...`) no entry covers,
   a whole item's included.
 
-The pinned Python turn protocol supplements the signature snapshot with class
+The pinned Python turn protocol supplements the signature snapshot with the discriminated
+unions, codec keys and literal values used on the turn link. It also contains class
 and instance attributes and the fields of plain wire records referenced by
 public links. The records remain in their original module. Both files used by
 Python's public API tests are kept verbatim.

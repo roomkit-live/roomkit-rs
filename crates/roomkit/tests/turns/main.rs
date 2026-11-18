@@ -15,6 +15,7 @@ mod delegation;
 mod depth;
 mod executor_link;
 mod host;
+mod inventory_wire;
 mod memory_transport;
 mod named_hooks;
 mod public_wire;

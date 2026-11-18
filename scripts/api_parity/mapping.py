@@ -51,6 +51,7 @@ _RULES = {
     "duration_suffix",
     "packages",
     "builtins",
+    "wire",
     "builtin_payloads",
     "literals",
     "builtin_errors",
@@ -100,6 +101,9 @@ class Rules:
     # snapshot holds no class's bases, so a family is written here.
     error_families: dict[str, dict[str, tuple[str, ...]]] = field(default_factory=dict)
 
+    # Exact Python wire definitions compared for each Rust representation.
+    wire: dict[str, list[str]] = field(default_factory=dict)
+
     @classmethod
     def from_table(cls, table: dict) -> Rules:
         if not _RULES_REQUIRED <= set(table) <= _RULES:
@@ -110,6 +114,10 @@ class Rules:
         acronyms = sorted(
             ((tokens(rust), python) for rust, python in table["acronyms"].items()), key=lambda pair: -len(pair[0])
         )
+        wire = table.get("wire", {})
+        _rust_paths("wire", list(wire))
+        if any(not isinstance(v, list) or not v or not all(isinstance(k, str) for k in v) for v in wire.values()):
+            raise ParityError("[rules.wire] expects a list of pinned Python wire definitions")
         builtin_errors = dict(table.get("builtin_errors", {}))
         _rust_paths("builtin_errors", list(builtin_errors))
         return cls(
@@ -121,6 +129,7 @@ class Rules:
             {path: _literal(path, raw) for path, raw in table.get("literals", {}).items()},
             builtin_errors,
             {path: _family(path, raw) for path, raw in table.get("error_families", {}).items()},
+            wire,
         )
 
     def builtin(self, path: str) -> Builtin | None:
@@ -129,7 +138,7 @@ class Rules:
     def ruled_types(self) -> list[str]:
         """The Rust types a rule maps, by path: its builtins, its literals and
         its error families."""
-        return [*self.builtins, *self.literals, *self.error_families]
+        return [*self.builtins, *self.literals, *self.error_families, *self.wire]
 
     def python_type_name(self, rust: str) -> str:
         """A Rust type's name with its acronyms in Python's casing."""

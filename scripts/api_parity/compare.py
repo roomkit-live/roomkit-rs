@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 
 from api_parity.mapping import Entry, Literal, Mapping, snake_name, variant_name
 from api_parity.sides import Python, Surface, python_signature
+from api_parity.wire_compare import check_wire
 
 # What a struct a caller builds that keeps `#[non_exhaustive]` is found with.
 NON_EXHAUSTIVE = "#[non_exhaustive]: a caller outside the crate cannot build it by struct update"
@@ -112,6 +113,8 @@ class Comparison:
         if entry is not None:
             self.applied.add(id(entry))
             return entry.python
+        if paths := self.rules.wire.get(item["path"]):
+            return " / ".join(paths)
         builtin = self.rules.builtin(item["path"])
         if builtin is not None:
             return BUILTIN + builtin.python
@@ -128,6 +131,7 @@ class Comparison:
         items = self.surface.items
         named = [("builtins", path) for path in self.rules.builtins]
         named += [("literals", path) for path in self.rules.literals]
+        named += [("wire", path) for path in self.rules.wire]
         for table, path in named:
             if path not in items:
                 self._find("rust", path, f"listed in [rules] {table}: no such Rust item", path, None)
@@ -189,6 +193,13 @@ class Comparison:
         return python == rust or (python == rust + suffix and "Duration" in rust_type)
 
     def _item(self, item: dict, python: str) -> None:
+        if paths := self.rules.wire.get(item["path"]):
+            for path in paths:
+                shape = self.python.wire_shapes.get(path)
+                problems = check_wire(item, shape, self.surface) if shape else ["no pinned wire definition"]
+                for problem in problems:
+                    self._find("rust", item["path"], f"{path}: {problem}", item["path"], python)
+            return
         if python.startswith(BUILTIN):
             self._builtin_members(item, python)
             return

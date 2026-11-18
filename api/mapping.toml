@@ -1686,3 +1686,20 @@ rust = "roomkit::turns::TurnBackend"
 members = ["executors_now"]
 approved = "2026-11-18"
 reason = "Python's _executors_now refreshes a cached catalogue before placement skips a turn. A transport that uses its current catalogue inherits the ordinary read (HITL 708b5c5d)."
+
+# Each JSON shape is extracted from the pinned Python source. The Rust frame
+# tests exercise the discriminator, flattening and restricted publication union.
+[rules.wire]
+"roomkit::turns::wire::Envelope" = ["roomkit.turns.wire.FrameEnvelope", "roomkit.turns.wire.ControlEnvelope"]
+"roomkit::turns::wire::FrameEnvelope" = ["roomkit.turns.wire.FrameEnvelope"]
+"roomkit::turns::wire::ControlEnvelope" = ["roomkit.turns.wire.ControlEnvelope"]
+"roomkit::turns::wire::Frame" = ["roomkit.turns.wire.Frame"]
+"roomkit::turns::wire::Control" = ["roomkit.turns.wire.Control"]
+"roomkit::turns::wire::OwnerMessage" = ["roomkit.turns.wire.OwnerMessage"]
+"roomkit::turns::wire::PublicationFrame" = ["roomkit.turns.wire.RoomPublication.frame"]
+"roomkit::turns::wire::InputOutcome" = ["roomkit.turns.wire.InputAnswer.outcome"]
+"roomkit::turns::wire::ToolOutcome" = ["roomkit.turns.wire.ToolResult.outcome"]
+"roomkit::turns::wire::Item" = ["roomkit.turns._codec.encode_item"]
+"roomkit::turns::wire::ToolEnd" = ["roomkit.turns._codec.encode_end"]
+"roomkit::turns::wire::WireResult" = ["roomkit.turns._codec.encode_result"]
+"roomkit::turns::wire::WireLoopEnd" = ["roomkit.models.streaming.LoopEndMarker"]

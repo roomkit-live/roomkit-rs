@@ -1,4 +1,4 @@
-"""Recover the typed turn attributes and protocol records absent from the signature snapshot.
+"""Recover the typed turn attributes, protocol records and wire shapes from their source.
 
 The ordinary Python snapshot records methods, properties and exported classes.
 These definitions are read statically from the very same commit. Protocol
@@ -12,6 +12,11 @@ import ast
 import json
 import subprocess
 from pathlib import Path
+
+if __package__:
+    from .wire_source import EXTRA_MODULES, wire_shapes
+else:
+    from wire_source import EXTRA_MODULES, wire_shapes
 
 ATTRIBUTE_CLASSES = {
     "base": {"ExecutorLink", "TurnLink", "RoomOwner", "TurnBackend"},
@@ -94,7 +99,12 @@ def main() -> None:
         )
         for module in (*ATTRIBUTE_CLASSES, "wire")
     }
-    print(json.dumps({"commit": args.commit, **extract(sources)}, ensure_ascii=False, indent=2, sort_keys=True))
+    for name, path in EXTRA_MODULES.items():
+        sources[name] = subprocess.check_output(
+            ["git", "-C", str(args.checkout), "show", f"{args.commit}:src/roomkit/{path}.py"],
+            text=True, encoding="utf-8",
+        )
+    print(json.dumps({"commit": args.commit, **extract(sources), "wire_shapes": wire_shapes(sources)}, ensure_ascii=False, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

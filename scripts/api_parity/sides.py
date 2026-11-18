@@ -41,7 +41,8 @@ def names(entries: list[dict]) -> list[str]:
 class Python:
     """The snapshot: every public name's spec, and every `__all__`."""
 
-    def __init__(self, signatures: dict, exports: dict, commit: str = "") -> None:
+    def __init__(self, signatures: dict, exports: dict, commit: str = "", wire_shapes: dict | None = None) -> None:
+        self.wire_shapes = wire_shapes or {}
         self.specs = signatures
         self.exports = {package: set(listed) for package, listed in exports.items()}
         self.commit = commit
@@ -185,7 +186,7 @@ def load_python(directory: Path) -> Python:
             if owner in signatures:
                 signatures[owner].setdefault(name, ["property"])
     signatures.update(protocol["protocol_records"])
-    return Python(signatures, exports, commit)
+    return Python(signatures, exports, commit, protocol.get("wire_shapes"))
 
 
 def load_surface(path: Path) -> Surface:

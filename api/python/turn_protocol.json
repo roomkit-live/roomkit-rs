@@ -128,5 +128,286 @@
         "error=None"
       ]
     }
+  },
+  "wire_shapes": {
+    "roomkit.models.streaming.LoopEndMarker": {
+      "fields": [
+        "budget_tokens",
+        "budget_usd",
+        "last_usage",
+        "max_rounds",
+        "model",
+        "provider",
+        "reason",
+        "rounds",
+        "timeout_seconds",
+        "usage",
+        "usage_complete"
+      ]
+    },
+    "roomkit.turns._codec.encode_end": {
+      "fields": [
+        "arguments",
+        "duration_ms",
+        "error",
+        "intent",
+        "outcome",
+        "refused_but_ran",
+        "result",
+        "status",
+        "structured_content",
+        "tool_id",
+        "tool_name"
+      ]
+    },
+    "roomkit.turns._codec.encode_item": {
+      "tag": "kind",
+      "variants": {
+        "instruction_read": [
+          "runtime_record",
+          "text"
+        ],
+        "loop_end": [
+          "budget_tokens",
+          "budget_usd",
+          "last_usage",
+          "max_rounds",
+          "model",
+          "provider",
+          "reason",
+          "rounds",
+          "timeout_seconds",
+          "usage",
+          "usage_complete"
+        ],
+        "segment_break": [],
+        "stream_end": [],
+        "text": [
+          "deltas",
+          "text"
+        ],
+        "thinking": [
+          "thinking"
+        ],
+        "tool_end": [
+          "arguments",
+          "duration_ms",
+          "error",
+          "intent",
+          "outcome",
+          "refused_but_ran",
+          "result",
+          "start",
+          "status",
+          "structured_content",
+          "tool_id",
+          "tool_name"
+        ],
+        "tool_start": [
+          "arguments",
+          "intent",
+          "ran_with",
+          "tool_id",
+          "tool_name"
+        ],
+        "usage": [
+          "model",
+          "partial",
+          "provider",
+          "usage"
+        ]
+      }
+    },
+    "roomkit.turns._codec.encode_result": {
+      "keys": [
+        "parts",
+        "value"
+      ]
+    },
+    "roomkit.turns.wire.Control": {
+      "tag": "type",
+      "variants": {
+        "cancel": [
+          "reason"
+        ],
+        "close": [],
+        "heartbeat": [],
+        "host_result": [
+          "call_id",
+          "error",
+          "record_changes",
+          "result"
+        ],
+        "input_answer": [
+          "outcome",
+          "reason",
+          "request_id",
+          "value"
+        ],
+        "pull": [
+          "count",
+          "read"
+        ],
+        "steer": [
+          "directive",
+          "steer_id"
+        ],
+        "tool_result": [
+          "call_id",
+          "error",
+          "outcome",
+          "record_changes",
+          "result",
+          "structured_content"
+        ]
+      }
+    },
+    "roomkit.turns.wire.ControlEnvelope": {
+      "fields": [
+        "message",
+        "seq",
+        "turn_id"
+      ],
+      "message": "Control"
+    },
+    "roomkit.turns.wire.Frame": {
+      "tag": "type",
+      "variants": {
+        "accepted": [
+          "executor_id"
+        ],
+        "call_cancel": [
+          "call_id"
+        ],
+        "end": [],
+        "ephemeral": [
+          "channel",
+          "event"
+        ],
+        "error": [
+          "error"
+        ],
+        "framework_event": [
+          "channel_id",
+          "data",
+          "event_id",
+          "event_type",
+          "room_id"
+        ],
+        "heartbeat": [],
+        "host_call": [
+          "arguments",
+          "call_id",
+          "context",
+          "verb"
+        ],
+        "input_closed": [
+          "reason",
+          "request_id"
+        ],
+        "input_request": [
+          "actor_id",
+          "arguments",
+          "channel_id",
+          "created_at",
+          "request_id",
+          "room_id",
+          "tool_call_id",
+          "tool_name"
+        ],
+        "input_taken": [
+          "request_id",
+          "taken"
+        ],
+        "item": [
+          "item"
+        ],
+        "output": [
+          "output",
+          "streams"
+        ],
+        "record": [
+          "record"
+        ],
+        "steer_result": [
+          "loops",
+          "steer_id"
+        ],
+        "tool_args": [
+          "arguments",
+          "start"
+        ],
+        "tool_call": [
+          "arguments",
+          "call_id",
+          "context",
+          "name"
+        ],
+        "tool_ended": [
+          "end",
+          "start"
+        ]
+      }
+    },
+    "roomkit.turns.wire.FrameEnvelope": {
+      "fields": [
+        "message",
+        "seq",
+        "turn_id"
+      ],
+      "message": "Frame"
+    },
+    "roomkit.turns.wire.InputAnswer.outcome": {
+      "values": [
+        "answered",
+        "rejected"
+      ]
+    },
+    "roomkit.turns.wire.OwnerMessage": {
+      "tag": "type",
+      "variants": {
+        "room_call": [
+          "arguments",
+          "call_id",
+          "chain_depth",
+          "channel_id",
+          "executor_id",
+          "room_id",
+          "turn_id",
+          "verb"
+        ],
+        "room_publication": [
+          "channel_id",
+          "executor_id",
+          "frame",
+          "room_id",
+          "turn_id"
+        ]
+      }
+    },
+    "roomkit.turns.wire.RoomPublication.frame": {
+      "tag": "type",
+      "variants": {
+        "ephemeral": [
+          "channel",
+          "event"
+        ],
+        "framework_event": [
+          "channel_id",
+          "data",
+          "event_id",
+          "event_type",
+          "room_id"
+        ]
+      }
+    },
+    "roomkit.turns.wire.ToolResult.outcome": {
+      "values": [
+        "served",
+        "refused",
+        "failed",
+        "unserved"
+      ]
+    }
   }
 }
