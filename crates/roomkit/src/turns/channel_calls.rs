@@ -2,17 +2,40 @@
 //! (RFC §10.6.3), including changed state on a failed verb.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use roomkit_core::model::{Metadata, Timestamp};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::Turns;
+
+#[cfg(any(test, feature = "redis"))]
+mod submission;
 use super::error::{TurnError, kit_error, turn_failure};
 use super::observe::Carried;
 use super::wire::{ChannelControl, ChannelControlEnvelope, PreviousTurn, WireError};
 use crate::RoomKitError;
 use crate::channel::{ChannelError, DynChannel};
+#[cfg(feature = "redis")]
+use submission::SubmittedRemoteCall;
+
+/// The owner's local knowledge of whether this particular attempt reached an
+/// executor. The wire copy starts with a new marker.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Handover(Arc<AtomicBool>);
+
+impl PartialEq for Handover {
+    fn eq(&self, other: &Self) -> bool {
+        self.handed() == other.handed()
+    }
+}
+
+impl Handover {
+    fn handed(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct ChannelCall {
@@ -26,6 +49,22 @@ pub(crate) struct ChannelCall {
     #[serde(default)]
     pub(crate) room_state: Metadata,
     pub(crate) previous_turn: Option<PreviousTurn>,
+    #[serde(skip)]
+    pub(crate) handover: Handover,
+}
+
+impl ChannelCall {
+    /// The transport has handed the call to an executor.
+    #[cfg(any(feature = "redis", test))]
+    pub(crate) fn hand_over(&self) {
+        self.handover.0.store(true, Ordering::Release);
+    }
+
+    /// The executor explicitly refused this attempt without applying it.
+    #[cfg(any(feature = "redis", test))]
+    pub(crate) fn refused(&self) {
+        self.handover.0.store(false, Ordering::Release);
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -47,6 +86,12 @@ impl Turns {
     ) -> Result<ChannelResult, RoomKitError> {
         if self.is_closed() {
             return Err(TurnError::link_reason("backend_closed").into_kit_error());
+        }
+        #[cfg(feature = "redis")]
+        if let Some(backend) = self.remote_for_channel(Some(&*channel)) {
+            return self
+                .remote_channel_call(backend, call, room_created_at)
+                .await;
         }
         if self.executor_lifecycle.is_closed() {
             return Err(
@@ -178,4 +223,26 @@ fn invalid(error: &serde_json::Error) -> RoomKitError {
     RoomKitError::Value(format!(
         "The channel control cannot cross the turn backend: {error}"
     ))
+}
+
+#[cfg(feature = "redis")]
+impl Turns {
+    async fn remote_channel_call(
+        &self,
+        backend: &super::redis::RedisTurnBackend,
+        mut call: ChannelCall,
+        created_at: Timestamp,
+    ) -> Result<ChannelResult, RoomKitError> {
+        let submission = SubmittedRemoteCall::new(self, &mut call, created_at);
+        let message = ChannelControl::ChannelCall(Box::new(call));
+        let answer = backend.control_remote(&message).await?.ok_or_else(|| {
+            TurnError::new(
+                "frame_invalid",
+                "the executor did not answer the channel call",
+            )
+            .into_kit_error()
+        })?;
+        submission.complete(&answer);
+        Ok(answer)
+    }
 }

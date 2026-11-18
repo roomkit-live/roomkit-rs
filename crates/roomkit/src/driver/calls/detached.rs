@@ -18,15 +18,26 @@ pub(super) async fn tell<S: ConversationStore>(
     let channel = inner.channel(&binding.channel_id);
     if binding.category == ChannelCategory::Intelligence {
         let (channel_id, room_id) = (&binding.channel_id, &binding.room_id);
+        let organization =
+            match super::control_organization(inner, room_id, channel.as_deref()).await {
+                Ok(organization) => organization,
+                Err(error) => return failed(error),
+            };
         let cleanup = match DetachCleanup::begin(inner, channel_id, room_id).await {
             Ok(cleanup) => cleanup,
             Err(error) => return failed(error),
         };
-        inner.turns.detached(channel_id, room_id, channel).await;
+        let notified = inner
+            .turns
+            .detached(channel_id, room_id, organization, channel)
+            .await;
         if let Err(error) = cleanup.finish().await {
             return failed(error);
         }
-        return ChannelOutcome::Told.into();
+        return match notified {
+            Ok(()) => ChannelOutcome::Told.into(),
+            Err(error) => failed(error),
+        };
     }
     let Some(channel) = channel else {
         return ChannelOutcome::Told.into();
@@ -36,7 +47,7 @@ pub(super) async fn tell<S: ConversationStore>(
 
 /// `StoreFailure` is the Rust wrapper for the exception Python propagates. The
 /// wrapper's generic display must not replace that cause's class and message.
-fn failed(error: RoomKitError) -> Outcome {
+pub(super) fn failed(error: RoomKitError) -> Outcome {
     let cause: ChannelError = if let RoomKitError::Store(failure) = error {
         if let Some(record) = crate::error::stored_record(&*failure) {
             return Outcome::Failed(record.clone());

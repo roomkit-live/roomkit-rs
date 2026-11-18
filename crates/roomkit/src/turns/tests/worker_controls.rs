@@ -98,7 +98,7 @@ impl Channel for Observed {
     ) -> Result<Value, ChannelError> {
         self.note("call");
         let mut state = self.state.lock().unwrap();
-        let before = state["cursor"].clone();
+        let before = state.get("cursor").cloned();
         state.insert("cursor".into(), json!(17));
         if verb == "fail" {
             return Err(crate::RoomKitError::Value("failed verb".into()).into());
@@ -290,3 +290,6 @@ async fn a_release_lets_the_next_build_run_before_the_old_turn_finishes() {
         [(1, "event"), (0, "finished"), (0, "close"), (1, "close")]
     );
 }
+
+#[cfg(feature = "redis")]
+mod owner_lifecycle;

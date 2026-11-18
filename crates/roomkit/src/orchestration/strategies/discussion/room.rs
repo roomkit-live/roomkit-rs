@@ -657,7 +657,8 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         if self.state().closed {
             return Ok(());
         }
-        self.hand_to_memories(&event, &reach).await?;
+        self.hand_to_memories(&event, &reach, context.room.organization_id.as_deref())
+            .await?;
         let speaker = event.source.channel_id.clone();
         {
             let mut live = self.state();
@@ -689,6 +690,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         &self,
         event: &RoomEvent,
         reach: &[ChannelId],
+        organization: Option<&str>,
     ) -> Result<(), RoomKitError> {
         let kit = self.kit()?;
         for agent in &self.config().agents {
@@ -698,10 +700,22 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             let Some(channel) = kit.inner.channel(agent) else {
                 continue;
             };
-            kit.inner
+            let names = kit.inner.config().hooks.enabled_room_hooks(&self.room_id);
+            if let Err(error) = kit
+                .inner
                 .turns
-                .committed(agent, &self.room_id, event, Some(channel))
-                .await;
+                .committed(
+                    agent,
+                    &self.room_id,
+                    event,
+                    organization.map(str::to_owned),
+                    names,
+                    Some(channel),
+                )
+                .await
+            {
+                tracing::warn!(target: "roomkit::turns", agent=%agent, room=%self.room_id, %error, "the agent's memory was not handed a committed event");
+            }
         }
         Ok(())
     }

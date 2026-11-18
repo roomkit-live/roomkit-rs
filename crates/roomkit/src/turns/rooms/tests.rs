@@ -132,6 +132,7 @@ async fn a_channel_call_in_a_room_created_again_drops_the_earlier_room_s_state()
         organization_id: None,
         room_state: Metadata::new(),
         previous_turn: None,
+        handover: Default::default(),
     };
     drop(turns.channel_call(call, agent, again).await);
     assert_eq!(*lock(&drops.rooms), [key("r1").1]);
@@ -155,6 +156,7 @@ async fn a_channel_call_no_executor_took_leaves_the_previous_turn() {
         organization_id: None,
         room_state: Metadata::new(),
         previous_turn: None,
+        handover: Default::default(),
     };
     assert!(
         matches!(turns.channel_call(call, agent, Timestamp::UNIX_EPOCH).await, Err(RoomKitError::TurnLink { reason, .. }) if reason == "no_executor")

@@ -49,6 +49,7 @@ pub fn current_turn_id() -> Option<String> {
 
 mod call_state;
 mod channel_calls;
+mod channel_routing;
 pub(crate) mod declared;
 mod detach_state;
 pub use declared::{DeclareHostVerbOptions, DeclaredVerb};
@@ -580,73 +581,63 @@ impl Turns {
         }
     }
 
-    /// Tells the kit's own executor that `binding`'s intelligence channel
-    /// was attached to its room (RFC §10.6.3 `room_attached`): it calls the
-    /// channel's `on_room_attached`, `channel` the executor's, and logs
-    /// what the channel raises.
+    /// Notify the executors that serve this room’s intelligence channel after attach.
     pub(crate) async fn attached(
         &self,
         binding: &ChannelBinding,
+        organization_id: Option<String>,
         channel: Option<Arc<dyn DynChannel>>,
-    ) {
+    ) -> Result<(), RoomKitError> {
         self.pending_detaches
             .wait(&binding.channel_id, &binding.room_id)
             .await;
         let message = ChannelControl::RoomAttached {
             channel_id: binding.channel_id.clone(),
             room_id: binding.room_id.clone(),
-            organization_id: None,
+            organization_id,
             binding: Box::new(binding.clone()),
         };
-        if let Some(message) = self.control(&message) {
-            apply(channel, message).await;
-        }
+        self.send_channel_notification(message, channel).await
     }
 
-    /// Tells the kit's own executor that `channel_id` was detached from
-    /// `room_id` (RFC §10.6.3 `room_detached`): the room's next turn of the
-    /// channel names no previous turn, and work its last turn began is
-    /// refused; the executor calls the channel's `on_room_detached`,
-    /// `channel` the executor's, and logs what the channel raises.
+    /// Forget the previous turn before notifying its executors of the detach.
+    /// An executor missing the notification will still discard its stale state.
     pub(crate) async fn detached(
         &self,
         channel_id: &ChannelId,
         room_id: &RoomId,
+        organization_id: Option<String>,
         channel: Option<Arc<dyn DynChannel>>,
-    ) {
+    ) -> Result<(), RoomKitError> {
         self.records().pop(channel_id, room_id);
         self.rooms.forget(channel_id, room_id);
         let message = ChannelControl::RoomDetached {
             channel_id: channel_id.clone(),
             room_id: room_id.clone(),
-            organization_id: None,
+            organization_id,
         };
-        if let Some(message) = self.control(&message) {
-            apply(channel, message).await;
-        }
+        self.send_channel_notification(message, channel).await
     }
 
-    /// Hands `event`, committed in `room_id`, to `channel_id`'s channel on
-    /// the kit's own executor (RFC §10.6.3 `committed_event`), its memory
-    /// learning it without a turn (a discussion's, RFC §19.7.5 rule 3):
-    /// `channel` the executor's, what it raises logged.
+    /// Hand a committed event to the memory of an eligible executor without
+    /// starting a turn (RFC §10.6.3, §19.7.5 rule 3).
     pub(crate) async fn committed(
         &self,
         channel_id: &ChannelId,
         room_id: &RoomId,
         event: &RoomEvent,
+        organization_id: Option<String>,
+        room_hooks: Vec<String>,
         channel: Option<Arc<dyn DynChannel>>,
-    ) {
+    ) -> Result<(), RoomKitError> {
         let message = ChannelControl::CommittedEvent {
             channel_id: channel_id.clone(),
             room_id: room_id.clone(),
-            organization_id: None,
+            organization_id,
             event: Box::new(event.clone()),
-            room_hooks: Vec::new(),
+            room_hooks,
         };
-        if let Some(message) = self.control(&message) {
-            apply(channel, message).await;
-        }
+        self.send_channel_notification(message, channel).await
     }
 
     /// Carries a channel control message to the kit's own executor: the

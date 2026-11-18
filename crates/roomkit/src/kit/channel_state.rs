@@ -157,6 +157,7 @@ impl<S: ConversationStore> RoomKit<S> {
             verb,
             arguments: options.arguments,
             previous_turn: None,
+            handover: Default::default(),
         };
         let answer = self
             .inner

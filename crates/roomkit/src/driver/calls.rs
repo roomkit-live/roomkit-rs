@@ -1071,11 +1071,18 @@ fn refused_once_sealed(request: &ChannelRequest) -> ErrorRecord {
 /// an intelligence channel through the turn backend, whose executor logs
 /// what it raises (RFC §10.6.3); any other directly, what it raises
 /// refusing the attach.
-async fn room_attached<S>(inner: &Inner<S>, binding: ChannelBinding) -> Outcome {
+async fn room_attached<S: ConversationStore>(inner: &Inner<S>, binding: ChannelBinding) -> Outcome {
     let channel = inner.channel(&binding.channel_id);
     if binding.category == ChannelCategory::Intelligence {
-        inner.turns.attached(&binding, channel).await;
-        return ChannelOutcome::Told.into();
+        let organization =
+            match control_organization(inner, &binding.room_id, channel.as_deref()).await {
+                Ok(organization) => organization,
+                Err(error) => return detached::failed(error),
+            };
+        return match inner.turns.attached(&binding, organization, channel).await {
+            Ok(()) => ChannelOutcome::Told.into(),
+            Err(error) => detached::failed(error),
+        };
     }
     let Some(channel) = channel else {
         return ChannelOutcome::Told.into();
@@ -1085,6 +1092,23 @@ async fn room_attached<S>(inner: &Inner<S>, binding: ChannelBinding) -> Outcome 
             .on_room_attached(binding.room_id.clone(), binding)
             .await,
     )
+}
+
+/// The owning room selects the executors serving a declaration. Local live
+/// callbacks still borrow their channel without a store lookup.
+async fn control_organization<S: ConversationStore>(
+    inner: &Inner<S>,
+    room_id: &RoomId,
+    channel: Option<&dyn DynChannel>,
+) -> Result<Option<String>, RoomKitError> {
+    if !inner.turns.distributes_channel(channel) {
+        return Ok(None);
+    }
+    Ok(inner
+        .store
+        .get_room(room_id)
+        .await?
+        .and_then(|room| room.organization_id))
 }
 
 /// Push the stored gate to a live channel, regardless of its category.
