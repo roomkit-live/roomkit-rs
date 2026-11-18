@@ -248,3 +248,42 @@ async fn ended_turn_publications_reach_their_owner_in_order_and_keep_their_scope
     worker.close().await;
     assert!(events.try_recv().is_err());
 }
+
+#[cfg(feature = "redis")]
+#[tokio::test]
+async fn a_redis_served_worker_reaches_its_owner_after_an_application_link_ends() {
+    use roomkit::turns::TurnBackend;
+    use roomkit::{RedisTurnBackend, RedisTurnBackendOptions};
+
+    let Ok(url) = std::env::var("REDIS_URL") else {
+        return;
+    };
+    let node = RedisTurnBackend::new(
+        Some(&url),
+        RedisTurnBackendOptions {
+            key_prefix: format!("roomkit:served-port:{}", uuid::Uuid::new_v4()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let (attended, mut events) = owner("attended");
+    TurnBackend::attend(&node, attended).await.unwrap();
+    let (worker, mut hosts) = worker();
+    TurnBackend::serve(&node, Arc::new(worker.clone()))
+        .await
+        .unwrap();
+    let (host, _) = end_turn(&worker, &mut hosts).await;
+
+    assert_eq!(host.call("probe", None).await.unwrap()["owner"], "attended");
+    host.emit_turn_event("ai_response", roomkit::model::Metadata::new());
+    let published = tokio::time::timeout(Duration::from_secs(5), events.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(published.turn_id, host.turn_id());
+    assert!(
+        matches!(Frame::from(*published.frame), Frame::FrameworkEvent { event_type, .. } if event_type == "ai_response")
+    );
+    worker.close().await;
+    node.close().await.unwrap();
+}

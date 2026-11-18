@@ -1,5 +1,5 @@
 //! Reply references and the two directions of each active remote turn.
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 mod history;
@@ -15,7 +15,7 @@ use crate::turns::{MemoryTurn, lock};
 
 #[derive(Default)]
 pub(super) struct Routes {
-    pub(super) turn_owners: VecDeque<Arc<str>>,
+    pub(super) turn_owners: super::after_turn::TurnOwners,
     pub(super) closing: bool,
     pub(super) jobs: super::jobs::Jobs,
     answers: HashMap<String, (String, oneshot::Sender<String>)>,

@@ -42,7 +42,7 @@ async fn a_captured_host_reports_the_closing_owners_refusal() {
         return;
     };
     owner.attend().await.unwrap();
-    let port = worker.remember_owner(owner.node_id());
+    let port = worker.remember_owner("turn", owner.node_id());
     let OwnerMessageEnvelope {
         message: OwnerMessage::RoomCall(call),
     } = serde_json::from_str(&room_call("late")).unwrap()

@@ -60,7 +60,7 @@ impl RedisTurnBackend {
                 carried,
                 crate::turns::executor::WorkerOrigin {
                     owner: Some(crate::turns::room_owner::WorkerOwner::Redis(
-                        backend.remember_owner(&message.sender),
+                        backend.remember_owner(&id, &message.sender),
                     )),
                     ..Default::default()
                 },

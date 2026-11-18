@@ -237,7 +237,8 @@ fn invalid(reason: String) -> RoomKitError {
     }
 }
 
-type OwnerReply = crate::channel::BoxFuture<'static, Option<crate::turns::wire::RoomCallResult>>;
+pub(super) type OwnerReply =
+    crate::channel::BoxFuture<'static, Option<crate::turns::wire::RoomCallResult>>;
 pub(super) type OwnerPort =
     Arc<dyn Fn(crate::turns::wire::OwnerMessageEnvelope) -> OwnerReply + Send + Sync>;
 
