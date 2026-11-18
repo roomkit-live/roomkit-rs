@@ -693,13 +693,12 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         organization: Option<&str>,
     ) -> Result<(), RoomKitError> {
         let kit = self.kit()?;
-        let config = self.config();
+        let recipients = self
+            .memory_recipients(&kit, event, reach, organization)
+            .await;
         let names = kit.inner.config().hooks.enabled_room_hooks(&self.room_id);
         let mut memories = Vec::new();
-        for agent in &config.agents {
-            if *agent == event.source.channel_id || !reach.contains(agent) {
-                continue;
-            }
+        for agent in &recipients {
             let Some(channel) = kit.inner.channel(agent) else {
                 continue;
             };
@@ -727,6 +726,30 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         crate::orchestration::gather::gather_or_cut(memories)
             .await
             .map(drop)
+    }
+
+    async fn memory_recipients(
+        &self,
+        kit: &RoomKit<S>,
+        event: &RoomEvent,
+        reach: &[ChannelId],
+        organization: Option<&str>,
+    ) -> Vec<ChannelId> {
+        let mut recipients: Vec<_> = self
+            .config()
+            .agents
+            .iter()
+            .filter(|agent| **agent != event.source.channel_id && reach.contains(agent))
+            .cloned()
+            .collect();
+        let offline = kit
+            .known_offline(&recipients, &self.room_id, organization)
+            .await;
+        for agent in &offline {
+            tracing::debug!(target: "roomkit::turns", %agent, room = %self.room_id, "offline agent missed a committed event");
+        }
+        recipients.retain(|agent| !offline.contains(agent));
+        recipients
     }
 
     /// A person's message: the agents it addresses first; with no address

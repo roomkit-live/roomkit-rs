@@ -3,6 +3,7 @@
 use super::*;
 use roomkit::AgentIdentity;
 use roomkit::ChannelDeclaration;
+use roomkit::testing::TurnTap;
 use tokio::sync::Barrier;
 
 struct MeetingAgent {
@@ -65,6 +66,13 @@ async fn a_committed_message_reaches_every_discussion_memory_at_once() {
         })
         .unwrap();
     }
+    for name in ["offline-a", "offline-b"] {
+        kit.register_channel(ChannelDeclaration {
+            identity: Some(AgentIdentity::default()),
+            ..ChannelDeclaration::new(id(name))
+        })
+        .unwrap();
+    }
     kit.register_channel(RecordingTransport::new(
         id("sms"),
         ChannelType::SMS,
@@ -73,7 +81,12 @@ async fn a_committed_message_reaches_every_discussion_memory_at_once() {
     .unwrap();
     kit.create_room(CreateRoomOptions {
         room_id: Some(room()),
-        orchestration: Some(Some(Cluster::discussion_of(&["ana", "bob"]))),
+        orchestration: Some(Some(Cluster::discussion_of(&[
+            "ana",
+            "bob",
+            "offline-a",
+            "offline-b",
+        ]))),
         ..Default::default()
     })
     .await
@@ -81,6 +94,7 @@ async fn a_committed_message_reaches_every_discussion_memory_at_once() {
     kit.attach_channel(&room(), &id("sms"), AttachChannelOptions::default())
         .await
         .unwrap();
+    let tap = TurnTap::on(&kit);
     let text = "@nobody hello.";
     let message = InboundMessage::new(id("sms"), "user", TextContent::new(text));
     tokio::time::timeout(
@@ -102,5 +116,20 @@ async fn a_committed_message_reaches_every_discussion_memory_at_once() {
         handed,
         [(id("ana"), text.to_owned()), (id("bob"), text.to_owned())]
     );
+    let mut notified = Vec::new();
+    for raw in tap
+        .messages()
+        .into_iter()
+        .filter(|message| message.family == "channel_control")
+    {
+        let envelope: roomkit::turns::wire::ChannelControlEnvelope =
+            serde_json::from_str(&raw.json).unwrap();
+        if let roomkit::turns::ChannelControl::CommittedEvent { channel_id, .. } = envelope.message
+        {
+            notified.push(channel_id);
+        }
+    }
+    notified.sort();
+    assert_eq!(notified, [id("ana"), id("bob")]);
     kit.close().await.unwrap();
 }

@@ -4,6 +4,8 @@ mod call;
 pub(in crate::kit) mod detach;
 pub(crate) mod watch;
 
+use std::collections::BTreeSet;
+
 use roomkit_core::model::{ChannelCategory, ChannelId, RoomId};
 
 use super::{GetRoomOptions, RoomKit};
@@ -75,31 +77,41 @@ impl<S: ConversationStore> RoomKit<S> {
             .collect()
     }
 
-    /// A queued turn can be dropped only for a declaration confirmed offline by a fresh read.
+    /// Only declared agents absent from a fresh registry read can miss work (§10.6.7).
     pub(crate) async fn known_offline(
         &self,
-        channel: &ChannelId,
+        channels: &[ChannelId],
         room: &RoomId,
         organization: Option<&str>,
-    ) -> bool {
-        if !self
-            .inner
-            .channel(channel)
-            .is_some_and(|c| c.is_declaration_only())
-        {
-            return false;
+    ) -> BTreeSet<ChannelId> {
+        let declared: Vec<_> = channels
+            .iter()
+            .filter(|id| {
+                self.inner
+                    .channel(id)
+                    .is_some_and(|c| c.is_declaration_only())
+            })
+            .collect();
+        if declared.is_empty() {
+            return BTreeSet::new();
         }
         // Both built-in registries read current coverage. A failed read proves nothing.
-        let presence = self.executors().await.and_then(|infos| {
-            self.presence_of(channel, room, organization.map(str::to_owned), &infos)
-        });
-        match presence {
-            Ok(seen) => !seen.online,
-            Err(error) => {
-                tracing::warn!(%error, %channel, %room, "Could not establish executor coverage");
-                false
+        let confirmed = self.executors().await.and_then(|infos| {
+            let mut offline = BTreeSet::new();
+            for id in declared {
+                if !self
+                    .presence_of(id, room, organization.map(str::to_owned), &infos)?
+                    .online
+                {
+                    offline.insert(id.clone());
+                }
             }
-        }
+            Ok(offline)
+        });
+        confirmed.unwrap_or_else(|error| {
+            tracing::warn!(%error, %room, "Could not establish executor coverage");
+            BTreeSet::new()
+        })
     }
 
     pub(super) fn presence_of(
@@ -142,5 +154,46 @@ impl<S: ConversationStore> RoomKit<S> {
             Vec::new()
         };
         Ok(AgentPresence::new(channel_id.as_str(), takes, covering))
+    }
+}
+
+#[cfg(all(test, feature = "redis"))]
+mod tests {
+    use super::*;
+    use crate::{
+        ChannelDeclaration, RedisTurnBackend, RedisTurnBackendOptions, RoomKitOptions, TurnTimeouts,
+    };
+    use std::time::Duration;
+    use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn an_unreadable_registry_cannot_confirm_any_absent_agent() {
+        // The listener owns its port but never answers Redis's handshake.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("redis://{}", listener.local_addr().unwrap());
+        let backend = RedisTurnBackend::new(
+            Some(&url),
+            RedisTurnBackendOptions {
+                timeouts: TurnTimeouts {
+                    heartbeat_timeout: Duration::from_millis(40),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let kit = RoomKit::new(RoomKitOptions {
+            turn_backend: Some(backend),
+            ..Default::default()
+        });
+        let candidates = ["ana", "bob"].map(|name| ChannelId::new(name).unwrap());
+        for id in &candidates {
+            kit.register_channel(ChannelDeclaration::new(id.clone()))
+                .unwrap();
+        }
+        let room = RoomId::new("without-a-stored-room").unwrap();
+        assert!(kit.executors().await.is_err());
+        assert!(kit.known_offline(&candidates, &room, None).await.is_empty());
+        kit.close().await.unwrap();
     }
 }

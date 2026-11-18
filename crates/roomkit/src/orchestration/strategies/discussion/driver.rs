@@ -709,8 +709,13 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         };
         if !entry.post
             && kit
-                .known_offline(&entry.agent, &self.room_id, self.organization_id.as_deref())
+                .known_offline(
+                    std::slice::from_ref(&entry.agent),
+                    &self.room_id,
+                    self.organization_id.as_deref(),
+                )
                 .await
+                .contains(&entry.agent)
         {
             self.skip_offline(state, &entry, &answered, changes);
             return Ok(None);
