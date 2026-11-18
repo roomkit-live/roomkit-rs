@@ -13,7 +13,6 @@ impl InMemoryTurnBackend {
         organization: Option<&str>,
         claim: bool,
     ) -> Result<Worker, RoomKitError> {
-        let key = (channel.clone(), room.clone());
         let options = TakesOptions {
             room_hooks: hooks.to_owned(),
             organization_id: organization.map(str::to_owned),
@@ -27,7 +26,7 @@ impl InMemoryTurnBackend {
                 (
                     state.workers.clone(),
                     state.owner.clone(),
-                    state.holders.get(&key).cloned(),
+                    state.holders.get(channel, room).cloned(),
                     state.revision,
                 )
             };
@@ -53,13 +52,10 @@ impl InMemoryTurnBackend {
                 continue;
             }
             let chosen = pick.ok_or_else(|| no_executor(channel.as_str(), hooks, organization))?;
-            if claim
-                && state
+            if claim {
+                state
                     .holders
-                    .get(&key)
-                    .is_none_or(|prior| !std::sync::Arc::ptr_eq(prior, &chosen))
-            {
-                state.holders.insert(key, std::sync::Arc::clone(&chosen));
+                    .put(channel, room, std::sync::Arc::clone(&chosen));
                 state.revision = state.revision.wrapping_add(1);
             }
             return Ok(chosen);
@@ -116,7 +112,7 @@ impl InMemoryTurnBackend {
             } => {
                 {
                     let mut state = lock(&self.state);
-                    state.holders.remove(&(channel_id.clone(), room_id.clone()));
+                    state.holders.pop(channel_id, room_id);
                     state.revision = state.revision.wrapping_add(1);
                 }
                 self.tell(channel_id, organization_id.as_deref(), &message)
@@ -171,4 +167,73 @@ pub(super) fn crossed<T: serde::Serialize + serde::de::DeserializeOwned>(
     let raw =
         serde_json::to_vec(message).map_err(|error| RoomKitError::Value(error.to_string()))?;
     serde_json::from_slice(&raw).map_err(|error| RoomKitError::Value(error.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::InMemoryTurnBackend;
+    use crate::model::{ChannelId, RoomId};
+    use crate::testing::{EchoAgent, EchoAgentOptions};
+    use crate::turns::records::ROOMS_KEPT;
+    use crate::turns::{ChannelCall, ChannelControl, TurnBackend};
+    use crate::{TurnExecutor, TurnExecutorOptions};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    async fn call(backend: &InMemoryTurnBackend, channel: &ChannelId, room: &RoomId) -> String {
+        let call = ChannelCall::new(channel.clone(), room.clone(), "get_status");
+        backend
+            .control(ChannelControl::ChannelCall(Box::new(call)))
+            .await
+            .unwrap()
+            .unwrap()
+            .executor_id
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_room_call_refreshes_affinity_and_a_quiet_rooms_holder_expires() {
+        let backend = InMemoryTurnBackend::new();
+        let enabled = Arc::new(AtomicBool::new(false));
+        for (id, eligible) in [
+            ("first", Arc::clone(&enabled)),
+            ("second", Arc::new(AtomicBool::new(true))),
+        ] {
+            let worker = TurnExecutor::new_with_host_predicate(
+                move |id| {
+                    std::future::ready(Ok(Some(EchoAgent::new(
+                        id,
+                        "hi",
+                        EchoAgentOptions::default(),
+                    ))))
+                },
+                move |_| eligible.load(Ordering::Relaxed),
+                TurnExecutorOptions {
+                    executor_id: Some(id.into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            backend.serve(Arc::new(worker)).await.unwrap();
+        }
+        let channel = ChannelId::new("agent").unwrap();
+        let active = RoomId::new("active").unwrap();
+        let quiet = RoomId::new("quiet").unwrap();
+        assert_eq!(call(&backend, &channel, &active).await, "second");
+        assert_eq!(call(&backend, &channel, &quiet).await, "second");
+        enabled.store(true, Ordering::Relaxed);
+        for id in 0..ROOMS_KEPT - 2 {
+            let room = RoomId::new(format!("other-{id}")).unwrap();
+            backend.select(&channel, &room, &[], None, true).unwrap();
+        }
+        assert_eq!(call(&backend, &channel, &active).await, "second");
+        // A committed event only looks up the holder; the next new room evicts the quiet one.
+        backend.select(&channel, &quiet, &[], None, false).unwrap();
+        assert_eq!(
+            call(&backend, &channel, &RoomId::new("another").unwrap()).await,
+            "first"
+        );
+        assert_eq!(call(&backend, &channel, &active).await, "second");
+        assert_eq!(call(&backend, &channel, &quiet).await, "first");
+    }
 }

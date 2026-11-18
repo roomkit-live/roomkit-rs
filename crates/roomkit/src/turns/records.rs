@@ -12,7 +12,7 @@ use roomkit_core::model::{ChannelId, RoomEvent, RoomId, Timestamp, Visibility};
 
 use super::wire::PreviousTurn;
 
-/// How many (channel, room) pairs the owner keeps a record for.
+/// How many (channel, room) pairs a side keeps a record for.
 pub(crate) const ROOMS_KEPT: usize = 10_000;
 
 /// The bounds the submitted trigger set on publication after its turn.
@@ -64,10 +64,10 @@ type Key = (ChannelId, RoomId);
 /// One record per (channel, room), the least recently written falling out
 /// past `kept`.
 #[derive(Debug)]
-pub(crate) struct RoomRecords {
+pub(crate) struct RoomRecords<T = PreviousTurn> {
     kept: usize,
     next: u64,
-    records: HashMap<Key, (u64, PreviousTurn)>,
+    records: HashMap<Key, (u64, T)>,
     order: BTreeMap<u64, Key>,
     /// Room id → the channels it holds a record of.
     rooms: HashMap<RoomId, BTreeSet<ChannelId>>,
@@ -76,13 +76,13 @@ pub(crate) struct RoomRecords {
     marks: HashMap<RoomId, Timestamp>,
 }
 
-impl Default for RoomRecords {
+impl<T> Default for RoomRecords<T> {
     fn default() -> Self {
         Self::new(ROOMS_KEPT)
     }
 }
 
-impl RoomRecords {
+impl<T> RoomRecords<T> {
     pub(crate) fn new(kept: usize) -> Self {
         Self {
             kept,
@@ -94,41 +94,14 @@ impl RoomRecords {
         }
     }
 
-    /// Undo only the current entry. A later turn can already own this room.
-    pub(crate) fn undo_submission(
-        &mut self,
-        channel: &ChannelId,
-        room: &RoomId,
-        turn: &str,
-        previous: Option<PreviousTurn>,
-    ) {
-        if self
-            .get(channel, room)
-            .is_some_and(|entry| entry.turn_id == turn)
-        {
-            match previous {
-                Some(record) => {
-                    self.put(channel, room, record);
-                }
-                None => self.pop(channel, room),
-            }
-        }
-    }
-
-    pub(crate) fn get(&self, channel_id: &ChannelId, room_id: &RoomId) -> Option<&PreviousTurn> {
+    pub(crate) fn get(&self, channel_id: &ChannelId, room_id: &RoomId) -> Option<&T> {
         self.records
             .get(&(channel_id.clone(), room_id.clone()))
             .map(|(_, record)| record)
     }
 
-    /// Records `record` as the room's last of the channel, and returns the
-    /// one it replaces.
-    pub(crate) fn put(
-        &mut self,
-        channel_id: &ChannelId,
-        room_id: &RoomId,
-        record: PreviousTurn,
-    ) -> Option<PreviousTurn> {
+    /// Record the latest value for the pair and return the one it replaces.
+    pub(crate) fn put(&mut self, channel_id: &ChannelId, room_id: &RoomId, record: T) -> Option<T> {
         let key = (channel_id.clone(), room_id.clone());
         let written = self.next;
         self.next = self.next.wrapping_add(1);
@@ -149,22 +122,6 @@ impl RoomRecords {
             self.unindex(&key);
         }
         replaced.map(|(_, record)| record)
-    }
-
-    /// Records the executor that took `turn_id`, while it is the room's
-    /// last turn of the channel.
-    pub(crate) fn took(
-        &mut self,
-        channel_id: &ChannelId,
-        room_id: &RoomId,
-        turn_id: &str,
-        executor_id: &str,
-    ) {
-        if let Some((_, record)) = self.records.get_mut(&(channel_id.clone(), room_id.clone()))
-            && record.turn_id == turn_id
-        {
-            record.executor_id = Some(executor_id.to_owned());
-        }
     }
 
     /// Forgets the room's record of the channel.
@@ -216,6 +173,45 @@ impl RoomRecords {
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.records.len()
+    }
+}
+
+impl RoomRecords {
+    /// Undo only the current entry. A later turn can already own this room.
+    pub(crate) fn undo_submission(
+        &mut self,
+        channel: &ChannelId,
+        room: &RoomId,
+        turn: &str,
+        previous: Option<PreviousTurn>,
+    ) {
+        if self
+            .get(channel, room)
+            .is_some_and(|entry| entry.turn_id == turn)
+        {
+            match previous {
+                Some(record) => {
+                    self.put(channel, room, record);
+                }
+                None => self.pop(channel, room),
+            }
+        }
+    }
+
+    /// Records the executor that took `turn_id`, while it is the room's
+    /// last turn of the channel.
+    pub(crate) fn took(
+        &mut self,
+        channel_id: &ChannelId,
+        room_id: &RoomId,
+        turn_id: &str,
+        executor_id: &str,
+    ) {
+        if let Some((_, record)) = self.records.get_mut(&(channel_id.clone(), room_id.clone()))
+            && record.turn_id == turn_id
+        {
+            record.executor_id = Some(executor_id.to_owned());
+        }
     }
 }
 

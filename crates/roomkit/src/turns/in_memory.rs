@@ -9,12 +9,12 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::{Arc, Mutex, Weak};
 
+use super::records::RoomRecords;
 use super::{
     ChannelControl, ChannelResult, ExecutorInfo, ExecutorInfoOptions, LocalPresenceClaims,
     MemoryTurn, RoomOwner, ServedExecutor, TurnBackend, TurnFuture, TurnLink, TurnRequest, lock,
 };
 use crate::RoomKitError;
-use crate::model::{ChannelId, RoomId};
 
 type Worker = Arc<dyn ServedExecutor>;
 
@@ -22,7 +22,7 @@ type Worker = Arc<dyn ServedExecutor>;
 struct State {
     workers: Vec<Worker>,
     owner: Option<Arc<dyn RoomOwner>>,
-    holders: BTreeMap<(ChannelId, RoomId), Worker>,
+    holders: RoomRecords<Worker>,
     turns: BTreeMap<u64, Weak<MemoryTurn>>,
     next: u64,
     revision: u64,
