@@ -29,7 +29,10 @@
 //! reentrancy rules it would have in the owner's own code.
 
 mod client;
-pub use client::{OwnerEvents, OwnerHost, OwnerTools};
+pub use client::{
+    OwnerEvents, OwnerHost, OwnerTools, TurnClient, TurnClientOptions, TurnClientOutput,
+    TurnRunOptions,
+};
 mod served_executor;
 pub use served_executor::ServedExecutor;
 pub(crate) use served_executor::owner_executor;
@@ -174,6 +177,7 @@ pub(crate) enum Answer {
 /// registered live, whose turns its own executor takes.
 #[derive(Debug)]
 pub(crate) struct Turns {
+    client: Option<Arc<client::Services>>,
     pub(crate) application: Option<application::Application>,
     #[cfg(feature = "redis")]
     pub(crate) remote: Option<RedisTurnBackend>,
@@ -217,6 +221,7 @@ impl Default for Turns {
             #[cfg(feature = "redis")]
             remote: None,
             application: None,
+            client: None,
             #[cfg(feature = "redis")]
             serving_backends: redis::ServingBackends::default(),
             worker_owner: Mutex::default(),
@@ -421,7 +426,9 @@ impl Turns {
             .map_err(|e| to_record(&error::kit_error(&e)))?;
         let channel = kit.channel(&binding.channel_id);
         let mut context = context;
-        let channel_rows = if self.sends_channel_rows(channel.as_deref()) {
+        let channel_rows = if let Some(client) = &self.client {
+            client.channel_rows(binding, &event, &context).await
+        } else if self.sends_channel_rows(channel.as_deref()) {
             crate::history::distributed::distributed_rows(
                 kit.as_ref(),
                 binding,

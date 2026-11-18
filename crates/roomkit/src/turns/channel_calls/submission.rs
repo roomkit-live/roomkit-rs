@@ -15,14 +15,23 @@ pub(super) struct SubmittedRemoteCall<'a> {
 }
 
 impl<'a> SubmittedRemoteCall<'a> {
-    pub(super) fn new(turns: &'a Turns, call: &mut ChannelCall, created_at: Timestamp) -> Self {
+    pub(super) fn new(
+        turns: &'a Turns,
+        call: &mut ChannelCall,
+        created_at: impl Into<Option<Timestamp>>,
+    ) -> Self {
+        let created_at = created_at.into();
         let mut records = turns.records();
-        records.mark_room(&call.room_id, created_at);
+        if let Some(mark) = created_at {
+            records.mark_room(&call.room_id, mark);
+        }
         let previous = records.get(&call.channel_id, &call.room_id).cloned();
         call.previous_turn.clone_from(&previous);
         let made = PreviousTurn::after(&call.call_id, previous.as_ref(), None);
         records.put(&call.channel_id, &call.room_id, made);
-        records.mark_room(&call.room_id, created_at);
+        if let Some(mark) = created_at {
+            records.mark_room(&call.room_id, mark);
+        }
         Self {
             turns,
             channel: call.channel_id.clone(),
@@ -34,9 +43,9 @@ impl<'a> SubmittedRemoteCall<'a> {
         }
     }
 
-    pub(super) fn complete(mut self, answer: &ChannelResult) {
+    pub(super) fn complete(mut self, answer: Option<&ChannelResult>) {
         self.answered = true;
-        if let Some(executor) = &answer.executor_id {
+        if let Some(executor) = answer.and_then(|a| a.executor_id.as_ref()) {
             self.turns
                 .took(&self.channel, &self.room, &self.id, executor);
         }
@@ -106,12 +115,12 @@ mod tests {
         let mut later = call("later");
         let earlier_attempt = SubmittedRemoteCall::new(&turns, &mut earlier, mark);
         let later_attempt = SubmittedRemoteCall::new(&turns, &mut later, mark);
-        later_attempt.complete(&ChannelResult {
+        later_attempt.complete(Some(&ChannelResult {
             result: json!(true),
             error: None,
             room_state: None,
             executor_id: Some("worker".to_owned()),
-        });
+        }));
         drop(earlier_attempt);
         let record = previous(&turns, &later).unwrap();
         assert_eq!(record.turn_id, "later");

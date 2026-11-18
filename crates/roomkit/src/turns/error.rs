@@ -325,6 +325,7 @@ const RETRYABLE: &str = "retryable";
 /// declares (RMK-1085).
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TurnFailure {
+    wire: Option<Box<WireError>>,
     pub(crate) record: ErrorRecord,
     declared: Option<Box<DeliveryError>>,
 }
@@ -333,12 +334,17 @@ impl From<ErrorRecord> for TurnFailure {
     fn from(record: ErrorRecord) -> Self {
         Self {
             record,
+            wire: None,
             declared: None,
         }
     }
 }
 
 impl TurnFailure {
+    pub(super) fn into_wire(self) -> WireError {
+        self.wire
+            .map_or_else(|| from_record(&self.record), |wire| *wire)
+    }
     /// The failure of `error`, an error that crossed: what it declares
     /// read from its `code` and `retryable`, as Python's `DeliveryResult`
     /// reads them off the error its turn backend rebuilds.
@@ -357,6 +363,7 @@ impl TurnFailure {
                 retryable,
             });
         Self {
+            wire: Some(Box::new(error.clone())),
             record: to_record(error),
             declared: declared.map(Box::new),
         }

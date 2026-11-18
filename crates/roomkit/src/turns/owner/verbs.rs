@@ -311,25 +311,26 @@ async fn send(
 /// `room_call`), as the room's records name its last turn of the channel.
 pub(crate) async fn answer_room_call(
     kit: &Arc<dyn TurnKit>,
+    client: Option<&crate::turns::client::Services>,
     records: impl FnOnce() -> Option<LastTurn>,
     message: RoomCall,
 ) -> RoomCallResult {
-    let RoomCall {
-        call_id,
-        channel_id,
-        room_id,
-        executor_id,
-        turn_id,
-        verb,
-        arguments,
-        ..
-    } = message;
+    let call_id = message.call_id.clone();
     let answered = async {
+        let RoomCall {
+            channel_id,
+            room_id,
+            executor_id,
+            turn_id,
+            verb,
+            arguments,
+            ..
+        } = &message;
         let last = records();
         let room_created_at = last.as_ref().and_then(|last| last.room_created_at);
         match last.map(|last| (last.turn_id, last.executor_id)) {
-            Some((last, Some(took))) if took == executor_id && last == turn_id => {}
-            Some((last, Some(took))) if took == executor_id => {
+            Some((last, Some(took))) if &took == executor_id && &last == turn_id => {}
+            Some((last, Some(took))) if &took == executor_id => {
                 return Err(refusal(
                     PERMISSION_ERROR,
                     format!(
@@ -346,37 +347,46 @@ pub(crate) async fn answer_room_call(
                 ));
             }
         }
+        if let Some(client) = client {
+            let host = client.host.as_ref().ok_or_else(|| {
+                refusal(PERMISSION_ERROR, "this owner serves no host verb".into())
+            })?;
+            return host
+                .call_between_turns(&message)
+                .await
+                .map_err(|e| Box::new(client.errors.record(e.as_ref())));
+        }
         let declared = kit
-            .declared_verb(&verb)
+            .declared_verb(verb)
             .filter(|declared| declared.between_turns);
         if !BETWEEN_TURNS.contains(&verb.as_str()) && declared.is_none() {
             return Err(refusal(
                 VALUE_ERROR,
                 format!(
                     "{} needs a turn: it is not served between turns",
-                    repr(&verb)
+                    repr(verb)
                 ),
             ));
         }
-        let room = room_after_turn(kit, &room_id, room_created_at).await?;
+        let room = room_after_turn(kit, room_id, room_created_at).await?;
         if let Some(declared) = declared {
             return super::call_context::between_turns(
                 kit.error_classes(),
                 declared.verb,
                 room,
                 channel_id.clone(),
-                arguments,
+                arguments.clone(),
             )
             .await;
         }
         // Work its turn began, which starts fresh once the turn is over
         // (RFC §8.3): no depth of the turn floors what it does.
         let scope = Scope {
-            room_id: &room_id,
+            room_id,
             organization_id: room.organization_id.as_deref(),
             floor: None,
         };
-        run_verb(kit, &scope, &verb, arguments).await
+        run_verb(kit, &scope, verb, arguments.clone()).await
     };
     let (result, error) = match answered.await {
         Ok(result) => (result, None),

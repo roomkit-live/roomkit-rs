@@ -33,6 +33,10 @@ impl Application {
         }
     }
 
+    pub(super) fn bind(&self, owner: Arc<dyn RoomOwner>) {
+        let _owner = self.owner.set(owner);
+    }
+
     pub(super) async fn ready(&self) -> Result<(), RoomKitError> {
         let owner = self.owner.get().ok_or_else(owner_closed)?;
         self.attending
@@ -40,9 +44,10 @@ impl Application {
             .await?;
         self.serving
             .get_or_try_init(|| async {
-                self.backend
-                    .serve(owner.executor().ok_or_else(owner_closed)?)
-                    .await
+                if let Some(executor) = owner.executor() {
+                    self.backend.serve(executor).await?;
+                }
+                Ok::<_, RoomKitError>(())
             })
             .await?;
         Ok(())
@@ -68,7 +73,7 @@ impl Turns {
 
     pub(crate) fn bind_application_owner<S: ConversationStore>(&self, kit: &RoomKit<S>) {
         if let Some(application) = &self.application {
-            let _owner = application.owner.set(Arc::new(KitOwner {
+            application.bind(Arc::new(KitOwner {
                 kit: Arc::downgrade(&kit.inner),
                 executor: super::owner_executor(kit),
             }));

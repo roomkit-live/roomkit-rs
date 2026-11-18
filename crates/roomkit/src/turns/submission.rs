@@ -112,9 +112,23 @@ impl Turns {
             strategy_turn,
             channel_rows,
         } = input;
-        let room_hooks = request_room_hooks(kit, &event.room_id, &binding.channel_id, local)?;
-        let owner_tools = kit.owner_tools(&binding.channel_id, &event.room_id);
-        let trace = current_trace();
+        let (room_hooks, owner_tools, trace) = if let Some(client) = &self.client {
+            (
+                client.hook_names(&event.room_id),
+                client
+                    .tools
+                    .as_ref()
+                    .map(|tools| tools.declared(&binding.channel_id, &event.room_id))
+                    .unwrap_or_default(),
+                client.trace(),
+            )
+        } else {
+            (
+                request_room_hooks(kit, &event.room_id, &binding.channel_id, local)?,
+                kit.owner_tools(&binding.channel_id, &event.room_id),
+                current_trace(),
+            )
+        };
         let history = std::mem::take(&mut context.recent_events);
         let mut records = self.records();
         if records
@@ -280,12 +294,12 @@ impl Turns {
         binding: &ChannelBinding,
         input: Input,
         submitted: impl FnOnce(Canceller) -> G,
-    ) -> Result<(OwnerTurn, G), ErrorRecord> {
+    ) -> Result<(OwnerTurn, G), super::TurnFailure> {
         let mut closing = self.cutting();
         if self.is_closed() || *closing.borrow() {
-            return Err(closed());
+            return Err(closed().into());
         }
-        let facts = owner::Facts::of(binding, &input.event, &input.context.room);
+        let mut facts = owner::Facts::of(binding, &input.event, &input.context.room);
         let turn_id: Arc<str> = Arc::from(format!("turn-{}", Uuid::new_v4().simple()));
         let observers = self.observers();
         let Prepared {
@@ -294,11 +308,14 @@ impl Turns {
             ..
         } = self.prepare_request(&**kit, binding, input, &turn_id, false, &observers)?;
         let request = executor::parse(carried).map_err(|why| uncarried(&why))?;
+        if let Some(client) = &self.client {
+            facts.client = Some((Arc::clone(client), Arc::new(request.clone())));
+        }
         handover.marker = request.handover.clone();
         let link = tokio::select! {
             biased;
-            _ = closing.wait_for(|closing| *closing) => return Err(closed()),
-            link = app.backend.submit(request) => link.map_err(|e| super::to_record(&super::error::kit_error(&e)))?,
+            _ = closing.wait_for(|closing| *closing) => return Err(closed().into()),
+            link = app.backend.submit(request) => link.map_err(|e| super::TurnFailure::crossed(&self.error_classes().record(&e)))?,
         };
         if link.request().turn_id.as_str() != turn_id.as_ref()
             || link.request().room_id != facts.room_id
@@ -309,7 +326,8 @@ impl Turns {
                 "frame_invalid",
                 "the backend returned a link for a different turn",
             )
-            .to_record());
+            .to_record()
+            .into());
         }
         handover.handed = true;
         drop(handover);
@@ -319,7 +337,7 @@ impl Turns {
         let task = super::application::run_link(link, Arc::clone(&memory), controls, pump);
         if !kit.spawn(Box::pin(task)) {
             memory.shut();
-            return Err(closed());
+            return Err(closed().into());
         }
         self.track_owner(&turn, &memory, binding, &facts);
         Ok((turn, following))

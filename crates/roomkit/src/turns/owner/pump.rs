@@ -94,7 +94,7 @@ pub(in crate::turns) fn publish_for_room(
         .sync_scope(|| kit.emit(event_type, ids, data));
 }
 
-fn emitted_by_its_turn(
+pub(in crate::turns) fn emitted_by_its_turn(
     room: &RoomId,
     channel: &ChannelId,
     event_type: &str,
@@ -124,6 +124,7 @@ pub(super) struct Pump {
     /// Withdrawn calls still unwinding; their inline work remains the turn's.
     withdrawn: Vec<RunningCall>,
     publisher: Arc<crate::turn::publish::Publisher>,
+    client_publications: crate::turns::client::publications::Publications,
     accepted: bool,
     /// The items received, deltas counted: never more than granted.
     received: u64,
@@ -146,6 +147,7 @@ impl Pump {
             calls: HashMap::new(),
             withdrawn: Vec::new(),
             publisher: Arc::default(),
+            client_publications: Default::default(),
             accepted: false,
             received: 0,
         }
@@ -255,6 +257,17 @@ impl Pump {
                     self.withdrawn.retain(|call| !call.task.is_finished());
                     self.withdrawn.push(call);
                 }
+            }
+            frame @ (Frame::FrameworkEvent { .. } | Frame::Ephemeral { .. })
+                if self.state.facts.client.is_some() =>
+            {
+                self.client_publications.queue(
+                    self.kit.as_ref(),
+                    &self.state.facts,
+                    lock(&self.state.waiting).clone(),
+                    frame,
+                    self.state.turn.traced.load(Ordering::Acquire),
+                );
             }
             Frame::FrameworkEvent {
                 event_type,
@@ -388,7 +401,13 @@ impl Pump {
         let floor = context.chain_depth.max(state.facts.response_depth);
         let answering = call_id.clone();
         let task = async move {
-            let served = call_context::serve_tool(&kit, &state.facts, name, arguments, &context);
+            let call = crate::turns::wire::ToolCall {
+                call_id: answering.clone(),
+                name,
+                arguments,
+                context,
+            };
+            let served = call_context::serve_tool(&kit, &state.facts, call);
             let answered = waiting.at_least(floor).scope(served).await;
             answer_tool(&state, answering, answered);
         };
@@ -581,7 +600,7 @@ fn answer_tool(state: &OwnerState, call_id: String, answered: call_context::Tool
         call_id,
         outcome,
         result,
-        error,
+        error: answered.error.or(error),
         structured_content: answered.structured_content,
         record_changes: answered.record_changes,
     };

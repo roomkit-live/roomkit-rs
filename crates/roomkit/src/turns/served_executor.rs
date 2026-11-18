@@ -13,11 +13,15 @@ pub(crate) use owner::owner_executor;
 
 mod private {
     pub(crate) trait Sealed {
+        fn apply_room_hooks(&self, room: &roomkit_core::model::RoomId, names: Vec<String>);
         fn transport(&self, key: super::native::Key) -> &dyn super::native::Native;
     }
 }
 
 impl<S: ConversationStore> private::Sealed for TurnExecutor<S> {
+    fn apply_room_hooks(&self, room: &roomkit_core::model::RoomId, names: Vec<String>) {
+        self.hooks().use_room_hooks(room, names);
+    }
     fn transport(&self, _: native::Key) -> &dyn native::Native {
         self
     }

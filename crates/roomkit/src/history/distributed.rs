@@ -30,12 +30,7 @@ pub(crate) async fn distributed_rows(
                 EventType::ToolCallStart | EventType::ToolCallEnd | EventType::InstructionRead
             )
     });
-    let first = context
-        .recent_events
-        .iter()
-        .map(|row| row.index)
-        .chain(super::answered_index(event))
-        .min();
+    let first = history_start(event, context);
     match kit
         .read_channel_rows(binding.clone(), event.room_id.clone(), first)
         .await
@@ -46,6 +41,15 @@ pub(crate) async fn distributed_rows(
             Vec::new()
         }
     }
+}
+
+pub(crate) fn history_start(event: &RoomEvent, context: &RoomContext) -> Option<u64> {
+    context
+        .recent_events
+        .iter()
+        .map(|row| row.index)
+        .chain(super::answered_index(event))
+        .min()
 }
 
 pub(crate) async fn read_distributed_rows<S: ConversationStore>(

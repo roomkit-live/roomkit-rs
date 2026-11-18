@@ -37,21 +37,31 @@ pub(super) async fn serve(
     arguments: Metadata,
     context: &CallContext,
 ) -> HostAnswer {
+    let run = async {
+        if let Some((client, request)) = &facts.client {
+            let host = client.host.as_ref().ok_or_else(|| {
+                Box::new(one(
+                    "ValueError",
+                    format!("No verb {} is served by the room owner", repr(verb)),
+                ))
+            })?;
+            host.call(request, verb, arguments)
+                .await
+                .map_err(|error| Box::new(client.errors.record(error.as_ref())))
+        } else {
+            verbs::serve(kit, facts, verb, arguments, context).await
+        }
+    };
     if matches!(verb, "room_tasks" | "room_vision" | "room_context") {
         return HostAnswer {
-            outcome: verbs::serve(kit, facts, verb, arguments, context).await,
+            outcome: run.await,
             record_changes: None,
         };
     }
     if let Some(error) = invalid_context(facts, context) {
         return HostAnswer::failed(error);
     }
-    let served = scoped(
-        facts,
-        context,
-        verbs::serve(kit, facts, verb, arguments, context),
-    )
-    .await;
+    let served = scoped(facts, context, run).await;
     HostAnswer {
         outcome: served.outcome,
         record_changes: served.record_changes,
@@ -60,6 +70,7 @@ pub(super) async fn serve(
 
 pub(super) struct ToolAnswer {
     pub(super) outcome: OwnerToolAnswer,
+    pub(super) error: Option<WireError>,
     pub(super) structured_content: Option<Metadata>,
     pub(super) record_changes: Option<RecordChanges>,
 }
@@ -68,6 +79,7 @@ impl From<OwnerToolAnswer> for ToolAnswer {
     fn from(outcome: OwnerToolAnswer) -> Self {
         Self {
             outcome,
+            error: None,
             structured_content: None,
             record_changes: None,
         }
@@ -77,27 +89,59 @@ impl From<OwnerToolAnswer> for ToolAnswer {
 pub(super) async fn serve_tool(
     kit: &Arc<dyn TurnKit>,
     facts: &Facts,
-    name: String,
-    arguments: Metadata,
-    context: &CallContext,
+    call: crate::turns::wire::ToolCall,
 ) -> ToolAnswer {
-    if let Some(error) = invalid_context(facts, context) {
+    let context = call.context.clone();
+    if let Some(error) = invalid_context(facts, &context) {
         return OwnerToolAnswer::Unserved(error.message).into();
     }
-    let call = OwnerCall {
-        room_id: facts.room_id.clone(),
-        room_metadata: Arc::clone(&facts.room_metadata),
-        channel_id: facts.channel_id.clone(),
-        tool_call_id: context.tool_call_id.clone(),
-        arguments,
-        requester: context.requester.clone(),
+    let run = async {
+        if let Some((client, request)) = &facts.client {
+            let Some(tools) = &client.tools else {
+                return (
+                    OwnerToolAnswer::Unserved(format!(
+                        "No tool {} is served by the room owner",
+                        repr(&call.name)
+                    )),
+                    None,
+                );
+            };
+            return match tools.serve(request, call).await {
+                Ok(value) => (OwnerToolAnswer::Served(value), None),
+                Err(error) => {
+                    let record = client.errors.record(error.as_ref());
+                    let outcome = match record.kind.rsplit(':').next().unwrap_or(&record.kind) {
+                        "UnservedToolCallError" => {
+                            OwnerToolAnswer::Unserved(record.message.clone())
+                        }
+                        "ToolRefusedError" => OwnerToolAnswer::Refused(record.message.clone()),
+                        _ => OwnerToolAnswer::Failed {
+                            kind: record.kind.clone(),
+                            message: record.message.clone(),
+                        },
+                    };
+                    (outcome, Some(record))
+                }
+            };
+        }
+        let native = OwnerCall {
+            room_id: facts.room_id.clone(),
+            room_metadata: Arc::clone(&facts.room_metadata),
+            channel_id: facts.channel_id.clone(),
+            tool_call_id: context.tool_call_id.clone(),
+            arguments: call.arguments,
+            requester: context.requester.clone(),
+        };
+        (kit.serve_owner_tool(call.name, native).await, None)
     };
-    let served = scoped(facts, context, kit.serve_owner_tool(name, call)).await;
-    let structured_content = matches!(served.outcome, OwnerToolAnswer::Served(_))
+    let served = scoped(facts, &context, run).await;
+    let (outcome, error) = served.outcome;
+    let structured_content = matches!(outcome, OwnerToolAnswer::Served(_))
         .then_some(served.structured_content)
         .flatten();
     ToolAnswer {
-        outcome: served.outcome,
+        outcome,
+        error,
         structured_content,
         record_changes: served.record_changes,
     }

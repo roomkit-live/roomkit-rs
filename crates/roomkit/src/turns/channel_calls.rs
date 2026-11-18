@@ -285,7 +285,40 @@ impl Turns {
             )
             .into_kit_error()
         })?;
-        submission.complete(&answer);
+        submission.complete(Some(&answer));
         Ok(answer)
+    }
+}
+
+impl Turns {
+    pub(super) async fn client_control(
+        &self,
+        backend: &dyn super::TurnBackend,
+        mut message: ChannelControl,
+    ) -> Result<Option<ChannelResult>, RoomKitError> {
+        match &mut message {
+            ChannelControl::RoomDetached {
+                channel_id,
+                room_id,
+                ..
+            } => self.records().pop(channel_id, room_id),
+            ChannelControl::CommittedEvent {
+                room_id,
+                room_hooks,
+                ..
+            } => {
+                if let Some(client) = &self.client {
+                    *room_hooks = client.hook_names(room_id);
+                }
+            }
+            ChannelControl::ChannelCall(call) => {
+                let submitted = SubmittedRemoteCall::new(self, call, None);
+                let answer = backend.control(message).await?;
+                submitted.complete(answer.as_ref());
+                return Ok(answer);
+            }
+            ChannelControl::ChannelReleased { .. } | ChannelControl::RoomAttached { .. } => {}
+        }
+        backend.control(message).await
     }
 }

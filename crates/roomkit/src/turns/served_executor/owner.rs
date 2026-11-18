@@ -44,6 +44,11 @@ impl<S: ConversationStore> OwnerExecutor<S> {
 }
 
 impl<S: ConversationStore> super::private::Sealed for OwnerExecutor<S> {
+    fn apply_room_hooks(&self, room: &roomkit_core::model::RoomId, names: Vec<String>) {
+        if let Some(worker) = self.worker() {
+            worker.hooks().use_room_hooks(room, names);
+        }
+    }
     fn transport(&self, _: super::native::Key) -> &dyn super::native::Native {
         self
     }

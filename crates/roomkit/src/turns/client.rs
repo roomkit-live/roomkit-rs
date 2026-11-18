@@ -1,3 +1,301 @@
 //! Standalone room owner for turns submitted to an application transport.
+mod output;
 mod ports;
+pub(super) mod publications;
+mod services;
+pub use output::TurnClientOutput;
 pub use ports::{OwnerEvents, OwnerHost, OwnerTools};
+pub(super) use services::Services;
+
+use super::wire::{HostResult, OwnerMessage, OwnerMessageEnvelope, RoomCall, RoomPublication};
+use super::{ChannelControl, ChannelResult};
+use super::{
+    ErrorClasses, RoomOwner, ServedExecutor, SteerAddress, TurnBackend, TurnFuture, TurnTimeouts,
+    Turns,
+};
+use crate::human_input::PendingInputEvent;
+use crate::steering::SteeringDirective;
+use crate::telemetry::TelemetryProvider;
+use crate::turn::TurnKit;
+use crate::{
+    InMemoryStore, InputRequestOptions, RoomKit, RoomKitError, RoomKitOptions, SteerOptions,
+};
+use roomkit_core::model::{ChannelBinding, ChannelId, RoomContext, RoomEvent, RoomId};
+use std::fmt;
+use std::sync::{Arc, Weak};
+
+/// The optional services of a standalone room owner (RFC §10.6).
+#[derive(Clone, Default)]
+pub struct TurnClientOptions {
+    /// Executor to serve on first use, if this client has local channels.
+    pub executor: Option<Arc<dyn ServedExecutor>>,
+    /// Bounds on admission, reads and calls for turns started by this client.
+    pub timeouts: TurnTimeouts,
+    /// Tools this owner serves its turns.
+    pub tools: Option<Arc<dyn OwnerTools>>,
+    /// Host verbs and channel history supplied by this owner.
+    pub host: Option<Arc<dyn OwnerHost>>,
+    /// Destination for events emitted by this owner's turns.
+    pub events: Option<Arc<dyn OwnerEvents>>,
+    /// Application error types this owner carries and rebuilds.
+    pub error_classes: ErrorClasses,
+    /// Provider that injects the active span into requests.
+    pub telemetry: Option<Arc<dyn TelemetryProvider>>,
+}
+impl fmt::Debug for TurnClientOptions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TurnClientOptions")
+            .field("timeouts", &self.timeouts)
+            .field("executor", &self.executor.as_ref().map(|e| e.executor_id()))
+            .field("error_classes", &self.error_classes)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Optional arguments to a standalone owner's turn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TurnRunOptions {
+    /// Whether this turn runs the channel's strategy generation.
+    pub strategy_turn: bool,
+}
+
+/// A standalone room owner using the supplied backend for its turns and controls.
+#[derive(Clone)]
+pub struct TurnClient {
+    state: Arc<State>,
+}
+
+struct State {
+    backend: Arc<dyn TurnBackend>,
+    services: Arc<Services>,
+    turns: Arc<Turns>,
+    // Supplies task ownership and cancellation to the existing frame reader.
+    runtime: RoomKit<InMemoryStore>,
+}
+
+impl State {
+    fn runtime(&self) -> Arc<dyn TurnKit> {
+        Arc::new(Arc::downgrade(&self.runtime.inner))
+    }
+    async fn receive(&self, message: OwnerMessage) -> Option<HostResult> {
+        self.turns
+            .receive_owner_message(self.runtime(), OwnerMessageEnvelope { message })
+            .await
+    }
+}
+
+impl fmt::Debug for TurnClient {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TurnClient")
+            .field("services", &self.state.services)
+            .finish_non_exhaustive()
+    }
+}
+
+impl TurnClient {
+    /// Create the owner. The first run or control registers it with the backend.
+    pub fn new(backend: Arc<dyn TurnBackend>, options: TurnClientOptions) -> Self {
+        let timeouts = options.timeouts;
+        let services = Arc::new(Services::new(options));
+        let application = super::application::Application::new(Arc::clone(&backend));
+        let turns = Arc::new(Turns {
+            application: Some(application),
+            client: Some(Arc::clone(&services)),
+            ..Turns::default()
+        });
+        turns.set_timeouts(timeouts);
+        turns.set_error_classes(services.errors.clone());
+        let state = Arc::new(State {
+            backend,
+            services,
+            turns,
+            runtime: RoomKit::new(RoomKitOptions::default()),
+        });
+        if let Some(app) = &state.turns.application {
+            app.bind(Arc::new(ClientOwner(Arc::downgrade(&state))));
+        }
+        Self { state }
+    }
+    /// The configured turn transport.
+    pub fn backend(&self) -> &Arc<dyn TurnBackend> {
+        &self.state.backend
+    }
+    /// The executor served at first use, when supplied.
+    pub fn executor(&self) -> Option<&Arc<dyn ServedExecutor>> {
+        self.state.services.executor.as_ref()
+    }
+    /// The telemetry used for this owner's requests.
+    pub fn telemetry(&self) -> Option<&Arc<dyn TelemetryProvider>> {
+        self.state.services.telemetry.as_ref()
+    }
+    /// The application error classes used by this owner.
+    pub fn errors(&self) -> &ErrorClasses {
+        &self.state.services.errors
+    }
+
+    /// Submit one turn. A streaming answer advances when the caller reads its stream.
+    ///
+    /// # Errors
+    /// Returns the executor's error or a transport failure.
+    pub async fn run(
+        &self,
+        event: RoomEvent,
+        binding: &ChannelBinding,
+        context: RoomContext,
+        options: TurnRunOptions,
+    ) -> Result<TurnClientOutput, RoomKitError> {
+        let answer = self
+            .state
+            .turns
+            .run(
+                &self.state.runtime(),
+                binding,
+                event,
+                context,
+                options.strategy_turn,
+                |_| (),
+            )
+            .await
+            .map_err(|failure| self.errors().rebuild(&failure.into_wire()))?;
+        Ok(TurnClientOutput::from_answer(answer, self.errors()))
+    }
+
+    /// Enable the named executor hook for the room, in registration order.
+    pub fn enable_room_hook(&self, room: &RoomId, name: &str) {
+        self.state.services.enable(room, name);
+    }
+    /// Disable a named executor hook, returning whether it was enabled.
+    pub fn disable_room_hook(&self, room: &RoomId, name: &str) -> bool {
+        self.state.services.disable(room, name)
+    }
+    /// Return the hooks carried by the next turn in this room.
+    pub fn room_hook_names(&self, room: &RoomId) -> Vec<String> {
+        self.state.services.hook_names(room)
+    }
+
+    /// Send a channel control, preserving this owner's previous-turn record.
+    ///
+    /// # Errors
+    /// Returns a transport failure when the control cannot reach its executor.
+    pub async fn control(
+        &self,
+        message: ChannelControl,
+    ) -> Result<Option<ChannelResult>, RoomKitError> {
+        self.state.turns.ready().await?;
+        self.state
+            .turns
+            .client_control(self.backend().as_ref(), message)
+            .await
+    }
+    /// Read an open human-input request in the requested organization.
+    pub fn input_request(
+        &self,
+        id: &str,
+        options: &InputRequestOptions,
+    ) -> Option<PendingInputEvent> {
+        self.state
+            .turns
+            .inputs
+            .request(id, options.organization_id.as_deref())
+    }
+    /// Answer an input request, including an answer that arrived just before it opened.
+    pub async fn answer_input(&self, id: &str, value: &str) -> bool {
+        self.state.turns.answer_input(id, value).await
+    }
+    /// Reject an input request with the given reason.
+    pub async fn reject_input(&self, id: &str, reason: &str) -> bool {
+        self.state.turns.reject_input(id, reason).await
+    }
+    /// Steer this owner's running turns in the room and return the number of loops reached.
+    pub async fn steer(
+        &self,
+        room: &RoomId,
+        channel: &ChannelId,
+        directive: impl Into<SteeringDirective>,
+        options: SteerOptions,
+    ) -> usize {
+        let address = SteerAddress {
+            room,
+            channel,
+            turn: options.turn_id.as_deref(),
+            organization: options.organization_id.as_deref(),
+        };
+        self.state.turns.steer(&directive.into(), address).await
+    }
+
+    /// Cut the open turns, release their calls and close the backend.
+    ///
+    /// # Errors
+    /// Returns failures from closing the runtime or backend.
+    pub async fn close(&self) -> Result<(), RoomKitError> {
+        let state = &self.state;
+        state.turns.cut_all();
+        state.turns.close();
+        if let Some(executor) = self.executor() {
+            executor.close().await;
+        }
+        let closed = state.runtime.close().await;
+        state.backend.close().await?;
+        closed
+    }
+}
+
+struct ClientOwner(Weak<State>);
+impl RoomOwner for ClientOwner {
+    fn executor(&self) -> Option<Arc<dyn ServedExecutor>> {
+        self.0.upgrade()?.services.executor.clone()
+    }
+    fn room_call(&self, message: RoomCall) -> TurnFuture<'_, Result<HostResult, RoomKitError>> {
+        Box::pin(async move {
+            if let Some(state) = self.0.upgrade().filter(|s| !s.turns.is_closed()) {
+                return state
+                    .receive(OwnerMessage::RoomCall(message))
+                    .await
+                    .ok_or_else(|| RoomKitError::Runtime("Missing room call result".into()));
+            }
+            Ok(HostResult {
+                call_id: message.call_id,
+                result: serde_json::Value::Null,
+                error: Some(super::error::one(
+                    "RuntimeError",
+                    "The room owner has closed".into(),
+                )),
+                record_changes: None,
+            })
+        })
+    }
+    fn room_publication(
+        &self,
+        message: RoomPublication,
+    ) -> TurnFuture<'_, Result<(), RoomKitError>> {
+        Box::pin(async move {
+            if let Some(state) = self.0.upgrade().filter(|s| !s.turns.is_closed()) {
+                state.receive(OwnerMessage::RoomPublication(message)).await;
+            }
+            Ok(())
+        })
+    }
+}
+
+impl RoomOwner for TurnClient {
+    fn executor(&self) -> Option<Arc<dyn ServedExecutor>> {
+        self.state.services.executor.clone()
+    }
+    fn room_call(&self, message: RoomCall) -> TurnFuture<'_, Result<HostResult, RoomKitError>> {
+        Box::pin(async move {
+            ClientOwner(Arc::downgrade(&self.state))
+                .room_call(message)
+                .await
+        })
+    }
+    fn room_publication(
+        &self,
+        message: RoomPublication,
+    ) -> TurnFuture<'_, Result<(), RoomKitError>> {
+        Box::pin(async move {
+            ClientOwner(Arc::downgrade(&self.state))
+                .room_publication(message)
+                .await
+        })
+    }
+}

@@ -25,7 +25,7 @@ impl Turns {
             OwnerMessage::RoomCall(call) => {
                 let (channel, room) = (call.channel_id.clone(), call.room_id.clone());
                 let last = || owner::last_turn(&self.records(), &channel, &room);
-                let answer = owner::answer_room_call(&kit, last, call);
+                let answer = owner::answer_room_call(&kit, self.client.as_deref(), last, call);
                 Some(TurnContext::default().scope(answer).await)
             }
             OwnerMessage::RoomPublication(super::wire::RoomPublication {
@@ -43,6 +43,21 @@ impl Turns {
                         .map(|held| (held.scope(&turn_id), records.room_mark(&room_id)))
                 };
                 if let Some((scope, mark)) = scope {
+                    if let Some(client) = &self.client {
+                        if let Some(events) = &client.events {
+                            let held = super::client::publications::Scope {
+                                room: room_id,
+                                channel: channel_id,
+                                answer: scope,
+                                mark,
+                            };
+                            TurnContext::default()
+                                .at_least(scope.depth)
+                                .scope(held.deliver(events.as_ref(), (*frame).into(), false))
+                                .await;
+                        }
+                        return None;
+                    }
                     let publish =
                         publish(&*kit, &room_id, &channel_id, scope, mark, (*frame).into());
                     TurnContext::default()

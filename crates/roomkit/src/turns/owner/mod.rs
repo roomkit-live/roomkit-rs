@@ -33,7 +33,7 @@ use roomkit_core::model::{
 use tokio::sync::{mpsc, watch};
 
 use self::pump::Pump;
-pub(super) use self::pump::publish_for_room;
+pub(super) use self::pump::{emitted_by_its_turn, publish_for_room};
 pub(crate) use self::reader::{OwnerTurn, RemoteItem};
 pub(crate) use self::steering::Steerable;
 use self::steering::Steers;
@@ -49,6 +49,7 @@ use crate::turns::context::TurnContext;
 /// What the owner knows of a turn it submitted, which its verbs read.
 #[derive(Clone, Debug)]
 pub(crate) struct Facts {
+    pub(super) client: Option<(Arc<super::client::Services>, Arc<super::TurnRequest>)>,
     pub(crate) room_id: RoomId,
     pub(crate) room: Arc<Room>,
     /// The room as the turn read it, for tools that name its agents.
@@ -67,6 +68,7 @@ pub(crate) struct Facts {
 impl Facts {
     pub(crate) fn of(binding: &ChannelBinding, event: &RoomEvent, room: &Room) -> Self {
         Self {
+            client: None,
             room_id: event.room_id.clone(),
             room: Arc::new(room.clone()),
             room_metadata: Arc::new(room.metadata.clone()),
