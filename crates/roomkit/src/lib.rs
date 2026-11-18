@@ -90,6 +90,7 @@ mod stream;
 pub mod tasks;
 pub mod telemetry;
 pub mod testing;
+mod text_errors;
 mod tool_call_scope;
 mod tool_calls;
 mod tool_verdict;
@@ -178,6 +179,10 @@ pub use self::channel::{
 #[doc(hidden)]
 pub use self::classed::ClassedError;
 pub use self::content_logging::{content_logging_enabled, set_content_logging};
+pub use self::text_errors::{
+    ChannelRefusalError, TaskCutShortError, TaskTurnFailedError, ToolTimeoutError,
+    TurnCutShortError,
+};
 // Outside the public API: what an AI channel reads of a discussion's turn.
 pub use self::context::keep_context;
 pub use self::delivery::backend::{

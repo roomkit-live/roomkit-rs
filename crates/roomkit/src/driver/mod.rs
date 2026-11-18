@@ -156,6 +156,18 @@ pub(crate) struct Committed {
     pub(crate) decides: Option<Box<InboundResult>>,
 }
 
+/// A direct operation. The delegated worker's cause belongs to this run only.
+pub(crate) enum RunPurpose {
+    Call(&'static str),
+    Delegation(crate::text_errors::WorkerCause),
+}
+
+impl From<&'static str> for RunPurpose {
+    fn from(name: &'static str) -> Self {
+        Self::Call(name)
+    }
+}
+
 /// Runs `operation`, made by the kit's call `call`, until it is ready; a
 /// lock its execution context holds a live lease on is granted to it (RFC
 /// §13.5).
@@ -169,7 +181,7 @@ pub(crate) struct Committed {
 /// stall is a defect of this crate.
 pub(crate) async fn run<S: ConversationStore, O: Operation + Send + 'static>(
     inner: &Arc<Inner<S>>,
-    call: &'static str,
+    call: impl Into<RunPurpose> + Send,
     operation: O,
 ) -> Result<O::Output, RoomKitError>
 where
@@ -188,7 +200,7 @@ where
 pub(crate) async fn run_on<S: ConversationStore, O: Operation + Send + 'static>(
     inner: &Arc<Inner<S>>,
     environment: Arc<dyn Environment + Send + Sync>,
-    call: &'static str,
+    call: impl Into<RunPurpose> + Send,
     operation: O,
 ) -> Result<O::Output, RoomKitError>
 where
@@ -301,13 +313,17 @@ where
 async fn run_in_its_task<S: ConversationStore, O: Operation + Send + 'static>(
     inner: &Arc<Inner<S>>,
     environment: Arc<dyn Environment + Send + Sync>,
-    call: &'static str,
+    call: impl Into<RunPurpose> + Send,
     operation: O,
     own: bool,
 ) -> Result<O::Output, Stop>
 where
     O::Output: Send + 'static,
 {
+    let (call, worker) = match call.into() {
+        RunPurpose::Call(name) => (name, None),
+        RunPurpose::Delegation(worker) => ("delegate", Some(worker)),
+    };
     let in_flight = Arc::new(InFlight::default());
     let lifetime = Arc::new(CallLifetime::default());
     let running = Arc::clone(&lifetime);
@@ -319,6 +335,7 @@ where
             own,
             in_flight: noting,
             lifetime: running,
+            worker,
         };
         drive(&kit, environment, call, operation, Leases::Granted, how).await
     });
@@ -357,6 +374,7 @@ enum Driven<'run> {
     Inbound(&'run mut Caller),
     Call {
         own: bool,
+        worker: Option<crate::text_errors::WorkerCause>,
         in_flight: Arc<InFlight>,
         lifetime: Arc<CallLifetime>,
     },
@@ -377,15 +395,16 @@ async fn drive<S: ConversationStore, O: Operation>(
     leases: Leases,
     how: Driven<'_>,
 ) -> Result<O::Output, Stop> {
-    let (mut caller, own, in_flight, lifetime) = match how {
-        Driven::Inbound(caller) => (Some(caller), false, None, None),
+    let (mut caller, own, in_flight, lifetime, worker) = match how {
+        Driven::Inbound(caller) => (Some(caller), false, None, None, None),
         Driven::Call {
             own,
             in_flight,
             lifetime,
-        } => (None, own, Some(in_flight), Some(lifetime)),
+            worker,
+        } => (None, own, Some(in_flight), Some(lifetime), worker),
     };
-    let (shared, adoptions) = RunShared::new();
+    let (shared, adoptions) = RunShared::for_worker(worker);
     let mut held = Held::new(Arc::clone(&shared), leases);
     if let Some(caller) = &mut caller {
         match caller.hand.take() {

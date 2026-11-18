@@ -21,6 +21,7 @@ use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use roomkit::ChannelRefusalError;
 use roomkit::model::{Metadata, ToolCall};
 use serde_json::{Value, json};
 
@@ -256,7 +257,7 @@ impl ToolEviction {
     /// stored result, or its lines holding the call's `query`; a result the
     /// room does not store is refused, its words naming the ids it holds.
     /// Python's `handle_read`.
-    fn read(&self, room: &str, arguments: &Metadata) -> Result<String, String> {
+    fn read(&self, room: &str, arguments: &Metadata) -> Result<String, ChannelRefusalError> {
         let result_id = arguments
             .get("result_id")
             .and_then(Value::as_str)
@@ -273,7 +274,9 @@ impl ToolEviction {
                     .map(|((_, id), _, _)| id.as_str())
                     .collect();
                 let error = format!("Result '{result_id}' not found");
-                return Err(dumps(&json!({"error": error, "available": available})));
+                return Err(ChannelRefusalError::new(dumps(
+                    &json!({"error": error, "available": available}),
+                )));
             };
             // Read back, it is in use: the room's least recently read go first.
             let entry = store.results.remove(at);
@@ -418,7 +421,7 @@ impl DynToolset for Reread {
         // A refusal, not a result: the room's tool memory never keeps it as
         // the answer to the read.
         let read = self.0.read(context.room_id.as_str(), &call.arguments);
-        Box::pin(async move { read.map(ToolResult::Text).map_err(ToolError::Refused) })
+        Box::pin(async move { read.map(ToolResult::Text).map_err(ToolError::from) })
     }
 }
 

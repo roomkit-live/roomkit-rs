@@ -651,9 +651,11 @@ async fn a_stream_s_end_fails_its_task_beside_what_its_output_said() {
     }
 }
 
-/// An agent `worker` whose streamed turn says `Looking.`, then fails with a
-/// provider's refusal raised as Python's `ProviderError`.
-struct RefusedMidStream;
+/// An application worker whose stream narrates once and then returns its supplied error.
+struct RefusedMidStream {
+    failure: fn(&RoomId) -> ChannelError,
+    with_end: bool,
+}
 
 impl Channel for RefusedMidStream {
     fn channel_id(&self) -> ChannelId {
@@ -694,11 +696,7 @@ impl Channel for RefusedMidStream {
         if event.source.channel_id == self.channel_id() {
             return ready(Ok(ChannelOutput::empty()));
         }
-        let refusal = std::io::Error::other("upstream 503");
-        let raised: ChannelError = Box::new(roomkit::ClassedError::new(
-            "roomkit.providers.ai.base:ProviderError",
-            refusal,
-        ));
+        let raised = (self.failure)(&event.room_id);
         let items = Items(VecDeque::from([
             Ok(ResponseItem::Text("Looking.".to_owned())),
             Err(raised),
@@ -706,6 +704,11 @@ impl Channel for RefusedMidStream {
         let output = current_turn_host()
             .unwrap()
             .respond_with_stream(Box::pin(items));
+        if self.with_end {
+            output
+                .response_metadata
+                .insert("loop_end_reason", serde_json::json!("error"));
+        }
         ready(Ok(output))
     }
 }
@@ -719,7 +722,16 @@ impl Channel for RefusedMidStream {
 // roomkit-ai's provider errors pass once they name their class.
 #[tokio::test]
 async fn a_failed_task_keeps_the_class_its_worker_s_error_names() {
-    let kit = kit_of(RefusedMidStream).await;
+    let kit = kit_of(RefusedMidStream {
+        with_end: false,
+        failure: |_| {
+            Box::new(roomkit::ClassedError::new(
+                "roomkit.providers.ai.base:ProviderError",
+                std::io::Error::other("upstream 503"),
+            ))
+        },
+    })
+    .await;
     let options = DelegateOptions {
         wait: true,
         ..DelegateOptions::default()
@@ -741,4 +753,96 @@ async fn a_failed_task_keeps_the_class_its_worker_s_error_names() {
         (TaskStatus::Failed, "ProviderError", "upstream 503")
     );
     kit.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_locally_registered_worker_returns_its_typed_task_cut() {
+    let kit = kit_of(RefusedMidStream {
+        with_end: false,
+        failure: |_| {
+            Box::new(roomkit::TaskCutShortError::new(
+                "custom stop",
+                Some("Checking.".to_owned()),
+            ))
+        },
+    })
+    .await;
+    let task = kit
+        .delegate(
+            &room(),
+            &channel("worker"),
+            "Check it.",
+            DelegateOptions {
+                wait: true,
+                ..DelegateOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    let result = task.result().unwrap();
+    let error = result.exception.unwrap();
+    assert_eq!(error.error_type, "TaskCutShortError");
+    assert_eq!(
+        error.message,
+        roomkit::TaskCutShortError::message_for("custom stop")
+    );
+    assert_eq!(error.attributes["reason"], "custom stop");
+    assert_eq!(error.attributes["narration"], "Checking.");
+    assert_eq!(result.output.as_deref(), Some("Checking."));
+    assert_eq!(result.metadata["loop_end_reason"], "custom stop");
+    kit.close().await.unwrap();
+}
+
+// Python: test_a_streaming_worker_that_raises_an_already_wrapped_failure.
+#[tokio::test]
+async fn prewrapped_task_failures_keep_the_workers_cause_and_explicit_end() {
+    for with_end in [false, true] {
+        let kit = kit_of(RefusedMidStream {
+            with_end,
+            failure: |child| {
+                let cause = roomkit::ClassedError::new(
+                    "ProviderError",
+                    std::io::Error::other(format!("upstream {child}")),
+                )
+                .with_attributes(roomkit::model::Metadata::from_iter([(
+                    "status_code".to_owned(),
+                    serde_json::json!(503),
+                )]));
+                Box::new(roomkit::TaskTurnFailedError::new(
+                    Arc::new(cause),
+                    "interrupted",
+                    Some("Given narration".to_owned()),
+                ))
+            },
+        })
+        .await;
+        let parent = room();
+        let worker = channel("worker");
+        let options = || DelegateOptions {
+            wait: true,
+            ..DelegateOptions::default()
+        };
+        let (first, second) = tokio::join!(
+            kit.delegate(&parent, &worker, "First", options()),
+            kit.delegate(&parent, &worker, "Second", options())
+        );
+        for task in [first.unwrap(), second.unwrap()] {
+            let result = task.result().unwrap();
+            let error = result.exception.unwrap();
+            assert_eq!(error.message, format!("upstream {}", task.child_room_id));
+            if with_end {
+                assert_eq!(error.error_type, "TaskTurnFailedError");
+                assert_eq!(error.attributes["reason"], "interrupted");
+                assert_eq!(error.attributes["narration"], "Given narration");
+                assert_eq!(result.output.as_deref(), Some("Looking."));
+                assert_eq!(result.metadata["loop_end_reason"], "error");
+            } else {
+                assert_eq!(error.error_type, "ProviderError");
+                assert_eq!(error.attributes["status_code"], 503);
+                assert_eq!(result.output.as_deref(), Some("Given narration"));
+                assert_eq!(result.metadata["loop_end_reason"], "interrupted");
+            }
+        }
+        kit.close().await.unwrap();
+    }
 }

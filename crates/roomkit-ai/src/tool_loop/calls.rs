@@ -232,9 +232,9 @@ impl Loop {
     /// as a repeat of the arguments it would run with (RFC §6.4).
     async fn guarded(&self, call: ToolCall) -> ToolCallReport {
         match self.repeat_refusal(&call.name, &call.arguments) {
-            Some(words) => {
-                logs::refused(&call.name, &words);
-                ended(call, ToolCallOutcome::Refused, words)
+            Some(refusal) => {
+                logs::refused(&call.name, &refusal.message);
+                ended(call, ToolCallOutcome::Refused, refusal.message)
             }
             None => self.execute(call).await,
         }
@@ -249,7 +249,9 @@ impl Loop {
             return refused;
         }
         match self.repeat_refusal(&called.call.name, &called.call.arguments) {
-            Some(words) => refused.ended(ToolCallOutcome::Refused, Value::String(words)),
+            Some(refusal) => {
+                refused.ended(ToolCallOutcome::Refused, Value::String(refusal.message))
+            }
             None => refused,
         }
     }
@@ -258,9 +260,15 @@ impl Loop {
     /// own names, whose catalogue holds within the turn, the pure ones wherever
     /// the channel keeps them for itself, a search hiding anything or not
     /// (Python's `traits.pure`).
-    fn repeat_refusal(&self, name: &str, arguments: &Metadata) -> Option<String> {
+    fn repeat_refusal(
+        &self,
+        name: &str,
+        arguments: &Metadata,
+    ) -> Option<roomkit::ChannelRefusalError> {
         let pure = TOOL_SEARCH_INFRA_TOOL_NAMES.contains(&name) && self.toolbox.is_reserved(name);
-        self.repeat_guard.refusal(name, arguments, pure)
+        self.repeat_guard
+            .refusal(name, arguments, pure)
+            .map(roomkit::ChannelRefusalError::new)
     }
 
     /// Starts the turn's repeat counts again once a call to `name` that ran
@@ -647,11 +655,8 @@ fn failure(call: ToolCall, error: ToolError) -> ToolCallReport {
 /// A call whose tool did not answer within `bound`, cut: it fails as a
 /// tool that raised (RFC §21.6).
 fn timed_out(call: ToolCall, bound: Duration) -> ToolCallReport {
-    let detail = format!(
-        "{TIMED_OUT}: tool '{}' did not answer within {} s",
-        call.name,
-        roomkit::orchestration::timeout_seconds(bound)
-    );
+    let error = roomkit::ToolTimeoutError::new(&call.name, bound.as_secs_f64());
+    let detail = format!("{TIMED_OUT}: {error}");
     logs::timed_out(&call.name, &detail);
     let text = texts::failed(&call.name, TIMED_OUT);
     ended(call, ToolCallOutcome::Failed, text).with_error_detail(detail)

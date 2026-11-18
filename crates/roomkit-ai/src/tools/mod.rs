@@ -196,6 +196,12 @@ pub enum ToolError {
     },
 }
 
+impl From<roomkit::ChannelRefusalError> for ToolError {
+    fn from(error: roomkit::ChannelRefusalError) -> Self {
+        Self::Refused(error.message)
+    }
+}
+
 impl ToolError {
     /// A refusal the model reads as `words`.
     pub fn refused(words: impl Into<String>) -> Self {

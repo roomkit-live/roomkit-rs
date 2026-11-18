@@ -322,19 +322,14 @@ pub(crate) fn task_work(result: &DelegatedTaskResult) -> &str {
     result.output.as_deref().unwrap_or("")
 }
 
-/// The error a task cut short by `reason` carries: Python's
-/// `TaskCutShortError.message_for(reason)`.
-pub(crate) fn cut_short_message(reason: &str) -> String {
-    format!("The worker's turn ended {reason} before its answer")
-}
-
 /// How a failed task's turn was cut short (its round cap, deadline or
 /// budget, a stop), when a cut ended it: `None` for a task that completed,
 /// or that failed with an error, even one raised after its turn began and
 /// named on its `loop_end_reason` (RFC §23.3). Python's `task_cut_reason`.
 pub(crate) fn task_cut_reason(result: &DelegatedTaskResult) -> Option<&str> {
     let reason = result.metadata.get("loop_end_reason")?.as_str()?;
-    (result.error.as_deref() == Some(cut_short_message(reason).as_str())).then_some(reason)
+    (result.error.as_deref() == Some(crate::TaskCutShortError::message_for(reason).as_str()))
+        .then_some(reason)
 }
 
 #[cfg(test)]
@@ -342,7 +337,7 @@ mod tests {
     use std::time::Duration;
 
     use pretty_assertions::assert_eq;
-    use roomkit_core::model::{ChannelId, ErrorRecord, RoomId, TaskStatus};
+    use roomkit_core::model::{ChannelId, RoomId, TaskStatus};
 
     use super::{DelegatedTask, DelegatedTaskOptions, DelegatedTaskResult, WaitOptions};
     use crate::error::RoomKitError;
@@ -444,11 +439,11 @@ mod tests {
 
     // Python: tests/tasks/test_task_turn_record.py::test_a_cut_tasks_result_copies_and_pickles
     // A copy of a cut task's result keeps its failure, which its serialized
-    // form leaves out. An error record has no reason nor narration of its
-    // own: Python's TaskCutShortError has no Rust type.
+    // form leaves out. The local record carries the cut's reason and narration.
     #[test]
     fn a_cut_tasks_result_keeps_its_failure_when_copied_never_on_the_wire() {
-        let cut = ErrorRecord::new("TaskCutShortError", "The worker's turn ended max_rounds");
+        let cut =
+            crate::TaskCutShortError::new("max_rounds", Some("Checking.".to_owned())).record();
         let result = DelegatedTaskResult {
             output: Some("Checking.".to_owned()),
             exception: Some(cut.clone()),

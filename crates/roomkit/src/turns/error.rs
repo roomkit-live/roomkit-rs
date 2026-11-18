@@ -172,6 +172,9 @@ pub(crate) fn record_of(error: &(dyn Error + Send + Sync + 'static)) -> ErrorRec
     if let Some(RemoteError(crossed)) = error.downcast_ref::<RemoteError>() {
         return to_record(crossed);
     }
+    if let Some(record) = crate::text_errors::text_record(error) {
+        return record;
+    }
     let classed = error.downcast_ref::<ClassedError>();
     ErrorRecord {
         attributes: Box::new(
@@ -189,8 +192,32 @@ pub(crate) fn record_of(error: &(dyn Error + Send + Sync + 'static)) -> ErrorRec
 
 /// `error`, a channel's, as it crosses, its causes after it.
 pub(crate) fn channel_error(error: &(dyn Error + 'static)) -> WireError {
+    let mut record = channel_record(error);
+    let mut original = error
+        .downcast_ref::<crate::TaskTurnFailedError>()
+        .map(crate::TaskTurnFailedError::cause_record);
+    let mut cause = error.source();
+    while let Some(next) = cause {
+        if record.causes.len() >= CAUSES_KEPT {
+            break;
+        }
+        let described = original.take().map_or_else(
+            || recipient_error(next).unwrap_or_else(|| one("Error", next.to_string())),
+            |cause| from_record(&cause),
+        );
+        record.causes.push(described);
+        cause = next.source();
+    }
+    record
+}
+
+/// The top-level channel error before the transport includes its causes.
+fn channel_record(error: &(dyn Error + 'static)) -> WireError {
     if let Some(missing) = recipient_error(error) {
         return missing;
+    }
+    if let Some(record) = crate::text_errors::text_record(error) {
+        return from_record(&record);
     }
     let classed = error.downcast_ref::<ClassedError>();
     let mut record = one(
@@ -199,16 +226,6 @@ pub(crate) fn channel_error(error: &(dyn Error + 'static)) -> WireError {
     );
     if let Some(classed) = classed {
         record.attributes.clone_from(classed.attributes());
-    }
-    let mut cause = error.source();
-    while let Some(next) = cause {
-        if record.causes.len() >= CAUSES_KEPT {
-            break;
-        }
-        record
-            .causes
-            .push(recipient_error(next).unwrap_or_else(|| one("Error", next.to_string())));
-        cause = next.source();
     }
     record
 }

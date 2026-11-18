@@ -1647,3 +1647,21 @@ rust = "roomkit::model::ToolCallVerdict::new"
 params = ["result", "blocked", "replaces_structured", "structured_content", "error_detail"]
 approved = "2026-11-17"
 reason = "Default supplies the Python defaults. The constructor takes the frozen fields explicitly and preserves their collection handles (HITL 29f71bf8)."
+
+[[exception]]
+python = "roomkit.TaskCutShortError.__init__"
+params = ["reason"]
+approved = "2026-11-17"
+reason = "the reason is the field of the underlying TurnCutShortError, directly reachable by dereference (HITL on the five public error types)"
+
+[[exception]]
+python = "roomkit.TaskTurnFailedError.__init__"
+params = ["error"]
+approved = "2026-11-17"
+reason = "the original shared worker error is exposed by Error::source with its original type and identity (HITL on the five public error types)"
+
+[[exception]]
+python = "roomkit.TurnCutShortError.__init__"
+params = ["message"]
+approved = "2026-11-17"
+reason = "the constructor captures Python's exception message, which Display reads (HITL on the five public error types)"

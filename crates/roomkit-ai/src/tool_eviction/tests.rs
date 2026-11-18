@@ -50,7 +50,7 @@ fn answer(eviction: &ToolEviction, room: &str, arguments: &Value) -> Value {
     let arguments = arguments.as_object().cloned().unwrap_or_default();
     let read = eviction
         .read(room, &arguments)
-        .unwrap_or_else(|refused| refused);
+        .unwrap_or_else(|refused| refused.message);
     serde_json::from_str(&read).unwrap()
 }
 

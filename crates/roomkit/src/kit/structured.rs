@@ -15,7 +15,7 @@ use serde_json::Value;
 
 use super::RoomKit;
 use super::background_tools::collision;
-use super::tasks::{TaskEnd, failed, kit_failure, task_outcome};
+use super::tasks::{TaskEnd, failed, kit_failure};
 use crate::error::RoomKitError;
 use crate::orchestration::SUBMIT_RESULT;
 use crate::store::{ConversationStore, ListEventsOptions};
@@ -63,11 +63,10 @@ impl<S: ConversationStore> RoomKit<S> {
             } else {
                 &tool.reminder
             };
-            let answers = match Box::pin(self.delegated_answers(task, message.to_owned())).await {
-                Ok(answers) => answers,
+            let outcome = match Box::pin(self.delegated_outcome(task, message.to_owned())).await {
+                Ok(outcome) => outcome,
                 Err(failure) => return failed(failure, context),
             };
-            let outcome = task_outcome(&answers, &task.agent_id);
             turns = outcome.turns;
             let submitted = self
                 .submitted_result(&task.child_room_id, &task.agent_id, tool)

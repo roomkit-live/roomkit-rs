@@ -11,6 +11,8 @@
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+use crate::text_errors::general;
+
 use roomkit_core::model::{ChannelId, EventContent, Metadata, RoomEvent, RoomId, TaskStatus};
 use serde_json::{Value, json};
 
@@ -107,38 +109,6 @@ pub(crate) fn timed_out_text(timeout: Duration) -> String {
 #[doc(hidden)]
 pub fn timeout_seconds(timeout: Duration) -> String {
     general(timeout.as_secs_f64())
-}
-
-/// `value` as Python's `format(value, "g")` writes it: six significant
-/// digits, trailing zeros dropped, in exponent form below 1e-4 or from
-/// 1e6.
-fn general(value: f64) -> String {
-    if value == 0.0 {
-        return "0".to_owned();
-    }
-    let scientific = format!("{value:.5e}");
-    let (mantissa, exponent) = scientific.split_once('e').unwrap_or((&scientific, "0"));
-    let exponent: i32 = exponent.parse().unwrap_or_default();
-    if (-4..6).contains(&exponent) {
-        let decimals = usize::try_from(5 - exponent).unwrap_or_default();
-        return without_trailing_zeros(&format!("{value:.decimals$}")).to_owned();
-    }
-    let sign = if exponent < 0 { '-' } else { '+' };
-    format!(
-        "{}e{sign}{:02}",
-        without_trailing_zeros(mantissa),
-        exponent.unsigned_abs()
-    )
-}
-
-/// A decimal's text without the zeros ending its fraction, nor a point
-/// left alone.
-fn without_trailing_zeros(text: &str) -> &str {
-    if text.contains('.') {
-        text.trim_end_matches('0').trim_end_matches('.')
-    } else {
-        text
-    }
 }
 
 /// A worker delegation's terminal entry: its level, its detail, and what it

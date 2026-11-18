@@ -581,7 +581,10 @@ pub(super) async fn channel<S: ConversationStore>(
                     }
                     Err(refusal) => refused_content(&refusal),
                 },
-                Err(error) => Outcome::Failed(ErrorRecord::new("ChannelError", error.to_string())),
+                Err(error) => Outcome::Failed(
+                    crate::text_errors::text_record(&*error)
+                        .unwrap_or_else(|| ErrorRecord::new("ChannelError", error.to_string())),
+                ),
             }
         }
         ChannelRequest::OnEvent {
@@ -619,6 +622,10 @@ pub(super) async fn channel<S: ConversationStore>(
             as_trace,
         } => {
             let read = stream::StreamRead {
+                worker_cause: shared
+                    .worker
+                    .as_ref()
+                    .and_then(|worker| worker.for_worker(&responder.channel_id)),
                 responder,
                 answers: *answers,
                 target,
@@ -1456,6 +1463,9 @@ fn strategy_output(result: Result<ChannelOutput, ChannelError>) -> Outcome {
 /// [`ClassedError`] names, its attributes kept, else of type
 /// `ChannelError`, a boxed error having no class name.
 pub(crate) fn channel_failed(error: &ChannelError) -> Outcome {
+    if let Some(record) = crate::text_errors::text_record(&**error) {
+        return Outcome::Failed(record);
+    }
     let kit_error = error.downcast_ref::<RoomKitError>();
     let classed = error.downcast_ref::<ClassedError>();
     if let Some(result) = kit_error.and_then(RoomKitError::provider_result) {

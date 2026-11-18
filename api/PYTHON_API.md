@@ -105,6 +105,9 @@ the mapping and its tests. The check does not generate or update this document.
 | — | `roomkit.ChannelOutput.__init__` | `response_stream` |
 | — | `roomkit.TurnHost` | `__init__` |
 | — | `roomkit.DeliveryHandle` | `__init__` |
+| `roomkit::TaskCutShortError::new` | `roomkit.TaskCutShortError.__init__` | The `reason` belongs to its borrowed base. |
+| `roomkit::TaskTurnFailedError::new` | `roomkit.TaskTurnFailedError.__init__` | The `error` is accessible through `Error::source`. |
+| `roomkit::TurnCutShortError::new` | `roomkit.TurnCutShortError.__init__` | `Display` returns the original `message`. |
 | `roomkit::HookError` | — | Whole type |
 | `roomkit::HookFuture` | — | Whole type |
 | `roomkit::HookHandler` | — | Whole type |
@@ -598,6 +601,35 @@ explicitly approved Rust constructor domain. Instructions default to the
 reference prompt when absent or empty, and `reasoning_effort` defaults to None.
 `CutReply` is a text carrier; this does not implement audio interruption,
 realtime admission, remote/offline turn scheduling or vendor classifiers.
+
+### Public tool and delegated-turn errors
+
+A `ChannelRefusalError` carries the channel's words. It converts into the
+existing `roomkit_ai::ToolError::Refused` family at the handler boundary.
+`ToolTimeoutError` accepts a tool name and a bound in seconds, and formats its
+diagnostic the same way as an expired call. The standalone constructor accepts
+the full floating-point domain, including signed zero, infinities and NaN.
+
+`TurnCutShortError` accepts the original message and an optional reason.
+`TaskCutShortError` accepts an open-ended reason and an optional narration,
+exposes the base by reference and provides the task's `message_for` formatter.
+`TaskTurnFailedError` retains the original worker error in an
+`Arc<dyn Error + Send + Sync>`. Its display captures the original message at
+construction. The standard `Error::source` gives access to the same error.
+
+The local channel driver copies the class, message and data of a typed error
+into its error record. A delegated worker that raises a pre-wrapped failure
+from a stream supplies its original cause record to the task if the turn has
+no independent failure marker. When the turn has its own failure marker,
+the task retains the inner wrapper's record and the turn's narration.
+
+The public Rust fields `ChannelOutput.error` and `DelegatedTaskResult.exception`
+use `ErrorRecord`, which carries a class, message and JSON attributes. A
+buffered output accepts this record. It cannot carry a native exception
+chain. A task's returned wrapper record likewise has no nested source to
+traverse. The standalone `TaskTurnFailedError` retains its complete native
+source while the application holds it. Non-finite floats in native
+`ToolTimeoutError.timeout` become JSON null when projected into a record.
 
 ### Framework injection for application channels
 
