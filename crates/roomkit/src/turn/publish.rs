@@ -113,8 +113,7 @@ impl TurnHost {
     #[doc(hidden)]
     pub fn publish_ephemeral(&self, event: EphemeralEvent) {
         let publisher = &self.shared.publisher;
-        #[cfg(feature = "redis")]
-        if self.shared.link.has_remote_owner() {
+        if self.shared.link.uses_worker_link() {
             // Only the owner knows whether its reader is tracing this turn.
             // An ended turn can never carry answer text.
             if self.answer_unscoped

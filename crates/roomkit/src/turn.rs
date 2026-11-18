@@ -569,6 +569,9 @@ impl TurnHost {
         verb: &str,
         arguments: &T,
     ) -> Result<Value, RoomKitError> {
+        if !self.open() && self.shared.link.lacks_owner_port() {
+            return Err(crate::turns::room_owner::ended(verb));
+        }
         if !self.open() && !BETWEEN_TURNS.contains(&verb) {
             let mut sent = BETWEEN_TURNS.to_vec();
             sent.sort_unstable();
@@ -673,8 +676,7 @@ impl TurnHost {
     /// while each runs, whether the turn's work emits it during the turn or
     /// after it (RFC §8.3).
     fn emit(&self, event_type: &str, data: Metadata) {
-        #[cfg(feature = "redis")]
-        if self.shared.link.has_remote_owner() {
+        if self.shared.link.uses_worker_link() {
             self.shared
                 .link
                 .publish_remote(crate::turns::wire::Frame::FrameworkEvent {

@@ -214,6 +214,12 @@ impl<S: ConversationStore> TurnExecutor<S> {
 }
 
 impl<S: ConversationStore> TurnExecutor<S> {
+    /// Give future turns a route to their room owner after their link ends (RFC §10.6.3).
+    /// Work retained from an earlier turn continues to use the port it received at admission.
+    pub fn reach_owner(&self, owner: Arc<dyn crate::turns::RoomOwner>) {
+        self.kit.inner.turns.set_worker_owner(owner);
+    }
+
     /// Run the request delivered by an application backend (RFC §10.6.2). The link
     /// releases its resources after the executor finishes sending the turn's frames.
     /// An application implementing [`ExecutorLink`](crate::turns::ExecutorLink)
@@ -237,8 +243,7 @@ impl<S: ConversationStore> TurnExecutor<S> {
         let origin = crate::turns::executor::WorkerOrigin {
             context: link.turn_context(),
             waits_for_writes: true,
-            #[cfg(feature = "redis")]
-            owner: None,
+            owner: Some(self.kit.inner.turns.worker_owner()),
         };
         let turn = self.start_request(link.request().clone(), origin)?;
         let kit = Arc::downgrade(&self.kit.inner);

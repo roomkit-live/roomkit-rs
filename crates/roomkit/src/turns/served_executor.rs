@@ -42,6 +42,8 @@ pub trait ServedExecutor: Send + Sync + 'static {
     fn takes(&self, channel_id: &ChannelId, options: TakesOptions) -> bool;
     /// Time bounds used by the turns this executor runs.
     fn timeouts(&self) -> TurnTimeouts;
+    /// Give new turns the port they use to reach their owner after their link ends.
+    fn reach_owner(&self, owner: Arc<dyn super::RoomOwner>);
     /// Admit the request on the backend's executor link.
     ///
     /// # Errors
@@ -87,6 +89,9 @@ impl<S: ConversationStore> ServedExecutor for TurnExecutor<S> {
     }
     fn timeouts(&self) -> TurnTimeouts {
         self.timeouts()
+    }
+    fn reach_owner(&self, owner: Arc<dyn super::RoomOwner>) {
+        self.reach_owner(owner);
     }
     fn take(&self, link: Arc<dyn ExecutorLink>) -> Result<(), RoomKitError> {
         self.take(link)

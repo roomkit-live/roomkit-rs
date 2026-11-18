@@ -30,7 +30,7 @@ impl RedisTurnBackend {
             let origin = WorkerOrigin {
                 context: owner.turn_context(),
                 waits_for_writes: true,
-                owner: Some(port),
+                owner: Some(crate::turns::room_owner::WorkerOwner::Redis(port)),
             };
             match worker.take_from(request, origin) {
                 Ok(turn) => {

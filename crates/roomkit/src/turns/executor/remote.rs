@@ -17,8 +17,7 @@ use crate::turns::{MemoryTurn, Turns};
 pub(crate) struct WorkerOrigin {
     pub(crate) context: TurnContext,
     pub(crate) waits_for_writes: bool,
-    #[cfg(feature = "redis")]
-    pub(crate) owner: Option<crate::turns::redis::PeerOwner>,
+    pub(crate) owner: Option<crate::turns::room_owner::WorkerOwner>,
 }
 
 /// The transport side of a worker's running turn.
@@ -53,7 +52,6 @@ impl WorkerTurn {
         let (controls, incoming) = pipe(Arc::clone(&id), Carried::Control, observers);
         let memory =
             MemoryTurn::with_context(id, frames, controls, turns.timeouts(), origin.context);
-        #[cfg(feature = "redis")]
         let memory = MemoryTurn {
             owner: origin.owner,
             ..memory

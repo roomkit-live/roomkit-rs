@@ -433,7 +433,11 @@ impl HostLink {
     /// Whether a verb can still reach the owner: during the turn, or after
     /// it as a `room_call` while the kit's turn backend lives.
     pub(crate) fn reaches_owner(&self) -> bool {
-        self.is_open() || self.turns.strong_count() > 0
+        self.is_open()
+            || self.sender.turn.owner.as_ref().map_or_else(
+                || self.turns.strong_count() > 0,
+                |owner| owner.reachable(self.turns.strong_count() > 0),
+            )
     }
 
     /// Runs `verb` with `arguments` on the owner, the turn's work at least
@@ -501,9 +505,6 @@ impl HostLink {
     /// Runs `verb` as work the turn began, after it ended (RFC §10.6.3
     /// `room_call`).
     async fn between_turns(&self, verb: &str, arguments: Metadata) -> Result<Value, RoomKitError> {
-        let Some(turns) = self.turns.upgrade() else {
-            return Err(RoomKitError::KitClosed);
-        };
         let message = RoomCall {
             call_id: Uuid::new_v4().simple().to_string(),
             channel_id: self.facts.channel.clone(),
@@ -514,39 +515,51 @@ impl HostLink {
             verb: verb.to_owned(),
             arguments,
         };
-        #[cfg(feature = "redis")]
-        if let Some(peer) = &self.sender.turn.owner {
-            return peer.call(message).await;
+        if let Some(owner) = &self.sender.turn.owner {
+            return owner.call(message, self.turns.strong_count() > 0).await;
         }
+        let turns = self.turns.upgrade().ok_or(RoomKitError::KitClosed)?;
         turns.room_call(Arc::clone(&self.kit), message).await
     }
 
-    #[cfg(feature = "redis")]
-    pub(crate) fn has_remote_owner(&self) -> bool {
+    pub(crate) fn lacks_owner_port(&self) -> bool {
+        matches!(
+            self.sender.turn.owner,
+            Some(crate::turns::room_owner::WorkerOwner::Unreachable)
+        )
+    }
+
+    pub(crate) fn uses_worker_link(&self) -> bool {
         self.sender.turn.owner.is_some()
     }
 
     /// Decide under the same lock that ends the turn whether this is a frame on
     /// its running link or a publication for the owner between turns.
-    #[cfg(feature = "redis")]
     pub(crate) fn publish_remote(&self, frame: Frame) {
-        use crate::turns::wire::{OwnerMessage, PublicationFrame, RoomPublication};
-        let Some(peer) = &self.sender.turn.owner else {
+        use crate::turns::wire::{PublicationFrame, RoomPublication};
+        let Some(owner) = &self.sender.turn.owner else {
             return;
         };
-        let _state = lock(&self.pending);
-        if self.is_open() {
-            if let Err(Uncarried(why)) = self.sender.send(&frame) {
-                tracing::debug!(%why, "a publication could not cross the turn link");
+        {
+            let _state = lock(&self.pending);
+            if self.is_open() {
+                if let Err(Uncarried(why)) = self.sender.send(&frame) {
+                    tracing::debug!(%why, "a publication could not cross the turn link");
+                }
+                return;
             }
-        } else if let Ok(frame) = PublicationFrame::try_from(frame) {
-            peer.publish(OwnerMessage::RoomPublication(RoomPublication {
-                channel_id: self.facts.channel.clone(),
-                room_id: self.facts.room.clone(),
-                executor_id: self.facts.executor.clone(),
-                turn_id: self.facts.turn.clone(),
-                frame: Box::new(frame),
-            }));
+        }
+        if let Ok(frame) = PublicationFrame::try_from(frame) {
+            owner.publish(
+                &*self.kit,
+                RoomPublication {
+                    channel_id: self.facts.channel.clone(),
+                    room_id: self.facts.room.clone(),
+                    executor_id: self.facts.executor.clone(),
+                    turn_id: self.facts.turn.clone(),
+                    frame: Box::new(frame),
+                },
+            );
         }
     }
 

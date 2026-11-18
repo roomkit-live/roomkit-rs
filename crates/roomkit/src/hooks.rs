@@ -655,7 +655,6 @@ async fn run_turn_hook<P: Send + 'static>(
     context: RoomContext,
     check: impl FnOnce(&mut HookResult<P>) -> Option<String>,
 ) -> HookOutcome<P> {
-    #[cfg(feature = "redis")]
     let context =
         if let Some(host) = crate::TurnHost::remote_hook_host(spec.trigger, &context.room.id) {
             match Box::pin(host.remote_hook_room()).await {

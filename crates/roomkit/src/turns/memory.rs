@@ -23,8 +23,7 @@ use crate::discussion_turn::{discussion_notes, discussion_turn};
 #[derive(Debug)]
 pub(crate) struct MemoryTurn {
     pub(crate) turn_id: Arc<str>,
-    #[cfg(feature = "redis")]
-    pub(crate) owner: Option<super::redis::PeerOwner>,
+    pub(crate) owner: Option<super::room_owner::WorkerOwner>,
     /// Whether its reader commits the turn as a delegated task's trace (RFC
     /// §23.3 step 5), which its publisher reads at each text it publishes.
     pub(crate) traced: Arc<AtomicBool>,
@@ -79,7 +78,6 @@ impl MemoryTurn {
             controls,
             timeouts,
             traced: Arc::default(),
-            #[cfg(feature = "redis")]
             owner: None,
             process_beat: AtomicBool::new(false),
             contexts: Mutex::new(Contexts {

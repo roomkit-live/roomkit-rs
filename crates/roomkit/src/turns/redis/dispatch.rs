@@ -63,7 +63,9 @@ impl RedisTurnBackend {
             let turn = worker.take_from(
                 carried,
                 crate::turns::executor::WorkerOrigin {
-                    owner: Some(backend.remember_owner(&message.sender)),
+                    owner: Some(crate::turns::room_owner::WorkerOwner::Redis(
+                        backend.remember_owner(&message.sender),
+                    )),
                     ..Default::default()
                 },
             );

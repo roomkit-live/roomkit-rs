@@ -49,6 +49,8 @@ pub fn current_turn_id() -> Option<String> {
         .map(|id| id.to_string())
 }
 
+pub(crate) mod room_owner;
+pub use room_owner::RoomOwner;
 mod backend;
 pub use backend::{ExecutorLink, TurnFuture, TurnLink};
 pub use context::TurnContext;
@@ -139,6 +141,7 @@ pub(crate) struct Turns {
     pub(crate) remote: Option<RedisTurnBackend>,
     #[cfg(feature = "redis")]
     pub(crate) serving_backends: redis::ServingBackends,
+    worker_owner: Mutex<Option<room_owner::OwnerPort>>,
     timeouts: RwLock<TurnTimeouts>,
     observers: RwLock<Observers>,
     /// The id the kit's own executor answers with.
@@ -176,6 +179,7 @@ impl Default for Turns {
             remote: None,
             #[cfg(feature = "redis")]
             serving_backends: redis::ServingBackends::default(),
+            worker_owner: Mutex::default(),
             timeouts: RwLock::new(TurnTimeouts::default()),
             observers: RwLock::new(Observers::default()),
             executor_id: executor_id(),

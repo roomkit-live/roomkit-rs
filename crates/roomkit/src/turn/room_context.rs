@@ -10,19 +10,17 @@ use crate::turns::wire::{ROOM_CONTEXT, ReadRoomContext};
 use crate::{ConversationStore, RoomKitError};
 
 impl TurnHost {
-    #[cfg(feature = "redis")]
     pub(crate) fn remote_hook_host(trigger: crate::HookTrigger, room: &RoomId) -> Option<Self> {
         if !trigger.is_turn_trigger() {
             return None;
         }
         super::current_turn_host().filter(|host| {
-            host.room_id() == room && host.shared.link.has_remote_owner() && host.open()
+            host.room_id() == room && host.shared.link.uses_worker_link() && host.open()
         })
     }
 
     /// Read the live room for a worker hook (RFC §10.6.6). A cut during
     /// this read leaves the hook the context the turn started with.
-    #[cfg(feature = "redis")]
     pub(crate) async fn remote_hook_room(&self) -> Result<RoomContext, RoomKitError> {
         match self.verb(ROOM_CONTEXT, &ReadRoomContext::default()).await {
             Ok(room) => decoded(room),
