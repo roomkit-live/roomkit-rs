@@ -237,7 +237,7 @@ async fn check_audience(audience: Audience) {
         input.context.room = created;
     }
     if audience == Audience::PrivateTrigger {
-        input.trigger.response_visibility = Some(roomkit::model::Visibility::Intelligence);
+        input.trigger.response_visibility = Some(Visibility::Intelligence);
     }
     let pending = tokio::spawn(async move {
         active
@@ -257,7 +257,7 @@ async fn check_audience(audience: Audience) {
         kit.set_visibility(
             &room,
             &channel.channel_id(),
-            roomkit::model::Visibility::Intelligence,
+            Visibility::Intelligence,
             roomkit::SetVisibilityOptions::default(),
         )
         .await
