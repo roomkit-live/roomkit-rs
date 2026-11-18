@@ -56,6 +56,11 @@ impl<S: ConversationStore> RoomKit<S> {
 }
 
 impl<S: ConversationStore> TurnExecutor<S> {
+    #[cfg(feature = "redis")]
+    pub(crate) fn serving_backends(&self) -> &crate::turns::redis::ServingBackends {
+        &self.kit.inner.turns.serving_backends
+    }
+
     /// The id this executor answers with, Python's `executor_id`.
     pub fn executor_id(&self) -> &str {
         self.standalone.as_ref().map_or_else(
@@ -134,6 +139,8 @@ impl<S: ConversationStore> TurnExecutor<S> {
                 tracing::warn!(%error, "the executor could not close its channels");
             }
         }
+        #[cfg(feature = "redis")]
+        self.tell_redis_closed().await;
     }
 
     /// Whether this executor has closed.

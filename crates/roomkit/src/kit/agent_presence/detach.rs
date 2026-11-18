@@ -30,7 +30,12 @@ pub(in crate::kit) async fn run<S: ConversationStore>(
         super::call::run(inner, async move {
             owner
                 .agent_presence
-                .detached(&binding.room_id, &binding.channel_id)
+                .detached(
+                    &binding.room_id,
+                    &binding.channel_id,
+                    #[cfg(feature = "redis")]
+                    owner.turns.remote.as_ref(),
+                )
                 .await;
         })
         .await?;

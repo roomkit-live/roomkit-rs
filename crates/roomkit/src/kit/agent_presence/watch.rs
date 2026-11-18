@@ -1,6 +1,13 @@
 //! Local presence claims and retries. A forgotten claim can never be
 //! restored by an older publication that completes after a detach or close.
 
+#[cfg(feature = "redis")]
+mod claims;
+#[cfg(feature = "redis")]
+mod remote;
+#[cfg(feature = "redis")]
+pub(in crate::kit) use claims::on_room_close;
+
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -18,6 +25,8 @@ type Key = (RoomId, ChannelId);
 struct Claim {
     online: bool,
     pending: AtomicBool,
+    #[cfg(feature = "redis")]
+    reserved: AtomicBool,
 }
 
 #[derive(Debug, Default)]
@@ -31,14 +40,25 @@ struct State {
 pub(crate) struct Watch {
     state: Mutex<State>,
     gate: AsyncMutex<()>,
+    #[cfg(feature = "redis")]
+    remote: remote::Monitor,
 }
 
 impl Watch {
-    pub(crate) async fn detached(&self, room: &RoomId, channel: &ChannelId) {
+    pub(crate) async fn detached(
+        &self,
+        room: &RoomId,
+        channel: &ChannelId,
+        #[cfg(feature = "redis")] backend: Option<&crate::RedisTurnBackend>,
+    ) {
         // The room mutation has finished and released its lock. An earlier
         // publication finishes before this detach forgets its claim.
         let _gate = self.gate.lock().await;
         self.forget(room, Some(channel));
+        #[cfg(feature = "redis")]
+        if let Some(backend) = backend {
+            claims::forget(backend, room, channel).await;
+        }
     }
 
     pub(crate) fn forget(&self, room: &RoomId, channel: Option<&ChannelId>) {
@@ -58,7 +78,14 @@ impl Watch {
         Some(Arc::clone(state.epochs.entry(key).or_default()))
     }
 
-    fn claim(&self, key: Key, epoch: &Arc<()>, online: bool, retry: bool) -> Option<Arc<Claim>> {
+    fn claim(
+        &self,
+        key: Key,
+        epoch: &Arc<()>,
+        online: bool,
+        retry: bool,
+        shared: bool,
+    ) -> Option<Arc<Claim>> {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if !state
             .epochs
@@ -72,11 +99,14 @@ impl Watch {
             .get(&key)
             .filter(|claim| claim.online == online)
         {
-            return (retry && claim.pending.load(Ordering::SeqCst)).then(|| Arc::clone(claim));
+            return (shared || (retry && claim.pending.load(Ordering::SeqCst)))
+                .then(|| Arc::clone(claim));
         }
         let claim = Arc::new(Claim {
             online,
             pending: AtomicBool::new(false),
+            #[cfg(feature = "redis")]
+            reserved: AtomicBool::new(false),
         });
         state.claims.insert(key, Arc::clone(&claim));
         Some(claim)
@@ -117,7 +147,11 @@ impl<S: ConversationStore> RoomKit<S> {
     }
 
     pub(crate) async fn publish_agent_presence(&self, room: &RoomId, channel: Option<&ChannelId>) {
+        #[cfg(feature = "redis")]
+        self.start_presence_watch();
         let _gate = self.inner.agent_presence.gate.lock().await;
+        #[cfg(feature = "redis")]
+        self.finish_presence_forgets().await;
         let result = self.publish_agents(room, channel).await;
         if let Err(error) = result {
             tracing::warn!(target: "roomkit::turns", %error, "publishing the room's agent presence failed");
@@ -130,6 +164,7 @@ impl<S: ConversationStore> RoomKit<S> {
         room: &RoomId,
         channel: Option<&ChannelId>,
     ) -> Result<(), RoomKitError> {
+        let executors = self.executors().await?;
         let channels = if let Some(channel) = channel {
             vec![channel.clone()]
         } else {
@@ -142,7 +177,7 @@ impl<S: ConversationStore> RoomKit<S> {
                 .collect()
         };
         for channel in channels {
-            if let Err(error) = self.publish_agent(room, &channel, false).await {
+            if let Err(error) = self.publish_agent(room, &channel, false, &executors).await {
                 tracing::warn!(target: "roomkit::turns", %room, %channel, %error, "publishing the agent's presence failed; it is tried again");
             }
         }
@@ -154,6 +189,7 @@ impl<S: ConversationStore> RoomKit<S> {
         room: &RoomId,
         channel: &ChannelId,
         retry: bool,
+        executors: &[crate::turns::ExecutorInfo],
     ) -> Result<(), RoomKitError> {
         let key = (room.clone(), channel.clone());
         let Some(epoch) = self.inner.agent_presence.begin(key.clone(), retry) else {
@@ -164,15 +200,24 @@ impl<S: ConversationStore> RoomKit<S> {
             .get_room(room)
             .await?
             .and_then(|room| room.organization_id);
-        let executors = self.executors().await?;
-        let presence = self.presence_of(channel, room, organization, &executors)?;
-        let Some(claim) = self
-            .inner
-            .agent_presence
-            .claim(key, &epoch, presence.online, retry)
+        let presence = self.presence_of(channel, room, organization, executors)?;
+        #[cfg(feature = "redis")]
+        let shared = self.inner.turns.remote.is_some();
+        #[cfg(not(feature = "redis"))]
+        let shared = false;
+        let Some(claim) =
+            self.inner
+                .agent_presence
+                .claim(key, &epoch, presence.online, retry, shared)
         else {
             return Ok(());
         };
+        #[cfg(feature = "redis")]
+        if let Some(backend) = &self.inner.turns.remote
+            && !claims::reserve(backend, &claim, room, channel).await?
+        {
+            return Ok(());
+        }
         let result = self
             .publish_presence(
                 room,
@@ -214,11 +259,15 @@ impl<S: ConversationStore> RoomKit<S> {
 
     async fn retry_pending_presence(&self) {
         let _gate = self.inner.agent_presence.gate.lock().await;
+        let Ok(executors) = self.executors().await else {
+            return;
+        };
         for (room, channel) in self.inner.agent_presence.pending() {
             match self.store().get_binding(&room, &channel).await {
                 Ok(None) => self.inner.agent_presence.forget(&room, Some(&channel)),
                 Ok(Some(_)) => {
-                    if let Err(error) = self.publish_agent(&room, &channel, true).await {
+                    if let Err(error) = self.publish_agent(&room, &channel, true, &executors).await
+                    {
                         tracing::debug!(target: "roomkit::turns", %room, %channel, %error, "publishing the agent's presence failed again");
                     }
                 }

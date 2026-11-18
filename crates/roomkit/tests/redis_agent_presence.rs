@@ -2,29 +2,26 @@
 #![cfg(feature = "redis")]
 #![expect(clippy::unwrap_used, reason = "a broken test fixture fails the test")]
 
-use roomkit::{RedisTurnBackend, RedisTurnBackendOptions};
+use std::collections::BTreeSet;
+use std::sync::Arc;
+use std::time::Duration;
 
-fn nodes() -> Option<(String, RedisTurnBackend, RedisTurnBackend)> {
-    let url = std::env::var("REDIS_URL").ok()?;
-    let prefix = format!("roomkit:test:agent-presence:{}", uuid::Uuid::new_v4());
-    let make = || {
-        RedisTurnBackend::new(
-            Some(&url),
-            RedisTurnBackendOptions {
-                key_prefix: prefix.clone(),
-                ..RedisTurnBackendOptions::default()
-            },
-        )
-        .unwrap()
-    };
-    Some((prefix.clone(), make(), make()))
-}
+use roomkit::model::{ChannelCategory, ChannelId, RoomId};
+use roomkit::realtime::{EphemeralEventType, InMemoryRealtime, RealtimeBackend};
+use roomkit::testing::EchoAgent;
+use roomkit::{
+    AgentIdentity, AttachChannelOptions, ChannelDeclaration, CreateRoomOptions, InMemoryStore,
+    RoomKit, RoomKitOptions, TurnExecutor, TurnExecutorOptions, TurnTimeouts,
+};
+use roomkit::{RedisTurnBackend, RedisTurnBackendOptions};
+use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
 #[tokio::test]
 async fn two_owners_claim_each_change_once_and_share_the_python_key() {
-    let Some((prefix, first, second)) = nodes() else {
+    let Some((prefix, node)) = test_nodes(Duration::from_millis(30)) else {
         return;
     };
+    let (first, second) = (node(), node());
     let agent = "a:b";
     let room = "r/É";
     let (one, two) = tokio::join!(
@@ -72,4 +69,191 @@ async fn two_owners_claim_each_change_once_and_share_the_python_key() {
     first.close().await.unwrap();
     assert!(first.claim_presence(agent, room, Some(true)).await.is_err());
     second.close().await.unwrap();
+}
+
+struct Room {
+    id: RoomId,
+    agent: ChannelId,
+    realtime: Arc<InMemoryRealtime>,
+    store: Arc<InMemoryStore>,
+}
+
+impl Room {
+    fn new() -> Self {
+        Self {
+            id: "r".parse().unwrap(),
+            agent: "worker".parse().unwrap(),
+            realtime: Arc::new(InMemoryRealtime::default()),
+            store: Arc::new(InMemoryStore::new()),
+        }
+    }
+
+    fn owner(&self, node: RedisTurnBackend) -> RoomKit {
+        let kit = RoomKit::new(RoomKitOptions {
+            realtime: Some(Arc::<InMemoryRealtime>::clone(&self.realtime)),
+            store: Arc::clone(&self.store),
+            turn_backend: Some(node),
+            ..Default::default()
+        });
+        kit.register_channel(ChannelDeclaration {
+            identity: Some(AgentIdentity::default()),
+            ..ChannelDeclaration::new(self.agent.clone())
+        })
+        .unwrap();
+        kit
+    }
+
+    async fn create(&self, kit: &RoomKit) -> UnboundedReceiver<EphemeralEventType> {
+        let (send, events) = unbounded_channel();
+        self.realtime
+            .subscribe_to_room(
+                &self.id,
+                Arc::new(move |event| {
+                    if event.user_id == "worker"
+                        && matches!(
+                            event.r#type,
+                            EphemeralEventType::PresenceOffline
+                                | EphemeralEventType::PresenceOnline
+                        )
+                    {
+                        send.send(event.r#type).unwrap();
+                    }
+                    Box::pin(async {})
+                }),
+            )
+            .await;
+        kit.create_room(CreateRoomOptions {
+            room_id: Some(self.id.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        self.attach(kit).await;
+        events
+    }
+
+    async fn attach(&self, kit: &RoomKit) {
+        kit.attach_channel(
+            &self.id,
+            &self.agent,
+            AttachChannelOptions {
+                category: Some(ChannelCategory::Intelligence),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    }
+}
+
+fn worker() -> TurnExecutor {
+    TurnExecutor::new(
+        |_id| async { Ok(None::<EchoAgent>) },
+        TurnExecutorOptions {
+            executor_id: Some("host-1".into()),
+            hosts: Some(BTreeSet::from(["worker".into()])),
+            ..Default::default()
+        },
+    )
+    .unwrap()
+}
+
+fn test_nodes(interval: Duration) -> Option<(String, impl Fn() -> RedisTurnBackend)> {
+    let url = std::env::var("REDIS_URL").ok()?;
+    let prefix = format!("roomkit:test:agent-presence:{}", uuid::Uuid::new_v4());
+    Some((prefix.clone(), move || {
+        RedisTurnBackend::new(
+            Some(&url),
+            RedisTurnBackendOptions {
+                key_prefix: prefix.clone(),
+                timeouts: TurnTimeouts {
+                    heartbeat_interval: interval,
+                    heartbeat_timeout: Duration::from_secs(30),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .unwrap()
+    }))
+}
+
+async fn expect_event(
+    events: &mut UnboundedReceiver<EphemeralEventType>,
+    kind: EphemeralEventType,
+) {
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(3), events.recv())
+            .await
+            .unwrap(),
+        Some(kind)
+    );
+}
+
+#[tokio::test]
+async fn two_room_owners_publish_each_remote_worker_change_once() {
+    use EphemeralEventType::{PresenceOffline, PresenceOnline};
+    let interval = Duration::from_millis(30);
+    let Some((_, node)) = test_nodes(interval) else {
+        return;
+    };
+    let room = Room::new();
+    let (first, second) = (room.owner(node()), room.owner(node()));
+    let peer = node();
+    let worker = worker();
+    peer.serve(worker.clone()).await.unwrap();
+    let mut events = room.create(&first).await;
+    expect_event(&mut events, PresenceOnline).await;
+    peer.close().await.unwrap();
+    expect_event(&mut events, PresenceOffline).await;
+    tokio::time::sleep(3 * interval).await;
+    assert!(events.try_recv().is_err());
+    first
+        .detach_channel(
+            &room.id,
+            &room.agent,
+            roomkit::DetachChannelOptions::default(),
+        )
+        .await
+        .unwrap();
+    room.attach(&second).await;
+    expect_event(&mut events, PresenceOffline).await;
+    worker.close().await;
+    first.close().await.unwrap();
+    second.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_local_serve_and_close_publish_without_waiting_for_a_heartbeat() {
+    use EphemeralEventType::{PresenceOffline, PresenceOnline};
+    let Some((_, node)) = test_nodes(Duration::from_secs(6)) else {
+        return;
+    };
+    let backend = node();
+    let room = Room::new();
+    let kit = room.owner(backend.clone());
+    let mut events = room.create(&kit).await;
+    expect_event(&mut events, PresenceOffline).await;
+    let worker = worker();
+    backend.serve(worker.clone()).await.unwrap();
+    assert!(
+        !backend
+            .claim_presence("worker", "r", Some(true))
+            .await
+            .unwrap()
+    );
+    expect_event(&mut events, PresenceOnline).await;
+    worker.close().await;
+    assert!(
+        !backend
+            .claim_presence("worker", "r", Some(false))
+            .await
+            .unwrap()
+    );
+    expect_event(&mut events, PresenceOffline).await;
+    tokio::time::timeout(Duration::from_secs(2), roomkit::testing::idle(&kit))
+        .await
+        .unwrap();
+    assert!(events.try_recv().is_err());
+    kit.close().await.unwrap();
 }

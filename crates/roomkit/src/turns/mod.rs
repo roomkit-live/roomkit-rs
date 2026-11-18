@@ -132,6 +132,8 @@ pub(crate) enum Answer {
 pub(crate) struct Turns {
     #[cfg(feature = "redis")]
     pub(crate) remote: Option<RedisTurnBackend>,
+    #[cfg(feature = "redis")]
+    pub(crate) serving_backends: redis::ServingBackends,
     timeouts: RwLock<TurnTimeouts>,
     observers: RwLock<Observers>,
     /// The id the kit's own executor answers with.
@@ -167,6 +169,8 @@ impl Default for Turns {
         Self {
             #[cfg(feature = "redis")]
             remote: None,
+            #[cfg(feature = "redis")]
+            serving_backends: redis::ServingBackends::default(),
             timeouts: RwLock::new(TurnTimeouts::default()),
             observers: RwLock::new(Observers::default()),
             executor_id: executor_id(),

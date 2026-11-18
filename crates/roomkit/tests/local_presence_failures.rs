@@ -248,3 +248,69 @@ async fn closing_the_kit_ends_an_attach_held_in_presence_publication() {
 mod attach;
 #[path = "local_presence_failures/lifecycle.rs"]
 mod lifecycle;
+
+#[cfg(feature = "redis")]
+#[tokio::test]
+async fn a_redis_owner_retries_a_reserved_failure_and_releases_only_unpublished_claims_on_close() {
+    use roomkit::{RedisTurnBackend, RedisTurnBackendOptions, TurnTimeouts};
+    let Ok(url) = std::env::var("REDIS_URL") else {
+        return;
+    };
+    for delivered in [true, false] {
+        let options = RedisTurnBackendOptions {
+            key_prefix: format!("roomkit:test:presence-retry:{}", uuid::Uuid::new_v4()),
+            timeouts: TurnTimeouts {
+                heartbeat_interval: Duration::from_millis(20),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let owner = RedisTurnBackend::new(Some(&url), options.clone()).unwrap();
+        let peer = RedisTurnBackend::new(Some(&url), options).unwrap();
+        let failures = if delivered { 2 } else { usize::MAX };
+        let realtime = Arc::new(Backend::new(failures, EphemeralEventType::PresenceOnline));
+        let kit = RoomKit::new(RoomKitOptions {
+            turn_backend: Some(owner),
+            realtime: Some(Arc::<Backend>::clone(&realtime)),
+            ..Default::default()
+        });
+        let room: roomkit::model::RoomId = "r".parse().unwrap();
+        let channel: roomkit::model::ChannelId = "helper".parse().unwrap();
+        kit.register_channel(EchoAgent::new(
+            channel.clone(),
+            "hi",
+            EchoAgentOptions::default(),
+        ))
+        .unwrap();
+        kit.create_room(CreateRoomOptions {
+            room_id: Some(room.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        kit.attach_channel(&room, &channel, AttachChannelOptions::default())
+            .await
+            .unwrap();
+        assert!(
+            !peer
+                .claim_presence("helper", "r", Some(true))
+                .await
+                .unwrap()
+        );
+        if delivered {
+            tokio::time::timeout(Duration::from_secs(2), realtime.delivered.notified())
+                .await
+                .unwrap();
+            assert_eq!(realtime.attempts.load(Ordering::SeqCst), 3);
+            assert_eq!(realtime.published.lock().unwrap().len(), 1);
+        }
+        kit.close().await.unwrap();
+        assert_eq!(
+            peer.claim_presence("helper", "r", Some(true))
+                .await
+                .unwrap(),
+            !delivered
+        );
+        peer.close().await.unwrap();
+    }
+}

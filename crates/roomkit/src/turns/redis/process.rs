@@ -28,6 +28,7 @@ impl RedisTurnBackend {
             if serving.closing {
                 return Err(super::routes::closed());
             }
+            executor.served_by(self);
             let retired: Vec<_> = serving
                 .workers
                 .values()
@@ -44,21 +45,46 @@ impl RedisTurnBackend {
                 .insert(executor.executor_id().into(), executor);
             serving.generation = serving.generation.saturating_add(1);
         }
-        self.start().await
+        self.start().await?;
+        self.notify_coverage(super::CoverageNotice::ExecutorsChanged)
+            .await;
+        Ok(())
     }
 
     pub(super) async fn attend(&self) -> Result<(), RoomKitError> {
-        {
+        let first_use = {
             let mut serving = lock(&self.0.serving);
             if serving.closing {
                 return Err(super::routes::closed());
             }
-            if !serving.owner {
+            let first = !serving.owner;
+            if first {
                 serving.owner = true;
                 serving.generation = serving.generation.saturating_add(1);
             }
+            first
+        };
+        self.start().await?;
+        if first_use {
+            self.notify_coverage(super::CoverageNotice::OwnerAttended)
+                .await;
         }
-        self.start().await
+        Ok(())
+    }
+
+    pub(super) async fn worker_closed(&self) -> Result<(), RoomKitError> {
+        {
+            let mut serving = lock(&self.0.serving);
+            if serving.closing {
+                return Ok(());
+            }
+            serving.generation = serving.generation.saturating_add(1);
+        }
+        let mut conn = self.connection().await?;
+        write_beat(self, &mut conn, &self.snapshot()).await?;
+        self.notify_coverage(super::CoverageNotice::ExecutorsChanged)
+            .await;
+        Ok(())
     }
 
     async fn start(&self) -> Result<(), RoomKitError> {

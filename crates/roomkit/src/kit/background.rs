@@ -187,10 +187,11 @@ impl<S: ConversationStore> RoomKit<S> {
         // as the Python implementation's turn backend's close.
         turns.close();
         #[cfg(feature = "redis")]
-        if let Some(backend) = &turns.remote
-            && let Err(error) = backend.close().await
-        {
-            tracing::warn!(%error, "Closing the Redis turn backend failed");
+        if let Some(backend) = &turns.remote {
+            self.release_pending_presence(backend).await;
+            if let Err(error) = backend.close().await {
+                tracing::warn!(%error, "Closing the Redis turn backend failed");
+            }
         }
         self.unwind_turns().await;
         let failures = self.close_channels_with_observers().await;

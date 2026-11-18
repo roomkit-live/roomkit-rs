@@ -334,7 +334,9 @@ pub(crate) struct Inner<S> {
     pub(crate) turn_runners: crate::turn_runners::TurnRunners<S>,
     /// The discussion this process runs for each room (RFC §19.7.5).
     pub(crate) discussions: discussions::DiscussionSeams,
-    pub(crate) agent_presence: agent_presence::watch::Watch,
+    pub(crate) agent_presence: Arc<agent_presence::watch::Watch>,
+    #[cfg(feature = "redis")]
+    on_presence_room_close: Box<dyn Fn(&RoomId) + Send + Sync>,
 }
 
 impl<S> std::fmt::Debug for Inner<S> {
@@ -497,11 +499,16 @@ impl<S: ConversationStore> RoomKit<S> {
             room_subscriptions: room_subscriptions::RoomSubscriptions::default(),
             turn_runners: crate::turn_runners::TurnRunners::default(),
             discussions: discussions::DiscussionSeams::default(),
-            agent_presence: agent_presence::watch::Watch::default(),
+            agent_presence: Arc::default(),
+            #[cfg(feature = "redis")]
+            on_presence_room_close: agent_presence::watch::on_room_close(Weak::clone(kit)),
         });
         inner.subscribe_status_bus();
         inner.name_held_deliveries();
-        Self { inner }
+        let kit = Self { inner };
+        #[cfg(feature = "redis")]
+        kit.wire_presence_watch();
+        kit
     }
 
     /// The registered channel `channel_id`, as the kit holds it: its id,
@@ -794,6 +801,8 @@ impl<S> Inner<S> {
             &notice
         {
             self.agent_presence.forget(room_id, None);
+            #[cfg(feature = "redis")]
+            (self.on_presence_room_close)(room_id);
         }
         let event = FrameworkEvent::of(notice, self.environment.now());
         self.events.emit(&self.tasks, event)
