@@ -149,6 +149,7 @@ sqlite-fixture:
 # cargo runs them all, then fails naming each binary that failed.
 postgres-test:
 	@test -n "$$POSTGRES_DSN" || { echo "postgres-test: POSTGRES_DSN is not set"; exit 1; }
+	python3 scripts/check-postgres-consumer.py
 	$(CARGO) test --locked --no-fail-fast --package roomkit-postgres -- --test-threads=4
 
 # The cross-read fixture of roomkit-postgres (RMK-989): the rows the Python

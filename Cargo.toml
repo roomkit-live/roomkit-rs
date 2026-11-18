@@ -102,7 +102,7 @@ rusqlite = { version = "0.41", features = ["bundled"] }
 # The Postgres store (HITL ebca3f13): the client, its pool, and TLS on the
 # workspace's rustls; JSONB through serde_json. No default features beyond
 # the tokio runtime, for roomkit-postgres alone.
-tokio-postgres = { version = "0.7", default-features = false, features = ["runtime", "with-serde_json-1"] }
+tokio-postgres = { version = "=0.7.18", git = "https://github.com/sboily/rust-postgres", rev = "068bbab6cf2bd3867aa897d1e296126dfed650f8", default-features = false, features = ["runtime", "with-serde_json-1"] }
 deadpool-postgres = { version = "0.14", default-features = false, features = ["rt_tokio_1"] }
 tokio-postgres-rustls = "0.13"
 # roomkit-postgres's TLS tests: a certificate authority, its servers and its
@@ -126,6 +126,13 @@ blake2 = { version = "0.11", default-features = false }
 axum = { version = "0.8", default-features = false, features = ["http1", "query", "tokio", "ws"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect"] }
+
+# Keep the pool, its TLS connector and the store on the same driver until
+# rust-postgres/rust-postgres#1409 ships. Applications repeat this root patch.
+[patch.crates-io]
+tokio-postgres = { git = "https://github.com/sboily/rust-postgres", rev = "068bbab6cf2bd3867aa897d1e296126dfed650f8" }
+postgres-types = { git = "https://github.com/sboily/rust-postgres", rev = "068bbab6cf2bd3867aa897d1e296126dfed650f8" }
+postgres-protocol = { git = "https://github.com/sboily/rust-postgres", rev = "068bbab6cf2bd3867aa897d1e296126dfed650f8" }
 
 # Identity verification's hash runs at its production work factor in the
 # tests and examples too (RFC §11.7.7): optimized in debug builds, one hash

@@ -69,6 +69,28 @@ roomkit-openai = { git = "https://github.com/roomkit-live/roomkit-rs", rev = "FU
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
+### PostgreSQL driver
+
+If your application uses `roomkit-postgres`, apply these entries in the
+root `Cargo.toml` of the application workspace. The exact version keeps Cargo
+on the patched driver when other 0.7 releases are available. The patch also
+aligns the SQL types used by the application, pool and TLS connector.
+
+```toml
+[dependencies]
+tokio-postgres = "=0.7.18"
+
+[patch.crates-io]
+tokio-postgres = { git = "https://github.com/sboily/rust-postgres", rev = "068bbab6cf2bd3867aa897d1e296126dfed650f8" }
+postgres-types = { git = "https://github.com/sboily/rust-postgres", rev = "068bbab6cf2bd3867aa897d1e296126dfed650f8" }
+postgres-protocol = { git = "https://github.com/sboily/rust-postgres", rev = "068bbab6cf2bd3867aa897d1e296126dfed650f8" }
+```
+
+This revision waits for PostgreSQL to close the cancellation connection before
+the store reuses a pooled connection. Keep the patch until you upgrade to a
+RoomKit revision that uses a released driver containing the fix.
+[Upstream change](https://github.com/rust-postgres/rust-postgres/pull/1409).
+
 ## A first room
 
 This example connects a recording transport and an echo agent without network

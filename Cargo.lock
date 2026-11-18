@@ -1761,10 +1761,9 @@ dependencies = [
 [[package]]
 name = "postgres-protocol"
 version = "0.6.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08808e3c483c46e999108051c78334f473d5adb59d78bb80a1268c7e6aa6c514"
+source = "git+https://github.com/sboily/rust-postgres?rev=068bbab6cf2bd3867aa897d1e296126dfed650f8#068bbab6cf2bd3867aa897d1e296126dfed650f8"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "byteorder",
  "bytes",
  "fallible-iterator 0.2.0",
@@ -1779,8 +1778,7 @@ dependencies = [
 [[package]]
 name = "postgres-types"
 version = "0.2.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "851ca9db4932932d69f3ea811b1abe63087a0f740a47692619dd40d4899b68be"
+source = "git+https://github.com/sboily/rust-postgres?rev=068bbab6cf2bd3867aa897d1e296126dfed650f8#068bbab6cf2bd3867aa897d1e296126dfed650f8"
 dependencies = [
  "bytes",
  "fallible-iterator 0.2.0",
@@ -3004,8 +3002,7 @@ dependencies = [
 [[package]]
 name = "tokio-postgres"
 version = "0.7.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a528f7d280f6d5b9cd149635c8705b0dd049754bc67d81d31fa25169a93809d3"
+source = "git+https://github.com/sboily/rust-postgres?rev=068bbab6cf2bd3867aa897d1e296126dfed650f8#068bbab6cf2bd3867aa897d1e296126dfed650f8"
 dependencies = [
  "async-trait",
  "byteorder",
