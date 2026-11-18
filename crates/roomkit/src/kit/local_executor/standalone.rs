@@ -191,7 +191,7 @@ impl<S: ConversationStore> TurnExecutor<S> {
     }
 
     #[cfg(test)]
-    pub(crate) fn take(&self, carried: CarriedRequest) -> Result<WorkerTurn, RoomKitError> {
+    pub(crate) fn take_carried(&self, carried: CarriedRequest) -> Result<WorkerTurn, RoomKitError> {
         self.take_from(
             carried,
             #[cfg(feature = "redis")]
@@ -208,6 +208,21 @@ impl<S: ConversationStore> TurnExecutor<S> {
             reason: "frame_invalid".into(),
             message: Some(why),
         })?;
+        self.start_request(
+            request,
+            executor::WorkerOrigin {
+                #[cfg(feature = "redis")]
+                owner,
+                ..executor::WorkerOrigin::default()
+            },
+        )
+    }
+
+    pub(super) fn start_request(
+        &self,
+        request: crate::turns::TurnRequest,
+        origin: executor::WorkerOrigin,
+    ) -> Result<WorkerTurn, RoomKitError> {
         let channel_id = request.channel_id.clone();
         let organization = request.context.room.organization_id.clone();
         let room = request.room_id.clone();
@@ -242,8 +257,7 @@ impl<S: ConversationStore> TurnExecutor<S> {
             self.executor_id().to_owned(),
             request,
             build,
-            #[cfg(feature = "redis")]
-            owner,
+            origin,
         )
     }
 }

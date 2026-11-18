@@ -2,13 +2,18 @@
 
 use crate::RoomKitError;
 use crate::turns::ChannelResult;
-use crate::turns::wire::{ChannelControl, ChannelControlEnvelope};
+use crate::turns::wire::ChannelControl;
 use crate::{ConversationStore, TurnExecutor};
 
 impl<S: ConversationStore> TurnExecutor<S> {
-    pub(crate) async fn control(
+    /// Apply a channel verb or notify a built channel about its room (RFC §10.6.3).
+    ///
+    /// # Errors
+    /// A closed executor refuses the message. A completed verb reports its own
+    /// error alongside its resulting room state.
+    pub async fn control(
         &self,
-        envelope: ChannelControlEnvelope,
+        message: ChannelControl,
     ) -> Result<Option<ChannelResult>, RoomKitError> {
         if self.closed() {
             return Err(RoomKitError::TurnLink {
@@ -16,7 +21,6 @@ impl<S: ConversationStore> TurnExecutor<S> {
                 message: Some(format!("Executor {} has closed", self.executor_id())),
             });
         }
-        let message = envelope.message;
         match &message {
             ChannelControl::ChannelCall(call) => {
                 let answer = match self

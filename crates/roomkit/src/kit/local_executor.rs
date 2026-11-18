@@ -200,3 +200,26 @@ impl<S: ConversationStore> TurnExecutor<S> {
         self.kit.inner.turns.timeouts()
     }
 }
+
+impl<S: ConversationStore> TurnExecutor<S> {
+    /// Run the request delivered by an application backend (RFC §10.6.2). The link
+    /// releases its resources after the executor finishes sending the turn's frames.
+    ///
+    /// # Errors
+    /// A closed executor or a second admission of the same turn is refused.
+    pub fn take(&self, link: Arc<dyn crate::turns::ExecutorLink>) -> Result<(), RoomKitError> {
+        let origin = crate::turns::executor::WorkerOrigin {
+            context: link.turn_context(),
+            waits_for_writes: true,
+            #[cfg(feature = "redis")]
+            owner: None,
+        };
+        let turn = self.start_request(link.request().clone(), origin)?;
+        let kit = Arc::downgrade(&self.kit.inner);
+        let running = crate::turn::TurnKit::spawn(&kit, Box::pin(turn.serve_link(link)));
+        if !running {
+            return Err(RoomKitError::KitClosed);
+        }
+        Ok(())
+    }
+}

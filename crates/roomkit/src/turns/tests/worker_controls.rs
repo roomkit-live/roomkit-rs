@@ -137,7 +137,10 @@ impl Channel for Observed {
     }
 }
 
-pub(super) fn envelope(kind: &str, update: impl FnOnce(&mut Value)) -> ChannelControlEnvelope {
+pub(super) fn envelope(
+    kind: &str,
+    update: impl FnOnce(&mut Value),
+) -> crate::turns::ChannelControl {
     let mut value = include_str!("../../../tests/fixtures/turns/python-rpc.jsonl")
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).unwrap())
@@ -147,7 +150,9 @@ pub(super) fn envelope(kind: &str, update: impl FnOnce(&mut Value)) -> ChannelCo
         .unwrap()["message"]
         .take();
     update(&mut value["message"]);
-    serde_json::from_value(value).unwrap()
+    serde_json::from_value::<ChannelControlEnvelope>(value)
+        .unwrap()
+        .message
 }
 
 #[tokio::test]
@@ -290,7 +295,7 @@ async fn a_release_lets_the_next_build_run_before_the_old_turn_finishes() {
     submitted.channel_rows.push(row.clone());
     row.source.channel_id = super::support::channel("someone-else");
     submitted.channel_rows.push(row);
-    let mut turn = executor.take(submitted).unwrap();
+    let mut turn = executor.take_carried(submitted).unwrap();
     frame(&mut turn, "old", 1, "accepted").await;
     timeout(Duration::from_secs(5), started.notified())
         .await

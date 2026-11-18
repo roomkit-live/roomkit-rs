@@ -27,7 +27,7 @@ mod lifecycle;
 mod link;
 mod record;
 mod remote;
-pub(crate) use remote::{WorkerTurn, factory_error, missing, no_executor, refused};
+pub(crate) use remote::{WorkerOrigin, WorkerTurn, factory_error, missing, no_executor, refused};
 mod steering;
 mod work;
 
@@ -80,14 +80,16 @@ pub(super) fn take(
         turn,
         kit: Arc::clone(kit),
     };
+    let run = async move {
+        executor
+            .run(controls, Incoming::Local(Box::new(carried)))
+            .await;
+    };
     #[cfg(test)]
     if turns.executor_apart.load(Ordering::SeqCst) {
-        let run = executor.run(controls, Incoming::Local(Box::new(carried)));
         return kit.spawn(Box::pin(crate::telemetry::within_no_span(run)));
     }
-    kit.spawn(Box::pin(
-        executor.run(controls, Incoming::Local(Box::new(carried))),
-    ))
+    kit.spawn(Box::pin(run))
 }
 
 /// What one turn's task runs with.
@@ -134,7 +136,7 @@ enum Cut {
 
 impl Executor {
     /// Runs the turn to its end, which the owner is told unless lost.
-    async fn run(self, mut controls: PipeReceiver<Control>, incoming: Incoming) {
+    async fn run(&self, mut controls: PipeReceiver<Control>, incoming: Incoming) {
         if self
             .send(&Frame::Accepted {
                 executor_id: self.id.clone(),
@@ -623,9 +625,9 @@ fn apply(
 /// What a broken link from the owner is to the executor.
 fn lost(failure: &LinkFailure) -> TurnError {
     match failure {
-        #[cfg(feature = "redis")]
-        LinkFailure::WriteRefused => TurnError::link(failure),
-        LinkFailure::Lost { .. } | LinkFailure::Invalid(_) => TurnError::link(failure),
+        LinkFailure::FrameLost | LinkFailure::Lost { .. } | LinkFailure::Invalid(_) => {
+            TurnError::link(failure)
+        }
         LinkFailure::Closed => TurnError::new("owner_lost", "the turn's owner let go of it"),
     }
 }

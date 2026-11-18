@@ -63,7 +63,7 @@ impl RedisTurnBackend {
         let backend = self.clone();
         let message = msg.clone();
         let admitted = self.dispatch(async move {
-            let body = match worker.control(control).await {
+            let body = match worker.control(control.message).await {
                 Ok(Some(answer)) => serde_json::to_string(&answer),
                 Ok(None) => Ok(r#"{"type":"channel_result","result":null,"room_state":null,"error":null,"executor_id":null}"#.to_owned()),
                 Err(error) => Ok(serde_json::json!({

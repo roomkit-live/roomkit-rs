@@ -116,6 +116,10 @@ impl MemoryTurn {
             .get_or_insert_with(TurnContext::current);
     }
 
+    pub(super) fn first_stream_context(&self, context: TurnContext) {
+        lock(&self.contexts).stream.get_or_insert(context);
+    }
+
     /// Stops both directions: their readers learn it, and what is put on
     /// them later is dropped. The owner's contexts are let go of: a turn
     /// over holds nothing of the run that submitted it.

@@ -136,7 +136,7 @@ impl RedisTurnBackend {
             };
             if let Err(error) = result {
                 tracing::warn!(%error, "Sending the turn control failed");
-                memory.frames.end(LinkFailure::WriteRefused);
+                memory.frames.end(LinkFailure::FrameLost);
                 break;
             }
         }

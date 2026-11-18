@@ -61,8 +61,8 @@ async fn a_python_request_uses_one_lazy_build_for_two_distinct_turns() {
     )
     .unwrap();
     assert_eq!(executor.advertised_organizations(), None);
-    let mut first = executor.take(request("one", None)).unwrap();
-    let mut second = executor.take(request("two", None)).unwrap();
+    let mut first = executor.take_carried(request("one", None)).unwrap();
+    let mut second = executor.take_carried(request("two", None)).unwrap();
     for (turn, id) in [(&mut first, "one"), (&mut second, "two")] {
         assert_eq!(
             frame(turn, id, 1, "accepted").await["executor_id"],
@@ -79,7 +79,7 @@ async fn a_python_request_uses_one_lazy_build_for_two_distinct_turns() {
     assert_eq!(builds.load(Ordering::SeqCst), 1);
     assert_eq!(agent.ends(), ["answered", "answered"]);
     executor.close().await;
-    assert!(executor.take(request("closed", None)).is_err());
+    assert!(executor.take_carried(request("closed", None)).is_err());
 }
 
 #[tokio::test]
@@ -94,7 +94,9 @@ async fn the_worker_refuses_another_tenant_before_building() {
         options(),
     )
     .unwrap();
-    let mut turn = executor.take(request("foreign", Some("other"))).unwrap();
+    let mut turn = executor
+        .take_carried(request("foreign", Some("other")))
+        .unwrap();
     frame(&mut turn, "foreign", 1, "accepted").await;
     let failed = frame(&mut turn, "foreign", 2, "error").await;
     assert_eq!(failed["error"]["attributes"]["reason"], "no_executor");
@@ -128,18 +130,20 @@ async fn cancellation_crosses_the_pipe_while_the_factory_is_still_running() {
         options(),
     )
     .unwrap();
-    let mut turn = executor.take(request("cancel", None)).unwrap();
+    let mut turn = executor.take_carried(request("cancel", None)).unwrap();
     frame(&mut turn, "cancel", 1, "accepted").await;
     timeout(Duration::from_secs(5), building.notified())
         .await
         .unwrap();
-    assert!(executor.take(request("cancel", None)).is_err());
+    assert!(executor.take_carried(request("cancel", None)).is_err());
     turn.control(json!({"turn_id":"cancel","seq":1,"message":{"type":"steer","steer_id":"ask","directive":{"type":"inject_message","content":"early"}}}).to_string());
     assert_eq!(
         frame(&mut turn, "cancel", 2, "steer_result").await["loops"],
         Value::Null
     );
-    let mut next = executor.take(request("also-building", None)).unwrap();
+    let mut next = executor
+        .take_carried(request("also-building", None))
+        .unwrap();
     frame(&mut next, "also-building", 1, "accepted").await;
     turn.control(
         json!({"turn_id":"cancel", "seq":2, "message":{"type":"cancel", "reason":"cancelled"}})

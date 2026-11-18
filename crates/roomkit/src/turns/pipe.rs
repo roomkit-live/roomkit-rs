@@ -34,9 +34,8 @@ pub(crate) enum LinkFailure {
     Closed,
     /// A message was lost: the next one carried another number.
     Lost { expected: u64, got: u64 },
-    /// The transport refused to write a numbered message.
-    #[cfg(feature = "redis")]
-    WriteRefused,
+    /// The transport reported a frame lost while writing or receiving a message.
+    FrameLost,
     /// A message could not be read.
     Invalid(String),
 }
@@ -46,9 +45,7 @@ impl LinkFailure {
     pub(crate) fn reason(&self) -> &'static str {
         match self {
             Self::Closed => "backend_closed",
-            Self::Lost { .. } => "frame_lost",
-            #[cfg(feature = "redis")]
-            Self::WriteRefused => "frame_lost",
+            Self::Lost { .. } | Self::FrameLost => "frame_lost",
             Self::Invalid(_) => "frame_invalid",
         }
     }
@@ -59,8 +56,7 @@ impl LinkFailure {
             // Python's `TurnLinkError` words (RMK-1106).
             Self::Closed => "The turn ended: its turn backend closed".to_owned(),
             Self::Lost { expected, .. } => format!("Message {expected} of the turn was lost"),
-            #[cfg(feature = "redis")]
-            Self::WriteRefused => "The turn ended without its executor: frame_lost".to_owned(),
+            Self::FrameLost => "The turn ended without its executor: frame_lost".to_owned(),
             Self::Invalid(why) => format!("The turn's frames could not be read: {why}"),
         }
     }
