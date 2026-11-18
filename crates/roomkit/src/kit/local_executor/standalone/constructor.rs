@@ -44,7 +44,25 @@ impl Default for TurnExecutorOptions {
 
 impl TurnExecutor<InMemoryStore> {
     /// Construct an independent executor whose factory builds a channel the first
-    /// time a turn needs it. A successful build is shared by turns of that channel.
+    /// time work needs it. With `owns_channels` enabled, concurrent turns of the same
+    /// channel share the build. A host-owned registry supplies its channel on each use.
+    ///
+    /// ```
+    /// use roomkit::model::ChannelId;
+    /// use roomkit::testing::{EchoAgent, EchoAgentOptions};
+    /// use roomkit::{TurnExecutor, TurnExecutorOptions};
+    ///
+    /// let worker = TurnExecutor::new(
+    ///     |id| std::future::ready(Ok(Some(EchoAgent::new(id, "Hello", EchoAgentOptions::default())))),
+    ///     TurnExecutorOptions {
+    ///         hosts: Some(["support-*".to_owned()].into()),
+    ///         max_channels: Some(8),
+    ///         ..Default::default()
+    ///     },
+    /// ).unwrap();
+    /// assert!(worker.hosts_channel(&ChannelId::new("support-ca").unwrap()));
+    /// assert!(worker.serves(None));
+    /// ```
     ///
     /// # Errors
     /// Refuses a misplaced host wildcard, an empty organization declaration or a

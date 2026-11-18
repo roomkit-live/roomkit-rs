@@ -946,9 +946,9 @@ reason = "The engine is built with its kit; its chains and observer tasks run in
 
 [[missing]]
 python = "roomkit.TurnExecutor"
-members = ["take", "reach_owner", "control", "wire", "use_wiring", "wiring"]
+members = ["reach_owner", "wire", "use_wiring", "wiring"]
 scope = "text"
-reason = "Constructing and serving a remote executor is supported. The public wiring and custom transport interfaces listed here still need Rust equivalents."
+reason = "The worker accepts application links and channel controls. The caller still needs a public port for out-of-turn owner calls and publications, and access to the channel wiring environment."
 
 [[exception]]
 rust = "roomkit::TurnExecutor::hook"
@@ -1018,9 +1018,9 @@ reason = "not in 0.x: voice"
 
 [[missing]]
 python = "roomkit.RoomKit.__init__"
-params = ["turn_backend", "error_classes"]
+params = ["error_classes"]
 scope = "text"
-reason = "not in 0.x: the turn backend, and the application's error classes an error crossing it is rebuilt as (RFC 10.6.8)"
+reason = "The kit still needs the application-provided error classes used to reconstruct errors crossing a turn link (RFC 10.6.8)."
 
 [[missing]]
 python = "roomkit.RoomKit.create_room"

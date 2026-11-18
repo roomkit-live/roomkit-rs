@@ -81,6 +81,7 @@ mod submission;
 mod tests;
 mod timeouts;
 pub mod wire;
+#[doc(inline)]
 pub use wire::{ChannelControl, OwnerTool, PreviousTurn, RoomCall, RoomPublication, TurnRequest};
 
 use std::sync::atomic::{AtomicBool, Ordering};

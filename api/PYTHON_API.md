@@ -541,13 +541,60 @@ notifications log at ERROR and continue, as Python's owner publisher does;
 notifications published directly by an idle channel log at DEBUG and continue.
 This Rust error form was approved on 2026-11-17.
 
+## Turn executors and transports
+
+An application can give either a standalone worker or the kit's executor an
+`Arc<dyn roomkit::turns::ExecutorLink>` through `TurnExecutor::take`. The call
+starts the turn on a task. The link supplies the request, sends numbered
+frames, receives controls and learns when the turn ends through `turn_ended`.
+A write waiting on the transport can run concurrently with a control read.
+`TurnExecutor::control` accepts a typed `ChannelControl` outside a turn.
+A channel verb returns a `ChannelResult` with its value or error and any
+changed room state. Attach, detach, release and committed-event notifications
+return `None`. These worker APIs are available with the default features.
+
+`roomkit::turns::TurnLink` describes the owner's end of a turn. The typed
+request, frames, controls and envelopes are in `roomkit::turns::wire`. The
+request and channel call track handover locally. Their serialized copies
+start with a fresh handover marker.
+
+With the `redis` feature, the owner accepts a `RedisTurnBackend` in
+`RoomKitOptions::turn_backend`. The Redis backend exposes `serve`,
+`executors`, `claim_presence` and `close`. Each standalone factory returns a future yielding `Result<Option<C>, RoomKitError>` for one concrete `C: Channel`. `TurnExecutorOptions` supplies the executor
+ID, host declarations, organization scope, timeouts, channel ownership and
+cache bound. `new_with_host_predicate` accepts a local host predicate.
+Remote placement uses the advertised channel IDs and trailing-wildcard
+prefixes.
+
+The following application contracts remain open for text API parity.
+
+| Python contract | Current Rust behavior |
+| --- | --- |
+| `TurnBackend`, `InMemoryTurnBackend`, `TurnClient` | The kit has built-in local routing and accepts the concrete Redis backend. An application still needs a public backend interface and a way to supply it to the owner. Redis submits requests, routes channel controls and attends the owner internally. |
+| `serve(executor)` | `TurnExecutor<S>` keeps the store type of its hooks. Redis currently takes `TurnExecutor<InMemoryStore>`. A worker with a host predicate or omitted host list can accept direct work, but Redis placement and its catalogue use finite declarations. |
+| `TurnExecutor.organizations` | The standalone constructor accepts `None` for rooms without an organization and rejects an explicitly empty collection. Its public getter returns an empty set in the former case. The Redis declaration preserves null. The kit's executor serves `"*"`. |
+| `TurnExecutor.reach_owner`, `RoomOwner` | Redis routes host calls and publications after a turn. Installing the destination for that work from an application-supplied transport remains open. |
+| `TurnExecutor.wire`, `use_wiring`, `wiring` | The SDK wires the channels it registers. Inspection and replacement of that environment by the application remain open. |
+| `TurnExecutor(..., telemetry=..., error_classes=...)`, `RoomKit(..., error_classes=...)` | Built-in remote errors use the SDK's codec. Supplying worker telemetry and an application error-class registry for the worker or kit remains open. |
+
+The Python snapshot lists methods and properties. It omits instance attributes
+such as `link.request` and `RedisTurnBackend.node_id`, which are accessors in
+Rust. A matching JSON message also leaves some constructor differences open.
+For example, `ChannelCall::new` takes a call ID while Python generates one by
+default, and the Rust `RoomCall` struct literal supplies the ID, depth and
+arguments. The discriminator is part of the serialized message.
+
+The Python worker constructor also takes `media_resolver` and `attached_media`.
+These belong to the media API.
+
 ## Discussion queue changes
 
 `SpeakQueueChange::TurnSkipped` is Python's `TURN_SKIPPED`, serialized as
-`"turn_skipped"`. It can be constructed and read as public queue-change data.
-Detecting an offline remote executor and skipping its queued discussion turn
-remain unsupported; adding this value does not enable those runtime behaviors.
-
+`"turn_skipped"`. Before giving a queued turn, the discussion checks whether
+an executor currently serves the declared channel, the room's organization
+and its enabled turn hooks. A confirmed absence skips the turn and drops any
+instruction it held. A committed event also skips the memory of a confirmed
+offline agent. A registry read failure leaves the agent eligible.
 
 ## Speaking and thinking
 
@@ -603,7 +650,7 @@ integers and values above `u32::MAX` accepted by Python are outside this
 explicitly approved Rust constructor domain. Instructions default to the
 reference prompt when absent or empty, and `reasoning_effort` defaults to None.
 `CutReply` is a text carrier; this does not implement audio interruption,
-realtime admission, remote/offline turn scheduling or vendor classifiers.
+realtime admission or vendor classifiers.
 
 ### Public tool and delegated-turn errors
 

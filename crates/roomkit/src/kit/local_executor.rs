@@ -173,7 +173,9 @@ impl<S: ConversationStore> TurnExecutor<S> {
             .and_then(|worker| worker.hosts.clone())
     }
 
-    /// The kit's executor serves every organization (RFC §10.6.7).
+    /// The kit's executor returns the wildcard for all organizations (§10.6.7).
+    /// A standalone worker configured with no organization declaration returns an
+    /// empty set here and serves rooms without an organization.
     pub fn organizations(&self) -> BTreeSet<String> {
         self.advertised_organizations().unwrap_or_default()
     }
@@ -206,6 +208,20 @@ impl<S: ConversationStore> TurnExecutor<S> {
 impl<S: ConversationStore> TurnExecutor<S> {
     /// Run the request delivered by an application backend (RFC §10.6.2). The link
     /// releases its resources after the executor finishes sending the turn's frames.
+    /// An application implementing [`ExecutorLink`](crate::turns::ExecutorLink)
+    /// can admit its link on either a standalone worker or a kit's executor.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use roomkit::turns::ExecutorLink;
+    /// use roomkit::{ConversationStore, RoomKitError, TurnExecutor};
+    ///
+    /// fn accept<S: ConversationStore>(
+    ///     worker: &TurnExecutor<S>, link: Arc<dyn ExecutorLink>,
+    /// ) -> Result<(), RoomKitError> {
+    ///     worker.take(link)
+    /// }
+    /// ```
     ///
     /// # Errors
     /// A closed executor or a second admission of the same turn is refused.

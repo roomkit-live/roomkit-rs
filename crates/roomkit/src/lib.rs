@@ -324,6 +324,7 @@ pub use self::orchestration::{HandoffHandler, HandoffRequest, HandoffResult};
 pub use self::orchestration::{ResultTool, SUBMIT_RESULT};
 #[doc(hidden)]
 pub use self::turn::OwnerToolAnswer;
+#[doc(inline)]
 pub use self::turns::TurnTimeouts;
 #[doc(inline)]
 #[cfg(feature = "redis")]
