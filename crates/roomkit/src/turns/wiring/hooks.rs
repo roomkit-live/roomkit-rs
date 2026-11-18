@@ -55,6 +55,13 @@ impl TurnWiring {
 }
 
 impl ChannelTurnHooks {
+    pub(crate) fn wired(&self) -> Option<(&TurnWiring, &RoomId, &ChannelId)> {
+        match &self.0 {
+            Binding::Wired(bound) => Some((&bound.wiring, &bound.room, &bound.channel)),
+            Binding::Turn(_) => None,
+        }
+    }
+
     pub(crate) fn host(&self) -> Option<&TurnHost> {
         match &self.0 {
             Binding::Turn(host) => Some(host),

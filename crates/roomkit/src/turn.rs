@@ -831,49 +831,22 @@ impl TurnHost {
     /// For roomkit-ai's tool loop, which calls it once per call: a tool or
     /// a channel that calls it too runs the hooks twice.
     #[doc(hidden)]
-    pub async fn on_tool_call(&self, mut report: ToolCallReport) -> ToolCallReport {
-        let unserved = report.outcome == Some(ToolCallOutcome::Unserved);
-        if report.outcome != Some(ToolCallOutcome::Served) && !unserved {
+    pub async fn on_tool_call(&self, report: ToolCallReport) -> ToolCallReport {
+        if !matches!(
+            report.outcome,
+            Some(ToolCallOutcome::Served | ToolCallOutcome::Unserved)
+        ) {
             return report;
         }
-        let hooks = self.hooks(HookTrigger::OnToolCall);
-        let mut event = self.event_of(&report);
-        // The chain reads a call nothing served as Python hands it: no
-        // result, and no error yet.
-        event.is_error = false;
-        if unserved {
-            event.result = None;
-        }
-        let mut chain = ToolCallChain::new(event);
-        for (spec, handler) in hooks
-            .iter()
-            .filter(|(spec, _)| spec.execution == HookExecution::Sync)
-        {
-            let ran = hooks::run_traced(
-                spec,
-                Arc::clone(handler),
-                chain.current.clone(),
-                self.shared.context.clone(),
-                |_| None,
-            )
-            .await;
-            self.report_timeout(spec, &ran);
-            if let Some(reason) = chain.read(spec, ran) {
-                return withheld(report, &reason);
-            }
-        }
-        let Some(result) = chain.current.result else {
-            // Nothing served the call: the loop reports it failed, once,
-            // with what the hooks that failed said.
-            report.error_detail = chain.errors_detail();
-            return report;
-        };
-        if unserved {
-            report.outcome = Some(ToolCallOutcome::Served);
-        }
-        report.result = result;
-        report.structured_content = chain.current.structured_content.and_then(renderable);
-        report
+        let event = self.event_of(&report);
+        ToolCallChain::judge(
+            report,
+            event,
+            &self.hooks(HookTrigger::OnToolCall),
+            &self.shared.context,
+            |spec, ran| self.report_timeout(spec, ran),
+        )
+        .await
     }
 
     /// Reports `report`, a call that ended, to the kit's ASYNC `ON_TOOL_CALL`
@@ -1096,6 +1069,52 @@ struct ToolCallChain {
 }
 
 impl ToolCallChain {
+    async fn judge(
+        mut report: ToolCallReport,
+        mut event: ToolCallEvent,
+        hooks: &[(HookSpec, Arc<dyn HookHandler<ToolCallEvent>>)],
+        context: &RoomContext,
+        timeout: impl Fn(&HookSpec, &HookOutcome<ToolCallEvent>),
+    ) -> ToolCallReport {
+        let unserved = report.outcome == Some(ToolCallOutcome::Unserved);
+        // The chain reads a call nothing served as Python hands it: no
+        // result, and no error yet.
+        event.is_error = false;
+        if unserved {
+            event.result = None;
+        }
+        let mut chain = ToolCallChain::new(event);
+        for (spec, handler) in hooks
+            .iter()
+            .filter(|(spec, _)| spec.execution == HookExecution::Sync)
+        {
+            let ran = hooks::run_traced(
+                spec,
+                Arc::clone(handler),
+                chain.current.clone(),
+                context.clone(),
+                |_| None,
+            )
+            .await;
+            timeout(spec, &ran);
+            if let Some(reason) = chain.read(spec, ran) {
+                return withheld(report, &reason);
+            }
+        }
+        let Some(result) = chain.current.result else {
+            // Nothing served the call: the loop reports it failed, once,
+            // with what the hooks that failed said.
+            report.error_detail = chain.errors_detail();
+            return report;
+        };
+        if unserved {
+            report.outcome = Some(ToolCallOutcome::Served);
+        }
+        report.result = result;
+        report.structured_content = chain.current.structured_content.and_then(renderable);
+        report
+    }
+
     fn new(event: ToolCallEvent) -> Self {
         Self {
             served: event.result.is_some(),

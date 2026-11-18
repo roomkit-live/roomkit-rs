@@ -1,5 +1,7 @@
 //! Hook callbacks for registered handlers, including calls outside a turn.
 
+mod ordinary;
+
 use super::{
     Arc, ChannelId, ChannelType, ConversationStore, GateChain, GateEnd, HookExecution, HookOutcome,
     HookSpec, HookTrigger, Inner, Metadata, RoomContext, RoomId, ToolCall, ToolCallChain,
@@ -102,13 +104,20 @@ impl Notification {
     }
 
     async fn before(&self, call: ToolCall) -> ExternalToolDecision {
-        if !self.hooks.is_empty() && self.context.is_none() {
-            return ExternalToolDecision {
+        let event = self.event(&ToolCallReport::new(call));
+        match self.before_chain(&event).await {
+            Some(chain) => external_decision(chain, &event.arguments),
+            None => ExternalToolDecision {
                 allowed: false,
                 ..ExternalToolDecision::default()
-            };
+            },
         }
-        let event = self.event(&ToolCallReport::new(call));
+    }
+
+    async fn before_chain(&self, event: &ToolCallEvent) -> Option<GateChain> {
+        if !self.hooks.is_empty() && self.context.is_none() {
+            return None;
+        }
         let chain = self.gate(event.clone()).await;
         if chain.ended.is_none() {
             self.observe(&chain.current);
@@ -124,7 +133,7 @@ impl Notification {
             ("reason".to_owned(), reason.map_or(Value::Null, Value::from)),
         ]);
         self.emit("before_tool_use", data).await;
-        external_decision(chain, &event.arguments)
+        Some(chain)
     }
 
     async fn gate(&self, event: ToolCallEvent) -> GateChain {
@@ -175,7 +184,11 @@ impl Notification {
         if !crate::external_tools::claim_external_report() {
             return;
         }
-        self.observe(&event);
+        self.observe_completed(&event).await;
+    }
+
+    async fn observe_completed(&self, event: &ToolCallEvent) {
+        self.observe(event);
         let mut data = Metadata::from_iter([
             ("tool_name".to_owned(), Value::from(event.name.as_str())),
             (

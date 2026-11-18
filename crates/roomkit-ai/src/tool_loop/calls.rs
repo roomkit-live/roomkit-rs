@@ -160,8 +160,8 @@ impl Loop {
         let (ended, parts) = self.shaped(ended);
         // A skill's activation the hooks left as it served it is read whole.
         let own = kept_whole(&ended.call.name).then(|| ended.result.clone());
-        let ended = match &self.turn {
-            Some(turn) => turn.on_tool_call(ended).await,
+        let ended = match &self.callbacks {
+            Some(hooks) => hooks.on_tool_call(ended).await,
             None => ended,
         };
         if let Some(span) = span {
@@ -204,7 +204,13 @@ impl Loop {
             announced_only: false,
             structured_content: reported.structured_content.clone(),
         };
-        self.tell(called, nth, &reported, &end);
+        if let (None, Some(hooks)) = (&self.turn, &self.callbacks) {
+            hooks
+                .report_wired_tool(&reported, called.report.callback())
+                .await;
+        } else {
+            self.tell(called, nth, &reported, &end);
+        }
         Ok(end)
     }
 
@@ -214,7 +220,9 @@ impl Loop {
     /// reports it to the kit's observers.
     fn tell(&self, called: &Called, nth: usize, reported: &ToolCallReport, end: &ToolEnd) {
         let Some(turn) = &self.turn else {
-            if end.outcome == ToolCallOutcome::Served {
+            if let Some(hooks) = &self.callbacks {
+                hooks.report_abandoned_wired_tool(reported.clone(), called.report.callback());
+            } else if end.outcome == ToolCallOutcome::Served {
                 called.report.claim();
             }
             return;
@@ -448,11 +456,10 @@ impl Loop {
             }
         };
         let asked = call.arguments.clone();
-        let Some(turn) = &self.turn else {
+        let Some(hooks) = &self.callbacks else {
             return Gated::Runs { call, asked };
         };
-        let turn = turn.with_tool_report_claim(called.report.callback());
-        let arguments = match turn.before_tool_use(&call).await {
+        let arguments = match hooks.before_tool_use(&call, called.report.callback()).await {
             ToolGate::Allowed(arguments) => arguments,
             ToolGate::Refused { text, error_detail } => {
                 logs::before_refusal(&call.name);

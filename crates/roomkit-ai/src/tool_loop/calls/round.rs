@@ -45,13 +45,18 @@ impl Loop {
     /// Python's `_report_unreported_calls`: observers alone see this cancellation;
     /// the reader closes the announced rows when it reads the round's failure.
     fn report_abandoned(&self, called: &Called, ran: ToolCall) {
-        let Some(turn) = &self.turn else { return };
         let tool = serde_json::to_string(&ran.name).unwrap_or_default();
         let text = format!(
             "{{\"error\": \"Tool call cancelled\", \"tool\": {tool}, \"hint\": \"The turn ended before its result.\"}}"
         );
         let report =
             ToolCallReport::new(ran).ended(ToolCallOutcome::Cancelled, Value::String(text));
+        let Some(turn) = &self.turn else {
+            if let Some(hooks) = &self.callbacks {
+                hooks.report_abandoned_wired_tool(report, called.report.callback());
+            }
+            return;
+        };
         let turn = turn.with_tool_report_claim(called.report.callback());
         if called.duplicate {
             turn.report_call_under_held_id(&report);

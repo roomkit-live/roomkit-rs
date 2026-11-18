@@ -1,4 +1,6 @@
 //! Public application wiring, including the independent worker's last room context.
+mod ordinary_tools;
+
 use super::{Link, link};
 use roomkit::model::{ChannelId, RoomContext, RoomEvent, RoomId};
 use roomkit::testing::{EchoAgent, EchoAgentOptions};
