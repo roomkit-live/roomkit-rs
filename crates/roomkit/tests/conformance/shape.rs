@@ -40,6 +40,7 @@ const EVENT_HANDLER_REACTION: &[&str] = &["when", "repeat", "gate", "do"];
 const KIT: &[&str] = &[
     "max_chain_depth",
     "process_timeout_ms",
+    "turn_timeouts",
     "router",
     "identity_resolver",
     "identity_channel_types",
@@ -475,7 +476,7 @@ fn base_arguments(call: &str) -> Option<&'static [&'static str]> {
         | "kit_executor.executor_id"
         | "executors" => &[],
         "executor.pause" | "executor.resume" | "executor.start" | "executor.close"
-        | "executor.calls" => &["executor"],
+        | "executor.kill" | "executor.calls" => &["executor"],
         "process_inbound" => &["message", "room_id", "defer_delivery"],
         "delivery.cancel" => &["of", "reason", "timeout_ms"],
         "delivery.wait" => &["of"],
@@ -617,6 +618,17 @@ pub(crate) fn unknown_members(scenario: &Value) -> Vec<String> {
     let setup = &scenario["setup"];
     optional(setup, SETUP, "setup", &mut found);
     optional(&setup["kit"], KIT, "setup.kit", &mut found);
+    optional(
+        &setup["kit"]["turn_timeouts"],
+        &[
+            "heartbeat_interval_ms",
+            "heartbeat_timeout_ms",
+            "accept_ms",
+            "cancel_ms",
+        ],
+        "setup.kit.turn_timeouts",
+        &mut found,
+    );
     identity(setup, &mut found);
     strategies(setup, &mut found);
     executor_setup(setup, &mut found);

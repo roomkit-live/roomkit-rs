@@ -1,6 +1,7 @@
 //! RFC §6.4 and §10.6. The normal runner places declared channels on workers
 //! with independent Redis nodes and compares the complete scenario expectations.
 mod channel;
+mod site;
 mod topology;
 
 use futures_core::future::BoxFuture;
@@ -8,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use roomkit::{RedisTurnBackend, RoomKitError, TurnExecutor, TurnExecutorOptions};
+use roomkit::{RoomKitError, TurnExecutor, TurnExecutorOptions};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -17,6 +18,9 @@ use channel::WorkerChannel;
 
 const SUPPORTED: &[&str] = &[
     "discussion/an-offline-agent-s-turn-is-skipped-not-failed",
+    "executors/after-a-lost-executor-the-room-s-next-turn-runs-elsewhere",
+    "executors/an-executor-closed-during-a-turn-ends-it",
+    "executors/an-executor-killed-mid-answer-loses-its-turn-and-what-was-shown-stays",
     "executors/a-channel-call-no-executor-takes-fails-no-executor",
     "executors/a-channel-call-runs-on-the-executor-holding-the-room",
     "executors/a-declared-agent-s-turn-runs-on-the-executor-hosting-it",
@@ -144,7 +148,8 @@ struct Workers {
     declarations: Vec<Worker>,
     channels: Arc<Vec<Value>>,
     slot: RunSlot,
-    active: Mutex<BTreeMap<String, (RedisTurnBackend, TurnExecutor)>>,
+    active: Mutex<BTreeMap<String, site::Site>>,
+    mortal: BTreeSet<String>,
 }
 
 impl Workers {
@@ -160,6 +165,7 @@ impl Workers {
                 executor_id: Some(worker.id.clone()),
                 hosts: Some(worker.hosts.clone()),
                 organizations: worker.organizations.clone(),
+                timeouts: self.topology.owner().timeouts(),
                 max_channels: worker.max_channels,
                 ..TurnExecutorOptions::default()
             },
@@ -191,9 +197,8 @@ impl Workers {
                     .map_err(RoomKitError::Value)??;
             }
         }
-        let hosting = self.topology.worker()?;
-        hosting.serve(executor.clone()).await?;
-        active.insert(id.to_owned(), (hosting, executor));
+        let site = site::Site::start(&self.topology, executor, self.mortal.contains(id)).await?;
+        active.insert(id.to_owned(), site);
         Ok(())
     }
 
@@ -201,11 +206,11 @@ impl Workers {
     /// Resuming re-advertises that same instance on the same Redis node.
     async fn advertise(&self, id: &str, paused: bool) -> Result<(), RoomKitError> {
         let active = self.active.lock().await;
-        let (hosting, executor) = active
+        let site = active
             .get(id)
             .ok_or_else(|| RoomKitError::Value(format!("executor {id} is not running")))?;
         if !paused {
-            return hosting.serve(executor.clone()).await;
+            return site.advertise(site.executor.clone()).await;
         }
         let no_channels = TurnExecutor::new(
             |_| {
@@ -219,14 +224,15 @@ impl Workers {
                 ..TurnExecutorOptions::default()
             },
         )?;
-        hosting.serve(no_channels).await
+        site.advertise(no_channels).await
     }
 
-    async fn close(&self, id: &str) -> Result<(), RoomKitError> {
-        let entry = self.active.lock().await.remove(id);
-        let (hosting, executor) =
-            entry.ok_or_else(|| RoomKitError::Value(format!("executor {id} is not started")))?;
-        self.topology.close_worker(&hosting, &executor).await
+    async fn remove(&self, id: &str) -> Result<site::Site, RoomKitError> {
+        self.active
+            .lock()
+            .await
+            .remove(id)
+            .ok_or_else(|| RoomKitError::Value(format!("executor {id} is not started")))
     }
 }
 
@@ -238,7 +244,7 @@ impl crate::run::WorkerControl for Workers {
                 .lock()
                 .await
                 .get(id)
-                .map(|(backend, _)| backend.clone())
+                .map(|site| site.hosting.clone())
                 .ok_or_else(|| RoomKitError::Value(format!("executor {id} is not running")))?;
             roomkit::testing::settle_redis_publications(&hosting, self.topology.owner()).await
         })
@@ -263,9 +269,10 @@ impl crate::run::WorkerControl for Workers {
         Box::pin(async move {
             match operation {
                 "executor.start" => self.start(id).await,
-                "executor.close" => self.close(id).await,
                 "executor.pause" => self.advertise(id, true).await,
                 "executor.resume" => self.advertise(id, false).await,
+                "executor.close" => self.remove(id).await?.close(&self.topology).await,
+                "executor.kill" => self.remove(id).await?.kill(&self.topology).await,
                 other => Err(RoomKitError::Value(format!(
                     "unsupported executor operation: {other}"
                 ))),
@@ -283,6 +290,13 @@ async fn exercise(url: &str, scenario: &Value) -> Result<Vec<String>, RoomKitErr
         channels: Arc::new(serde_json::from_value(setup["channels"].clone()).map_err(parse_error)?),
         slot: RunSlot::default(),
         active: Mutex::default(),
+        mortal: scenario["steps"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|step| step["call"] == "executor.kill")
+            .filter_map(|step| step["executor"].as_str().map(str::to_owned))
+            .collect(),
     });
     let owner = workers.topology.owner().clone();
     let problems = crate::harness::run_with(
@@ -297,7 +311,7 @@ async fn exercise(url: &str, scenario: &Value) -> Result<Vec<String>, RoomKitErr
     .await;
     let running: Vec<_> = workers.active.lock().await.keys().cloned().collect();
     for id in running {
-        workers.close(&id).await?;
+        workers.remove(&id).await?.close(&workers.topology).await?;
     }
     owner.close().await?;
     Ok(problems)

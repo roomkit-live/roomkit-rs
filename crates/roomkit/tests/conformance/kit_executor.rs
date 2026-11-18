@@ -33,7 +33,8 @@ pub(crate) async fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Cal
                 .unwrap_or_default();
             Ok(finish(run, name, Ok(calls), crate::calls::dump))
         }
-        "executor.pause" | "executor.resume" | "executor.start" | "executor.close" => {
+        "executor.pause" | "executor.resume" | "executor.start" | "executor.close"
+        | "executor.kill" => {
             let id: String = field(spec, "executor")?;
             let workers = run
                 .workers

@@ -532,6 +532,7 @@ async fn lifecycle_call(
         | "executor.resume"
         | "executor.start"
         | "executor.calls"
+        | "executor.kill"
         | "executor.close"
         | "kit_executor.close"
         | "kit_executor.executor_id"

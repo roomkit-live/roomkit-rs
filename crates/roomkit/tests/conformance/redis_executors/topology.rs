@@ -25,6 +25,7 @@ pub(super) struct Topology {
 impl Topology {
     pub(super) fn new(url: &str, scenario: &Value) -> Result<Self, RoomKitError> {
         let options = RedisTurnBackendOptions {
+            timeouts: timeouts(scenario)?,
             key_prefix: format!("roomkit:test:scenario:{}", Uuid::new_v4()),
             ..RedisTurnBackendOptions::default()
         };
@@ -53,12 +54,40 @@ impl Topology {
         hosting: &RedisTurnBackend,
         executor: &TurnExecutor,
     ) -> Result<(), RoomKitError> {
-        let withdrawn = if self.shared {
+        executor.close().await;
+        if self.shared {
             Ok(())
         } else {
             hosting.close().await
-        };
-        executor.close().await;
-        withdrawn
+        }
     }
+}
+
+#[derive(Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Bounds {
+    heartbeat_interval_ms: Option<u64>,
+    heartbeat_timeout_ms: Option<u64>,
+    accept_ms: Option<u64>,
+    cancel_ms: Option<u64>,
+}
+
+fn timeouts(scenario: &Value) -> Result<roomkit::TurnTimeouts, RoomKitError> {
+    let bounds: Option<Bounds> =
+        serde_json::from_value(scenario["setup"]["kit"]["turn_timeouts"].clone())
+            .map_err(|err| RoomKitError::Value(err.to_string()))?;
+    let mut result = roomkit::TurnTimeouts::default();
+    if let Some(bounds) = bounds {
+        for (duration, ms) in [
+            (&mut result.heartbeat_interval, bounds.heartbeat_interval_ms),
+            (&mut result.heartbeat_timeout, bounds.heartbeat_timeout_ms),
+            (&mut result.accept, bounds.accept_ms),
+            (&mut result.cancel, bounds.cancel_ms),
+        ] {
+            if let Some(ms) = ms {
+                *duration = std::time::Duration::from_millis(ms);
+            }
+        }
+    }
+    Ok(result)
 }
