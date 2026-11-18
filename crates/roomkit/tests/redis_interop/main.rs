@@ -1,6 +1,7 @@
 //! One declared agent's text turn, run on a separate Redis executor (§10.6.2, §10.6.7).
 //! Set `REDIS_URL` and `ROOMKIT_PYTHON` (the reference checkout's interpreter with the Redis extra).
 
+mod after_turn;
 mod history;
 mod liveness;
 
@@ -184,6 +185,9 @@ async fn peer(role: &str) -> TestResult {
         ..TurnTimeouts::default()
     };
     let backend = backend(timeouts)?;
+    if role == "after-turn-worker" {
+        return after_turn::run(&backend).await;
+    }
     if role == "executor" {
         return executor(&backend, timeouts).await;
     }
@@ -203,13 +207,14 @@ async fn peer(role: &str) -> TestResult {
 
 fn main() -> TestResult {
     match env::args().nth(1).as_deref() {
-        Some(role @ ("owner" | "executor" | "history-owner" | "liveness-owner")) => {
-            tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(2)
-                .enable_all()
-                .build()?
-                .block_on(peer(role))
-        }
+        Some(
+            role
+            @ ("owner" | "executor" | "history-owner" | "liveness-owner" | "after-turn-worker"),
+        ) => tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()?
+            .block_on(peer(role)),
         Some("--list") => Ok(writeln!(io::stdout(), "redis_interop: test")?),
         Some("--ignored") => Ok(()),
         Some(filter) if !filter.starts_with('-') && !"redis_interop".contains(filter) => Ok(()),

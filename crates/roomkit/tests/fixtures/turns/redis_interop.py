@@ -71,6 +71,11 @@ async def main() -> None:
                 if args.pair and args.pair != f"{owner}-{executor}":
                     continue
                 await check_turn(owner_command, executor_command)
+                if owner == "python" and executor == "rust":
+                    from redis_after_turn import check_after_turn
+
+                    await check_after_turn(Path(executor_command[0]))
+                    print("passed: Rust host reaches its Python owner during and after a turn", flush=True)
                 print(f"passed: {owner} owner, {executor} executor", flush=True)
     if not args.pair and not args.liveness_only:
         from redis_history import check_history
@@ -87,6 +92,7 @@ async def main() -> None:
         for case in ("stall", "dead", "absent"):
             await check_liveness(args.rust_peer.resolve(strict=True), case)
             print(f"passed: Rust owner with Python worker ({case})", flush=True)
+
 
 
 if __name__ == "__main__":
