@@ -106,7 +106,7 @@ impl WorkerOwner {
                 }
             }
             #[cfg(feature = "redis")]
-            Self::Redis(peer) => peer.publish(super::wire::OwnerMessage::RoomPublication(message)),
+            Self::Redis(peer) => peer.publish(message),
         }
     }
 }

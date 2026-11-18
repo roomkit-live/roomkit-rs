@@ -246,11 +246,6 @@ fn invalid(reason: String) -> RoomKitError {
     }
 }
 
-pub(super) type OwnerReply =
-    crate::channel::BoxFuture<'static, Option<crate::turns::wire::RoomCallResult>>;
-pub(super) type OwnerPort =
-    Arc<dyn Fn(crate::turns::wire::OwnerMessageEnvelope) -> OwnerReply + Send + Sync>;
-
 impl RedisTurnBackend {
     pub(super) fn owner_message(&self, incoming: &Message) -> Result<(), RoomKitError> {
         use crate::turns::wire::{OwnerMessage, OwnerMessageEnvelope, RoomCallResult};
@@ -265,7 +260,7 @@ impl RedisTurnBackend {
         let message = incoming.clone();
         let admitted = self.dispatch_incoming(incoming.kind == "work", async move {
             let result = if let Some(owner) = owner {
-                owner(parsed).await
+                super::transport::deliver_to_owner(owner, parsed.message).await
             } else if let OwnerMessage::RoomCall(call) = parsed.message {
                 Some(RoomCallResult {
                     call_id: call.call_id,

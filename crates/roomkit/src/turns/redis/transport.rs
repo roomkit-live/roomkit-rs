@@ -39,9 +39,7 @@ impl TurnBackend for RedisTurnBackend {
                     if let Some(worker) = own {
                         self.reserve_owner(&worker);
                     }
-                    *port = Some(Arc::new(move |envelope| {
-                        Box::pin(deliver_to_owner(Arc::clone(&owner), envelope.message))
-                    }));
+                    *port = Some(owner);
                 }
             }
             RedisTurnBackend::attend(self).await
@@ -71,7 +69,10 @@ impl TurnBackend for RedisTurnBackend {
     }
 }
 
-async fn deliver_to_owner(owner: Arc<dyn RoomOwner>, message: OwnerMessage) -> Option<HostResult> {
+pub(super) async fn deliver_to_owner(
+    owner: Arc<dyn RoomOwner>,
+    message: OwnerMessage,
+) -> Option<HostResult> {
     match message {
         OwnerMessage::RoomCall(call) => {
             let call_id = call.call_id.clone();

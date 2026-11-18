@@ -11,9 +11,9 @@ use super::stream::Message;
 use super::{Node, RedisTurnBackend};
 use crate::RoomKitError;
 use crate::turns::ErrorClasses;
-use crate::turns::lock;
 use crate::turns::wire::{OwnerMessage, OwnerMessageEnvelope, RoomCall, RoomCallResult};
 use crate::turns::{RoomOwner, RoomPublication, TurnFuture};
+use crate::turns::{in_memory, lock};
 
 #[derive(Debug)]
 pub(crate) struct PeerOwner {
@@ -67,10 +67,10 @@ impl PeerOwner {
             return Err(super::routes::closed());
         }
         let call_id = call.call_id.clone();
-        let envelope = OwnerMessageEnvelope {
-            message: OwnerMessage::RoomCall(call),
-        };
         let result = if let Some(peer) = self.peer(&backend) {
+            let envelope = OwnerMessageEnvelope {
+                message: OwnerMessage::RoomCall(call),
+            };
             let body = serde_json::to_string(&envelope).map_err(|error| invalid(&error))?;
             let exchange = backend.exchange(&peer, "owner", body, "");
             tokio::pin!(exchange);
@@ -95,8 +95,8 @@ impl PeerOwner {
             };
             serde_json::from_str::<RoomCallResult>(&answer).map_err(|error| invalid(&error))?
         } else {
-            let owner = lock(&backend.0.owner).clone().ok_or_else(no_owner)?;
-            owner(envelope).await.ok_or_else(no_owner)?
+            let owner = lock(&backend.0.owner).clone();
+            in_memory::local_call(owner, call).await?
         };
         // A refusal can precede decoding the call and therefore carry an empty call id.
         // The Redis question reference already correlates the answer with this caller.
@@ -111,10 +111,14 @@ impl PeerOwner {
 
     /// Enqueue immediately: a subsequent room call must follow this work
     /// in the owner's Redis stream even if the caller never yields between them.
-    pub(crate) fn publish(&self, message: OwnerMessage) {
+    pub(crate) fn publish(&self, message: RoomPublication) {
         match self.publication(message) {
             Ok(Some(local)) => {
-                tokio::spawn(local);
+                tokio::spawn(async move {
+                    if let Err(error) = local.await {
+                        tracing::debug!(%error, "a publication after a turn did not reach its owner");
+                    }
+                });
             }
             Ok(None) => {}
             Err(error) => {
@@ -125,22 +129,24 @@ impl PeerOwner {
 
     fn publication(
         &self,
-        message: OwnerMessage,
-    ) -> Result<Option<super::owner::OwnerReply>, RoomKitError> {
+        message: RoomPublication,
+    ) -> Result<Option<TurnFuture<'static, Result<(), RoomKitError>>>, RoomKitError> {
         let backend = RedisTurnBackend(self.node.upgrade().ok_or(RoomKitError::KitClosed)?);
         if *backend.0.stop.borrow() {
             return Err(super::routes::closed());
         }
-        let envelope = OwnerMessageEnvelope { message };
         if let Some(peer) = self.peer(&backend) {
+            let envelope = OwnerMessageEnvelope {
+                message: OwnerMessage::RoomPublication(message),
+            };
             let body = serde_json::to_string(&envelope).map_err(|error| invalid(&error))?;
             let reference = Uuid::new_v4().simple().to_string();
             let message = Message::new("work", backend.node_id(), body, "", &reference);
             backend.post_unconfirmed(&peer, &message)?;
             Ok(None)
         } else {
-            let local = lock(&backend.0.owner).clone().ok_or_else(no_owner)?;
-            Ok(Some(local(envelope)))
+            let owner = lock(&backend.0.owner).clone();
+            Ok(Some(Box::pin(in_memory::local_publication(owner, message))))
         }
     }
 }
@@ -156,8 +162,8 @@ impl RoomOwner for PeerOwner {
     ) -> TurnFuture<'_, Result<(), RoomKitError>> {
         Box::pin(async move {
             let route = self.of(&message.turn_id);
-            if let Some(local) = route.publication(OwnerMessage::RoomPublication(message))? {
-                local.await;
+            if let Some(local) = route.publication(message)? {
+                local.await?;
             }
             Ok(())
         })
@@ -171,6 +177,5 @@ fn invalid(error: &serde_json::Error) -> RoomKitError {
     }
 }
 
-fn no_owner() -> RoomKitError {
-    RoomKitError::Runtime("No room owner is reached outside a turn on this backend".into())
-}
+#[cfg(test)]
+mod local_tests;

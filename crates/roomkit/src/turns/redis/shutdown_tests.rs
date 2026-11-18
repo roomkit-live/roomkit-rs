@@ -11,7 +11,7 @@ use super::stream::Message;
 use super::{RedisTurnBackend, RedisTurnBackendOptions};
 use crate::testing::{EchoAgent, EchoAgentOptions};
 use crate::turns::wire::RoomCallResult;
-use crate::turns::{TurnTimeouts, lock};
+use crate::turns::TurnTimeouts;
 use crate::{TurnExecutor, TurnExecutorOptions};
 
 const LIMIT: Duration = Duration::from_secs(3);
@@ -140,33 +140,50 @@ fn room_call(id: &str) -> String {
     .to_string()
 }
 
+struct WaitingOwner {
+    entered: Arc<Notify>,
+    release: Arc<Notify>,
+}
+
+impl crate::turns::RoomOwner for WaitingOwner {
+    fn room_call(
+        &self,
+        call: crate::turns::RoomCall,
+    ) -> crate::turns::TurnFuture<'_, Result<RoomCallResult, crate::RoomKitError>> {
+        Box::pin(async move {
+            assert_eq!(call.call_id, "first", "new call was applied while closing");
+            self.entered.notify_one();
+            self.release.notified().await;
+            Ok(RoomCallResult {
+                call_id: call.call_id,
+                result: json!("settled"),
+                record_changes: None,
+                error: None,
+            })
+        })
+    }
+    fn room_publication(
+        &self,
+        _: crate::turns::RoomPublication,
+    ) -> crate::turns::TurnFuture<'_, Result<(), crate::RoomKitError>> {
+        panic!("expected a call")
+    }
+}
+
 #[tokio::test]
 async fn a_closing_owner_answers_admitted_calls_and_refuses_new_work_without_applying_it() {
     let Some((host, peer)) = pair() else { return };
     let entered = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
-    *lock(&host.0.owner) = Some(Arc::new({
-        let entered = Arc::clone(&entered);
-        let release = Arc::clone(&release);
-        move |msg| {
-            let crate::turns::wire::OwnerMessage::RoomCall(call) = msg.message else {
-                panic!("expected a call")
-            };
-            assert_eq!(call.call_id, "first", "new call was applied while closing");
-            entered.notify_one();
-            let release = Arc::clone(&release);
-            Box::pin(async move {
-                release.notified().await;
-                Some(RoomCallResult {
-                    call_id: call.call_id,
-                    result: json!("settled"),
-                    record_changes: None,
-                    error: None,
-                })
-            })
-        }
-    }));
-    host.attend().await.unwrap();
+    crate::turns::TurnBackend::attend(
+        &host,
+        Arc::new(WaitingOwner {
+            entered: Arc::clone(&entered),
+            release: Arc::clone(&release),
+        }),
+    )
+    .await
+    .unwrap();
     let first = peer.ask(host.node_id(), "owner", room_call("first"), "", LIMIT);
     let at_close = async {
         timeout(LIMIT, entered.notified()).await.unwrap();

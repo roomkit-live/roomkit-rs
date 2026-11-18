@@ -71,7 +71,7 @@ struct Node {
     outbox: Mutex<outbox::Outbox>,
     id: String,
     prefix: String,
-    owner: Mutex<Option<owner::OwnerPort>>,
+    owner: Mutex<Option<Arc<dyn super::RoomOwner>>>,
     owner_worker: OnceLock<placement::Reserved>,
     routes: Mutex<routes::Routes>,
     serving: Mutex<process::Serving>,

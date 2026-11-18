@@ -4,6 +4,8 @@ pub(crate) use coverage::{Coverage, Serving};
 mod links;
 mod placement;
 mod port;
+#[cfg(feature = "redis")]
+pub(super) use port::{local_call, local_publication};
 
 use std::collections::BTreeMap;
 use std::fmt;
