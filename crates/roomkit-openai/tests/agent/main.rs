@@ -13,6 +13,7 @@ mod credentials;
 mod fake;
 mod first_token;
 mod generate;
+mod nonfinite;
 mod reasoning;
 mod response_schema;
 mod responses;
