@@ -7,7 +7,7 @@ use super::{RoomCall, RoomOwner, RoomPublication, ServedExecutor, TurnBackend, T
 use crate::kit::Inner;
 use crate::{ConversationStore, RoomKit, RoomKitError};
 use std::fmt;
-use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::sync::{Arc, OnceLock, Weak};
 use tokio::sync::OnceCell;
 
 pub(crate) struct Application {
@@ -55,7 +55,7 @@ fn owner_closed() -> RoomKitError {
 
 struct KitOwner<S> {
     kit: Weak<Inner<S>>,
-    executor: Mutex<Option<Weak<dyn ServedExecutor>>>,
+    executor: Arc<dyn ServedExecutor>,
 }
 
 impl Turns {
@@ -63,7 +63,7 @@ impl Turns {
         if let Some(application) = &self.application {
             let _owner = application.owner.set(Arc::new(KitOwner {
                 kit: Arc::downgrade(&kit.inner),
-                executor: Mutex::default(),
+                executor: super::owner_executor(kit),
             }));
         }
     }
@@ -71,16 +71,8 @@ impl Turns {
 
 impl<S: ConversationStore> RoomOwner for KitOwner<S> {
     fn executor(&self) -> Option<Arc<dyn ServedExecutor>> {
-        let mut held = super::lock(&self.executor);
-        if let Some(executor) = held.as_ref().and_then(Weak::upgrade) {
-            return Some(executor);
-        }
-        let kit = RoomKit {
-            inner: self.kit.upgrade()?,
-        };
-        let executor: Arc<dyn ServedExecutor> = Arc::new(kit.turn_executor());
-        *held = Some(Arc::downgrade(&executor));
-        Some(executor)
+        self.kit.upgrade()?;
+        Some(Arc::clone(&self.executor))
     }
     fn room_call(&self, message: RoomCall) -> TurnFuture<'_, Result<HostResult, RoomKitError>> {
         Box::pin(async move {
