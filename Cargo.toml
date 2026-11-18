@@ -67,7 +67,7 @@ sse-stream = "~0.2"
 # Served frontmatter events; local skill parsing remains independent.
 saphyr-parser = { version = "=0.3.3", default-features = false }
 # Verified MCP resource bytes and safe YAML binary values.
-base64 = { version = "0.22", default-features = false, features = ["std"] }
+base64 = { version = "0.23", default-features = false, features = ["std"] }
 sha2 = { version = "0.11", default-features = false }
 # Identity verification's secrets (RFC §11.7.7), hashed as the Python
 # implementation hashes them, scrypt salted with the request's id, so that
