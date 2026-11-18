@@ -308,3 +308,6 @@ impl RedisTurnBackend {
             })?
     }
 }
+
+#[cfg(test)]
+mod injected_client_tests;

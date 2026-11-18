@@ -36,8 +36,9 @@ pub(crate) type WorkerLookup = Box<dyn Fn() -> Option<Worker> + Send + Sync>;
 /// Keyword arguments of Python's `RedisTurnBackend(url, *, client, key_prefix, timeouts)`.
 #[derive(Clone)]
 pub struct RedisTurnBackendOptions {
-    /// Supply the data connection client; the heartbeat still uses the given URL.
-    pub client: Option<redis::Client>,
+    /// Reuse the application’s data connection manager, including its configured timeouts.
+    /// The inbox and heartbeat open independent connections at the supplied URL.
+    pub client: Option<ConnectionManager>,
     /// Namespace shared by the room owners and their workers.
     pub key_prefix: String,
     /// The time bounds of this backend's turns.
@@ -83,7 +84,6 @@ struct Node {
     stop: tokio::sync::watch::Sender<bool>,
     closing: tokio::sync::Mutex<bool>,
     timeouts: TurnTimeouts,
-    client: redis::Client,
     choice: Mutex<usize>,
     address: redis::Client,
     data: OnceCell<ConnectionManager>,
@@ -136,10 +136,9 @@ impl RedisTurnBackend {
             stop: tokio::sync::watch::channel(false).0,
             closing: tokio::sync::Mutex::new(false),
             timeouts: options.timeouts,
-            client: options.client.unwrap_or_else(|| client.clone()),
             choice: Mutex::new(0),
             address: client,
-            data: OnceCell::new(),
+            data: OnceCell::new_with(options.client),
         })))
     }
 
@@ -178,7 +177,7 @@ impl RedisTurnBackend {
                     .set_connection_timeout(Some(bound))
                     .set_response_timeout(Some(bound))
                     .set_number_of_retries(0);
-                ConnectionManager::new_with_config(node.client.clone(), config)
+                ConnectionManager::new_with_config(node.address.clone(), config)
                     .await
                     .map_err(|error| redis_error(&error))
             })
@@ -199,12 +198,16 @@ fn redis_error(error: &redis::RedisError) -> RoomKitError {
 mod constructor_tests {
     use super::*;
 
-    #[test]
-    fn only_an_absent_url_is_refused_with_an_injected_client() {
+    #[tokio::test]
+    async fn only_an_absent_url_is_refused_with_an_injected_client() {
         let default = redis::ConnectionAddr::Tcp("localhost".into(), 6379);
         let custom = redis::Client::open("redis://example.test:6380").unwrap();
         let injected = RedisTurnBackendOptions {
-            client: Some(custom.clone()),
+            client: Some(
+                custom
+                    .get_connection_manager_lazy(ConnectionManagerConfig::new())
+                    .unwrap(),
+            ),
             ..Default::default()
         };
         let refused = RedisTurnBackend::new(None, injected.clone()).unwrap_err();
@@ -214,13 +217,10 @@ mod constructor_tests {
         for url in [None, Some("")] {
             let backend = RedisTurnBackend::new(url, RedisTurnBackendOptions::default()).unwrap();
             assert_eq!(backend.0.address.get_connection_info().addr(), &default);
-            assert_eq!(backend.0.client.get_connection_info().addr(), &default);
+            assert!(backend.0.data.get().is_none());
         }
         let backend = RedisTurnBackend::new(Some(""), injected).unwrap();
         assert_eq!(backend.0.address.get_connection_info().addr(), &default);
-        assert_eq!(
-            backend.0.client.get_connection_info().addr(),
-            custom.get_connection_info().addr()
-        );
+        assert!(backend.0.data.get().is_some());
     }
 }
