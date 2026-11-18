@@ -228,7 +228,8 @@ pub(super) async fn read_kept<S: ConversationStore>(
     let mut producer = Producer {
         room_id: answers.room_id.clone(),
         failing,
-        segments: Segments::new(source, answers, correlation_id).reading(live.clone()),
+        segments: Segments::new(source, answers, correlation_id)
+            .reading(live.clone(), kept.turn.remote_executor()),
         stream: Some(kept.turn),
         cut: None,
         place: kept.place,

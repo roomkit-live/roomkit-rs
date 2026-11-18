@@ -2,8 +2,8 @@
 //! each read granting the executor its window again once half of it was
 //! read (RFC §10.6.4).
 
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, OnceLock};
 
 use roomkit_core::model::{
     ChannelOutput, ErrorRecord, Metadata, ResponseMetadata, ToolCallContent, ToolCallOutcome,
@@ -322,6 +322,11 @@ impl OwnerTurn {
     fn read_usage(&mut self, marker: UsageMarker) -> Read {
         self.window.read_deltas(1);
         Read::Item(RemoteItem::Item(ResponseItem::Usage(marker)))
+    }
+
+    /// The executor that accepted this turn away from its owner, shared through a late cut.
+    pub(crate) fn remote_executor(&self) -> Arc<OnceLock<String>> {
+        Arc::clone(&self.state.remote_executor)
     }
 
     /// The turn's one record, its output's, kept as the executor sends it.

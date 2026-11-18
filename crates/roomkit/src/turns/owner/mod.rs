@@ -24,7 +24,7 @@ mod verbs;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use roomkit_core::model::{
     ChannelBinding, ChannelId, ChannelType, Metadata, Room, RoomEvent, RoomId, Timestamp,
@@ -96,6 +96,8 @@ pub(super) enum Main {
 pub(super) struct OwnerState {
     pub(super) turn: Arc<MemoryTurn>,
     pub(super) facts: Facts,
+    /// The executor named by this turn's acceptance when it ran on another kit.
+    pub(super) remote_executor: Arc<OnceLock<String>>,
     /// The context of the owner's call last waiting on the turn, the call
     /// that submitted it until another waits: a verb the turn asks, or a
     /// call of the owner's tools, runs in a copy of it (RFC §10.6.5).
@@ -217,6 +219,7 @@ pub(crate) fn open(
     let state = Arc::new(OwnerState {
         turn,
         facts,
+        remote_executor: Arc::default(),
         waiting: Mutex::new(TurnContext::current()),
         ran_with: Mutex::new(HashMap::new()),
         told_ends: Mutex::new(HashMap::new()),

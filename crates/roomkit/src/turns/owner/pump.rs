@@ -213,6 +213,9 @@ impl Pump {
                     &self.state.turn.turn_id,
                     &executor_id,
                 );
+                if executor_id != self.turns.executor_id() {
+                    self.state.remote_executor.get_or_init(|| executor_id);
+                }
             }
             // A beat says an executor runs the turn, as `accepted` does.
             Frame::Heartbeat => self.accepted = true,

@@ -19,6 +19,7 @@
 //! a call's start and end by (RFC §6.4).
 
 use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 
 use roomkit_core::model::{
     EventContent, EventId, EventSource, EventStatus, EventType, Metadata, ResponseMetadata,
@@ -67,6 +68,8 @@ pub(super) struct Segments {
     /// The turn's live record (RFC §6.7), which rides each message as it
     /// stands when the message is written.
     live: ResponseMetadata,
+    /// Which remote executor accepted this specific turn, even after its stream closes.
+    remote_executor: Option<Arc<OnceLock<String>>>,
     /// How the turn ended, once its end was read: `loop_end_reason`,
     /// `ai_usage`.
     record: Option<Metadata>,
@@ -94,6 +97,7 @@ impl Segments {
             correlation_id,
             text: String::new(),
             live: ResponseMetadata::default(),
+            remote_executor: None,
             record: None,
             owed: false,
             began: false,
@@ -106,8 +110,13 @@ impl Segments {
 
     /// The rows read `live`, the turn's record, as it stands when each
     /// message is written.
-    pub(super) fn reading(mut self, live: ResponseMetadata) -> Self {
+    pub(super) fn reading(
+        mut self,
+        live: ResponseMetadata,
+        executor: Arc<OnceLock<String>>,
+    ) -> Self {
         self.live = live;
+        self.remote_executor = Some(executor);
         self
     }
 
@@ -229,7 +238,10 @@ impl Segments {
 
     /// The turn reached its end: its record rides the next text segment, or
     /// the last message once the response is over.
-    pub(super) fn end_turn(&mut self, record: Metadata) {
+    pub(super) fn end_turn(&mut self, mut record: Metadata) {
+        if let Some(executor) = self.remote_executor.as_ref().and_then(|name| name.get()) {
+            record.insert("executor_id".into(), Value::from(executor.as_str()));
+        }
         self.record = Some(record);
         self.owed = true;
     }
@@ -502,10 +514,18 @@ mod tests {
         // A null is no end, and no usage (Python's `turn_summary`).
         let live = ResponseMetadata::new();
         live.insert(LOOP_END_REASON, Value::Null);
-        assert_eq!(segments().reading(live.clone()).turn_entry(), None);
+        assert_eq!(
+            segments()
+                .reading(live.clone(), Arc::default())
+                .turn_entry(),
+            None
+        );
         live.insert(LOOP_END_REASON, Value::from("interrupted"));
         live.insert(AI_USAGE, Value::Null);
-        let entry = segments().reading(live).turn_entry().expect("an end");
+        let entry = segments()
+            .reading(live, Arc::default())
+            .turn_entry()
+            .expect("an end");
         assert_eq!(entry.get(AI_USAGE), None);
 
         for (named, end) in [
@@ -515,11 +535,42 @@ mod tests {
         ] {
             let live = ResponseMetadata::new();
             live.insert(LOOP_END_REASON, named);
-            let mut segments = segments().reading(live);
+            let mut segments = segments().reading(live, Arc::default());
             segments.handed();
             segments.stopped();
             let entry = segments.turn_entry().expect("an end");
             assert_eq!(entry.get(LOOP_END_REASON).cloned(), end);
+        }
+    }
+
+    #[test]
+    fn only_the_last_record_names_the_remote_executor_including_a_readers_cut() {
+        for remote in [false, true] {
+            for cut in [false, true] {
+                let executor = Arc::new(OnceLock::new());
+                let mut segments =
+                    segments().reading(ResponseMetadata::default(), Arc::clone(&executor));
+                if remote {
+                    executor.set("elsewhere".into()).unwrap();
+                }
+                segments.handed();
+                segments.text("Checking.");
+                let before = segments.start(ToolCallContent::new("lookup", "call_1"));
+                assert!(!before[0].metadata.contains_key("executor_id"));
+                segments.stored(&before[0]);
+                if cut {
+                    segments.stopped();
+                } else {
+                    segments.end_turn(record("completed"));
+                }
+                let (_, final_record) = segments.take_owed_record().unwrap();
+                let expected = remote.then(|| json!("elsewhere"));
+                assert_eq!(final_record.get("executor_id"), expected.as_ref());
+                assert_eq!(
+                    final_record.get(LOOP_END_REASON),
+                    Some(&json!(if cut { "cancelled" } else { "completed" }))
+                );
+            }
         }
     }
 
