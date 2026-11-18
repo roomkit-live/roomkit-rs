@@ -57,6 +57,10 @@ async def main(role: str) -> None:
     prefix = os.environ["ROOMKIT_INTEROP_PREFIX"]
     if role == "owner":
         await owner(prefix)
+    elif role == "history-owner":
+        from redis_history import owner as history_owner
+
+        await history_owner()
     elif role == "executor":
         from tests.redis_turn_executor import main as serve
 

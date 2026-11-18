@@ -1,6 +1,8 @@
 //! One declared agent's text turn, run on a separate Redis executor (§10.6.2, §10.6.7).
 //! Set `REDIS_URL` and `ROOMKIT_PYTHON` (the reference checkout's interpreter with the Redis extra).
 
+mod history;
+
 use std::collections::BTreeSet;
 use std::env;
 use std::error::Error;
@@ -17,8 +19,8 @@ use roomkit::store::ListEventsOptions;
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AgentIdentity, AttachChannelOptions, ChannelDeclaration, ConversationStore, CreateRoomOptions,
-    ProcessInboundOptions, RedisTurnBackend, RedisTurnBackendOptions, RoomKit, RoomKitError,
-    RoomKitOptions, TurnExecutor, TurnExecutorOptions, TurnTimeouts,
+    InboundResult, ProcessInboundOptions, RedisTurnBackend, RedisTurnBackendOptions, RoomKit,
+    RoomKitError, RoomKitOptions, TurnExecutor, TurnExecutorOptions, TurnTimeouts,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{AiChannel, AiChannelOptions};
@@ -130,17 +132,27 @@ async fn open_room(kit: &RoomKit) -> TestResult<(RoomId, ChannelId)> {
     Ok((room, tx))
 }
 
-async fn observe(kit: &RoomKit) -> TestResult<Value> {
-    let (room, tx) = open_room(kit).await?;
-    let input = InboundMessage::new(tx, "u", TextContent::new("Hi."));
+async fn send(
+    kit: &RoomKit,
+    room: &RoomId,
+    tx: ChannelId,
+    text: &str,
+) -> TestResult<InboundResult> {
+    let input = InboundMessage::new(tx, "u", TextContent::new(text));
     let options = ProcessInboundOptions {
         room_id: Some(room.clone()),
         ..ProcessInboundOptions::default()
     };
     let result = kit.process_inbound(input, options).await?;
-    if let Some(error) = result.error {
+    if let Some(error) = &result.error {
         return Err(format!("inbound failed: {error:?}").into());
     }
+    Ok(result)
+}
+
+async fn observe(kit: &RoomKit) -> TestResult<Value> {
+    let (room, tx) = open_room(kit).await?;
+    let result = send(kit, &room, tx, "Hi.").await?;
     let rows = kit
         .store()
         .list_events(&room, ListEventsOptions::default())
@@ -178,7 +190,11 @@ async fn peer(role: &str) -> TestResult {
         turn_backend: Some(backend),
         ..RoomKitOptions::default()
     });
-    let observations = observe(&kit).await;
+    let observations = if role == "history-owner" {
+        history::replay(&kit).await
+    } else {
+        observe(&kit).await
+    };
     kit.close().await?;
     writeln!(io::stdout(), "{}", observations?)?;
     Ok(())
@@ -186,11 +202,13 @@ async fn peer(role: &str) -> TestResult {
 
 fn main() -> TestResult {
     match env::args().nth(1).as_deref() {
-        Some(role @ ("owner" | "executor")) => tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()?
-            .block_on(peer(role)),
+        Some(role @ ("owner" | "executor" | "history-owner")) => {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()?
+                .block_on(peer(role))
+        }
         Some("--list") => Ok(writeln!(io::stdout(), "redis_interop: test")?),
         Some("--ignored") => Ok(()),
         Some(filter) if !filter.starts_with('-') && !"redis_interop".contains(filter) => Ok(()),
