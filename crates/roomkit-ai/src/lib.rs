@@ -88,6 +88,9 @@ mod plan_event;
 mod plan_task;
 mod planning;
 mod provider;
+mod tool_name_rule;
+
+pub use self::tool_name_rule::ToolNameRule;
 mod router;
 pub mod tasks;
 pub use author_images::ImageResolver;

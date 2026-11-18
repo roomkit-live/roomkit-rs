@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Expose custom provider tool-name rules through `roomkit_ai::ToolNameRule`, using the native Rust `fancy-regex` syntax for whole-name matching.
+
 - Expose `roomkit_ai::stream_call_of` and `tool_call_of` to copy complete and streamed tool calls while retaining all fields.
 
 - Expose `parse_frontmatter` to read a local manifest and its body directly from text, preserving field order and simple lists.

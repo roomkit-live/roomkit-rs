@@ -17,6 +17,7 @@ roomkit.workspace = true
 roomkit-core = { workspace = true, features = ["system-environment"] }
 # The `Stream` a provider's response is read as (step 4, decision 11).
 futures-core.workspace = true
+fancy-regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

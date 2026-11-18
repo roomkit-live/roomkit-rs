@@ -5,6 +5,12 @@
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum AiError {
+    /// A provider author supplied an invalid tool-name expression.
+    #[error("invalid tool name pattern: {reason}")]
+    ToolNamePattern {
+        /// The regular expression compiler's diagnostic.
+        reason: String,
+    },
     /// The provider selected incompatible Chat Completions dialect settings.
     #[error("{reason}")]
     ChatDialect {
