@@ -150,6 +150,17 @@ checkout with its test and Redis dependencies installed.
 cargo test --locked -p roomkit --features redis --test redis_interop
 ```
 
+The shared RFC scenarios use the same Redis service. To check the executor
+scenarios with the in-memory conversation store on both Tokio runtimes, run
+
+```sh
+ROOMKIT_CONFORMANCE_FILTER=executors/ cargo test --locked -p roomkit --features redis --test conformance -- every_scenario --nocapture
+```
+
+Set `ROOMKIT_CONFORMANCE_JUNIT` to a directory to retain the pass, failure
+and skip counts for each runtime. The SQLite and PostgreSQL conformance
+runners also accept `REDIS_URL`.
+
 ## Examples and documentation
 
 | Example | What it demonstrates |
