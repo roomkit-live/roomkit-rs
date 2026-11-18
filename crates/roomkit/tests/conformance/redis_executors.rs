@@ -18,14 +18,17 @@ use channel::WorkerChannel;
 const SUPPORTED: &[&str] = &[
     "discussion/an-offline-agent-s-turn-is-skipped-not-failed",
     "executors/a-channel-call-no-executor-takes-fails-no-executor",
+    "executors/a-channel-call-runs-on-the-executor-holding-the-room",
     "executors/a-declared-agent-s-turn-runs-on-the-executor-hosting-it",
     "executors/a-delegation-to-a-declared-worker-runs-on-its-executor",
     "executors/a-detach-forgets-what-the-room-kept-for-a-channel",
     "executors/a-later-turn-on-another-executor-replays-the-instruction-it-read",
     "executors/a-live-agent-s-turn-stays-on-the-kit-s-executor",
     "executors/a-provider-the-factory-hands-every-build-outlives-a-build-let-go",
+    "executors/a-publication-from-an-executor-no-longer-holding-the-room-is-dropped",
     "executors/a-released-channel-is-built-anew-for-the-next-turn",
     "executors/a-room-s-agent-presence-names-the-executors-covering-each-agent",
+    "executors/a-room-s-turns-stay-on-the-executor-holding-its-state",
     "executors/a-room-whose-executor-builds-nothing-for-its-agent-stays-on-it",
     "executors/a-room-whose-executor-closed-moves-to-another",
     "executors/a-skill-activated-on-one-executor-rides-the-next-turn-on-another",
@@ -42,6 +45,7 @@ const SUPPORTED: &[&str] = &[
     "executors/an-agent-its-executor-builds-nothing-for-fails-no-executor",
     "executors/an-executor-builds-an-agent-at-its-first-turn-not-when-a-room-attaches-it",
     "executors/an-executor-declaring-every-agent-takes-the-turns-of-agents-it-was-never-named",
+    "executors/an-executor-drops-the-state-a-turn-elsewhere-made-stale",
     "executors/an-executor-lacking-a-room-s-hook-does-not-cover-its-agent-there",
     "executors/an-executor-lacking-a-room-s-hook-does-not-take-its-turn",
     "executors/an-executor-past-its-bound-closes-the-agent-it-used-least-recently",
@@ -192,6 +196,31 @@ impl Workers {
         Ok(())
     }
 
+    /// Withdraw the declaration while retaining the worker, its builds and its active turns.
+    /// Resuming re-advertises that same instance on the same Redis node.
+    async fn advertise(&self, id: &str, paused: bool) -> Result<(), RoomKitError> {
+        let active = self.active.lock().await;
+        let (hosting, executor) = active
+            .get(id)
+            .ok_or_else(|| RoomKitError::Value(format!("executor {id} is not running")))?;
+        if !paused {
+            return hosting.serve(executor.clone()).await;
+        }
+        let no_channels = TurnExecutor::new(
+            |_| {
+                std::future::ready(Err::<Option<WorkerChannel>, _>(RoomKitError::Runtime(
+                    "a paused executor was asked to build a channel".into(),
+                )))
+            },
+            TurnExecutorOptions {
+                executor_id: Some(id.to_owned()),
+                hosts: Some(BTreeSet::new()),
+                ..TurnExecutorOptions::default()
+            },
+        )?;
+        hosting.serve(no_channels).await
+    }
+
     async fn close(&self, id: &str) -> Result<(), RoomKitError> {
         let entry = self.active.lock().await.remove(id);
         let (hosting, executor) =
@@ -234,6 +263,8 @@ impl crate::run::WorkerControl for Workers {
             match operation {
                 "executor.start" => self.start(id).await,
                 "executor.close" => self.close(id).await,
+                "executor.pause" => self.advertise(id, true).await,
+                "executor.resume" => self.advertise(id, false).await,
                 other => Err(RoomKitError::Value(format!(
                     "unsupported executor operation: {other}"
                 ))),

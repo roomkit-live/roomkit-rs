@@ -474,7 +474,8 @@ fn base_arguments(call: &str) -> Option<&'static [&'static str]> {
         | "kit_executor.closed"
         | "kit_executor.executor_id"
         | "executors" => &[],
-        "executor.start" | "executor.close" | "executor.calls" => &["executor"],
+        "executor.pause" | "executor.resume" | "executor.start" | "executor.close"
+        | "executor.calls" => &["executor"],
         "process_inbound" => &["message", "room_id", "defer_delivery"],
         "delivery.cancel" => &["of", "reason", "timeout_ms"],
         "delivery.wait" => &["of"],

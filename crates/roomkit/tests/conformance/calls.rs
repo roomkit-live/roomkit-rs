@@ -528,7 +528,9 @@ async fn lifecycle_call(
         "register_hook" => finish(run, name, register_hook(run, &spec["hook"])?, |()| {
             Value::Null
         }),
-        "executor.start"
+        "executor.pause"
+        | "executor.resume"
+        | "executor.start"
         | "executor.calls"
         | "executor.close"
         | "kit_executor.close"
