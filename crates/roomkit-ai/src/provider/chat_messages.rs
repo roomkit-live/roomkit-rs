@@ -1,12 +1,10 @@
 //! The Chat Completions message format and its provider-selected dialect (RFC §6.7).
 
-use roomkit_core::rules::transcript::{DataUriError, parse_data_uri, to_data_uri};
 use serde_json::{Value, json};
 
 use super::chat_dialect::ChatDialect;
 use super::{
-    AiContentPart, AiImagePart, AiMessage, AiMessageContent, AiRole, ProviderError,
-    ProviderErrorOptions,
+    AiContentPart, AiImagePart, AiMessage, AiMessageContent, AiRole, ProviderError, image_part_uri,
 };
 use crate::skills::dumps;
 
@@ -27,16 +25,7 @@ pub fn chat_messages(
         rows.push(json!({"role": "system", "content": prompt}));
     }
     for message in messages {
-        render(&mut rows, message, dialect).map_err(|error| {
-            ProviderError::new(
-                format!("invalid image part: {error}"),
-                ProviderErrorOptions {
-                    provider: provider.into(),
-                    ..Default::default()
-                },
-            )
-            .with_source(error)
-        })?;
+        render(&mut rows, message, dialect, provider)?;
     }
     Ok(rows)
 }
@@ -45,7 +34,8 @@ fn render(
     rows: &mut Vec<Value>,
     message: &AiMessage,
     dialect: &ChatDialect,
-) -> Result<(), DataUriError> {
+    provider: &str,
+) -> Result<(), ProviderError> {
     let role = message.role.as_str();
     let parts = match &message.content {
         AiMessageContent::Text(text) => {
@@ -59,7 +49,7 @@ fn render(
     let calls = tool_calls(parts);
     if !calls.is_empty() {
         let content = if dialect.flattens_text() {
-            flat(parts)?
+            flat(parts, provider)?
         } else {
             Value::String(text(parts))
         };
@@ -81,14 +71,14 @@ fn render(
         .iter()
         .any(|part| matches!(part, AiContentPart::ToolResult(_)))
     {
-        append_results(rows, parts, dialect)?;
+        append_results(rows, parts, dialect, provider)?;
     } else if dialect.flattens_text() {
-        let content = flat(parts)?;
+        let content = flat(parts, provider)?;
         if content.as_str() != Some("") {
             rows.push(json!({"role": role, "content": content}));
         }
     } else {
-        let blocks = blocks(parts)?;
+        let blocks = blocks(parts, provider)?;
         let content = if blocks.is_empty() && !parts.is_empty() {
             json!("")
         } else {
@@ -119,7 +109,8 @@ fn append_results(
     rows: &mut Vec<Value>,
     parts: &[AiContentPart],
     dialect: &ChatDialect,
-) -> Result<(), DataUriError> {
+    provider: &str,
+) -> Result<(), ProviderError> {
     let mut images = Vec::new();
     for part in parts {
         if let AiContentPart::ToolResult(result) = part {
@@ -133,7 +124,7 @@ fn append_results(
             }
             rows.push(row);
             for part in shown {
-                images.push(image(&part)?);
+                images.push(image(&part, provider)?);
             }
         }
     }
@@ -186,22 +177,17 @@ fn attach_thinking(
     }
 }
 
-fn image(part: &AiImagePart) -> Result<Value, DataUriError> {
-    let url = if part.url.starts_with("data:") {
-        let (kind, bytes) = parse_data_uri(&part.url, part.mime_type.as_deref())?;
-        to_data_uri(&bytes, &kind)
-    } else {
-        part.url.clone()
-    };
+fn image(part: &AiImagePart, provider: &str) -> Result<Value, ProviderError> {
+    let url = image_part_uri(part, provider)?;
     Ok(json!({"type":"image_url", "image_url":{"url":url}}))
 }
 
-fn blocks(parts: &[AiContentPart]) -> Result<Vec<Value>, DataUriError> {
+fn blocks(parts: &[AiContentPart], provider: &str) -> Result<Vec<Value>, ProviderError> {
     parts
         .iter()
         .filter_map(|part| match part {
             AiContentPart::Text(text) => Some(Ok(json!({"type":"text", "text":text.text}))),
-            AiContentPart::Image(part) => Some(image(part)),
+            AiContentPart::Image(part) => Some(image(part, provider)),
             AiContentPart::ToolCall(_)
             | AiContentPart::ToolResult(_)
             | AiContentPart::Thinking(_) => None,
@@ -209,12 +195,12 @@ fn blocks(parts: &[AiContentPart]) -> Result<Vec<Value>, DataUriError> {
         .collect()
 }
 
-fn flat(parts: &[AiContentPart]) -> Result<Value, DataUriError> {
+fn flat(parts: &[AiContentPart], provider: &str) -> Result<Value, ProviderError> {
     if parts
         .iter()
         .any(|part| matches!(part, AiContentPart::Image(_)))
     {
-        Ok(Value::Array(blocks(parts)?))
+        Ok(Value::Array(blocks(parts, provider)?))
     } else {
         Ok(Value::String(text(parts)))
     }

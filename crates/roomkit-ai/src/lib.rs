@@ -160,6 +160,7 @@ pub use self::provider::{
 };
 #[doc(hidden)]
 pub use self::provider::{check_schema_answer, checked_stream, schema_for_generate};
+pub use self::provider::{image_part_base64, image_part_payload, image_part_uri};
 pub use self::router::{
     AiRouter, AiRouterFuture, FallbackRouter, RouteReason, RouteRequest, Routed,
 };

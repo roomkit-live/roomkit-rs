@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Expose the URI, decoded bytes and canonical base64 forms of image parts embedded in text-provider messages.
+
 - Register an opted-in application channel with `register_channel(framework_aware(channel))` to give it a weak handle to the same kit and store.
 
 - Expose tool schema normalization, ordered Chat Completions function declarations and the shared provider tool-name check through `roomkit_ai`. Returned schemas own their nested data.

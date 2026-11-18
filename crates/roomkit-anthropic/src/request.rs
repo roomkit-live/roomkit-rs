@@ -2,9 +2,9 @@
 use crate::{AnthropicConfig, error, models, reasoning};
 use roomkit_ai::{
     AiContentPart, AiContext, AiImagePart, AiMessage, AiMessageContent, AiRole, AiToolResultPart,
-    ProviderError, ToolResult, ToolResultPart,
+    ProviderError, ToolResult, ToolResultPart, image_part_base64,
 };
-use roomkit_core::rules::transcript::{fence, identifier, parse_data_uri, to_data_uri};
+use roomkit_core::rules::transcript::{fence, identifier};
 use serde_json::{Map, Value, json};
 
 pub(crate) fn body(config: &AnthropicConfig, context: &AiContext) -> Result<Value, ProviderError> {
@@ -137,12 +137,7 @@ fn image(part: &AiImagePart) -> Result<Value, ProviderError> {
     if !part.url.starts_with("data:") {
         return Ok(json!({"type":"image", "source":{"type":"url", "url":part.url}}));
     }
-    let (kind, bytes) = parse_data_uri(&part.url, part.mime_type.as_deref())
-        .map_err(|cause| error::failed(format!("invalid image part: {cause}")))?;
-    let canonical = to_data_uri(&bytes, &kind);
-    let (_, payload) = canonical
-        .split_once(',')
-        .ok_or_else(|| error::failed("invalid image payload"))?;
+    let (kind, payload) = image_part_base64(part, "anthropic")?;
     Ok(json!({"type":"image", "source":{"type":"base64", "media_type":kind, "data":payload}}))
 }
 
