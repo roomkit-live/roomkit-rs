@@ -152,10 +152,7 @@ fn a_result_file_is_claimed_only_when_a_directory_is_named() {
 
 #[test]
 fn a_directory_git_cannot_read_names_no_commit() {
-    let directory = new_directory();
-    std::fs::create_dir_all(&directory).unwrap();
-    let revision = junit::revision(&directory);
-    std::fs::remove_dir_all(&directory).unwrap();
+    let revision = junit::revision(&new_directory());
     assert_eq!(
         revision,
         Revision {
@@ -163,4 +160,51 @@ fn a_directory_git_cannot_read_names_no_commit() {
             clean: false
         }
     );
+}
+
+#[test]
+fn a_run_names_its_commit_and_whether_tracked_files_differ() {
+    let directory = new_directory();
+    std::fs::create_dir_all(&directory).unwrap();
+    let git = |arguments: &[&str]| {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&directory)
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {arguments:?}: {output:?}");
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    };
+    git(&["init", "-q"]);
+    std::fs::write(directory.join("tracked"), "one").unwrap();
+    git(&["add", "tracked"]);
+    git(&[
+        "-c",
+        "user.name=Conformance",
+        "-c",
+        "user.email=test@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "commit",
+        "-qm",
+        "fixture",
+    ]);
+    let commit = git(&["rev-parse", "HEAD"]);
+    let clean = junit::revision(&directory);
+    std::fs::write(directory.join("untracked"), "new").unwrap();
+    let untracked = junit::revision(&directory);
+    std::fs::write(directory.join("tracked"), "two").unwrap();
+    let changed = junit::revision(&directory);
+    std::fs::remove_dir_all(&directory).unwrap();
+
+    let at = |clean| Revision {
+        commit: commit.clone(),
+        clean,
+    };
+    assert_eq!(clean, at(true));
+    assert_eq!(untracked, at(true), "an untracked file is no change");
+    assert_eq!(changed, at(false));
 }
