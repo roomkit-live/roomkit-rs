@@ -27,6 +27,20 @@ pub struct CallContext {
     pub response_metadata: Option<Metadata>,
 }
 
+/// A worker's call to a tool served by the room owner (RFC §10.6.5).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename = "tool_call")]
+pub struct ToolCall {
+    /// Identifier used to correlate the answer.
+    pub call_id: String,
+    /// Name of the requested tool.
+    pub name: String,
+    /// Arguments supplied to the handler.
+    pub arguments: Metadata,
+    /// Room, channel, actor and model call identity for this invocation.
+    pub context: CallContext,
+}
+
 /// Changes measured against the record carried by one owner-served call.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]

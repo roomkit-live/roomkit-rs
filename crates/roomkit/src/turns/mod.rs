@@ -28,6 +28,8 @@
 //! call that first read it, so a tool that calls the kit keeps the
 //! reentrancy rules it would have in the owner's own code.
 
+mod client;
+pub use client::{OwnerEvents, OwnerHost, OwnerTools};
 mod served_executor;
 pub use served_executor::ServedExecutor;
 pub(crate) use served_executor::owner_executor;

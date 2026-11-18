@@ -27,7 +27,9 @@ mod output;
 pub(crate) use output::ErrorRecord as WireError;
 pub use output::{ErrorRecord, Item, ToolEnd, WireLoopEnd, WireOutput, WireResult};
 mod messages;
-pub use messages::{CallContext, Control, Frame, InputOutcome, RecordChanges, ToolOutcome};
+pub use messages::{
+    CallContext, Control, Frame, InputOutcome, RecordChanges, ToolCall, ToolOutcome,
+};
 
 use roomkit_core::model::{
     ChannelBinding, ChannelId, EventContent, EventId, EventType, Metadata, Observation,
