@@ -248,6 +248,15 @@ impl TurnHost {
         &self.room_hooks
     }
 
+    pub(crate) fn callback_parts(&self) -> (&Arc<dyn TurnKit>, &RoomId, &ChannelId, &ChannelType) {
+        (
+            &self.shared.kit,
+            &self.shared.room_id,
+            &self.shared.channel_id,
+            &self.shared.channel_type,
+        )
+    }
+
     pub(crate) fn initial_context(&self) -> &RoomContext {
         &self.shared.context
     }
@@ -731,20 +740,9 @@ impl TurnHost {
     /// Python implementation's engine emits it: about the turn's room and
     /// agent.
     fn report_timeout<P>(&self, spec: &HookSpec, ran: &HookOutcome<P>) {
-        if !matches!(ran, HookOutcome::TimedOut) {
-            return;
+        if let Some(data) = timeout_data(spec, ran) {
+            self.emit("hook_timeout", data);
         }
-        let mut data = Metadata::new();
-        data.insert("hook_name".to_owned(), Value::from(spec.name.as_str()));
-        data.insert(
-            "trigger".to_owned(),
-            serde_json::to_value(spec.trigger).unwrap_or_default(),
-        );
-        data.insert(
-            "timeout".to_owned(),
-            Value::from(spec.timeout.as_secs_f64()),
-        );
-        self.emit("hook_timeout", data);
     }
 
     /// The gate let `call` run with `arguments`: they cross before what
@@ -1357,6 +1355,24 @@ pub enum OwnerToolAnswer {
     },
     /// Nothing on the owner serves the tool.
     Unserved(String),
+}
+
+/// Fields carried by the framework event for a timed-out hook.
+pub(crate) fn timeout_data<P>(spec: &HookSpec, ran: &HookOutcome<P>) -> Option<Metadata> {
+    if !matches!(ran, HookOutcome::TimedOut) {
+        return None;
+    }
+    let mut data = Metadata::new();
+    data.insert("hook_name".to_owned(), Value::from(spec.name.as_str()));
+    data.insert(
+        "trigger".to_owned(),
+        serde_json::to_value(spec.trigger).unwrap_or_default(),
+    );
+    data.insert(
+        "timeout".to_owned(),
+        Value::from(spec.timeout.as_secs_f64()),
+    );
+    Some(data)
 }
 
 /// A call of a tool the owner serves, as its handler reads it: the room of

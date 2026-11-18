@@ -78,7 +78,7 @@ pub(super) struct TurnStream<T: AcpTransport> {
     channel_id: ChannelId,
     room_id: RoomId,
     record: ResponseMetadata,
-    host: Option<TurnHost>,
+    callbacks: Option<roomkit::turns::ChannelTurnHooks>,
     reported: bool,
     done: bool,
 }
@@ -90,6 +90,16 @@ impl<T: AcpTransport> TurnStream<T> {
         let record = ask.record.clone();
         let host = ask.host.clone();
         let channel_id = shared.channel_id.clone();
+        let callbacks = host.clone().map(Into::into).or_else(|| {
+            shared
+                .wiring
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref()
+                .map(|wiring| {
+                    wiring.channel_hooks(&room_id, &channel_id, &roomkit::model::ChannelType::AI)
+                })
+        });
         let generation = shared.connector.generation(&room_id);
         let thinking_window = Arc::new(ThinkingWindow::new(
             host.clone().filter(|_| ask.answers_room),
@@ -126,7 +136,7 @@ impl<T: AcpTransport> TurnStream<T> {
             channel_id,
             room_id,
             record,
-            host,
+            callbacks,
             reported: false,
             done: false,
         }
@@ -201,7 +211,7 @@ impl<T: AcpTransport> TurnStream<T> {
     /// `_report_response`: its text, its end as its record names it, the
     /// counters the agent returned, unaltered. Outside a kit nothing fires.
     fn report(&self, answered: &Answered) {
-        let Some(host) = &self.host else {
+        let Some(host) = &self.callbacks else {
             return;
         };
         let (segments, content) =
@@ -228,7 +238,7 @@ impl<T: AcpTransport> TurnStream<T> {
         data.insert("latency_ms".to_owned(), Value::from(latency_ms));
         data.insert("streaming".to_owned(), Value::Bool(true));
         let emitter = host.clone();
-        host.observe_turn(&event, move || emitter.emit_turn_event("ai_response", data));
+        host.observe(&event, move || emitter.emit_later("ai_response", data));
     }
 }
 

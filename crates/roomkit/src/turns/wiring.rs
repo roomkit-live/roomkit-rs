@@ -1,5 +1,7 @@
 //! The room reads and outlets an executor gives the channels it wires (RFC §10.6.2).
+mod hooks;
 mod kit;
+pub use hooks::ChannelTurnHooks;
 mod rows;
 mod worker;
 pub(crate) use kit::KitWiringEnv;

@@ -1898,6 +1898,7 @@ impl<P: AiProvider> AiChannel<P> {
             reasoning_effort: settings.reasoning_effort.clone(),
             response_schema: settings.response_schema.clone(),
             turn: turn.clone(),
+            callbacks: self.channel_callbacks(&context.room.id, turn.as_ref()),
             context: tools,
             intents: self.intents.on,
             intents_required: self.intents.required,

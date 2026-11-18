@@ -46,19 +46,18 @@ impl TurnHost {
     /// Python implementation's channel fires it.
     #[doc(hidden)]
     pub async fn run_turn_hooks<P: TurnPayload>(&self, payload: P) -> TurnChain<P> {
-        let hooks = self.turn_hooks::<P>();
-        let chain = self.turn_chain(&hooks, payload).await;
-        if chain.blocked.is_none() {
-            self.observe_turn_with(&hooks, &chain.payload, None);
-        }
-        chain
+        crate::turns::ChannelTurnHooks::from(self.clone())
+            .run(payload)
+            .await
     }
 
     /// Runs only the SYNC decision chain. The caller reports the final standing
     /// decision separately, including a silence left by a block.
     #[doc(hidden)]
     pub async fn decide_turn<P: TurnPayload>(&self, payload: P) -> TurnChain<P> {
-        self.turn_chain(&self.turn_hooks::<P>(), payload).await
+        crate::turns::ChannelTurnHooks::from(self.clone())
+            .decide(payload)
+            .await
     }
 
     /// Starts the kit's hooks on the trigger of `payload`, an observed one,
@@ -68,9 +67,7 @@ impl TurnHost {
     /// `ON_AI_RESPONSE` fires (RFC §9.2).
     #[doc(hidden)]
     pub fn observe_turn<P: TurnPayload>(&self, payload: &P, then: impl FnOnce() + Send + 'static) {
-        let hooks = self.turn_hooks::<P>();
-        let then: Box<dyn FnOnce() + Send> = Box::new(then);
-        self.observe_turn_with(&hooks, payload, Some(then));
+        crate::turns::ChannelTurnHooks::from(self.clone()).observe(payload, then);
     }
 
     /// Emits the framework event `event_type` with `data`, about the turn's
@@ -80,25 +77,83 @@ impl TurnHost {
     pub fn emit_turn_event(&self, event_type: &str, data: Metadata) {
         self.emit(event_type, data);
     }
+}
 
-    /// The hooks on the trigger of `P` for the turn's room and agent.
-    fn turn_hooks<P: TurnPayload>(&self) -> TurnHooks<P> {
-        let agent = (&self.shared.room_id, &self.shared.channel_id);
-        self.shared
-            .kit
-            .turn_hooks(P::TRIGGER, agent, &self.shared.channel_type)
+impl<P> TurnChain<P> {
+    fn unchanged(payload: P) -> Self {
+        Self {
+            payload,
+            blocked: None,
+            failed_closed: false,
+        }
+    }
+}
+
+impl crate::turns::ChannelTurnHooks {
+    fn hooks<P: TurnPayload>(&self) -> TurnHooks<P> {
+        let (kit, room, channel, kind) = self.parts();
+        kit.turn_hooks(P::TRIGGER, (room, channel), kind)
             .into_iter()
             .filter_map(|(spec, hook)| Some((spec, hook.handler::<P>()?)))
             .collect()
     }
 
-    /// The SYNC chain of `hooks` on `payload`.
-    async fn turn_chain<P: TurnPayload>(&self, hooks: &TurnHooks<P>, payload: P) -> TurnChain<P> {
-        let mut chain = TurnChain {
-            payload,
-            blocked: None,
-            failed_closed: false,
+    /// Run the synchronous chain and then its observers if the chain was allowed.
+    pub async fn run<P: TurnPayload>(&self, payload: P) -> TurnChain<P> {
+        let hooks = self.hooks::<P>();
+        if hooks.is_empty() {
+            return TurnChain::unchanged(payload);
+        }
+        let Some(context) = self.context(P::TRIGGER).await else {
+            return TurnChain::unchanged(payload);
         };
+        let chain = self.chain(&hooks, payload, &context).await;
+        if chain.blocked.is_none() {
+            self.observe_with(&hooks, &chain.payload, &context, None);
+        }
+        chain
+    }
+
+    /// Run the synchronous decision chain without starting observers.
+    pub async fn decide<P: TurnPayload>(&self, payload: P) -> TurnChain<P> {
+        let hooks = self.hooks::<P>();
+        if hooks.is_empty() {
+            return TurnChain::unchanged(payload);
+        }
+        let Some(context) = self.context(P::TRIGGER).await else {
+            return TurnChain::unchanged(payload);
+        };
+        self.chain(&hooks, payload, &context).await
+    }
+
+    /// Schedule every observer, then the completion action once all finish.
+    pub fn observe<P: TurnPayload>(&self, payload: &P, then: impl FnOnce() + Send + 'static) {
+        let hooks = self.hooks::<P>();
+        if hooks.is_empty() {
+            then();
+            return;
+        }
+        let done: Box<dyn FnOnce() + Send> = Box::new(then);
+        if let Some(host) = self.host() {
+            self.observe_with(&hooks, payload, host.initial_context(), Some(done));
+        } else {
+            let bound = self.clone();
+            let payload = payload.clone();
+            self.spawn(Box::pin(async move {
+                if let Some(context) = bound.context(P::TRIGGER).await {
+                    bound.observe_with(&hooks, &payload, &context, Some(done));
+                }
+            }));
+        }
+    }
+
+    async fn chain<P: TurnPayload>(
+        &self,
+        hooks: &TurnHooks<P>,
+        payload: P,
+        context: &crate::model::RoomContext,
+    ) -> TurnChain<P> {
+        let mut chain = TurnChain::unchanged(payload);
         for (spec, handler) in hooks
             .iter()
             .filter(|(spec, _)| spec.execution == HookExecution::Sync)
@@ -107,11 +162,11 @@ impl TurnHost {
                 spec,
                 Arc::clone(handler),
                 chain.payload.clone(),
-                self.shared.context.clone(),
+                context.clone(),
                 |_| None,
             )
             .await;
-            self.report_timeout(spec, &ran);
+            self.timeout(spec, &ran);
             let failure = match ran {
                 HookOutcome::Returned(result) => match (result.action, result.event) {
                     (HookAction::Block, _) => {
@@ -152,10 +207,11 @@ impl TurnHost {
     /// Runs the ASYNC hooks of `hooks` on `payload` in the background, each
     /// within its timeout, as the turn's observers; `then` once every one
     /// ended, at once when there is none.
-    fn observe_turn_with<P: TurnPayload>(
+    fn observe_with<P: TurnPayload>(
         &self,
         hooks: &TurnHooks<P>,
         payload: &P,
+        context: &crate::model::RoomContext,
         then: Option<Box<dyn FnOnce() + Send>>,
     ) {
         let observers: Vec<_> = hooks
@@ -180,7 +236,7 @@ impl TurnHost {
                 spec.clone(),
                 Arc::clone(handler),
                 payload.clone(),
-                self.shared.context.clone(),
+                context.clone(),
             );
             // Boxed at once: each layer below moves its future by value, and
             // a debug build copies this one at every move, past a 2 MB stack
@@ -189,7 +245,7 @@ impl TurnHost {
             let (host, spec, done) = (self.clone(), spec.clone(), Arc::clone(&ended));
             let bounded = async move {
                 let observed = observing.await;
-                host.report_timeout(&spec, &observed);
+                host.timeout(&spec, &observed);
                 if let HookOutcome::Raised(error) = observed {
                     tracing::warn!(target: "roomkit::hooks", hook = %spec.name, error = %error.message, "a turn's observer raised");
                 }
@@ -198,8 +254,8 @@ impl TurnHost {
             // Under the turn's record, as Python's task copies its context.
             let bounded = crate::turn_record::within_current_turn_record(bounded);
             let bounded = crate::tool_call_scope::within_current_tool_call(bounded);
-            let task = ExecutionContext::current().scope(TURN.scope(Some(self.clone()), bounded));
-            if !self.shared.kit.spawn_observer(Box::pin(task)) {
+            let task = ExecutionContext::current().scope(TURN.scope(self.host().cloned(), bounded));
+            if !self.spawn(Box::pin(task)) {
                 tracing::debug!(target: "roomkit::hooks", "the kit is shut down: a turn's observer is not run");
                 ended.one();
             }

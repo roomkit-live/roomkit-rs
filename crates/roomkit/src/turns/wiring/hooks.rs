@@ -1,0 +1,114 @@
+//! A channel can fire its executor's hooks before joining a registry.
+use super::TurnWiring;
+use crate::channel::BoxFuture;
+use crate::model::{ChannelId, ChannelType, Metadata, RoomContext, RoomId};
+use crate::turn::{TurnHost, TurnKit};
+use crate::{FrameworkEvent, HookTrigger};
+use roomkit_core::rules::hook_chain::HookOutcome;
+use roomkit_core::rules::hook_registry::HookSpec;
+use std::sync::Arc;
+
+/// A channel's callbacks on its executor, usable inside or outside a turn.
+#[derive(Clone, Debug)]
+pub struct ChannelTurnHooks(Binding);
+
+#[derive(Clone, Debug)]
+enum Binding {
+    Turn(TurnHost),
+    Wired(Arc<Wired>),
+}
+#[derive(Debug)]
+struct Wired {
+    wiring: TurnWiring,
+    room: RoomId,
+    channel: ChannelId,
+    kind: ChannelType,
+}
+
+impl From<TurnHost> for ChannelTurnHooks {
+    fn from(host: TurnHost) -> Self {
+        Self(Binding::Turn(host))
+    }
+}
+
+impl TurnWiring {
+    /// The callbacks for a channel's text work in this room. They retain the
+    /// current turn when one exists and create no turn when called independently.
+    pub fn channel_hooks(
+        &self,
+        room: &RoomId,
+        channel: &ChannelId,
+        kind: &ChannelType,
+    ) -> ChannelTurnHooks {
+        if let Some(host) = crate::turn::turn_in_scope()
+            .filter(|host| host.room_id() == room && host.channel() == channel)
+        {
+            return host.into();
+        }
+        ChannelTurnHooks(Binding::Wired(Arc::new(Wired {
+            wiring: self.clone(),
+            room: room.clone(),
+            channel: channel.clone(),
+            kind: kind.clone(),
+        })))
+    }
+}
+
+impl ChannelTurnHooks {
+    pub(crate) fn host(&self) -> Option<&TurnHost> {
+        match &self.0 {
+            Binding::Turn(host) => Some(host),
+            Binding::Wired(_) => None,
+        }
+    }
+
+    pub(crate) fn parts(&self) -> (&Arc<dyn TurnKit>, &RoomId, &ChannelId, &ChannelType) {
+        match &self.0 {
+            Binding::Turn(host) => host.callback_parts(),
+            Binding::Wired(bound) => (&bound.wiring.kit, &bound.room, &bound.channel, &bound.kind),
+        }
+    }
+
+    pub(crate) async fn context(&self, trigger: HookTrigger) -> Option<RoomContext> {
+        match &self.0 {
+            Binding::Turn(host) => Some(host.initial_context().clone()),
+            Binding::Wired(bound) => bound.wiring.hook_context(&bound.room, trigger, None).await,
+        }
+    }
+
+    pub(crate) fn spawn(&self, task: BoxFuture<'static, ()>) -> bool {
+        self.parts().0.spawn_observer(task)
+    }
+
+    pub(crate) fn timeout<P>(&self, spec: &HookSpec, ran: &HookOutcome<P>) {
+        if let Some(data) = crate::turn::timeout_data(spec, ran) {
+            self.emit_later("hook_timeout", data);
+        }
+    }
+
+    /// Emit a framework fact after the hooks' synchronous decision.
+    pub async fn emit(&self, kind: &str, data: Metadata) {
+        match &self.0 {
+            Binding::Turn(host) => host.emit_turn_event(kind, data),
+            Binding::Wired(bound) => {
+                let mut event = FrameworkEvent::new(kind);
+                event.room_id = Some(bound.room.clone());
+                event.channel_id = Some(bound.channel.clone());
+                event.data = data;
+                bound.wiring.emit(event).await;
+            }
+        }
+    }
+
+    /// Queue a fact from a synchronous observer completion.
+    pub fn emit_later(&self, kind: &'static str, data: Metadata) {
+        if let Some(host) = self.host() {
+            host.emit_turn_event(kind, data);
+            return;
+        }
+        let bound = self.clone();
+        self.spawn(Box::pin(async move {
+            bound.emit(kind, data).await;
+        }));
+    }
+}

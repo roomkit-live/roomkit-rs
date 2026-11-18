@@ -113,7 +113,7 @@ impl Loop {
         trigger: &RoomEvent,
         messages: &[Message],
     ) -> bool {
-        if self.turn.is_none() {
+        if self.callbacks.is_none() {
             return true;
         }
         let Some((built, context)) = self
@@ -138,7 +138,7 @@ impl Loop {
             tools: self.hook_tools(),
             ..self.round_context(messages, self.system_prompt.clone())
         };
-        let Some(turn) = self.turn.clone() else {
+        let Some(turn) = self.callbacks.clone() else {
             return Some((built.clone(), crate::SharedAiContext::new(built)));
         };
         let event = AiGenerationEvent {
@@ -148,7 +148,7 @@ impl Loop {
             purpose,
             ..AiGenerationEvent::new(built.clone(), self.context.channel_id.clone())
         };
-        let chain = turn.run_turn_hooks(event).await;
+        let chain = turn.run(event).await;
         let blocked_by = chain.blocked.as_ref().map(|(name, reason)| {
             tracing::info!(target: "roomkit::ai", hook = %name, ?reason, "the generation was blocked by a hook");
             name.clone()
@@ -159,7 +159,7 @@ impl Loop {
             "blocked_by".to_owned(),
             blocked_by.clone().map_or(Value::Null, Value::from),
         );
-        turn.emit_turn_event("before_ai_generation", data);
+        turn.emit("before_ai_generation", data).await;
         if blocked_by.is_some() {
             return None;
         }
@@ -221,7 +221,7 @@ impl Loop {
     /// user's, each copy of a runtime mark replaced (RFC §6.4). A round
     /// that ran no call fires nothing.
     pub(super) async fn after_tool_round(&mut self, round_index: u32, ran: Ran) -> Vec<Message> {
-        let Some(turn) = self.turn.clone() else {
+        let Some(turn) = self.callbacks.clone() else {
             return Vec::new();
         };
         if ran.calls.is_empty() {
@@ -242,7 +242,7 @@ impl Loop {
                 ran.results,
             )
         };
-        let left = turn.run_turn_hooks(event).await.payload;
+        let left = turn.run(event).await.payload;
         self.adopted.withdrawn.extend(left.withdrawn);
         self.resolve_tool_catalogue();
         left.messages
@@ -256,7 +256,7 @@ impl Loop {
     /// then emits `ai_response` once they ended (RFC §8.2, §9.2). Outside a
     /// kit nothing fires.
     pub(super) fn report(&self, reason: LoopEndReason, rounds: u32, spent: &Spent) {
-        let Some(turn) = self.turn.clone() else {
+        let Some(turn) = self.callbacks.clone() else {
             return;
         };
         let (segments, content) = response_transcript(spent.segments.iter().cloned());
@@ -284,7 +284,7 @@ impl Loop {
         data.insert("latency_ms".to_owned(), Value::from(latency_ms));
         data.insert("streaming".to_owned(), Value::Bool(true));
         let host = turn.clone();
-        turn.observe_turn(&event, move || host.emit_turn_event("ai_response", data));
+        turn.observe(&event, move || host.emit_later("ai_response", data));
     }
 
     /// The turn's toolset as its hooks read it, by the tools' own schemas:

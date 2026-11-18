@@ -368,3 +368,82 @@ async fn wiring_before_registration_arms_human_input_and_propagates_a_closed_han
     );
     worker.close().await;
 }
+
+#[tokio::test]
+async fn wired_ai_generation_and_response_fire_without_a_turn_host() {
+    use roomkit::model::{HookResult, hook::AllowOptions};
+    use roomkit::turns::HookOptions;
+    use roomkit::{HookExecution, HookTrigger};
+    use roomkit_ai::{AiGenerationEvent, AiResponseEvent, testing::ScriptedRound};
+    let (link, _, _) = link(false);
+    let request = &link.request;
+    let worker = worker();
+    let env = Arc::new(Env::new(request.context.clone()));
+    worker.use_wiring(Arc::<Env>::clone(&env));
+    let (sent, mut seen) = tokio::sync::mpsc::unbounded_channel();
+    let start = sent.clone();
+    worker
+        .hook(
+            HookTrigger::BeforeAiGeneration,
+            move |_: AiGenerationEvent, ctx: RoomContext| {
+                let start = start.clone();
+                async move {
+                    assert!(roomkit::current_turn_host().is_none());
+                    start.send(("before", ctx.room.id)).unwrap();
+                    HookResult::allow(AllowOptions::default())
+                }
+            },
+            HookOptions::default(),
+        )
+        .unwrap();
+    worker
+        .hook(
+            HookTrigger::OnAiResponse,
+            move |_: AiResponseEvent, ctx: RoomContext| {
+                let sent = sent.clone();
+                async move {
+                    assert!(roomkit::current_turn_host().is_none());
+                    sent.send(("after", ctx.room.id)).unwrap();
+                }
+            },
+            HookOptions {
+                execution: HookExecution::Async,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let ai = AiChannel::new(
+        request.channel_id.clone(),
+        ScriptedProvider::new([ScriptedRound::writing(["done"])]),
+        AiChannelOptions::default(),
+    )
+    .unwrap();
+    worker.wire(&ai).unwrap();
+    ai.on_event(
+        request.event.clone(),
+        request.binding.clone(),
+        request.context.clone(),
+    )
+    .await
+    .unwrap();
+    for expected in ["before", "after"] {
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), seen.recv())
+                .await
+                .unwrap(),
+            Some((expected, request.room_id.clone()))
+        );
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while env.events.lock().unwrap().len() < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        *env.events.lock().unwrap(),
+        ["before_ai_generation", "ai_response"]
+    );
+    worker.close().await;
+}

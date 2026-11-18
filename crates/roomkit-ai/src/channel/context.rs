@@ -57,6 +57,22 @@ impl PreparedAnswer {
 }
 
 impl<P: AiProvider> AiChannel<P> {
+    pub(super) fn channel_callbacks(
+        &self,
+        room: &roomkit::model::RoomId,
+        host: Option<&TurnHost>,
+    ) -> Option<roomkit::turns::ChannelTurnHooks> {
+        host.cloned().map(Into::into).or_else(|| {
+            self.wiring
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref()
+                .map(|wiring| {
+                    wiring.channel_hooks(room, &self.channel_id, &roomkit::model::ChannelType::AI)
+                })
+        })
+    }
+
     /// The registered environment supplies the channel's own replay rows.
     pub(super) async fn wired_rows(
         &self,
