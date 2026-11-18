@@ -389,6 +389,8 @@ impl<S: ConversationStore> RoomKit<S> {
         environment: Arc<dyn Environment + Send + Sync>,
     ) -> Self {
         let RoomKitOptions {
+            #[cfg(feature = "redis")]
+            turn_backend,
             store,
             inbound_router,
             max_chain_depth,
@@ -457,6 +459,9 @@ impl<S: ConversationStore> RoomKit<S> {
             tasks: Arc::default(),
             environment,
             events: Handlers::default(),
+            #[cfg(feature = "redis")]
+            turns: Arc::new(Turns::with_backend(turn_backend)),
+            #[cfg(not(feature = "redis"))]
             turns: Arc::default(),
             room_turns: Arc::default(),
             sends: crate::sends::Sends::default(),

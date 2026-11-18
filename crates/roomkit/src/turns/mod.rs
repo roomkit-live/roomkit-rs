@@ -30,6 +30,10 @@
 
 mod public_options;
 pub use public_options::{HookOptions, RoomHookOptions, TakesOptions};
+#[cfg(feature = "redis")]
+mod redis;
+#[cfg(feature = "redis")]
+pub use redis::{RedisTurnBackend, RedisTurnBackendOptions};
 mod presence;
 pub use presence::{AgentPresence, ExecutorInfo, ExecutorInfoOptions};
 
@@ -126,6 +130,8 @@ pub(crate) enum Answer {
 /// registered live, whose turns its own executor takes.
 #[derive(Debug)]
 pub(crate) struct Turns {
+    #[cfg(feature = "redis")]
+    pub(crate) remote: Option<RedisTurnBackend>,
     timeouts: RwLock<TurnTimeouts>,
     observers: RwLock<Observers>,
     /// The id the kit's own executor answers with.
@@ -159,6 +165,8 @@ pub(crate) struct Turns {
 impl Default for Turns {
     fn default() -> Self {
         Self {
+            #[cfg(feature = "redis")]
+            remote: None,
             timeouts: RwLock::new(TurnTimeouts::default()),
             observers: RwLock::new(Observers::default()),
             executor_id: executor_id(),
@@ -195,6 +203,16 @@ impl Drop for Reading {
 }
 
 impl Turns {
+    #[cfg(feature = "redis")]
+    pub(crate) fn with_backend(remote: Option<RedisTurnBackend>) -> Self {
+        let mut turns = Self::default();
+        if let Some(backend) = &remote {
+            turns.set_timeouts(backend.timeouts());
+        }
+        turns.remote = remote;
+        turns
+    }
+
     /// The bounds of the turns submitted from now on.
     pub(crate) fn set_timeouts(&self, timeouts: TurnTimeouts) {
         *self
@@ -309,10 +327,39 @@ impl Turns {
         // The turn's tasks run in a unit of their own, within the call's
         // run's: a close from the turn's work spares them all (RFC
         // §12.10.4).
+        #[cfg(feature = "redis")]
+        let (context, channel_rows) = if let Some(backend) = &self.remote
+            && kit
+                .channel(&binding.channel_id)
+                .is_some_and(|c| c.is_declaration_only())
+        {
+            backend.set_owner(self, kit);
+            let mut context = context;
+            let rows = crate::history::distributed::distributed_rows(
+                kit.as_ref(),
+                binding,
+                &event,
+                &mut context,
+            )
+            .await;
+            (context, rows)
+        } else {
+            (context, Vec::new())
+        };
+        #[cfg(not(feature = "redis"))]
+        let channel_rows = Vec::new();
         let unit = Unit::new();
-        let (mut turn, _following) = Marks::current()
-            .with(unit)
-            .sync_scope(|| self.submit(kit, binding, event, context, strategy_turn, submitted))?;
+        let (mut turn, _following) = Marks::current().with(unit).sync_scope(|| {
+            self.submit(
+                kit,
+                binding,
+                event,
+                context,
+                strategy_turn,
+                channel_rows,
+                submitted,
+            )
+        })?;
         let (output, streams) = turn.output(self.cutting()).await?;
         Ok(if streams {
             Answer::Streamed(Box::new(output), turn)
@@ -330,6 +377,7 @@ impl Turns {
         event: RoomEvent,
         mut context: RoomContext,
         strategy_turn: bool,
+        channel_rows: Vec<RoomEvent>,
         submitted: impl FnOnce(Canceller) -> G,
     ) -> Result<(OwnerTurn, G), ErrorRecord> {
         if self.closed.load(Ordering::Acquire) || *self.cut.borrow() {
@@ -337,12 +385,21 @@ impl Turns {
         }
         let room_hooks = request_room_hooks(&**kit, &event.room_id, &binding.channel_id)?;
         let turn_id: Arc<str> = Arc::from(format!("turn-{}", Uuid::new_v4().simple()));
-        let running = self
-            .executor_lifecycle
-            .admit(Arc::clone(&turn_id))
-            .ok_or_else(|| {
-                TurnError::new("no_executor", "the kit's local executor has closed").to_record()
-            })?;
+        let declared = kit
+            .channel(&binding.channel_id)
+            .is_some_and(|c| c.is_declaration_only());
+        let running = if declared {
+            None
+        } else {
+            Some(
+                self.executor_lifecycle
+                    .admit(Arc::clone(&turn_id))
+                    .ok_or_else(|| {
+                        TurnError::new("no_executor", "the kit's local executor has closed")
+                            .to_record()
+                    })?,
+            )
+        };
         let mut records = self.records();
         // The records of another room of the id, deleted since and created
         // again in another process, name no previous turn (RFC §17.2).
@@ -376,14 +433,15 @@ impl Turns {
             PreviousTurn::after(&turn_id, previous.as_ref(), Some(&event)),
         );
         records.mark_room(&event.room_id, context.room.created_at);
-        let stale = kit.channel(&binding.channel_id).is_some_and(|channel| {
-            self.rooms.enter(
-                &channel,
-                (binding.channel_id.clone(), event.room_id.clone()),
-                &turn_id,
-                previous.as_ref(),
-            )
-        });
+        let stale = !declared
+            && kit.channel(&binding.channel_id).is_some_and(|channel| {
+                self.rooms.enter(
+                    &channel,
+                    (binding.channel_id.clone(), event.room_id.clone()),
+                    &turn_id,
+                    previous.as_ref(),
+                )
+            });
         drop(records);
         let timeouts = self.timeouts();
         let (frames, frames_read) = pipe(Arc::clone(&turn_id), Carried::Frame, observers.clone());
@@ -402,21 +460,44 @@ impl Turns {
             rest,
             event,
             history,
-            channel_rows: Vec::new(),
+            channel_rows,
         };
         // Register the delivery's cut before the executor can run its first
         // step on another worker. An earlier cut is already in its pipe.
         let following = submitted(turn.canceller());
         let taken = kit.spawn(pump)
-            && executor::take(
-                self,
-                running,
-                Arc::clone(&memory),
-                controls_read,
-                carried,
-                stale,
-                kit,
-            );
+            && match running {
+                Some(running) => executor::take(
+                    self,
+                    running,
+                    Arc::clone(&memory),
+                    controls_read,
+                    carried,
+                    stale,
+                    kit,
+                ),
+                None => {
+                    #[cfg(feature = "redis")]
+                    if let Some(backend) = self.remote.clone() {
+                        let link = Arc::clone(&memory);
+                        kit.spawn(Box::pin(async move {
+                            backend.submit_remote(carried, link, controls_read).await;
+                        }))
+                    } else {
+                        return Err(TurnError::new(
+                            "no_executor",
+                            format!("No executor serves channel '{}'", binding.channel_id),
+                        )
+                        .to_record());
+                    }
+                    #[cfg(not(feature = "redis"))]
+                    return Err(TurnError::new(
+                        "no_executor",
+                        format!("No executor serves channel '{}'", binding.channel_id),
+                    )
+                    .to_record());
+                }
+            };
         if !taken {
             memory.shut();
             return Err(closed());

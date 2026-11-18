@@ -324,8 +324,10 @@ pub use self::orchestration::{HandoffHandler, HandoffRequest, HandoffResult};
 pub use self::orchestration::{ResultTool, SUBMIT_RESULT};
 #[doc(hidden)]
 pub use self::turn::OwnerToolAnswer;
-#[doc(inline)]
 pub use self::turns::TurnTimeouts;
+#[doc(inline)]
+#[cfg(feature = "redis")]
+pub use self::turns::{RedisTurnBackend, RedisTurnBackendOptions};
 
 /// Python's `roomkit.tools` helpers this crate has.
 pub mod tools {

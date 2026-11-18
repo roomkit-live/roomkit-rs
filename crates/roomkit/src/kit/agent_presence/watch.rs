@@ -164,7 +164,8 @@ impl<S: ConversationStore> RoomKit<S> {
             .get_room(room)
             .await?
             .and_then(|room| room.organization_id);
-        let presence = self.presence_of(channel, room, organization);
+        let executors = self.executors().await?;
+        let presence = self.presence_of(channel, room, organization, &executors)?;
         let Some(claim) = self
             .inner
             .agent_presence

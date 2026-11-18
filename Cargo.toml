@@ -14,6 +14,8 @@ repository = "https://github.com/roomkit-live/roomkit-rs"
 publish = false
 
 [workspace.dependencies]
+# Redis Streams carry text turns between processes (RFC §10.6).
+redis = { version = "1.8.2", default-features = false, features = ["connection-manager", "streams", "tokio-rustls-comp", "tls-rustls-webpki-roots"] }
 roomkit = { path = "crates/roomkit" }
 roomkit-acp = { path = "crates/roomkit-acp" }
 roomkit-ai = { path = "crates/roomkit-ai" }

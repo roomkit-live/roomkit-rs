@@ -50,6 +50,9 @@ const DELIVERY_GAP_TIMEOUT: Duration = Duration::from_secs(30);
 /// type comes through [`with_store`](Self::with_store):
 /// `RoomKit::new(RoomKitOptions { process_timeout, ..RoomKitOptions::with_store(store) })`.
 pub struct RoomKitOptions<S = InMemoryStore> {
+    /// Python `turn_backend=None`: where the kit places the turns of channels registered by declaration.
+    #[cfg(feature = "redis")]
+    pub turn_backend: Option<crate::RedisTurnBackend>,
     /// Python `store=None`: where rooms and their timelines live (RFC §14),
     /// an in-memory store by default. The kit shares it, as Python's object
     /// is shared: a router built over it reads what the kit writes
@@ -181,6 +184,8 @@ impl<S> RoomKitOptions<S> {
     /// in-memory one.
     pub fn with_store(store: S) -> Self {
         Self {
+            #[cfg(feature = "redis")]
+            turn_backend: None,
             store: Arc::new(store),
             inbound_router: None,
             max_chain_depth: MAX_CHAIN_DEPTH,

@@ -29,6 +29,10 @@ impl<S: ConversationStore> RoomKit<S> {
         reason = "Python's public registry reader is asynchronous, including the empty local backend"
     )]
     pub async fn executors(&self) -> Result<Vec<ExecutorInfo>, RoomKitError> {
+        #[cfg(feature = "redis")]
+        if let Some(backend) = &self.inner.turns.remote {
+            return backend.executors().await;
+        }
         Ok(Vec::new())
     }
 
@@ -51,15 +55,21 @@ impl<S: ConversationStore> RoomKit<S> {
                 },
             )
             .await?;
+        let executors = self.executors().await?;
         let mut bindings = self.store().list_bindings(room_id).await?;
         bindings.retain(|binding| binding.category == ChannelCategory::Intelligence);
         bindings.sort_by(|left, right| left.channel_id.cmp(&right.channel_id));
-        Ok(bindings
+        bindings
             .into_iter()
             .map(|binding| {
-                self.presence_of(&binding.channel_id, room_id, room.organization_id.clone())
+                self.presence_of(
+                    &binding.channel_id,
+                    room_id,
+                    room.organization_id.clone(),
+                    &executors,
+                )
             })
-            .collect())
+            .collect()
     }
 
     pub(super) fn presence_of(
@@ -67,12 +77,32 @@ impl<S: ConversationStore> RoomKit<S> {
         channel_id: &ChannelId,
         room_id: &RoomId,
         organization_id: Option<String>,
-    ) -> AgentPresence {
+        infos: &[ExecutorInfo],
+    ) -> Result<AgentPresence, RoomKitError> {
+        let hooks = self.config().hooks.enabled_room_hooks(room_id);
+        if self
+            .inner
+            .channel(channel_id)
+            .is_none_or(|channel| channel.is_declaration_only())
+        {
+            let mut covering = Vec::new();
+            for info in infos {
+                if info.covers(channel_id.as_str(), &hooks, organization_id.as_deref())? {
+                    covering.push(info.executor_id.clone());
+                }
+            }
+            covering.sort();
+            return Ok(AgentPresence::new(
+                channel_id.as_str(),
+                !covering.is_empty(),
+                covering,
+            ));
+        }
         let executor = self.turn_executor();
         let takes = executor.takes(
             channel_id,
             TakesOptions {
-                room_hooks: self.config().hooks.enabled_room_hooks(room_id),
+                room_hooks: hooks,
                 organization_id,
             },
         );
@@ -81,6 +111,6 @@ impl<S: ConversationStore> RoomKit<S> {
         } else {
             Vec::new()
         };
-        AgentPresence::new(channel_id.as_str(), takes, covering)
+        Ok(AgentPresence::new(channel_id.as_str(), takes, covering))
     }
 }
