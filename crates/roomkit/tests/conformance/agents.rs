@@ -3,6 +3,9 @@
 //! and scripted tools, and the hooks on the tool triggers, which register
 //! through the kit's typed registrations.
 
+#[path = "agents/direct_prompt.rs"]
+pub(crate) mod direct_prompt;
+
 use std::collections::HashMap;
 use std::future::{Future, pending};
 use std::pin::Pin;

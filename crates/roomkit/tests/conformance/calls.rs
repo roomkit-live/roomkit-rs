@@ -374,6 +374,9 @@ async fn other_call(
         return crate::host_verbs::call(run, name, spec).await;
     }
 
+    if name == "agent.direct_prompt" {
+        return agents::direct_prompt::call(run, spec).await;
+    }
     if matches!(name, "agent.extra_tools" | "agent.replace_extra_tool") {
         return crate::extra_tools::call(run, name, spec);
     }
@@ -523,6 +526,9 @@ async fn lifecycle_call(
         "unregister_channel" => {
             let channel = channel_id(spec)?;
             let unregistered = run.kit().unregister_channel(&channel);
+            if unregistered.is_ok() {
+                crate::run::lock(&run.direct_channels).remove(channel.as_str());
+            }
             finish(run, name, unregistered, |_| Value::Null)
         }
         "register_hook" => finish(run, name, register_hook(run, &spec["hook"])?, |()| {
@@ -798,12 +804,19 @@ pub(crate) fn register_channel_with_skills(
         crate::run::lock(&run.host_tool_readers)
             .insert(id.to_string(), crate::extra_tools::reader(&agent));
         crate::run::lock(&run.models).extend(models);
-        match agent {
+        let direct = (!declared).then(|| agents::direct_prompt::channel(&agent));
+        let registered = match agent {
             agents::Scripted::Channel(agent) => register_built(run, declared, *agent),
             agents::Scripted::Agent(agent) => register_built(run, declared, *agent),
             agents::Scripted::RoutedChannel(agent) => register_built(run, declared, *agent),
             agents::Scripted::RoutedAgent(agent) => register_built(run, declared, *agent),
+        };
+        if registered.is_ok()
+            && let Some(direct) = direct
+        {
+            crate::run::lock(&run.direct_channels).insert(id.to_string(), direct);
         }
+        registered
     } else {
         register_built(run, declared, ScriptedChannel::new(channel, run)?)
     };

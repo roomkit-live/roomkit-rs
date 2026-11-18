@@ -155,6 +155,8 @@ pub(crate) struct Run {
     after_turn: Mutex<Vec<JoinHandle<()>>>,
     /// The scripted agents' models, by channel.
     pub(crate) models: Mutex<BTreeMap<String, ScriptedProvider>>,
+    pub(crate) direct_channels:
+        Mutex<BTreeMap<String, Arc<dyn crate::agents::direct_prompt::Prompt>>>,
     pub(crate) host_tool_readers: Mutex<BTreeMap<String, crate::extra_tools::Reader>>,
     pub(crate) model_methods: Mutex<BTreeMap<String, crate::agents::GenerationMethods>>,
     /// Whether each scripted model was closed, by its name, shared by the
@@ -249,6 +251,7 @@ impl Run {
             handles: Mutex::default(),
             after_turn: Mutex::default(),
             models: Mutex::default(),
+            direct_channels: Mutex::default(),
             host_tool_readers: Mutex::default(),
             model_methods: Mutex::default(),
             model_closed: Mutex::default(),

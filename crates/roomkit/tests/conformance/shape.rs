@@ -541,6 +541,7 @@ fn base_arguments(call: &str) -> Option<&'static [&'static str]> {
         "channel_call" => &["channel_id", "room_id", "verb", "arguments"],
         "cancel_delivery" => &["key", "reason"],
         "steer" => &["channel_id", "directive", "room_id"],
+        "agent.direct_prompt" => &["room_id", "channel_id", "event"],
         "acp.cancel" => &["channel_id", "room_id"],
         other => {
             return crate::mcp_host::arguments(other)
