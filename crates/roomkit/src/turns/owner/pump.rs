@@ -613,6 +613,7 @@ mod tests {
             channel_type: roomkit_core::model::ChannelType::AI,
             event_created_at: roomkit_core::model::Timestamp::UNIX_EPOCH,
             response_depth: 3,
+            answer_unscoped: true,
             organization_id: None,
         };
         let turn_kit: Arc<dyn TurnKit> = Arc::new(Arc::downgrade(&kit.inner));
@@ -641,6 +642,7 @@ mod tests {
             channel_type: roomkit_core::model::ChannelType::AI,
             event_created_at: roomkit_core::model::Timestamp::UNIX_EPOCH,
             response_depth: 1,
+            answer_unscoped: true,
             organization_id: None,
         };
         let cases = [
