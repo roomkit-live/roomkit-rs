@@ -259,9 +259,6 @@ pub(crate) fn stream_failure(error: &(dyn Error + Send + Sync + 'static)) -> Wir
 /// error crosses with its JSON attributes (RMK-1085); a cancel as Python's `TurnLinkError`, saying `cancelled`,
 /// its reason `executor_lost`; any other as a channel's.
 fn failure(error: &(dyn Error + Send + Sync + 'static), cancelled: &str) -> WireError {
-    if let Some(missing) = recipient_error(error) {
-        return missing;
-    }
     match error.downcast_ref::<RoomKitError>() {
         Some(RoomKitError::Cancelled) => {
             let mut crossed = one(TURN_LINK_ERROR, cancelled.to_owned());
@@ -270,20 +267,27 @@ fn failure(error: &(dyn Error + Send + Sync + 'static), cancelled: &str) -> Wire
                 .insert("reason".to_owned(), Value::from("executor_lost"));
             crossed
         }
-        Some(kit_error) => {
-            let mut crossed = one(kit_error.class_name(), error.to_string());
-            if let (Some(code), Some(retryable)) = (kit_error.code(), kit_error.retryable()) {
-                crossed
-                    .attributes
-                    .insert(CODE.to_owned(), Value::from(code));
-                crossed
-                    .attributes
-                    .insert(RETRYABLE.to_owned(), Value::Bool(retryable));
-            }
-            crossed
-        }
+        Some(kit_error) => described_kit_error(kit_error),
         None => channel_error(error),
     }
+}
+
+/// The public class and JSON attributes of a kit error, including when a
+/// delegated worker supplies it as the cause of its own failure.
+pub(crate) fn described_kit_error(error: &RoomKitError) -> WireError {
+    if let Some(missing) = recipient_error(error) {
+        return missing;
+    }
+    let mut crossed = one(error.class_name(), error.to_string());
+    if let (Some(code), Some(retryable)) = (error.code(), error.retryable()) {
+        crossed
+            .attributes
+            .insert(CODE.to_owned(), Value::from(code));
+        crossed
+            .attributes
+            .insert(RETRYABLE.to_owned(), Value::Bool(retryable));
+    }
+    crossed
 }
 
 /// The attribute naming the code an error declares.
@@ -712,6 +716,14 @@ mod tests {
         assert_eq!(to_record(&turn_failure(&error)), record);
         assert_eq!(to_record(&channel_error(&error)), record);
         assert_eq!(rebuild_kit_error(&kit_error(&error)), error);
+
+        let worker = crate::TaskTurnFailedError::new(
+            std::sync::Arc::new(RoomKitError::no_recipient("app", "customer")),
+            "interrupted",
+            None,
+        );
+        assert_eq!(worker.cause_record(), record);
+        assert_eq!(to_record(&channel_error(&worker).causes[0]), record);
 
         let wrapped = channel_error(&Wrapped(error));
         assert_eq!(wrapped.causes.len(), 1);

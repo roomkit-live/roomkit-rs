@@ -41,7 +41,7 @@ impl TaskTurnFailedError {
     pub(crate) fn cause_record(&self) -> ErrorRecord {
         let error = self.error.as_ref();
         if let Some(known) = error.downcast_ref::<crate::RoomKitError>() {
-            return ErrorRecord::new(known.class_name(), known.to_string());
+            return crate::turns::to_record(&crate::turns::described_kit_error(known));
         }
         crate::turns::record_of(error)
     }
