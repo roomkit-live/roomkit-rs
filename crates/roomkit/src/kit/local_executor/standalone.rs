@@ -54,6 +54,15 @@ pub(super) struct Standalone {
     predicate: Option<Box<HostPredicate>>,
 }
 
+impl crate::turns::LocalHosts for Standalone {
+    fn hosts_name(&self, id: &str) -> bool {
+        if let Some(predicate) = &self.predicate {
+            return ChannelId::new(id).is_ok_and(|id| predicate(&id));
+        }
+        self.matches_host_entry(id)
+    }
+}
+
 impl Standalone {
     pub(super) fn executor_id(&self) -> &str {
         &self.id
@@ -63,12 +72,14 @@ impl Standalone {
         if let Some(predicate) = &self.predicate {
             return predicate(id);
         }
+        self.matches_host_entry(id.as_str())
+    }
+
+    fn matches_host_entry(&self, id: &str) -> bool {
         self.hosts.as_ref().is_none_or(|hosts| {
             hosts.iter().any(|name| {
                 name.strip_suffix('*')
-                    .map_or(name == id.as_str(), |prefix| {
-                        id.as_str().starts_with(prefix)
-                    })
+                    .map_or(name == id, |prefix| id.starts_with(prefix))
             })
         })
     }

@@ -37,6 +37,7 @@ pub(crate) mod redis;
 #[cfg(feature = "redis")]
 pub use redis::{RedisTurnBackend, RedisTurnBackendOptions};
 mod presence;
+pub(crate) use presence::LocalHosts;
 pub use presence::{AgentPresence, ExecutorInfo, ExecutorInfoOptions};
 
 /// The innermost turn whose work is running, including a call served by its

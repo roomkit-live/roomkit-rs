@@ -60,7 +60,7 @@ the mapping and its tests. The check does not generate or update this document.
 | `roomkit::TurnHost::room_context` | `roomkit.TurnHost.room_context` | `Result<Metadata, RoomKitError>` reads fresh owned JSON, including history despite a zero channel window; failures keep the existing kit mapping and store causes. |
 | `roomkit::RedisTurnBackend`, `roomkit::RedisTurnBackendOptions` | `roomkit.RedisTurnBackend` | The optional `redis` feature enables the transport. `new` accepts an optional URL and the options hold the client, key prefix and timeouts. Cloning the backend keeps the same process identity. |
 | `roomkit::TurnExecutor::new`, `roomkit::TurnExecutorOptions` | `roomkit.TurnExecutor.__init__` | The factory asynchronously returns an optional channel. The listed hosts, organizations and executor ID are supplied through options. A worker starts serving when its backend's `serve` completes. |
-| `roomkit::turns::ExecutorInfo`, `roomkit::turns::ExecutorInfoOptions` | `roomkit.turns.ExecutorInfo` | Required string id plus Python defaults; owned optional `BTreeSet<String>` declarations, `Timestamp` heartbeat and cloned snapshots (HITL eb3c6f0b). |
+| `roomkit::turns::ExecutorInfo`, `roomkit::turns::ExecutorInfoOptions` | `roomkit.turns.ExecutorInfo` | Use `ExecutorInfo::new(id, options)` for the seven data fields. Local snapshots and their clones retain the worker's host selector. Serializing and reading the JSON restores the data fields alone (HITL eb3c6f0b, 32eff891). |
 | `roomkit::turns::ExecutorInfo::covers` | `roomkit.turns.ExecutorInfo.covers` | `room_hooks: &[String]` and `organization_id: Option<&str>` use `[]` and `None` for Python's defaults; `Result<bool, RoomKitError>` preserves gated invalid-prefix errors (HITL eb3c6f0b). |
 | `roomkit::turns::AgentPresence` | `roomkit.turns.AgentPresence` | Three required fields; owned executor-id list, independent across returned snapshots (HITL eb3c6f0b). |
 | `roomkit::RoomKit::agent_presence`, `roomkit::AgentPresenceOptions` | `roomkit.RoomKit.agent_presence` | Owned sorted presence list and optional organization scope; a local kit's `executors()` excludes its own executor (HITL eb3c6f0b). |
@@ -566,8 +566,8 @@ future yielding `Result<Option<C>, RoomKitError>` for one concrete
 declarations, organization scope, timeouts, channel ownership and cache
 bound. On the serving node, placement can consult a host predicate supplied
 by `new_with_host_predicate` or a worker with an omitted host list. That
-node lists its own active workers in registration order. Other nodes place
-work on advertised channel IDs and trailing-wildcard prefixes.
+node lists its own active workers in registration order. Its executor snapshots apply the local host selector in `covers`. Other nodes
+place work on advertised channel IDs and trailing-wildcard prefixes.
 
 The following application contracts remain open for text API parity.
 

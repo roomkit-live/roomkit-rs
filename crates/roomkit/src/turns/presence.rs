@@ -1,6 +1,8 @@
 //! Public executor declarations and agent presence (RFC §10.6.7).
 
 use std::collections::BTreeSet;
+use std::fmt;
+use std::sync::Arc;
 
 use roomkit_core::model::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -39,15 +41,41 @@ impl Default for ExecutorInfoOptions {
     }
 }
 
-/// An executor as its backend sees it, Python's `ExecutorInfo`.
+/// A worker's process-local host selection. A bound declaration retains the
+/// same allocation across registry reads, just as Python retains a bound method.
+pub(crate) trait LocalHosts: Send + Sync {
+    fn hosts_name(&self, id: &str) -> bool;
+}
+
+#[derive(Clone)]
+struct BoundDeclaration(Arc<dyn LocalHosts>);
+
+impl PartialEq for BoundDeclaration {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for BoundDeclaration {}
+
+impl fmt::Debug for BoundDeclaration {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("BoundDeclaration")
+    }
+}
+
+/// An executor as its backend sees it, Python's `ExecutorInfo`. Use
+/// [`Self::new`] to build one from public data. A snapshot of a locally served
+/// worker retains its host selection on clone and omits it from serialized data.
+/// Equality compares the public fields and the identity of the bound worker.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecutorInfo {
     /// The id the executor answers with.
     pub executor_id: String,
     /// The process it runs in, when its backend names one.
     pub node: Option<String>,
-    /// Declared channel ids and trailing-star prefixes. `None` declares no
-    /// channels in this data value; a local predicate is not serialized.
+    /// Advertised channel ids and trailing-star prefixes. A worker with a
+    /// process-local predicate or open declaration has `None` here.
     pub hosts: Option<BTreeSet<String>>,
     /// The organizations it serves; `None` serves rooms without one alone.
     pub organizations: Option<BTreeSet<String>>,
@@ -59,6 +87,8 @@ pub struct ExecutorInfo {
     /// Whether it currently takes turns.
     #[serde(default = "online")]
     pub online: bool,
+    #[serde(skip)]
+    local: Option<BoundDeclaration>,
 }
 
 fn online() -> bool {
@@ -76,12 +106,20 @@ impl ExecutorInfo {
             room_hooks: options.room_hooks,
             last_beat: options.last_beat,
             online: options.online,
+            local: None,
         }
+    }
+
+    #[cfg(feature = "redis")]
+    pub(crate) fn with_local_hosts(mut self, hosts: Arc<dyn LocalHosts>) -> Self {
+        self.local = Some(BoundDeclaration(hosts));
+        self
     }
 
     /// Whether this online executor covers the channel and the room's
     /// required hooks and organization. An empty hook slice and `None`
-    /// organization are Python's defaults.
+    /// organization are Python's defaults. Local snapshots consult the worker's
+    /// host selection. A typed predicate receives valid [`ChannelId`](roomkit_core::model::ChannelId) values.
     ///
     /// # Errors
     /// [`RoomKitError::Value`] for a `*` anywhere but the end of a host
@@ -103,6 +141,9 @@ impl ExecutorInfo {
             });
         if !serves {
             return Ok(false);
+        }
+        if let Some(local) = &self.local {
+            return Ok(local.0.hosts_name(channel_id));
         }
         let Some(hosts) = &self.hosts else {
             return Ok(false);

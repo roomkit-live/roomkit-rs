@@ -108,6 +108,7 @@ fn local_info(worker: &TurnExecutor, node: &str) -> ExecutorInfo {
             ..ExecutorInfoOptions::default()
         },
     )
+    .with_local_hosts(worker.local_hosts())
 }
 
 /// A draining executor still answers work it accepted after its declaration was withdrawn.

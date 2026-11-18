@@ -265,15 +265,7 @@ async fn each_node_lists_local_workers_directly_and_only_advertised_peers() {
     };
     let (hosting, elsewhere) = (node(), node());
     let named = worker("host-1");
-    let dynamic = TurnExecutor::new_with_host_predicate(
-        |_| async { Ok(None::<EchoAgent>) },
-        |id| id.as_str().starts_with("agent-"),
-        TurnExecutorOptions {
-            executor_id: Some("dynamic".into()),
-            ..Default::default()
-        },
-    )
-    .unwrap();
+    let dynamic = dynamic_worker("dynamic", "agent-");
     hosting.serve(named.clone()).await.unwrap();
     hosting.serve(dynamic.clone()).await.unwrap();
     let here = hosting.executors().await.unwrap();
@@ -296,12 +288,103 @@ async fn each_node_lists_local_workers_directly_and_only_advertised_peers() {
         .find(|row| row.executor_id == "dynamic")
         .unwrap();
     assert!(local.hosts.is_none());
+    let mut local_named = here
+        .iter()
+        .find(|row| row.executor_id == named.executor_id())
+        .unwrap()
+        .clone();
+    local_named.hosts = Some(BTreeSet::new());
+    assert!(local_named.covers("worker", &[], None).unwrap());
     assert_eq!(remote.len(), 1);
     let peer = remote.first().unwrap();
     assert_eq!(peer.executor_id, named.executor_id());
     assert!(peer.last_beat.is_some() && peer.covers("worker", &[], None).unwrap());
     assert_eq!(after.len(), 1);
     assert_eq!(after.first().unwrap().executor_id, named.executor_id());
+}
+
+fn dynamic_worker(id: &str, prefix: &'static str) -> TurnExecutor {
+    TurnExecutor::new_with_host_predicate(
+        |_| async { Ok(None::<EchoAgent>) },
+        move |id| id.as_str().starts_with(prefix),
+        TurnExecutorOptions {
+            executor_id: Some(id.into()),
+            ..Default::default()
+        },
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_local_predicate_is_visible_only_on_the_serving_node() {
+    let Some((_, node)) = test_nodes(Duration::from_millis(50)) else {
+        return;
+    };
+    let (hosting, elsewhere) = (node(), node());
+    let worker = dynamic_worker("predicate", "agent-");
+    hosting.serve(worker.clone()).await.unwrap();
+    let info = hosting.executors().await.unwrap().pop().unwrap();
+    let repeated = hosting.executors().await.unwrap().pop().unwrap();
+    let cloned = info.clone();
+    let data = serde_json::to_value(&info).unwrap();
+    let restored: roomkit::turns::ExecutorInfo = serde_json::from_value(data.clone()).unwrap();
+    worker.close().await;
+    let after_close = hosting.executors().await.unwrap();
+
+    let replacement = dynamic_worker("predicate", "blue-");
+    hosting.serve(replacement.clone()).await.unwrap();
+    let replaced = hosting.executors().await.unwrap().pop().unwrap();
+    let remote = elsewhere.executors().await.unwrap();
+    replacement.close().await;
+    hosting.close().await.unwrap();
+    elsewhere.close().await.unwrap();
+
+    assert!(remote.is_empty() && after_close.is_empty());
+    assert!(info.hosts.is_none() && info.last_beat.is_none());
+    assert!(cloned.covers("agent-one", &[], None).unwrap());
+    assert!(!info.covers("blue-one", &[], None).unwrap());
+    assert!(!info.covers("agent-one", &["missing".into()], None).unwrap());
+    assert!(!info.covers("agent-one", &[], Some("other")).unwrap());
+    assert!(!restored.covers("agent-one", &[], None).unwrap());
+    assert!(replaced.covers("blue-one", &[], None).unwrap());
+    assert!(!replaced.covers("agent-one", &[], None).unwrap());
+    assert_eq!(data, serde_json::to_value(&replaced).unwrap());
+    assert_eq!(info, cloned);
+    assert_eq!(info, repeated);
+    assert_ne!(info, restored);
+    assert_ne!(info, replaced);
+}
+
+#[tokio::test]
+async fn a_declared_agents_presence_lists_each_matching_local_predicate() {
+    let Some((_, node)) = test_nodes(Duration::from_millis(50)) else {
+        return;
+    };
+    let backend = node();
+    let room = Room::new();
+    let kit = room.owner(backend.clone());
+    let _events = room.create(&kit).await;
+    let first = dynamic_worker("first", "wor");
+    let second = dynamic_worker("second", "work");
+    let third = dynamic_worker("third", "other");
+    for worker in [&first, &second, &third] {
+        backend.serve(worker.clone()).await.unwrap();
+    }
+    let before = kit
+        .agent_presence(&room.id, roomkit::AgentPresenceOptions::default())
+        .await
+        .unwrap();
+    first.close().await;
+    let after = kit
+        .agent_presence(&room.id, roomkit::AgentPresenceOptions::default())
+        .await
+        .unwrap();
+    second.close().await;
+    third.close().await;
+    kit.close().await.unwrap();
+
+    assert_eq!(before.first().unwrap().executors, ["first", "second"]);
+    assert_eq!(after.first().unwrap().executors, ["second"]);
 }
 
 #[tokio::test]

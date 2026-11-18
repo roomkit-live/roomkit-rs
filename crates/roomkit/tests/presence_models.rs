@@ -72,10 +72,8 @@ fn coverage_gates_online_hooks_and_organization_before_validating_host_globs() {
             ..Default::default()
         },
     );
-    let offline = ExecutorInfo {
-        online: false,
-        ..bad.clone()
-    };
+    let mut offline = bad.clone();
+    offline.online = false;
     assert!(!offline.covers("ab", &[], None).unwrap());
     assert!(!bad.covers("ab", &["missing".into()], None).unwrap());
     assert!(!bad.covers("ab", &[], Some("other")).unwrap());

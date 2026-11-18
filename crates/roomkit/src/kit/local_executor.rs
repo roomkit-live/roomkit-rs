@@ -14,7 +14,7 @@ use roomkit_core::model::{ChannelId, RoomContext};
 
 use super::{HookEngine, RoomKit};
 use crate::hooks::{HookPayload, IntoHookReturn, closure_kept};
-use crate::turns::{HookOptions, RoomHookOptions, TakesOptions};
+use crate::turns::{HookOptions, LocalHosts, RoomHookOptions, TakesOptions};
 use crate::{
     ConversationStore, HookRegistration, HookTrigger, InMemoryStore, RoomKitError, TurnTimeouts,
 };
@@ -55,7 +55,23 @@ impl<S: ConversationStore> RoomKit<S> {
     }
 }
 
+impl<S: ConversationStore> LocalHosts for super::Inner<S> {
+    fn hosts_name(&self, id: &str) -> bool {
+        super::read(&self.channels)
+            .get(id)
+            .is_some_and(|channel| !channel.is_declaration_only())
+    }
+}
+
 impl<S: ConversationStore> TurnExecutor<S> {
+    #[cfg(feature = "redis")]
+    pub(crate) fn local_hosts(&self) -> Arc<dyn LocalHosts> {
+        match &self.standalone {
+            Some(worker) => Arc::<standalone::Standalone>::clone(worker),
+            None => Arc::<super::Inner<S>>::clone(&self.kit.inner),
+        }
+    }
+
     #[cfg(feature = "redis")]
     pub(crate) fn is_owner(
         &self,
@@ -159,12 +175,7 @@ impl<S: ConversationStore> TurnExecutor<S> {
     /// Whether it hosts this channel, even after closing.
     pub fn hosts_channel(&self, channel_id: &ChannelId) -> bool {
         self.standalone.as_ref().map_or_else(
-            || {
-                self.kit
-                    .inner
-                    .channel(channel_id)
-                    .is_some_and(|channel| !channel.is_declaration_only())
-            },
+            || self.kit.inner.hosts_name(channel_id.as_str()),
             |worker| worker.hosts(channel_id),
         )
     }
