@@ -286,10 +286,11 @@ impl Turns {
                 turns.set_timeouts(timeouts);
             }
             #[cfg(feature = "redis")]
-            if let Some(redis) =
-                (&*backend as &dyn std::any::Any).downcast_ref::<RedisTurnBackend>()
             {
-                turns.remote = Some(redis.clone());
+                let concrete: &dyn std::any::Any = &*backend;
+                if let Some(redis) = concrete.downcast_ref::<RedisTurnBackend>() {
+                    turns.remote = Some(redis.clone());
+                }
             }
             turns.application = Some(application::Application::new(backend));
         }
