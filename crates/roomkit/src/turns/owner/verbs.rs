@@ -147,6 +147,11 @@ async fn run_verb(
             let _: crate::turns::wire::RoomTasks = decoded(verb, arguments)?;
             to_data(&kit.room_tasks(scope.room_id.clone()).await)
         }
+        crate::turns::wire::ROOM_VISION => {
+            let _: crate::turns::wire::RoomVision = decoded(verb, arguments)?;
+            // Text-only owners have no camera analysis result (RFC §12.8.7).
+            Ok(Value::Null)
+        }
         ROOM_CONTEXT => {
             let _: ReadRoomContext = decoded(verb, arguments)?;
             let context = kit

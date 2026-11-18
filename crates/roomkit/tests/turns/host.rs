@@ -153,6 +153,29 @@ async fn a_turn_s_host_is_open_during_the_turn_and_reachable_after_it() {
     );
 }
 
+/// Python's distributed AI asks this reader while it prepares the text input.
+#[tokio::test(start_paused = true)]
+async fn room_vision_returns_no_note_without_a_camera_and_requires_a_live_turn() {
+    let kept = Arc::new(Mutex::new(None));
+    let takes = Arc::clone(&kept);
+    let kit = kit(move |_, _| {
+        let takes = Arc::clone(&takes);
+        async move {
+            let host = current_turn_host().unwrap();
+            let note = host.room_vision().await;
+            *takes.lock().unwrap() = Some((host, note));
+            Ok(ToolResult::Text("42".into()))
+        }
+    })
+    .await;
+    asks(&kit, "What is it?").await;
+    roomkit::testing::idle(&kit).await;
+    let (host, note) = kept.lock().unwrap().take().unwrap();
+    assert_eq!(note.unwrap(), None);
+    let failure = host.room_vision().await.unwrap_err();
+    assert!(matches!(failure, RoomKitError::Runtime(_)), "{failure}");
+}
+
 /// Python's `current_turn_host()` (turns/host.py): `None` for a host that
 /// can no longer reach its owner (RMK-1094). Work a turn began reads the
 /// host while the kit lives, and none once the kit is gone.

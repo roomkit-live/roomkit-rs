@@ -497,6 +497,17 @@ impl TurnHost {
         decoded(lines)
     }
 
+    /// The latest camera note for this room, when available on its owner
+    /// (RFC §12.8.7). A text-only room returns `None`.
+    ///
+    /// # Errors
+    ///
+    /// Reports a link failure, an invalid reply or a call after the turn ended.
+    pub async fn room_vision(&self) -> Result<Option<String>, RoomKitError> {
+        use crate::turns::wire::{ROOM_VISION, RoomVision};
+        decoded(self.verb(ROOM_VISION, &RoomVision::default()).await?)
+    }
+
     /// The definitions of the tools the room's owner serves this turn (RFC
     /// §10.6.5), each `{name, description, parameters}`: what an agent
     /// declares beside its own. For an AI channel's turn, not a public

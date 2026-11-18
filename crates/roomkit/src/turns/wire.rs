@@ -684,6 +684,9 @@ pub(crate) const WAIT_TASK: &str = "wait_task";
 /// The verb `room_tasks` (RFC §10.6.5, §23.4).
 pub(crate) const ROOM_TASKS: &str = "room_tasks";
 
+/// The room camera note reader (RFC §10.6.5, §12.8.7).
+pub(crate) const ROOM_VISION: &str = "room_vision";
+
 /// The verb `room_context` (RFC §10.6.5, §10.6.6).
 pub(crate) const ROOM_CONTEXT: &str = "room_context";
 
@@ -768,6 +771,11 @@ pub(crate) struct WaitTask {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RoomTasks {}
+
+/// No arguments, as Python's `RoomVision`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RoomVision {}
 
 /// `room_context`'s arguments: none.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
