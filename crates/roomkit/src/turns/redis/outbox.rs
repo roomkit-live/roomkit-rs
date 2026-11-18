@@ -13,6 +13,36 @@ use crate::turns::lock;
 
 type Receipt = oneshot::Receiver<Result<(), RoomKitError>>;
 
+/// Keep a numbered write in flight while receiving from the other side.
+#[derive(Default)]
+pub(super) struct PendingWrite(Option<Receipt>);
+
+impl PendingWrite {
+    pub(super) fn idle(&self) -> bool {
+        self.0.is_none()
+    }
+
+    pub(super) fn start(
+        &mut self,
+        backend: &RedisTurnBackend,
+        peer: &str,
+        message: &Message,
+    ) -> Result<(), RoomKitError> {
+        self.0 = Some(backend.enqueue(peer, message)?);
+        Ok(())
+    }
+
+    pub(super) async fn finished(&mut self) -> Result<(), RoomKitError> {
+        let Some(receipt) = self.0.as_mut() else {
+            return std::future::pending().await;
+        };
+        // Borrow the receipt while polling: another select branch must not lose it.
+        let result = receipt.await.map_err(|_| super::routes::closed())?;
+        self.0 = None;
+        result
+    }
+}
+
 #[derive(Default)]
 pub(super) struct Outbox {
     destinations: HashMap<String, mpsc::UnboundedSender<Pending>>,

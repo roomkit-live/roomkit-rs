@@ -68,21 +68,24 @@ impl RedisTurnBackend {
         mut turn: WorkerTurn,
         mut route: TurnRoute,
     ) {
+        let mut write = super::outbox::PendingWrite::default();
         loop {
-            tokio::select! {
+            let result = tokio::select! {
                 control = route.inbox.recv() => match control {
-                    Some(msg) if msg.kind == "control" => turn.control(msg.body),
+                    Some(msg) if msg.kind == "control" => { turn.control(msg.body); continue; }
                     _ => break,
                 },
-                raw = turn.next_frame() => {
+                raw = turn.next_frame(), if write.idle() => {
                     let Some(body) = raw else { break };
-                    let Ok(body) = crate::turns::wire::peer_error_payload(body) else { break; };
+                    let Ok(body) = crate::turns::wire::peer_error_payload(body) else { break };
                     let msg = Message::new("frame", self.node_id(), body, id, "");
-                    if let Err(error) = self.post(peer, &msg).await {
-                        tracing::warn!(%error, "Sending the turn frame failed");
-                        break;
-                    }
+                    write.start(self, peer, &msg)
                 }
+                result = write.finished() => result,
+            };
+            if let Err(error) = result {
+                tracing::warn!(%error, "Sending the turn frame failed");
+                break;
             }
         }
     }

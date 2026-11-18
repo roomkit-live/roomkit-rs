@@ -100,35 +100,35 @@ impl RedisTurnBackend {
         mut controls: PipeReceiver<Control>,
         mut route: TurnRoute,
     ) {
+        let mut write = super::outbox::PendingWrite::default();
         loop {
-            tokio::select! {
+            let result = tokio::select! {
                 msg = route.inbox.recv() => {
-                    let Some(msg) = msg else { memory.frames.shut(); break; };
+                    let Some(msg) = msg else { memory.frames.shut(); return; };
                     memory.frames.deliver_raw(msg.body);
+                    continue;
                 }
-                raw = controls.next_raw() => {
-                    let Some(body) = raw else {
-                        self.release_turn(&peer, &memory.turn_id).await;
-                        break;
-                    };
+                raw = controls.next_raw(), if write.idle() => {
+                    let Some(body) = raw else {break};
                     let body = match crate::turns::wire::peer_error_payload(body) {
                         Ok(body) => body,
                         Err(why) => {
                             memory.frames.end(LinkFailure::Invalid(why));
-                            self.release_turn(&peer, &memory.turn_id).await;
                             break;
                         }
                     };
                     let msg = Message::new("control", self.node_id(), body, &memory.turn_id, "");
-                    if let Err(error) = self.post(&peer, &msg).await {
-                        tracing::warn!(%error, "Sending the turn control failed");
-                        memory.frames.end(LinkFailure::WriteRefused);
-                        self.release_turn(&peer, &memory.turn_id).await;
-                        break;
-                    }
+                    write.start(self, &peer, &msg)
                 }
+                result = write.finished() => result,
+            };
+            if let Err(error) = result {
+                tracing::warn!(%error, "Sending the turn control failed");
+                memory.frames.end(LinkFailure::WriteRefused);
+                break;
             }
         }
+        self.release_turn(&peer, &memory.turn_id).await;
     }
 }
 
