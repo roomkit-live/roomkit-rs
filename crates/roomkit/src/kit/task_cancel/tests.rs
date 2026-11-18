@@ -22,10 +22,10 @@ use serde_json::{Value, json};
 use tokio::sync::{Notify, watch};
 
 use crate::kit::background_tools::TaskToolWindow;
-use crate::orchestration::backend::{RecentOptions, StatusBackend, StatusCallback, StatusFuture};
+use crate::orchestration::backend::{RecentOptions, StatusBackend, StatusFuture};
 use crate::orchestration::{
     InMemoryStatusBackend, InMemoryStatusBackendOptions, PostAsyncOptions, StatusBus,
-    StatusBusOptions, StatusEntry, StatusLevel,
+    StatusBusOptions, StatusCallback, StatusEntry, StatusLevel,
 };
 use crate::store::{ConversationStore, InMemoryStore};
 use crate::tasks::lines::{Line, ROOM_TASKS_WINDOW, room_lines};
