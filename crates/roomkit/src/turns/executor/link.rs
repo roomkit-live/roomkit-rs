@@ -433,11 +433,14 @@ impl HostLink {
     /// Whether a verb can still reach the owner: during the turn, or after
     /// it as a `room_call` while the kit's turn backend lives.
     pub(crate) fn reaches_owner(&self) -> bool {
+        let executor_alive = self.turns.strong_count() > 0;
         self.is_open()
-            || self.sender.turn.owner.as_ref().map_or_else(
-                || self.turns.strong_count() > 0,
-                |owner| owner.reachable(self.turns.strong_count() > 0),
-            )
+            || self
+                .sender
+                .turn
+                .owner
+                .as_ref()
+                .map_or(executor_alive, |owner| owner.reachable(executor_alive))
     }
 
     /// Runs `verb` with `arguments` on the owner, the turn's work at least
@@ -515,10 +518,14 @@ impl HostLink {
             verb: verb.to_owned(),
             arguments,
         };
+        let turns = self.turns.upgrade();
         if let Some(owner) = &self.sender.turn.owner {
-            return owner.call(message, self.turns.strong_count() > 0).await;
+            if !owner.reachable(turns.is_some()) && !self.lacks_owner_port() {
+                return Err(RoomKitError::KitClosed);
+            }
+            return owner.call(message).await;
         }
-        let turns = self.turns.upgrade().ok_or(RoomKitError::KitClosed)?;
+        let turns = turns.ok_or(RoomKitError::KitClosed)?;
         turns.room_call(Arc::clone(&self.kit), message).await
     }
 

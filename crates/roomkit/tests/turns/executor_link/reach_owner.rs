@@ -55,7 +55,7 @@ impl Channel for Agent {
         _: RoomContext,
     ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
         let host = roomkit::current_turn_host().unwrap();
-        host.emit_turn_event("ai_response", Default::default());
+        host.emit_turn_event("ai_response", roomkit::model::Metadata::new());
         self.hosts.send(host).unwrap();
         ready(Ok(ChannelOutput::empty()))
     }
@@ -229,7 +229,7 @@ async fn ended_turn_publications_reach_their_owner_in_order_and_keep_their_scope
         event.channel_id = Some(agent.clone());
         event
     };
-    host.emit_turn_event("ai_response", Default::default());
+    host.emit_turn_event("ai_response", roomkit::model::Metadata::new());
     host.publish_from_channel(event(EphemeralEventType::TextDelta));
     host.publish_from_channel(event(EphemeralEventType::Custom));
     tokio::time::timeout(Duration::from_secs(5), async {

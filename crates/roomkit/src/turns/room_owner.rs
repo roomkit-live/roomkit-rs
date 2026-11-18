@@ -59,20 +59,12 @@ impl WorkerOwner {
         }
     }
 
-    pub(crate) fn reachable(&self, _executor_alive: bool) -> bool {
-        match self {
-            Self::Unreachable => false,
-            Self::Application { .. } => true,
-            #[cfg(feature = "redis")]
-            Self::Redis(_) => _executor_alive,
-        }
+    pub(crate) fn reachable(&self, executor_alive: bool) -> bool {
+        !matches!(self, Self::Unreachable)
+            && (executor_alive || matches!(self, Self::Application { .. }))
     }
 
-    pub(crate) async fn call(
-        &self,
-        message: RoomCall,
-        _executor_alive: bool,
-    ) -> Result<Value, RoomKitError> {
+    pub(crate) async fn call(&self, message: RoomCall) -> Result<Value, RoomKitError> {
         match self {
             Self::Unreachable => Err(ended(&message.verb)),
             Self::Application { port, .. } => {
@@ -83,12 +75,7 @@ impl WorkerOwner {
                 }
             }
             #[cfg(feature = "redis")]
-            Self::Redis(peer) => {
-                if !_executor_alive {
-                    return Err(RoomKitError::KitClosed);
-                }
-                peer.call(message).await
-            }
+            Self::Redis(peer) => peer.call(message).await,
         }
     }
 
