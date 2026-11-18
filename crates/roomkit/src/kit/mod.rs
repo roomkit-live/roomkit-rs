@@ -503,7 +503,6 @@ impl<S: ConversationStore> RoomKit<S> {
         inner.name_held_deliveries();
         let kit = Self { inner };
         kit.inner.turns.bind_application_owner(&kit);
-        #[cfg(feature = "redis")]
         kit.wire_presence_watch();
         kit
     }

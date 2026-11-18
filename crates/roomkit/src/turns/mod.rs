@@ -58,6 +58,8 @@ pub use room_owner::RoomOwner;
 mod application;
 mod transport;
 pub use transport::TurnBackend;
+mod in_memory;
+pub use in_memory::InMemoryTurnBackend;
 mod backend;
 pub use backend::{ExecutorLink, TurnFuture, TurnLink};
 pub use context::TurnContext;
@@ -132,6 +134,29 @@ use crate::error::RoomKitError;
 use crate::steering::SteeringDirective;
 use crate::tasks::{Marks, Unit};
 use crate::turn::TurnKit;
+
+fn no_executor(channel: &str, hooks: &[String], organization: Option<&str>) -> RoomKitError {
+    let hooks = if hooks.is_empty() {
+        String::new()
+    } else {
+        let names = hooks
+            .iter()
+            .map(|s| crate::error::repr(s))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(" with room hooks [{names}]")
+    };
+    let org = organization.map_or_else(String::new, |o| {
+        format!(" in organization {}", crate::error::repr(o))
+    });
+    RoomKitError::TurnLink {
+        reason: "no_executor".into(),
+        message: Some(format!(
+            "No executor serves channel {}{hooks}{org}",
+            crate::error::repr(channel)
+        )),
+    }
+}
 
 /// What a turn answered on the owner.
 #[derive(Debug)]

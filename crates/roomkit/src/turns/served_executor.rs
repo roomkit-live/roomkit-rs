@@ -7,20 +7,17 @@ use roomkit_core::model::ChannelId;
 use super::{ChannelControl, ChannelResult, ExecutorLink, TakesOptions, TurnFuture, TurnTimeouts};
 use crate::{ConversationStore, RoomKitError, TurnExecutor};
 
-#[cfg(feature = "redis")]
 mod native;
 mod owner;
 pub(crate) use owner::owner_executor;
 
 mod private {
     pub(crate) trait Sealed {
-        #[cfg(feature = "redis")]
         fn transport(&self, key: super::native::Key) -> &dyn super::native::Native;
     }
 }
 
 impl<S: ConversationStore> private::Sealed for TurnExecutor<S> {
-    #[cfg(feature = "redis")]
     fn transport(&self, _: native::Key) -> &dyn native::Native {
         self
     }

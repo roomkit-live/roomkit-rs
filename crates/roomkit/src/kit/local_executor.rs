@@ -64,7 +64,6 @@ impl<S: ConversationStore> LocalHosts for super::Inner<S> {
 }
 
 impl<S: ConversationStore> TurnExecutor<S> {
-    #[cfg(feature = "redis")]
     pub(crate) fn local_hosts(&self) -> Arc<dyn LocalHosts> {
         match &self.standalone {
             Some(worker) => Arc::<standalone::Standalone>::clone(worker),
@@ -86,7 +85,6 @@ impl<S: ConversationStore> TurnExecutor<S> {
         })
     }
 
-    #[cfg(feature = "redis")]
     pub(crate) fn lifecycle(&self) -> std::sync::Weak<crate::turns::executor::Lifecycle> {
         Arc::downgrade(&self.kit.inner.turns.executor_lifecycle)
     }
@@ -174,6 +172,13 @@ impl<S: ConversationStore> TurnExecutor<S> {
                 tracing::warn!(%error, "the executor could not close its channels");
             }
         }
+        self.kit
+            .inner
+            .turns
+            .executor_lifecycle
+            .memory_backends
+            .closed()
+            .await;
         #[cfg(feature = "redis")]
         self.tell_redis_closed().await;
     }

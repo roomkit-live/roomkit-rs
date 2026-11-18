@@ -1,7 +1,6 @@
 //! A backend can keep the identity of the kit's executor without keeping the kit alive.
 use std::collections::BTreeSet;
 use std::sync::Arc;
-#[cfg(feature = "redis")]
 use std::sync::Weak;
 
 use roomkit_core::model::ChannelId;
@@ -17,7 +16,6 @@ struct OwnerExecutor<S> {
     kit: Arc<WeakRoomKit<S>>,
     id: String,
     timeouts: TurnTimeouts,
-    #[cfg(feature = "redis")]
     lifecycle: Weak<crate::turns::executor::Lifecycle>,
     #[cfg(feature = "redis")]
     identity: Weak<Self>,
@@ -32,7 +30,6 @@ pub(crate) fn owner_executor<S: ConversationStore>(kit: &RoomKit<S>) -> Arc<dyn 
             kit: Arc::new(kit.downgrade()),
             id: executor.executor_id().to_owned(),
             timeouts: executor.timeouts(),
-            #[cfg(feature = "redis")]
             lifecycle: executor.lifecycle(),
             #[cfg(feature = "redis")]
             identity: Weak::clone(identity),
@@ -47,7 +44,6 @@ impl<S: ConversationStore> OwnerExecutor<S> {
 }
 
 impl<S: ConversationStore> super::private::Sealed for OwnerExecutor<S> {
-    #[cfg(feature = "redis")]
     fn transport(&self, _: super::native::Key) -> &dyn super::native::Native {
         self
     }
@@ -130,19 +126,18 @@ impl<S: ConversationStore> ServedExecutor for OwnerExecutor<S> {
     }
 }
 
-#[cfg(feature = "redis")]
 impl<S: ConversationStore> crate::turns::LocalHosts for WeakRoomKit<S> {
     fn hosts_name(&self, id: &str) -> bool {
         self.upgrade().is_some_and(|kit| kit.inner.hosts_name(id))
     }
 }
 
-#[cfg(feature = "redis")]
 impl<S: ConversationStore> super::native::Native for OwnerExecutor<S> {
     fn local_hosts(&self) -> Arc<dyn crate::turns::LocalHosts> {
         Arc::<WeakRoomKit<S>>::clone(&self.kit)
     }
 
+    #[cfg(feature = "redis")]
     fn look_up(&self) -> crate::turns::redis::WorkerLookup {
         let identity = Weak::clone(&self.identity);
         Box::new(move || Some(identity.upgrade()?))
@@ -152,12 +147,14 @@ impl<S: ConversationStore> super::native::Native for OwnerExecutor<S> {
         Weak::clone(&self.lifecycle)
     }
 
+    #[cfg(feature = "redis")]
     fn served_by(&self, backend: &crate::RedisTurnBackend) {
         if let Some(worker) = self.worker() {
             worker.served_by(backend);
         }
     }
 
+    #[cfg(feature = "redis")]
     fn take_from(
         &self,
         request: crate::turns::CarriedRequest,

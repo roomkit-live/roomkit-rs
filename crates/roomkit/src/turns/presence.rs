@@ -110,7 +110,6 @@ impl ExecutorInfo {
         }
     }
 
-    #[cfg(feature = "redis")]
     pub(crate) fn with_local_hosts(mut self, hosts: Arc<dyn LocalHosts>) -> Self {
         self.local = Some(BoundDeclaration(hosts));
         self

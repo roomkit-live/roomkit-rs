@@ -2,6 +2,7 @@
 //! two pipes, the owner's execution contexts its work runs in, and its
 //! request, the events as they are and the rest serialized.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
@@ -16,7 +17,7 @@ use super::lock;
 use super::observe::{Carried, Observers};
 use super::pipe::{MAX_MESSAGE_BYTES, Pipe};
 use super::timeouts::TurnTimeouts;
-use super::wire::{Control, Frame, OwnerTool, PreviousTurn};
+use super::wire::{Control, Frame, OwnerTool, PreviousTurn, TurnRequest};
 use crate::discussion_turn::{discussion_notes, discussion_turn};
 
 /// One turn in memory: what its two sides share.
@@ -151,6 +152,33 @@ pub(crate) struct CarriedRequest {
     pub(crate) channel_rows: Vec<RoomEvent>,
 }
 
+impl CarriedRequest {
+    /// Public in-process submissions cross the same boundary as the native owner.
+    /// Event payloads are already typed and do not count towards the message bound.
+    pub(super) fn from_public(request: &TurnRequest) -> Result<Self, String> {
+        let rest = RestOut {
+            turn_id: &request.turn_id,
+            room_id: &request.room_id,
+            channel_id: &request.channel_id,
+            binding: &request.binding,
+            context: ContextOut::of(&request.context, None),
+            strategy_turn: request.strategy_turn,
+            notes: Cow::Borrowed(&request.notes),
+            in_place: request.in_place,
+            owner_tools: &request.owner_tools,
+            room_hooks: &request.room_hooks,
+            previous_turn: request.previous_turn.as_ref(),
+            trace: request.trace.as_ref(),
+        };
+        Ok(Self {
+            rest: rest.write()?,
+            event: request.event.clone(),
+            history: request.context.recent_events.clone(),
+            channel_rows: request.channel_rows.clone(),
+        })
+    }
+}
+
 /// A turn's request, as the owner submits it.
 pub(super) struct Request<'a> {
     pub(super) strategy_turn: bool,
@@ -177,14 +205,7 @@ impl Request<'_> {
     ///
     /// What makes it unable to cross.
     pub(super) fn write(&self, observers: &Observers) -> Result<String, String> {
-        let rest = self.rest(None);
-        let written = serde_json::to_string(&rest).map_err(|error| error.to_string())?;
-        if written.len() > MAX_MESSAGE_BYTES {
-            return Err(format!(
-                "{} bytes, past the bound of {MAX_MESSAGE_BYTES}",
-                written.len()
-            ));
-        }
+        let written = self.rest(None).write()?;
         if observers.tapped() {
             let whole = RequestOut {
                 rest: &self.rest(Some(self.history)),
@@ -205,16 +226,9 @@ impl Request<'_> {
             room_id: &self.event.room_id,
             channel_id: &self.binding.channel_id,
             binding: self.binding,
-            context: ContextOut {
-                room: &self.context.room,
-                bindings: &self.context.bindings,
-                participants: &self.context.participants,
-                recent_events: history,
-                history_start_index: self.context.history_start_index,
-                author_register: self.context.author_register.as_ref(),
-            },
+            context: ContextOut::of(self.context, history),
             strategy_turn: self.strategy_turn,
-            notes: discussion_notes(self.event),
+            notes: Cow::Owned(discussion_notes(self.event)),
             in_place: discussion_turn(self.event),
             owner_tools: self.owner_tools,
             room_hooks: self.room_hooks,
@@ -233,12 +247,25 @@ struct RestOut<'a> {
     binding: &'a ChannelBinding,
     context: ContextOut<'a>,
     strategy_turn: bool,
-    notes: Vec<String>,
+    notes: Cow<'a, [String]>,
     in_place: bool,
     owner_tools: &'a [OwnerTool],
     room_hooks: &'a [String],
     previous_turn: Option<&'a PreviousTurn>,
     trace: Option<&'a BTreeMap<String, String>>,
+}
+
+impl RestOut<'_> {
+    fn write(&self) -> Result<String, String> {
+        let written = serde_json::to_string(self).map_err(|error| error.to_string())?;
+        if written.len() > MAX_MESSAGE_BYTES {
+            return Err(format!(
+                "{} bytes, past the bound of {MAX_MESSAGE_BYTES}",
+                written.len()
+            ));
+        }
+        Ok(written)
+    }
 }
 
 /// A room's context, its recent events given apart.
@@ -253,10 +280,58 @@ struct ContextOut<'a> {
     author_register: Option<&'a Metadata>,
 }
 
+impl<'a> ContextOut<'a> {
+    fn of(context: &'a RoomContext, history: Option<&'a [RoomEvent]>) -> Self {
+        Self {
+            room: &context.room,
+            bindings: &context.bindings,
+            participants: &context.participants,
+            recent_events: history,
+            history_start_index: context.history_start_index,
+            author_register: context.author_register.as_ref(),
+        }
+    }
+}
+
 /// A whole request, as a tap reads it.
 #[derive(Serialize)]
 struct RequestOut<'a> {
     #[serde(flatten)]
     rest: &'a RestOut<'a>,
     event: &'a RoomEvent,
+}
+
+#[cfg(test)]
+mod public_request_tests {
+    use super::{CarriedRequest, TurnRequest};
+    use serde_json::Value;
+
+    #[test]
+    fn only_event_payloads_bypass_the_json_copy_and_handover_remains_local() {
+        let row: Value = serde_json::from_str(
+            include_str!("../../tests/fixtures/turns/python-case1.jsonl")
+                .lines()
+                .next()
+                .unwrap(),
+        )
+        .unwrap();
+        let mut request: TurnRequest = serde_json::from_value(row["message"].clone()).unwrap();
+        request
+            .event
+            .metadata
+            .insert("typed_event_only".into(), true.into());
+        request.channel_rows = vec![request.event.clone()];
+        request.context.recent_events = vec![request.event.clone()];
+        request.notes = vec!["independent from the event payload".to_owned()];
+        request.in_place = true;
+        request.hand_over();
+
+        let carried = CarriedRequest::from_public(&request).unwrap();
+        assert!(!carried.rest.contains("typed_event_only"));
+        assert!(carried.rest.contains("independent from the event payload"));
+        let decoded = crate::turns::executor::parse(carried).unwrap();
+        assert!(!decoded.handed());
+        request.refused();
+        assert_eq!(request, decoded);
+    }
 }

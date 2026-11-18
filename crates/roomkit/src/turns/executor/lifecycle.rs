@@ -14,6 +14,7 @@ use crate::turns::lock;
 pub(crate) struct Lifecycle {
     state: Mutex<State>,
     changed: Notify,
+    pub(crate) memory_backends: crate::turns::in_memory::Serving,
 }
 
 #[derive(Debug, Default)]

@@ -1,7 +1,6 @@
 //! Discover changes to declared agents' coverage and claim their publications across owners.
 
 use std::collections::{BTreeMap, BTreeSet};
-#[cfg(feature = "redis")]
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, PoisonError};
@@ -30,26 +29,45 @@ pub(super) struct Monitor {
 }
 
 impl<S: ConversationStore> RoomKit<S> {
-    #[cfg(feature = "redis")]
     pub(in crate::kit) fn wire_presence_watch(&self) {
-        if let Some(backend) = &self.inner.turns.remote {
+        let Some(backend) = self.inner.turns.configured_backend() else {
+            return;
+        };
+        if let Some(memory) =
+            (backend as &dyn std::any::Any).downcast_ref::<crate::InMemoryTurnBackend>()
+        {
             let weak = self.downgrade();
-            backend.watch_coverage(Arc::new(move |notice| {
+            memory.coverage.subscribe(Arc::new(move || {
+                let kit = weak.upgrade()?;
+                Some(Box::pin(async move { kit.coverage_notified(true).await }))
+            }));
+        }
+        #[cfg(feature = "redis")]
+        if let Some(redis) = &self.inner.turns.remote {
+            let weak = self.downgrade();
+            redis.watch_coverage(Arc::new(move |notice| {
                 let kit = weak.upgrade()?;
                 Some(Box::pin(async move {
-                    kit.start_presence_watch();
-                    if notice == crate::turns::redis::CoverageNotice::ExecutorsChanged
-                        && kit
-                            .inner
-                            .agent_presence
-                            .remote
-                            .started
-                            .load(Ordering::Acquire)
-                    {
-                        kit.check_agent_coverage().await;
-                    }
+                    kit.coverage_notified(
+                        notice == crate::turns::redis::CoverageNotice::ExecutorsChanged,
+                    )
+                    .await;
                 }))
             }));
+        }
+    }
+
+    async fn coverage_notified(&self, changed: bool) {
+        self.start_presence_watch();
+        if changed
+            && self
+                .inner
+                .agent_presence
+                .remote
+                .started
+                .load(Ordering::Acquire)
+        {
+            self.check_agent_coverage().await;
         }
     }
 

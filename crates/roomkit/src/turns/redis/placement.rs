@@ -8,7 +8,7 @@ use super::Worker;
 use super::registry::{Target, quoted};
 use super::{RedisTurnBackend, redis_error};
 use crate::RoomKitError;
-use crate::turns::{TakesOptions, lock};
+use crate::turns::{TakesOptions, lock, no_executor};
 
 pub(super) struct Reserved {
     lifecycle: std::sync::Weak<crate::turns::executor::Lifecycle>,
@@ -188,28 +188,5 @@ impl RedisTurnBackend {
             }
         }
         Ok(Candidates { here, elsewhere })
-    }
-}
-
-fn no_executor(channel: &str, hooks: &[String], organization: Option<&str>) -> RoomKitError {
-    let hooks = if hooks.is_empty() {
-        String::new()
-    } else {
-        let names = hooks
-            .iter()
-            .map(|s| crate::error::repr(s))
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!(" with room hooks [{names}]")
-    };
-    let org = organization.map_or_else(String::new, |o| {
-        format!(" in organization {}", crate::error::repr(o))
-    });
-    RoomKitError::TurnLink {
-        reason: "no_executor".into(),
-        message: Some(format!(
-            "No executor serves channel {}{hooks}{org}",
-            crate::error::repr(channel)
-        )),
     }
 }
