@@ -171,3 +171,14 @@ pub(crate) struct ContextRest {
     #[serde(default)]
     pub(crate) author_register: Option<Metadata>,
 }
+
+pub(crate) fn validate_rest(raw: &str) -> Result<RequestRest, String> {
+    use crate::turns::pipe::MAX_MESSAGE_BYTES;
+    if raw.len() > MAX_MESSAGE_BYTES {
+        return Err(format!(
+            "{} bytes, past the bound of {MAX_MESSAGE_BYTES}",
+            raw.len()
+        ));
+    }
+    serde_json::from_str(raw).map_err(|error| error.to_string())
+}

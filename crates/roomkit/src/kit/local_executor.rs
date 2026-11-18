@@ -170,10 +170,7 @@ impl<S: ConversationStore> TurnExecutor<S> {
 
     /// The kit's executor serves every organization (RFC §10.6.7).
     pub fn organizations(&self) -> BTreeSet<String> {
-        self.standalone.as_ref().map_or_else(
-            || BTreeSet::from(["*".to_owned()]),
-            |worker| worker.organizations(),
-        )
+        self.advertised_organizations().unwrap_or_default()
     }
 
     /// Whether it serves this organization; the kit's executor serves all.

@@ -5,9 +5,8 @@
 use roomkit_core::model::{Metadata, RoomEvent};
 use serde::{Deserialize, Serialize};
 
-use super::RequestRest;
+use super::validate_rest;
 use crate::turns::memory::CarriedRequest;
-use crate::turns::pipe::MAX_MESSAGE_BYTES;
 
 #[derive(Deserialize, Serialize)]
 struct Rest {
@@ -68,14 +67,4 @@ impl CarriedRequest {
         };
         serde_json::to_string(&wire).map_err(|error| error.to_string())
     }
-}
-
-pub(crate) fn validate_rest(raw: &str) -> Result<RequestRest, String> {
-    if raw.len() > MAX_MESSAGE_BYTES {
-        return Err(format!(
-            "{} bytes, past the bound of {MAX_MESSAGE_BYTES}",
-            raw.len()
-        ));
-    }
-    serde_json::from_str(raw).map_err(|error| error.to_string())
 }

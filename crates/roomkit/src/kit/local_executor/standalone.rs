@@ -8,8 +8,10 @@ use tokio::sync::watch;
 
 use crate::channel::{BoxFuture, DynChannel};
 use crate::turn::TurnKit;
+#[cfg(any(test, feature = "redis"))]
+use crate::turns::CarriedRequest;
 use crate::turns::wire::WireError;
-use crate::turns::{CarriedRequest, WorkerTurn, executor};
+use crate::turns::{WorkerTurn, executor};
 use crate::{ConversationStore, RoomKitError};
 
 use super::channels::Generations;
@@ -69,10 +71,6 @@ impl Standalone {
                     })
             })
         })
-    }
-
-    pub(super) fn organizations(&self) -> BTreeSet<String> {
-        self.organizations.clone().unwrap_or_default()
     }
 
     pub(super) fn serves(&self, organization: Option<&str>) -> bool {
@@ -143,7 +141,7 @@ impl Standalone {
 impl<S: ConversationStore> TurnExecutor<S> {
     pub(crate) fn advertised_organizations(&self) -> Option<BTreeSet<String>> {
         self.standalone.as_ref().map_or_else(
-            || Some(self.organizations()),
+            || Some(BTreeSet::from(["*".to_owned()])),
             |worker| worker.organizations.clone(),
         )
     }
@@ -199,6 +197,7 @@ impl<S: ConversationStore> TurnExecutor<S> {
         )
     }
 
+    #[cfg(any(test, feature = "redis"))]
     pub(crate) fn take_from(
         &self,
         carried: CarriedRequest,

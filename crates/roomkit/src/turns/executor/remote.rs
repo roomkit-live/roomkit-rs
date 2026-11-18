@@ -98,6 +98,7 @@ impl WorkerTurn {
     }
 
     /// Accept the owner's numbered control envelope.
+    #[cfg(any(test, feature = "redis"))]
     pub(crate) fn control(&self, envelope: String) {
         self.memory.controls.deliver_raw(envelope);
     }
@@ -109,6 +110,7 @@ impl WorkerTurn {
     }
 
     /// The next numbered frame for the owner, through the terminal frame.
+    #[cfg(any(test, feature = "redis"))]
     pub(crate) async fn next_frame(&mut self) -> Option<String> {
         self.frames.next_raw().await
     }

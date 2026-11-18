@@ -9,15 +9,19 @@
 //! numbers them per direction (RFC §10.6.3). Channel control and
 //! messages to the owner after a turn carry no turn-link sequence number.
 
+#[cfg(any(test, feature = "redis"))]
 mod carried_request;
-pub(crate) use carried_request::validate_rest;
 mod input_request;
 mod peer_errors;
 pub use input_request::InputRequest;
-pub(crate) use peer_errors::{native_class, peer_error_payload};
+pub(crate) use peer_errors::native_class;
+#[cfg(feature = "redis")]
+pub(crate) use peer_errors::peer_error_payload;
 
 mod request;
-pub(crate) use request::{ContextRest, RequestRest};
+#[cfg(feature = "redis")]
+pub(crate) use request::RequestRest;
+pub(crate) use request::{ContextRest, validate_rest};
 pub use request::{OwnerTool, PreviousTurn, TurnRequest};
 mod output;
 pub(crate) use output::ErrorRecord as WireError;

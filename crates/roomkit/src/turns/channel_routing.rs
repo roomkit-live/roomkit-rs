@@ -13,25 +13,13 @@ use crate::channel::DynChannel;
 
 impl Turns {
     #[cfg(feature = "redis")]
-    pub(super) fn remote_for_channel(
+    pub(crate) fn remote_for_channel(
         &self,
         channel: Option<&dyn DynChannel>,
     ) -> Option<&super::redis::RedisTurnBackend> {
         self.remote
             .as_ref()
             .filter(|_| channel.is_some_and(DynChannel::is_declaration_only))
-    }
-
-    pub(crate) fn distributes_channel(&self, channel: Option<&dyn DynChannel>) -> bool {
-        #[cfg(feature = "redis")]
-        {
-            self.remote_for_channel(channel).is_some()
-        }
-        #[cfg(not(feature = "redis"))]
-        {
-            let _ = channel;
-            false
-        }
     }
 
     pub(crate) async fn release(

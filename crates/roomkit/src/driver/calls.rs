@@ -1096,12 +1096,13 @@ async fn room_attached<S: ConversationStore>(inner: &Inner<S>, binding: ChannelB
 
 /// The owning room selects the executors serving a declaration. Local live
 /// callbacks still borrow their channel without a store lookup.
+#[cfg(feature = "redis")]
 async fn control_organization<S: ConversationStore>(
     inner: &Inner<S>,
     room_id: &RoomId,
     channel: Option<&dyn DynChannel>,
 ) -> Result<Option<String>, RoomKitError> {
-    if !inner.turns.distributes_channel(channel) {
+    if inner.turns.remote_for_channel(channel).is_none() {
         return Ok(None);
     }
     Ok(inner
@@ -1109,6 +1110,15 @@ async fn control_organization<S: ConversationStore>(
         .get_room(room_id)
         .await?
         .and_then(|room| room.organization_id))
+}
+
+#[cfg(not(feature = "redis"))]
+fn control_organization<S: ConversationStore>(
+    _inner: &Inner<S>,
+    _room_id: &RoomId,
+    _channel: Option<&dyn DynChannel>,
+) -> std::future::Ready<Result<Option<String>, RoomKitError>> {
+    std::future::ready(Ok(None))
 }
 
 /// Push the stored gate to a live channel, regardless of its category.
