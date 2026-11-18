@@ -542,7 +542,7 @@ async fn lifecycle_call(
         | "enable_room_hook"
         | "disable_room_hook" => crate::kit_executor::call(run, name, spec).await?,
         "add_room_hook" | "remove_room_hook" => room_hook_call(run, name, spec).await?,
-        "subscribe_room" | "publish_typing" => {
+        "subscribe_room" | "publish_typing" | "channel.publish" => {
             crate::subscription_calls::call(run, name, spec).await?
         }
         "mute_output" | "unmute_output" => output_call(run, name, spec).await?,

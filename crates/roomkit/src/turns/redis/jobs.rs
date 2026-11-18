@@ -10,7 +10,12 @@ use crate::turns::lock;
 #[derive(Default)]
 pub(super) struct Jobs {
     next: u64,
-    active: HashMap<u64, AbortHandle>,
+    active: HashMap<u64, Job>,
+}
+
+struct Job {
+    task: AbortHandle,
+    publication: bool,
 }
 
 struct Registration {
@@ -30,6 +35,14 @@ impl Drop for Registration {
 impl RedisTurnBackend {
     /// A close either owns this task through its final write or refuses it before it runs.
     pub(super) fn dispatch(&self, work: impl Future<Output = ()> + Send + 'static) -> bool {
+        self.dispatch_incoming(false, work)
+    }
+
+    pub(super) fn dispatch_incoming(
+        &self,
+        publication: bool,
+        work: impl Future<Output = ()> + Send + 'static,
+    ) -> bool {
         let mut routes = lock(&self.0.routes);
         if routes.closing {
             return false;
@@ -45,25 +58,45 @@ impl RedisTurnBackend {
             let _registration = guard;
             work.await;
         });
-        jobs.active.insert(token, task.abort_handle());
+        jobs.active.insert(
+            token,
+            Job {
+                task: task.abort_handle(),
+                publication,
+            },
+        );
         true
     }
 
-    async fn idle(&self, caller: Option<Id>) {
+    async fn wait_until(&self, done: impl Fn(&Jobs) -> bool) {
         loop {
             let changed = self.0.jobs_changed.notified();
             tokio::pin!(changed);
             changed.as_mut().enable();
-            if lock(&self.0.routes)
-                .jobs
-                .active
-                .values()
-                .all(|job| Some(job.id()) == caller)
-            {
+            if done(&lock(&self.0.routes).jobs) {
                 return;
             }
             changed.await;
         }
+    }
+
+    pub(super) async fn finish_received_publications(&self) {
+        let next = lock(&self.0.routes).jobs.next;
+        self.wait_until(|jobs| {
+            jobs.active
+                .iter()
+                .all(|(id, job)| *id >= next || !job.publication)
+        })
+        .await;
+    }
+
+    async fn idle(&self, caller: Option<Id>) {
+        self.wait_until(|jobs| {
+            jobs.active
+                .values()
+                .all(|job| Some(job.task.id()) == caller)
+        })
+        .await;
     }
 
     pub(super) async fn drain_jobs(&self) {
@@ -73,8 +106,8 @@ impl RedisTurnBackend {
             return;
         }
         for job in lock(&self.0.routes).jobs.active.values() {
-            if Some(job.id()) != caller {
-                job.abort();
+            if Some(job.task.id()) != caller {
+                job.task.abort();
             }
         }
         // Abortion takes effect on the next poll. A synchronous application callback

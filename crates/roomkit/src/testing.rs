@@ -74,6 +74,16 @@ pub async fn idle<S>(kit: &RoomKit<S>) {
     }
 }
 
+/// Wait for publications already queued by a worker to be handled by the room owner.
+#[cfg(feature = "redis")]
+#[doc(hidden)]
+pub async fn settle_redis_publications(
+    worker: &crate::RedisTurnBackend,
+    owner: &crate::RedisTurnBackend,
+) -> Result<(), crate::RoomKitError> {
+    owner.publications_handled_from(worker).await
+}
+
 /// Sets the bounds both sides of `kit`'s turns keep (RFC §10.6.8), which
 /// the Python implementation's kit takes no keyword for: a test seam. The
 /// RFC's defaults unless set: 10 seconds to accept a turn, a heartbeat each

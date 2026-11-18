@@ -104,6 +104,10 @@ pub(crate) struct Check {
 
 /// Lifecycle operations offered by the distributed executor fixture of this pass.
 pub(crate) trait WorkerControl: Send + Sync {
+    fn publication_taken<'a>(
+        &'a self,
+        worker: &'a str,
+    ) -> BoxFuture<'a, Result<(), roomkit::RoomKitError>>;
     fn start_all(&self) -> BoxFuture<'_, Result<(), roomkit::RoomKitError>>;
     fn change<'a>(
         &'a self,
@@ -116,6 +120,8 @@ pub(crate) trait WorkerControl: Send + Sync {
 pub(crate) struct Run {
     kit: crate::Kit,
     pub(crate) workers: Option<Arc<dyn WorkerControl>>,
+    /// Which actual executor handled a scripted turn, including after its channel was rebuilt.
+    pub(crate) turn_workers: Mutex<HashMap<String, String>>,
     /// The other processes of `setup.processes`, by id, in setup order
     /// (README, `processes`).
     processes: Mutex<Vec<(String, crate::Kit)>>,
@@ -256,6 +262,7 @@ impl Run {
             chat_dialects: Mutex::default(),
             backend: Mutex::default(),
             workers: None,
+            turn_workers: Mutex::default(),
             strategies: Mutex::default(),
             handoff_handlers: Mutex::default(),
             delegate_handlers: Mutex::default(),

@@ -263,6 +263,30 @@ impl RedisTurnBackend {
         Ok(())
     }
 
+    /// The test runner posts this marker behind the sender's publications on the same FIFO.
+    pub(crate) async fn publications_handled_from(
+        &self,
+        sender: &Self,
+    ) -> Result<(), RoomKitError> {
+        let id = Uuid::new_v4().simple().to_string();
+        let (tx, rx) = oneshot::channel();
+        self.listen().await;
+        lock(&self.0.routes)
+            .answers
+            .insert(id.clone(), (sender.node_id().to_owned(), tx));
+        let _registration = Question(&self.0.routes, id.clone());
+        let marker = Message::new("answer", sender.node_id(), String::new(), "", &id);
+        let wait = async {
+            sender.post(self.node_id(), &marker).await?;
+            rx.await.map_err(|_| closed())?;
+            self.finish_received_publications().await;
+            Ok(())
+        };
+        tokio::time::timeout(self.timeouts().accept, wait)
+            .await
+            .map_err(|_| RoomKitError::Timeout)?
+    }
+
     pub(super) async fn listen(&self) {
         self.0
             .reader

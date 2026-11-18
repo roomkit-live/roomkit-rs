@@ -177,7 +177,7 @@ impl RedisTurnBackend {
         let owner = crate::turns::lock(&self.0.owner).clone();
         let backend = self.clone();
         let message = incoming.clone();
-        let admitted = self.dispatch(async move {
+        let admitted = self.dispatch_incoming(incoming.kind == "work", async move {
             let result = if let Some(owner) = owner {
                 owner(parsed).await
             } else if let OwnerMessage::RoomCall(call) = parsed.message {

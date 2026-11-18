@@ -169,6 +169,9 @@ impl Channel for WorkerChannel {
         binding: ChannelBinding,
         context: RoomContext,
     ) -> Result<ChannelOutput, ChannelError> {
+        if let (Some(run), Some(host)) = (self.run.upgrade(), roomkit::current_turn_host()) {
+            lock(&run.turn_workers).insert(host.turn_id().to_owned(), self.worker.clone());
+        }
         self.note("on_event", Some(&event.room_id), None);
         forward!(self, on_event(event, binding, context).await)
     }

@@ -53,6 +53,8 @@ const SUPPORTED: &[&str] = &[
     "executors/one-build-serving-two-rooms-reads-each-turn-s-room-alone",
     "executors/the-kit-lists-the-executors-served-and-what-each-declares",
     "executors/what-the-room-keeps-for-a-channel-reaches-the-next-executor",
+    "executors/work-a-turn-apart-began-publishes-to-its-room-after-it",
+    "tenancy/a-deleted-room-s-turn-reaches-nothing-of-the-room-created-again",
 ];
 
 pub(super) fn run(
@@ -199,6 +201,19 @@ impl Workers {
 }
 
 impl crate::run::WorkerControl for Workers {
+    fn publication_taken<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<(), RoomKitError>> {
+        Box::pin(async move {
+            let hosting = self
+                .active
+                .lock()
+                .await
+                .get(id)
+                .map(|(backend, _)| backend.clone())
+                .ok_or_else(|| RoomKitError::Value(format!("executor {id} is not running")))?;
+            roomkit::testing::settle_redis_publications(&hosting, self.topology.owner()).await
+        })
+    }
+
     fn start_all(&self) -> BoxFuture<'_, Result<(), RoomKitError>> {
         Box::pin(async move {
             for worker in &self.declarations {

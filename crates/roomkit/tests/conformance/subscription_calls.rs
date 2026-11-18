@@ -15,6 +15,7 @@ pub(crate) async fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Cal
     let room = field::<RoomId>(spec, "room_id")?;
     let organization_id = optional::<String>(spec, "organization_id")?;
     Ok(match name {
+        "channel.publish" => return publish_from_worker(run, room, spec).await,
         "subscribe_room" => {
             let subscriber = field::<String>(spec, "subscriber")?;
             run.record_subscriber(&subscriber, None);
@@ -48,4 +49,24 @@ pub(crate) async fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Cal
         }
         other => return Err(format!("no call {other}")),
     })
+}
+
+/// A scripted channel publishes from the actual context its turn left it.
+async fn publish_from_worker(run: &Run, room: RoomId, spec: &Value) -> Result<Called, Unreadable> {
+    let worker: String = field(spec, "executor")?;
+    let host = roomkit::current_turn_host().ok_or("channel.publish outside a worker turn")?;
+    if crate::run::lock(&run.turn_workers).get(host.turn_id()) != Some(&worker) {
+        return Err(format!("channel.publish did not run on executor {worker}"));
+    }
+    let workers = run.workers.as_ref().ok_or("no executor fixture")?;
+    if let Some(gate) = optional::<String>(spec, "gate")? {
+        run.gates.hold(&gate).await;
+    }
+    let channel: roomkit::model::ChannelId = field(spec, "channel_id")?;
+    let mut event = EphemeralEvent::new(room, field(spec, "kind")?, channel.as_str());
+    event.channel_id = Some(channel);
+    event.data = optional(spec, "data")?.unwrap_or_default();
+    host.publish_from_channel(event);
+    let taken = workers.publication_taken(&worker).await;
+    Ok(finish(run, "channel.publish", taken, |()| Value::Null))
 }

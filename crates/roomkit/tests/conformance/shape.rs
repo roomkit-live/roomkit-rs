@@ -520,6 +520,7 @@ fn base_arguments(call: &str) -> Option<&'static [&'static str]> {
         "enable_room_hook" | "disable_room_hook" | "remove_room_hook" => &["room_id", "name"],
         "add_room_hook" => &["room_id", "hook"],
         "subscribe_room" => &["room_id", "subscriber"],
+        "channel.publish" => &["executor", "channel_id", "room_id", "kind", "data", "gate"],
         "publish_typing" => &["room_id", "user_id", "is_typing"],
         "process_delivery_status" => &["status"],
         "process_webhook" => &["meta", "channel_id"],
