@@ -183,6 +183,17 @@ pub enum RoomKitError {
         /// The provider's answer.
         result: ProviderResult,
     },
+    /// A channel refused before contacting its provider because no recipient
+    /// was available. Construct with [`RoomKitError::no_recipient`].
+    #[error("no_recipient")]
+    NoRecipient {
+        /// The channel reporting the refusal.
+        channel_id: String,
+        /// The binding's recipient metadata key.
+        recipient_key: String,
+        /// The same structured result returned to the application's caller.
+        result: Box<ProviderResult>,
+    },
     /// Python's builtin `ValueError`: an argument the call refuses, as the
     /// Python implementation's message says.
     #[error("{0}")]
@@ -319,6 +330,30 @@ pub enum RoomKitError {
 }
 
 impl RoomKitError {
+    /// Construct the refusal an application channel may return before any send.
+    /// It is non-retryable and leaves the provider's circuit breaker unchanged.
+    pub fn no_recipient(channel_id: impl Into<String>, recipient_key: impl Into<String>) -> Self {
+        let channel_id = channel_id.into();
+        let recipient_key = recipient_key.into();
+        let result = Box::new(ProviderResult::no_recipient(&channel_id, &recipient_key));
+        Self::NoRecipient {
+            channel_id,
+            recipient_key,
+            result,
+        }
+    }
+
+    /// The structured answer carried by a provider or missing-recipient refusal.
+    pub fn provider_result(&self) -> Option<&ProviderResult> {
+        if let Self::ProviderDelivery { result } = self {
+            return Some(result);
+        }
+        if let Self::NoRecipient { result, .. } = self {
+            return Some(result);
+        }
+        None
+    }
+
     /// The code the error's Python class carries as its `code` attribute:
     /// `kit_closed` for [`KitClosed`](Self::KitClosed), Python's
     /// `KitClosedError.code`; for [`ProviderDelivery`](Self::ProviderDelivery)
@@ -389,6 +424,7 @@ impl RoomKitError {
             | Self::EventNotFound(_)
             | Self::IdempotencyKeyTaken { .. }
             | Self::ProviderDelivery { .. }
+            | Self::NoRecipient { .. }
             | Self::TurnLink { .. }
             | Self::KitClosed
             | Self::ShutdownCancelled
@@ -401,6 +437,12 @@ impl RoomKitError {
     /// The code and the flag the error's Python class carries, as its
     /// delivery result reads them; `None` for a class that carries none.
     fn declared(&self) -> Option<DeliveryError> {
+        if matches!(self, Self::NoRecipient { .. }) {
+            return Some(DeliveryError {
+                retryable: false,
+                ..DeliveryError::new("no_recipient", "no_recipient")
+            });
+        }
         if let Self::ProviderDelivery { result } = self {
             return Some(DeliveryError::of_provider(result));
         }

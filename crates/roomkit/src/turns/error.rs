@@ -136,11 +136,36 @@ fn is_link_reason(kind: &str) -> bool {
 #[error("{}", .0.message)]
 pub(crate) struct RemoteError(pub(crate) WireError);
 
+/// The JSON attributes of the application's pre-send refusal. The structured
+/// provider result stays on the local delivery. Python's error record carries
+/// the strings and retry flag of the exception itself.
+fn recipient_error(error: &(dyn Error + 'static)) -> Option<WireError> {
+    let RoomKitError::NoRecipient {
+        channel_id,
+        recipient_key,
+        ..
+    } = error.downcast_ref::<RoomKitError>()?
+    else {
+        return None;
+    };
+    let mut crossed = one("NoRecipientError", error.to_string());
+    crossed.attributes = Metadata::from_iter([
+        (CODE.into(), "no_recipient".into()),
+        (RETRYABLE.into(), false.into()),
+        ("channel_id".into(), channel_id.as_str().into()),
+        ("recipient_key".into(), recipient_key.as_str().into()),
+    ]);
+    Some(crossed)
+}
+
 /// The core record of `error`, a channel's or one that crossed: one that
 /// crossed keeps its kind, a link's failure is recorded under
 /// [`TURN_LINK_ERROR`], any other is a channel's, under the class a
 /// [`ClassedError`] names.
 pub(crate) fn record_of(error: &(dyn Error + Send + Sync + 'static)) -> ErrorRecord {
+    if let Some(missing) = recipient_error(error) {
+        return to_record(&missing);
+    }
     if let Some(turn) = error.downcast_ref::<TurnError>() {
         return turn.to_record();
     }
@@ -164,6 +189,9 @@ pub(crate) fn record_of(error: &(dyn Error + Send + Sync + 'static)) -> ErrorRec
 
 /// `error`, a channel's, as it crosses, its causes after it.
 pub(crate) fn channel_error(error: &(dyn Error + 'static)) -> WireError {
+    if let Some(missing) = recipient_error(error) {
+        return missing;
+    }
     let classed = error.downcast_ref::<ClassedError>();
     let mut record = one(
         classed.map_or(CHANNEL_ERROR, ClassedError::class),
@@ -177,7 +205,9 @@ pub(crate) fn channel_error(error: &(dyn Error + 'static)) -> WireError {
         if record.causes.len() >= CAUSES_KEPT {
             break;
         }
-        record.causes.push(one("Error", next.to_string()));
+        record
+            .causes
+            .push(recipient_error(next).unwrap_or_else(|| one("Error", next.to_string())));
         cause = next.source();
     }
     record
@@ -212,6 +242,9 @@ pub(crate) fn stream_failure(error: &(dyn Error + Send + Sync + 'static)) -> Wir
 /// error crosses with its JSON attributes (RMK-1085); a cancel as Python's `TurnLinkError`, saying `cancelled`,
 /// its reason `executor_lost`; any other as a channel's.
 fn failure(error: &(dyn Error + Send + Sync + 'static), cancelled: &str) -> WireError {
+    if let Some(missing) = recipient_error(error) {
+        return missing;
+    }
     match error.downcast_ref::<RoomKitError>() {
         Some(RoomKitError::Cancelled) => {
             let mut crossed = one(TURN_LINK_ERROR, cancelled.to_owned());
@@ -367,6 +400,10 @@ pub(crate) fn rebuild_kit_error(error: &WireError) -> RoomKitError {
 fn rebuilt_variant(error: &WireError) -> Option<RoomKitError> {
     let variant = error.attributes.get(VARIANT)?.as_str()?;
     Some(match variant {
+        "NoRecipient" => RoomKitError::no_recipient(
+            error.attributes.get("channel_id")?.as_str()?,
+            error.attributes.get("recipient_key")?.as_str()?,
+        ),
         "KitClosed" => RoomKitError::KitClosed,
         "ShutdownCancelled" => RoomKitError::ShutdownCancelled,
         "Cancelled" => RoomKitError::Cancelled,
@@ -430,6 +467,15 @@ fn variant_of(error: &RoomKitError) -> (&'static str, Metadata) {
         RoomKitError::EventNotFound(_) => "EventNotFound",
         RoomKitError::IdempotencyKeyTaken { .. } => "IdempotencyKeyTaken",
         RoomKitError::ProviderDelivery { .. } => "ProviderDelivery",
+        RoomKitError::NoRecipient {
+            channel_id,
+            recipient_key,
+            ..
+        } => {
+            fields.insert("channel_id".into(), channel_id.as_str().into());
+            fields.insert("recipient_key".into(), recipient_key.as_str().into());
+            "NoRecipient"
+        }
         RoomKitError::Value(_) => "Value",
         RoomKitError::Cancelled => "Cancelled",
         RoomKitError::Timeout => "Timeout",
@@ -628,5 +674,30 @@ mod tests {
                 }
             ]
         );
+    }
+
+    #[test]
+    fn a_missing_recipient_keeps_its_class_and_json_attributes() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("delivery callback failed")]
+        struct Wrapped(#[source] RoomKitError);
+
+        let error = RoomKitError::no_recipient("app", "customer");
+        let record = record_of(&error);
+        assert_eq!(record.error_type, "NoRecipientError");
+        assert_eq!(record.message, "no_recipient");
+        assert_eq!(
+            serde_json::json!(*record.attributes),
+            serde_json::json!({
+                "code":"no_recipient","retryable":false,"channel_id":"app","recipient_key":"customer"
+            })
+        );
+        assert_eq!(to_record(&turn_failure(&error)), record);
+        assert_eq!(to_record(&channel_error(&error)), record);
+        assert_eq!(rebuild_kit_error(&kit_error(&error)), error);
+
+        let wrapped = channel_error(&Wrapped(error));
+        assert_eq!(wrapped.causes.len(), 1);
+        assert_eq!(to_record(&wrapped.causes[0]), record);
     }
 }

@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Allow application channels to report a missing recipient before sending. The public delivery result carries the refusal and the provider circuit breaker keeps its state.
+
 - Expose the existing result fallback and status subscriber types as `roomkit::orchestration::MissingResult` and `StatusCallback`.
 
 - Expose the text-provider rules for cut and unreadable tool calls, including their structured model errors.

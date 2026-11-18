@@ -231,6 +231,22 @@ pub struct ProviderResult {
 }
 
 impl ProviderResult {
+    /// Shared result of a missing recipient, before a provider send (RFC §10.2).
+    #[doc(hidden)]
+    pub fn no_recipient(channel_id: &str, recipient_key: &str) -> Self {
+        const CODE: &str = "no_recipient";
+        Self {
+            error: Some(CODE.into()),
+            metadata: Metadata::from_iter([
+                ("code".into(), CODE.into()),
+                ("retryable".into(), false.into()),
+                ("channel_id".into(), channel_id.into()),
+                ("recipient_key".into(), recipient_key.into()),
+            ]),
+            ..Self::new(false)
+        }
+    }
+
     /// A provider's answer, accepted or not, with no message id, error or
     /// data.
     pub fn new(success: bool) -> Self {

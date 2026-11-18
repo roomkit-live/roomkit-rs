@@ -64,6 +64,17 @@ pub fn log_failure(log: Log, error: &ErrorRecord, what: &str, caller_logs: bool)
 /// The level and the text of the line saying that `what` failed with
 /// `error`.
 fn line_of(error: &ErrorRecord, what: &str, caller_logs: bool) -> (Level, String) {
+    if error.error_type == "NoRecipientError"
+        && let Some(key) = error
+            .attributes
+            .get("recipient_key")
+            .and_then(Value::as_str)
+    {
+        return (
+            Level::WARN,
+            format!("{what} refused: the binding has no {key}"),
+        );
+    }
     if CUT_SHORT.contains(&error.error_type.as_str()) {
         return (Level::WARN, format!("{what} failed: {}", error.message));
     }
@@ -163,5 +174,22 @@ mod tests {
                 (Level::ERROR, "Task t failed".to_owned())
             )
         );
+    }
+
+    #[test]
+    fn a_typed_recipient_refusal_logs_the_missing_key_at_warning() {
+        let mut error = ErrorRecord::new("NoRecipientError", "no_recipient");
+        error
+            .attributes
+            .insert("recipient_key".into(), "customer".into());
+        assert_eq!(
+            line_of(&error, "Delivery to app", false),
+            (
+                Level::WARN,
+                "Delivery to app refused: the binding has no customer".into()
+            )
+        );
+        error.error_type = "ProviderDeliveryError".into();
+        assert_eq!(line_of(&error, "Delivery to app", false).0, Level::ERROR);
     }
 }

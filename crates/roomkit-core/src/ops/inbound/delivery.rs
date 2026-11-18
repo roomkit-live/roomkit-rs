@@ -1093,18 +1093,7 @@ impl DeliverySet {
             recipient_key = %key,
             "the binding has no recipient; the delivery is refused before any send"
         );
-        // Python's `NoRecipientError(channel_id, recipient_key)`, a
-        // `ProviderDeliveryError` of the refusal it builds.
-        let mut metadata = Metadata::new();
-        metadata.insert("code".to_owned(), NO_RECIPIENT.into());
-        metadata.insert("retryable".to_owned(), false.into());
-        metadata.insert("channel_id".to_owned(), channel_id.as_str().into());
-        metadata.insert("recipient_key".to_owned(), key.into());
-        let refusal = ProviderResult {
-            error: Some(NO_RECIPIENT.to_owned()),
-            metadata,
-            ..ProviderResult::new(false)
-        };
+        let refusal = ProviderResult::no_recipient(channel_id.as_str(), key);
         self.report_failure(index, DeliveryResult::refused(channel_id, refusal));
     }
 
@@ -1210,10 +1199,6 @@ fn voice_session(event: &RoomEvent) -> Option<String> {
         .and_then(serde_json::Value::as_str)
         .map(str::to_owned)
 }
-
-/// The error of a delivery refused for want of a recipient (RFC §10.2 step
-/// 3d).
-const NO_RECIPIENT: &str = "no_recipient";
 
 /// The recipient key the channel of `binding` delivers to, when the binding
 /// holds no recipient under it (RFC §10.2 step 3d, gap G-051). A channel that

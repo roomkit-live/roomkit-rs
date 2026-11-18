@@ -181,6 +181,7 @@ roomkit_postgres = ["roomkit.store", "roomkit.knowledge"]
 "roomkit.VerificationRefusedError" = []
 "roomkit.IdempotencyKeyTakenError" = ["room_id", "channel_id", "key"]
 "roomkit.ProviderDeliveryError" = []
+"roomkit.NoRecipientError" = []
 "roomkit.KitClosedError" = []
 "roomkit.ShutdownCancelledError" = []
 "roomkit.RemoteTurnError" = []
@@ -593,6 +594,12 @@ reason = "a trait method returns a nameable stream type (decision 18)"
 rust = "roomkit_mcp::McpError"
 approved = "2026-10-27"
 reason = "the error type a Result needs for the exceptions the MCP SDK raises"
+
+[[exception]]
+rust = "roomkit::RoomKitError"
+members = ["no_recipient", "provider_result", "NoRecipient::result"]
+approved = "2026-11-17"
+reason = "the error family uses one Rust enum. no_recipient is Python's NoRecipientError(channel_id, recipient_key) constructor. The stored result and the provider_result accessor expose the derived Python instance attribute returned on the delivery (RFC 5.13, 10.2)."
 
 [[exception]]
 rust = "roomkit::RoomKitError"

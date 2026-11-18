@@ -123,7 +123,17 @@ impl Sends {
         };
         let transition = match &answered {
             Ok(_) => self.breaker(&channel_id).succeeded(),
-            Err(_) => self.breaker(&channel_id).failed(Instant::now()),
+            Err(error) => {
+                if let Some(RoomKitError::NoRecipient { recipient_key, .. }) =
+                    error.downcast_ref::<RoomKitError>()
+                {
+                    tracing::warn!(target: "roomkit::core::delivery", channel_id = %channel_id, recipient_key,
+                        "Delivery to {channel_id} refused: the binding has no {recipient_key}");
+                    None
+                } else {
+                    self.breaker(&channel_id).failed(Instant::now())
+                }
+            }
         };
         match transition {
             Some(Transition::Opened) => emit(CoreEvent::circuit_breaker_opened(channel_id)),

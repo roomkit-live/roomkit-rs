@@ -6,15 +6,18 @@
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
+#[path = "support/warnings.rs"]
+mod warnings;
+
 use std::future::{Future, ready};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelBinding, ChannelCategory, ChannelId, ChannelOutput, ChannelType, DeliveryResultStatus,
-    InboundMessage, Metadata, ProviderResult, RateLimit, RetryPolicy, RoomContext, RoomEvent,
-    RoomId, TextContent,
+    ChannelBinding, ChannelCategory, ChannelId, ChannelOutput, ChannelType, DeliveryResult,
+    DeliveryResultStatus, InboundMessage, Metadata, ProviderResult, RateLimit, RetryPolicy,
+    RoomContext, RoomEvent, RoomId, TextContent,
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
@@ -39,6 +42,10 @@ enum Failure {
     Plain,
     /// A provider's refusal that says it may not be retried.
     Refused,
+    /// A refusal the channel issues before contacting its provider.
+    NoRecipient,
+    /// A provider answer carrying the same code as a pre-send refusal.
+    ProviderNoRecipient,
     /// The send's own cancel, Python's `CancelledError`.
     Cancelled,
 }
@@ -114,6 +121,11 @@ impl Channel for Flaky {
             Ok(ChannelOutput::empty())
         } else {
             Err(match self.failure {
+                Failure::NoRecipient => RoomKitError::no_recipient("ws", "customer").into(),
+                Failure::ProviderNoRecipient => RoomKitError::ProviderDelivery {
+                    result: missing_recipient_result(),
+                }
+                .into(),
                 Failure::Plain => "flaky".into(),
                 Failure::Cancelled => RoomKitError::Cancelled.into(),
                 Failure::Refused => RoomKitError::ProviderDelivery {
@@ -154,6 +166,27 @@ async fn sent(
     pause: Duration,
     options: AttachChannelOptions,
 ) -> (Vec<Read>, Vec<(String, Metadata)>) {
+    let (deliveries, events) = send_results(ws, messages, pause, options).await;
+    let read = deliveries
+        .into_iter()
+        .map(|delivery| {
+            (
+                delivery.status,
+                delivery
+                    .error
+                    .map(|error| (error.code, error.message, error.retryable)),
+            )
+        })
+        .collect();
+    (read, events)
+}
+
+async fn send_results(
+    ws: &Flaky,
+    messages: usize,
+    pause: Duration,
+    options: AttachChannelOptions,
+) -> (Vec<DeliveryResult>, Vec<(String, Metadata)>) {
     let kit = RoomKit::new(RoomKitOptions::default());
     let breaker_events: Arc<Mutex<Vec<(String, Metadata)>>> = Arc::default();
     for name in ["circuit_breaker_opened", "circuit_breaker_closed"] {
@@ -203,12 +236,7 @@ async fn sent(
             .get(&channel("ws"))
             .cloned()
             .unwrap();
-        read.push((
-            delivery.status,
-            delivery
-                .error
-                .map(|error| (error.code, error.message, error.retryable)),
-        ));
+        read.push(delivery);
     }
     kit.close().await.unwrap();
     let events = breaker_events.lock().unwrap().clone();
@@ -371,4 +399,68 @@ async fn a_send_waits_for_its_token_under_its_binding_s_rate_limit() {
         gaps.push(ws.gaps());
     }
     assert_eq!(gaps, [vec![0, 0], vec![1000, 1000]]);
+}
+
+fn missing_recipient_result() -> ProviderResult {
+    ProviderResult {
+        error: Some("no_recipient".into()),
+        metadata: serde_json::from_value(json!({"code":"no_recipient","retryable":false,"channel_id":"ws","recipient_key":"customer"})).unwrap(),
+        ..ProviderResult::new(false)
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn only_an_application_refusal_before_sending_spares_the_breaker() {
+    let refused = RoomKitError::no_recipient("ws", "customer");
+    assert!(
+        matches!(&refused, RoomKitError::NoRecipient {channel_id, recipient_key, ..}
+        if channel_id == "ws" && recipient_key == "customer")
+    );
+    assert_eq!(refused.to_string(), "no_recipient");
+    assert_eq!(refused.code().as_deref(), Some("no_recipient"));
+    assert_eq!(refused.retryable(), Some(false));
+    assert_eq!(refused.provider_result(), Some(&missing_recipient_result()));
+
+    for (failure, failed_sends, attempts, breaker_events) in [
+        (Failure::NoRecipient, 6, 7, 0),
+        (Failure::ProviderNoRecipient, 5, 5, 1),
+    ] {
+        let (captured, _capture) = warnings::Warnings::capture();
+        let app = Flaky::new(6, failure);
+        let (deliveries, events) =
+            send_results(&app, 7, Duration::ZERO, retrying(policy(3, None))).await;
+        assert_eq!((app.sends(), events.len()), (attempts, breaker_events));
+        let refused = captured.containing("Delivery to ws refused: the binding has no customer");
+        assert_eq!(
+            refused.len(),
+            if matches!(failure, Failure::NoRecipient) {
+                6
+            } else {
+                0
+            }
+        );
+        assert!(refused.iter().all(|line| line.starts_with("WARN")));
+
+        for failed in &deliveries[..failed_sends] {
+            let error = failed.error.as_ref().unwrap();
+            assert_eq!(
+                (&*error.code, &*error.message, error.retryable),
+                ("no_recipient", "no_recipient", false)
+            );
+            assert_eq!(
+                failed.provider_result.as_ref(),
+                Some(&missing_recipient_result())
+            );
+        }
+        if matches!(failure, Failure::NoRecipient) {
+            assert_eq!(deliveries[6].status, DeliveryResultStatus::Sent);
+        } else {
+            assert!(
+                deliveries[5..]
+                    .iter()
+                    .all(|delivery| delivery.error.as_ref().unwrap().message
+                        == "circuit_breaker_open")
+            );
+        }
+    }
 }

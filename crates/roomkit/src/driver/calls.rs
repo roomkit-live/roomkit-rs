@@ -1458,10 +1458,10 @@ fn strategy_output(result: Result<ChannelOutput, ChannelError>) -> Outcome {
 pub(crate) fn channel_failed(error: &ChannelError) -> Outcome {
     let kit_error = error.downcast_ref::<RoomKitError>();
     let classed = error.downcast_ref::<ClassedError>();
+    if let Some(result) = kit_error.and_then(RoomKitError::provider_result) {
+        return ChannelOutcome::ProviderDelivery(Box::new(result.clone())).into();
+    }
     let code = match kit_error {
-        Some(RoomKitError::ProviderDelivery { result }) => {
-            return ChannelOutcome::ProviderDelivery(Box::new(result.clone())).into();
-        }
         Some(kit_error) => kit_error.code().unwrap_or_else(|| kit_error.class_name()),
         None => classed
             .map_or("ChannelError", ClassedError::class)
