@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
+use crate::junit::{self, Case, Outcome};
 use crate::{harness, shape};
 
 /// The repository's copy of the suite.
@@ -37,10 +38,39 @@ fn scenario_id(root: &Path, path: &Path) -> String {
     relative.to_string_lossy().replace('\\', "/")
 }
 
-/// A runtime of one thread, which runs every task: the pass every store's
-/// runner makes.
-pub(crate) fn current_thread() -> tokio::runtime::Runtime {
+/// A pass over the scenarios: its name in the suite's output, the name of
+/// its runtime in the result file (`crate::junit`), and how that runtime is
+/// built.
+pub(crate) struct Pass {
+    pub(crate) name: &'static str,
+    pub(crate) runtime: &'static str,
+    pub(crate) build: fn() -> tokio::runtime::Runtime,
+}
+
+/// One thread, which runs every task: the pass every store's runner makes.
+pub(crate) const ONE_THREAD: Pass = Pass {
+    name: "one thread",
+    runtime: "current_thread",
+    build: current_thread,
+};
+
+/// Four workers, as a program on tokio's default multi-thread runtime runs.
+pub(crate) const FOUR_WORKERS: Pass = Pass {
+    name: "four workers",
+    runtime: "multi_thread_4",
+    build: four_workers,
+};
+
+fn current_thread() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+}
+
+fn four_workers() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
         .enable_all()
         .build()
         .unwrap()
@@ -97,69 +127,105 @@ fn problems(scenario: &Value, runtime: fn() -> tokio::runtime::Runtime) -> Vec<S
     })
 }
 
-/// Every scenario runs on a runtime `runtime` builds, the pass named
-/// `pass`; those this implementation fails there are exactly `known`, the
-/// known failures (roomkit-specs `conformance/README.md`, "Known
-/// failures").
-#[expect(
-    clippy::print_stdout,
-    reason = "the suite prints its known failures and its count, as a test does"
-)]
-pub(crate) fn every_scenario_gives_what_the_rfc_says(
-    pass: &str,
-    runtime: fn() -> tokio::runtime::Runtime,
-    known: &[(&str, &str)],
-    executor_pass: Option<ExecutorPass>,
-) {
-    let root = suite().join("scenarios");
+/// What a pass found: each selected scenario with its outcome, in path
+/// order, the ids of those failing, and what breaks the suite.
+#[derive(Default)]
+pub(crate) struct Run {
+    pub(crate) cases: Vec<Case>,
+    pub(crate) failing: Vec<String>,
+    pub(crate) report: Vec<String>,
+}
+
+/// Every scenario under `root` whose id contains `filter`, run on the
+/// runtime `pass` builds, against `known`, the known failures
+/// (roomkit-specs `conformance/README.md`, "Known failures").
+pub(crate) fn run(root: &Path, filter: Option<&str>, pass: &Pass, known: &[(&str, &str)]) -> Run {
     let mut paths = Vec::new();
-    scenarios(&root, &mut paths);
+    scenarios(root, &mut paths);
     assert!(!paths.is_empty(), "no scenario under {}", root.display());
-    let filter = std::env::var("ROOMKIT_CONFORMANCE_FILTER").ok();
-    let mut selected = 0;
-    let mut report = Vec::new();
-    let mut failing = Vec::new();
+    let mut run = Run::default();
     for path in &paths {
-        let id = scenario_id(&root, path);
-        if filter.as_ref().is_some_and(|needle| !id.contains(needle)) {
+        let id = scenario_id(root, path);
+        if filter.is_some_and(|needle| !id.contains(needle)) {
             continue;
         }
-        selected += 1;
         let scenario = load(path, &id);
-        let observed = executor_pass.and_then(|run| run(&scenario, runtime));
-        let problems = if let Some(observed) = observed {
-            observed
+        let observed = crate::EXECUTOR_PASS.and_then(|check| check(&scenario, pass.build));
+        let case = if let Some(problems) = observed {
+            judge(id, &problems, known, &mut run)
+        } else if reported_apart(&id, &mut run.failing) {
+            Case {
+                id,
+                outcome: Outcome::Skipped(NO_EXECUTOR_APART.to_owned()),
+            }
         } else {
-            if reported_apart(&id, &mut failing) {
-                continue;
-            }
-            problems(&scenario, runtime)
+            judge(id, &problems(&scenario, pass.build), known, &mut run)
         };
-        let listed = known.iter().find(|(listed, _)| *listed == id);
-        if !problems.is_empty() {
-            failing.push(id.clone());
-        }
-        match (problems.is_empty(), listed) {
-            // A failure that depends on the machine's speed may pass.
-            (true, Some((_, reason))) if reason.starts_with("timing:") => {}
-            (true, Some(_)) => {
-                report.push(format!("{id}: passes, but is listed as a known failure"));
-            }
-            (false, None) => report.push(format!("{id}:\n  {}", problems.join("\n  "))),
-            (false, Some(_)) => println!("known failure {id}:\n  {}", problems.join("\n  ")),
-            (true, None) => {}
-        }
+        run.cases.push(case);
     }
     for (listed, _) in known {
-        if !paths.iter().any(|path| scenario_id(&root, path) == *listed) {
-            report.push(format!("known failure {listed} names no scenario"));
+        if !paths.iter().any(|path| scenario_id(root, path) == *listed) {
+            run.report
+                .push(format!("known failure {listed} names no scenario"));
         }
     }
+    run
+}
+
+/// The scenario `id` run on `pass`, its failure noted in `run`, and what
+/// breaks the suite: an unexpected failure, or a known one that passes.
+#[expect(
+    clippy::print_stdout,
+    reason = "the suite prints its known failures, as a test does"
+)]
+fn judge(id: String, problems: &[String], known: &[(&str, &str)], run: &mut Run) -> Case {
+    let listed = known.iter().find(|(listed, _)| *listed == id);
+    if !problems.is_empty() {
+        run.failing.push(id.clone());
+    }
+    let outcome = match (problems.is_empty(), listed) {
+        (true, Some((_, reason))) if !reason.starts_with("timing:") => {
+            run.report
+                .push(format!("{id}: passes, but is listed as a known failure"));
+            Outcome::Passed
+        }
+        // A known failure that depends on the machine's speed may pass.
+        (true, _) => Outcome::Passed,
+        (false, None) => {
+            run.report
+                .push(format!("{id}:\n  {}", problems.join("\n  ")));
+            Outcome::Failed(problems.join("\n"))
+        }
+        (false, Some((_, reason))) => {
+            println!("known failure {id}:\n  {}", problems.join("\n  "));
+            Outcome::Failed(format!("known failure: {reason}\n{}", problems.join("\n")))
+        }
+    };
+    Case { id, outcome }
+}
+
+/// Every scenario of the repository's copy runs on `pass`; those this
+/// implementation fails there are exactly `known`, the known failures.
+/// When `ROOMKIT_CONFORMANCE_JUNIT` names a directory, the pass writes its
+/// result file there (`crate::junit`).
+#[expect(
+    clippy::print_stdout,
+    reason = "the suite prints its count, as a test does"
+)]
+pub(crate) fn every_scenario_gives_what_the_rfc_says(pass: &Pass, known: &[(&str, &str)]) {
+    let filter = std::env::var("ROOMKIT_CONFORMANCE_FILTER").ok();
+    let output = junit::claim(crate::BACKEND, pass.runtime);
+    let run = run(&suite().join("scenarios"), filter.as_deref(), pass, known);
+    if let Some(output) = &output {
+        junit::write(output, crate::BACKEND, pass.runtime, &run.cases);
+    }
     println!(
-        "{pass}: {} scenarios, {} failing: {failing:?}",
-        selected,
-        failing.len()
+        "{}: {} scenarios, {} failing: {:?}",
+        pass.name,
+        run.cases.len(),
+        run.failing.len(),
+        run.failing
     );
-    assert!(selected > 0, "no scenario matches {filter:?}");
-    assert!(report.is_empty(), "\n{}", report.join("\n"));
+    assert!(!run.cases.is_empty(), "no scenario matches {filter:?}");
+    assert!(run.report.is_empty(), "\n{}", run.report.join("\n"));
 }

@@ -45,6 +45,10 @@ mod host_verbs;
 mod identity;
 #[path = "../../../roomkit/tests/conformance/input_calls.rs"]
 mod input_calls;
+#[path = "../../../roomkit/tests/conformance/junit.rs"]
+mod junit;
+#[path = "../../../roomkit/tests/conformance/junit_tests.rs"]
+mod junit_tests;
 #[path = "../../../roomkit/tests/conformance/locks.rs"]
 mod locks;
 #[path = "../../../roomkit/tests/conformance/matching.rs"]
@@ -75,6 +79,9 @@ mod run;
 mod sandbox;
 #[path = "../../../roomkit/tests/conformance/scenarios.rs"]
 mod scenarios;
+
+const EXECUTOR_PASS: Option<scenarios::ExecutorPass> = None;
+
 #[path = "../../../roomkit/tests/conformance/scripted.rs"]
 mod scripted;
 #[path = "../../../roomkit/tests/conformance/shape.rs"]
@@ -122,6 +129,8 @@ pub(crate) const SCENARIO_BOUND: Duration = Duration::from_secs(60);
 pub(crate) type Kit = RoomKit<PostgresStore>;
 /// The store of the kit the runner builds.
 pub(crate) type Store = PostgresStore;
+/// The backend's name in the result file (`junit`).
+pub(crate) const BACKEND: &str = "postgres";
 
 /// Shared fixture checks have the same service requirement as scenarios.
 #[expect(
@@ -191,12 +200,7 @@ fn every_scenario_gives_what_the_rfc_says() {
     if !backend_available() {
         return;
     }
-    scenarios::every_scenario_gives_what_the_rfc_says(
-        "one thread",
-        scenarios::current_thread,
-        KNOWN_FAILURES,
-        None,
-    );
+    scenarios::every_scenario_gives_what_the_rfc_says(&scenarios::ONE_THREAD, KNOWN_FAILURES);
 }
 
 #[path = "../../../roomkit/tests/conformance/kit_executor.rs"]
