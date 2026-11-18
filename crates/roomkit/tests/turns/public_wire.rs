@@ -280,5 +280,5 @@ fn the_wire_error_constructor_preserves_the_absence_of_arguments() {
     let minimal: roomkit::turns::wire::ErrorRecord =
         serde_json::from_value(json!({"kind":"shop:Quota","message":"exceeded"})).unwrap();
     assert_eq!(record, minimal);
-    assert!(record.args.is_empty());
+    assert_eq!(record.args, Vec::<Value>::new());
 }
