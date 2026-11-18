@@ -3,7 +3,7 @@ use super::RedisTurnBackend;
 use super::routes::TurnRoute;
 use super::stream::Message;
 use crate::RoomKitError;
-use crate::turns::wire::ChannelControlEnvelope;
+use crate::turns::wire::{ChannelControl, ChannelControlEnvelope};
 use crate::turns::{CarriedRequest, WorkerTurn};
 
 impl RedisTurnBackend {
@@ -45,11 +45,17 @@ impl RedisTurnBackend {
         )
     }
 
-    fn accept_request(&self, msg: &Message, worker: super::Worker) -> Result<(), RoomKitError> {
+    fn accept_request(
+        &self,
+        msg: &Message,
+        worker: super::process::Recipient,
+    ) -> Result<(), RoomKitError> {
         let carried = CarriedRequest::from_wire(&msg.body).map_err(invalid)?;
-        let id = crate::turns::wire::validate_rest(&carried.rest)
-            .map_err(invalid)?
-            .turn_id;
+        let rest = crate::turns::wire::validate_rest(&carried.rest).map_err(invalid)?;
+        let Some(worker) = worker.for_channel(&rest.channel_id) else {
+            return self.answer(msg, "refused".into());
+        };
+        let id = rest.turn_id;
         let Some(route) = self.route_turn(&id, &msg.sender, true) else {
             return self.answer(msg, "refused".into());
         };
@@ -80,16 +86,30 @@ impl RedisTurnBackend {
         Ok(())
     }
 
-    fn accept_channel(&self, msg: &Message, worker: super::Worker) -> Result<(), RoomKitError> {
+    fn accept_channel(
+        &self,
+        msg: &Message,
+        worker: super::process::Recipient,
+    ) -> Result<(), RoomKitError> {
         let control: ChannelControlEnvelope = match serde_json::from_str(&msg.body) {
             Ok(control) => control,
             Err(error) => {
                 return self.channel_error(
                     msg,
                     &RoomKitError::Value(error.to_string()),
-                    Some(worker.executor_id().to_owned()),
+                    Some(msg.target.clone()),
                 );
             }
+        };
+        let channel = match &control.message {
+            ChannelControl::ChannelCall(call) => &call.channel_id,
+            ChannelControl::RoomAttached { channel_id, .. }
+            | ChannelControl::RoomDetached { channel_id, .. }
+            | ChannelControl::CommittedEvent { channel_id, .. }
+            | ChannelControl::ChannelReleased { channel_id } => channel_id,
+        };
+        let Some(worker) = worker.for_channel(channel) else {
+            return self.answer(msg, "refused".into());
         };
         let backend = self.clone();
         let message = msg.clone();

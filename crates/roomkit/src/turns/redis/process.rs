@@ -19,20 +19,43 @@ pub(super) struct Serving {
     closing: bool,
 }
 
+pub(super) struct Recipient {
+    served: Option<Worker>,
+    reserved: Option<Worker>,
+}
+
+impl Recipient {
+    pub(super) fn closed(&self) -> bool {
+        self.served.as_ref().is_none_or(|worker| worker.closed())
+            && self.reserved.as_ref().is_none_or(|worker| worker.closed())
+    }
+
+    pub(super) fn for_channel(self, channel: &crate::model::ChannelId) -> Option<Worker> {
+        self.reserved
+            .filter(|worker| worker.hosts_channel(channel))
+            .or(self.served)
+            .filter(|worker| !worker.closed())
+    }
+}
+
 impl RedisTurnBackend {
-    pub(super) fn receiving_worker(&self, id: &str, sender: &str) -> Option<Worker> {
+    pub(super) fn receiving_worker(&self, id: &str, sender: &str) -> Option<Recipient> {
         let loop_back = self.0.loop_back && sender == self.node_id();
-        if loop_back
-            && let Some(own) = self.0.owner_worker.get().and_then(|own| (own.look_up)())
-            && own.executor_id() == id
-        {
-            return Some(own);
-        }
-        lock(&self.0.serving)
+        let served = lock(&self.0.serving)
             .workers
             .iter()
             .find(|worker| worker.executor_id() == id && (loop_back || worker.hosted().is_some()))
-            .cloned()
+            .cloned();
+        let reserved = if loop_back {
+            self.0
+                .owner_worker
+                .get()
+                .and_then(|own| (own.look_up)())
+                .filter(|own| own.executor_id() == id)
+        } else {
+            None
+        };
+        (served.is_some() || reserved.is_some()).then_some(Recipient { served, reserved })
     }
 
     /// Advertise and serve this executor. A later registration can replace a closed executor.
@@ -253,17 +276,21 @@ impl RedisTurnBackend {
                 beat.undeclared.push(member);
             }
         }
+        beat.gone
+            .extend(scope.retiring.iter().map(|id| format!("{node}:{id}")));
         if self.0.loop_back
             && let Some(own) = self.0.owner_worker.get().and_then(|own| (own.look_up)())
             && !own.closed()
             && own.hosted().is_none()
         {
-            // The weakly held owner's executor also reports liveness without declaring channels.
-            beat.undeclared
-                .push(format!("{node}:{}", own.executor_id()));
+            let member = format!("{node}:{}", own.executor_id());
+            // The node's heartbeat is shared by any workers of the same id.
+            // Its owner keeps it alive, even after a replacement closes.
+            beat.gone.retain(|id| id != &member);
+            if !beat.declared.contains_key(&member) && !beat.undeclared.contains(&member) {
+                beat.undeclared.push(member);
+            }
         }
-        beat.gone
-            .extend(scope.retiring.iter().map(|id| format!("{node}:{id}")));
         beat
     }
 

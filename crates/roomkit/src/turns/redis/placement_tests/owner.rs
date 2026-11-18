@@ -38,6 +38,16 @@ impl Channel for Notices {
         ready(Ok(ChannelOutput::empty()))
     }
 
+    fn channel_call(
+        &self,
+        _: RoomId,
+        _: String,
+        _: crate::model::Metadata,
+    ) -> impl Future<Output = Result<serde_json::Value, ChannelError>> + Send {
+        self.0.lock().unwrap().push("called");
+        ready(Ok(serde_json::json!("owner")))
+    }
+
     fn on_room_attached(
         &self,
         _: RoomId,
@@ -119,4 +129,30 @@ async fn the_attended_executor_alone_receives_its_live_channels_work() {
     assert!(there.lock().unwrap().is_empty());
     node.close().await.unwrap();
     remote.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_looped_back_verb_stays_with_the_kit_after_its_executor_id_is_reused() {
+    let Some((node, _)) = super::nodes_with_loop_back(true) else {
+        return;
+    };
+    let (owner, notices) = kit();
+    let own: Arc<dyn ServedExecutor> = Arc::new(owner.turn_executor());
+    node.reserve_owner(&own);
+    node.serve_erased(Arc::clone(&own)).await.unwrap();
+    node.serve(super::collision::replacement(own.executor_id(), false))
+        .await
+        .unwrap();
+    let call =
+        crate::turns::ChannelCall::new("agent".parse().unwrap(), "room".parse().unwrap(), "who");
+    let result = node
+        .control_remote(&ChannelControl::ChannelCall(Box::new(call)))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(result.error.is_none());
+    assert_eq!(result.result, serde_json::json!("owner"));
+    assert_eq!(notices.lock().unwrap().as_slice(), ["called"]);
+    node.close().await.unwrap();
+    owner.close().await.unwrap();
 }

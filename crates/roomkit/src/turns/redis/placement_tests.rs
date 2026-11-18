@@ -135,7 +135,10 @@ async fn room_turn_on_local_node(loop_back: bool, own_channel: bool) {
         .unwrap();
     assert_eq!(inbox, loop_back, "only the looped-back turn uses the inbox");
     if own_channel {
-        assert!(peer.executors().await.unwrap().is_empty());
+        assert_eq!(
+            peer.executors().await.unwrap(),
+            Vec::<crate::turns::ExecutorInfo>::new()
+        );
     }
     peer.close().await.unwrap();
     kit.close().await.unwrap();
@@ -211,6 +214,7 @@ async fn assert_room_reply(kit: &RoomKit, room: &RoomId, tx: &ChannelId, agent: 
     assert!(matches!(&replies[0].content, EventContent::Text(text) if text.body == "in-process"));
 }
 
+mod collision;
 mod owner;
 
 #[tokio::test]
