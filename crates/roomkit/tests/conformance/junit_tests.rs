@@ -59,9 +59,15 @@ fn each_scenario_is_written_with_its_outcome(pass: &Pass) {
         reads_room("reads-its-room", "r1"),
         reads_room("reads-another-room", "r2"),
         reads_room("listed-as-failing", "r2"),
-        json!({"id": "executors/runs-apart"}),
+        json!({"id": "another-area/runs-apart", "setup": {"executors": []}}),
     ]);
-    let run = scenarios::run(&root, None, pass, &[("listed-as-failing", "§0: forced")]);
+    let run = scenarios::run(
+        &root,
+        None,
+        pass,
+        &[("listed-as-failing", "§0: forced")],
+        None,
+    );
     let file = root.with_extension("results").join("report.xml");
     let revision = Revision {
         commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
@@ -81,8 +87,8 @@ fn each_scenario_is_written_with_its_outcome(pass: &Pass) {
     assert_eq!(
         cases[0],
         format!(
-            r#"{}><skipped message="§10.6.7: an executor apart needs a public turn backend"/></testcase>"#,
-            case("executors/runs-apart")
+            r#"{}><skipped message="§10.6.7: this pass has no Redis turn executor"/></testcase>"#,
+            case("another-area/runs-apart")
         )
     );
     let known = format!(
@@ -107,6 +113,7 @@ fn each_scenario_is_written_with_its_outcome(pass: &Pass) {
         "{report}"
     );
     assert_eq!(run.report.len(), 1, "{:?}", run.report);
+    assert_eq!(run.failing, ["listed-as-failing", "reads-another-room"]);
 }
 
 #[test]
@@ -117,6 +124,24 @@ fn each_scenario_is_written_with_its_outcome_on_one_thread() {
 #[test]
 fn each_scenario_is_written_with_its_outcome_on_four_workers() {
     each_scenario_is_written_with_its_outcome(&FOUR_WORKERS);
+}
+
+/// A new scenario anywhere in the corpus uses the distributed fixture as
+/// soon as it declares executors, even when no workers are initially present.
+#[test]
+fn a_distributed_scenario_outside_executors_reports_its_observed_failure() {
+    let id = "another-area/new-distributed-case";
+    let root = suite_of(&[json!({"id": id, "setup": {"executors": []}})]);
+    let run = scenarios::run(
+        &root,
+        None,
+        &ONE_THREAD,
+        &[],
+        Some(|scenario, _| Some(vec![format!("unexpected operation in {}", scenario["id"])])),
+    );
+    std::fs::remove_dir_all(root).unwrap();
+    assert_eq!(run.failing, [id]);
+    assert!(run.report[0].contains("unexpected operation"));
 }
 
 #[test]

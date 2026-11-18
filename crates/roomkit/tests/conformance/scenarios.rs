@@ -76,33 +76,9 @@ fn four_workers() -> tokio::runtime::Runtime {
         .unwrap()
 }
 
-/// The area of the scenarios that need a turn executor beside the kit.
-const APART: &str = "executors/";
-
-/// The current pass has no fixture for this separately hosted executor.
-const NO_EXECUTOR_APART: &str =
-    "§10.6.7: this pass does not exercise this remote executor scenario";
+const NO_EXECUTOR: &str = "§10.6.7: this pass has no Redis turn executor";
 
 pub(crate) type ExecutorPass = fn(&Value, fn() -> tokio::runtime::Runtime) -> Option<Vec<String>>;
-
-/// Whether `id` is a scenario no runner here runs, reported as a known failure.
-#[expect(
-    clippy::print_stdout,
-    reason = "the suite prints its known failures, as a test does"
-)]
-fn reported_apart(id: &str, failing: &mut Vec<String>) -> bool {
-    // These scenarios also require a separately started executor (RFC
-    // §19.7.5, RMK-1626), which the runner cannot create yet. Remove these
-    // exact cases when the public executor and its runner are ported.
-    let apart = (id.starts_with(APART) && id != "executors/releasing-an-unknown-channel-fails")
-        || id == "discussion/an-offline-agent-s-turn-is-skipped-not-failed"
-        || id == "tenancy/a-deleted-room-s-turn-reaches-nothing-of-the-room-created-again";
-    if apart {
-        println!("known failure {id}:\n  {NO_EXECUTOR_APART}");
-        failing.push(id.to_owned());
-    }
-    apart
-}
 
 /// The scenario at `path`, which names `id`.
 fn load(path: &Path, id: &str) -> Value {
@@ -139,7 +115,13 @@ pub(crate) struct Run {
 /// Every scenario under `root` whose id contains `filter`, run on the
 /// runtime `pass` builds, against `known`, the known failures
 /// (roomkit-specs `conformance/README.md`, "Known failures").
-pub(crate) fn run(root: &Path, filter: Option<&str>, pass: &Pass, known: &[(&str, &str)]) -> Run {
+pub(crate) fn run(
+    root: &Path,
+    filter: Option<&str>,
+    pass: &Pass,
+    known: &[(&str, &str)],
+    executors: Option<ExecutorPass>,
+) -> Run {
     let mut paths = Vec::new();
     scenarios(root, &mut paths);
     assert!(!paths.is_empty(), "no scenario under {}", root.display());
@@ -150,13 +132,13 @@ pub(crate) fn run(root: &Path, filter: Option<&str>, pass: &Pass, known: &[(&str
             continue;
         }
         let scenario = load(path, &id);
-        let observed = crate::EXECUTOR_PASS.and_then(|check| check(&scenario, pass.build));
-        let case = if let Some(problems) = observed {
-            judge(id, &problems, known, &mut run)
-        } else if reported_apart(&id, &mut run.failing) {
-            Case {
-                id,
-                outcome: Outcome::Skipped(NO_EXECUTOR_APART.to_owned()),
+        let case = if scenario["setup"].get("executors").is_some() {
+            match executors.and_then(|check| check(&scenario, pass.build)) {
+                Some(problems) => judge(id, &problems, known, &mut run),
+                None => Case {
+                    id,
+                    outcome: Outcome::Skipped(NO_EXECUTOR.to_owned()),
+                },
             }
         } else {
             judge(id, &problems(&scenario, pass.build), known, &mut run)
@@ -215,12 +197,23 @@ fn judge(id: String, problems: &[String], known: &[(&str, &str)], run: &mut Run)
 pub(crate) fn every_scenario_gives_what_the_rfc_says(pass: &Pass, known: &[(&str, &str)]) {
     let filter = std::env::var("ROOMKIT_CONFORMANCE_FILTER").ok();
     let output = junit::claim(crate::BACKEND, pass.runtime);
-    let run = run(&suite().join("scenarios"), filter.as_deref(), pass, known);
+    let run = run(
+        &suite().join("scenarios"),
+        filter.as_deref(),
+        pass,
+        known,
+        crate::EXECUTOR_PASS,
+    );
     if let Some(output) = &output {
         junit::write(output, crate::BACKEND, pass.runtime, &run.cases);
     }
+    let skipped = run
+        .cases
+        .iter()
+        .filter(|case| matches!(case.outcome, Outcome::Skipped(_)))
+        .count();
     println!(
-        "{}: {} scenarios, {} failing: {:?}",
+        "{}: {} scenarios, {skipped} skipped, {} failing: {:?}",
         pass.name,
         run.cases.len(),
         run.failing.len(),

@@ -17,67 +17,10 @@ use serde_json::Value;
 use crate::identity::RunSlot;
 use channel::WorkerChannel;
 
-const SUPPORTED: &[&str] = &[
-    "discussion/an-offline-agent-s-turn-is-skipped-not-failed",
-    "executors/after-a-lost-executor-the-room-s-next-turn-runs-elsewhere",
-    "executors/an-executor-closed-during-a-turn-ends-it",
-    "executors/an-executor-that-never-answers-loses-the-turn-and-no-other-gets-it",
-    "executors/an-executor-killed-mid-answer-loses-its-turn-and-what-was-shown-stays",
-    "executors/a-channel-call-no-executor-takes-fails-no-executor",
-    "executors/a-channel-call-runs-on-the-executor-holding-the-room",
-    "executors/a-declared-agent-s-turn-runs-on-the-executor-hosting-it",
-    "executors/a-delegation-to-a-declared-worker-runs-on-its-executor",
-    "executors/a-detach-forgets-what-the-room-kept-for-a-channel",
-    "executors/a-hook-on-an-executor-reads-the-room-when-it-fires",
-    "executors/a-later-turn-on-another-executor-replays-the-instruction-it-read",
-    "executors/a-live-agent-s-turn-stays-on-the-kit-s-executor",
-    "executors/a-provider-the-factory-hands-every-build-outlives-a-build-let-go",
-    "executors/a-publication-from-an-executor-no-longer-holding-the-room-is-dropped",
-    "executors/a-released-channel-is-built-anew-for-the-next-turn",
-    "executors/a-room-s-agent-presence-names-the-executors-covering-each-agent",
-    "executors/a-room-s-turns-stay-on-the-executor-holding-its-state",
-    "executors/a-room-whose-executor-builds-nothing-for-its-agent-stays-on-it",
-    "executors/a-room-whose-executor-closed-moves-to-another",
-    "executors/a-skill-activated-on-one-executor-rides-the-next-turn-on-another",
-    "executors/a-turn-apart-asks-a-person-through-the-room-owner",
-    "executors/a-turn-apart-calls-a-tool-the-room-owner-serves",
-    "executors/a-turn-apart-calls-the-host-verbs-during-and-after-it",
-    "executors/a-turn-apart-emits-its-framework-events",
-    "executors/a-turn-apart-publishes-its-thinking-and-tool-calls-to-the-room",
-    "executors/a-turn-cut-on-its-executor-names-it-in-its-record",
-    "executors/a-turn-no-executor-declares-fails-and-the-room-goes-on",
-    "executors/a-turn-running-on-a-released-channel-ends-on-it",
-    "executors/a-turn-s-record-names-the-executor-that-ran-it-apart",
-    "executors/a-verb-the-channel-lacks-fails",
-    "executors/an-agent-its-executor-builds-nothing-for-fails-no-executor",
-    "executors/an-executor-builds-an-agent-at-its-first-turn-not-when-a-room-attaches-it",
-    "executors/an-executor-declaring-every-agent-takes-the-turns-of-agents-it-was-never-named",
-    "executors/an-executor-drops-the-state-a-turn-elsewhere-made-stale",
-    "executors/an-executor-lacking-a-room-s-hook-does-not-cover-its-agent-there",
-    "executors/an-executor-lacking-a-room-s-hook-does-not-take-its-turn",
-    "executors/an-executor-past-its-bound-closes-the-agent-it-used-least-recently",
-    "executors/an-executor-serving-every-organization-takes-every-room-s-turns",
-    "executors/an-executor-takes-the-turns-of-the-organizations-it-serves-alone",
-    "executors/another-executor-replays-the-tool-calls-of-the-first",
-    "executors/attach-and-detach-reach-every-executor-declaring-the-channel",
-    "executors/executors-declaring-prefixes-take-only-the-agents-under-them",
-    "executors/one-build-serving-two-rooms-reads-each-turn-s-room-alone",
-    "executors/the-kit-lists-the-executors-served-and-what-each-declares",
-    "executors/what-the-room-keeps-for-a-channel-reaches-the-next-executor",
-    "executors/work-a-turn-apart-began-publishes-to-its-room-after-it",
-    "tenancy/a-deleted-room-s-turn-reaches-nothing-of-the-room-created-again",
-];
-
 pub(super) fn run(
     scenario: &Value,
     runtime: fn() -> tokio::runtime::Runtime,
 ) -> Option<Vec<String>> {
-    if !scenario["id"]
-        .as_str()
-        .is_some_and(|id| SUPPORTED.contains(&id) || topology::is_presence(id))
-    {
-        return None;
-    }
     let url = std::env::var("REDIS_URL").ok()?;
     let unknown = crate::shape::unknown_members(scenario);
     if !unknown.is_empty() {
