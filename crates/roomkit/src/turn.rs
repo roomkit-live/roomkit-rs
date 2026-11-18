@@ -1108,7 +1108,7 @@ impl ToolCallChain {
         &mut self,
         hooks: &[(HookSpec, Arc<dyn HookHandler<ToolCallEvent>>)],
         context: &RoomContext,
-        timeout: impl Fn(&HookSpec, &HookOutcome<ToolCallEvent>),
+        mut timeout: impl FnMut(&HookSpec, &HookOutcome<ToolCallEvent>),
     ) -> Option<String> {
         for (spec, handler) in hooks
             .iter()

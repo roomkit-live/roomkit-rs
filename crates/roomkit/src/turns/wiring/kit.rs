@@ -13,13 +13,18 @@ impl<S: ConversationStore> WiringEnv for KitWiringEnv<S> {
     fn context<'a>(
         &'a self,
         room: &'a RoomId,
-        _carrying: Option<&'a RoomContext>,
+        carrying: Option<&'a RoomContext>,
     ) -> TurnFuture<'a, Result<RoomContext, RoomKitError>> {
         Box::pin(async move {
             let kit = self.0.upgrade().ok_or(RoomKitError::KitClosed)?;
-            crate::driver::load_context(&*kit.store, room, kit.config().recent_events())
-                .await?
-                .ok_or_else(|| RoomKitError::RoomNotFound(room.clone()))
+            crate::driver::load_context_carrying(
+                &*kit.store,
+                room,
+                kit.config().recent_events(),
+                carrying,
+            )
+            .await?
+            .ok_or_else(|| RoomKitError::RoomNotFound(room.clone()))
         })
     }
     fn tool_rows<'a>(

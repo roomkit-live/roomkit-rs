@@ -1,17 +1,17 @@
 //! The four callbacks a text channel obtains from its executor (RFC §9.3).
 
 mod verdict;
-use super::{ExternalToolDecision, Notification, external_decision, note_report};
+use super::{ExternalToolDecision, Notification, note_report};
 use crate::model::ChannelId;
 use crate::turns::{EmitOptions, TurnFuture, TurnWiring};
-use crate::{HookExecution, HookTrigger, RoomKitError, ToolCallEvent, ToolCallVerdict};
+use crate::{HookExecution, RoomKitError, ToolCallEvent, ToolCallVerdict};
 use std::sync::Arc;
 
 type Claim = Arc<dyn Fn() -> bool + Send + Sync>;
 
 /// The gate, verdict and observer callbacks of the executor that wired a channel.
 #[derive(Clone, Debug)]
-pub struct ToolHooks(TurnWiring);
+pub struct ToolHooks(pub(super) TurnWiring);
 
 impl TurnWiring {
     /// The tool-call callbacks a channel can bind to its own identifier.
@@ -33,25 +33,11 @@ impl ToolHooks {
         move |event| {
             let binding = binding.clone();
             Box::pin(async move {
-                let Some(n) = binding
-                    .notification(&event, HookTrigger::BeforeToolUse)
-                    .await
-                else {
-                    return Ok(ExternalToolDecision::default());
-                };
-                if n.unreachable() {
-                    return Ok(ExternalToolDecision {
-                        allowed: false,
-                        ..Default::default()
-                    });
-                }
-                let chain = n.gate(event.clone()).await;
-                if chain.ended.is_none() {
-                    n.observe(&chain.current);
-                }
-                n.emit_result("before_tool_use", Notification::before_data(&event, &chain))
+                let (decision, _) = binding
+                    .tools
+                    .decide_before_tool_use(&event, &binding.channel, None)
                     .await?;
-                Ok(external_decision(chain, &event.arguments))
+                Ok(decision)
             })
         }
     }
@@ -72,10 +58,10 @@ impl ToolHooks {
         move |event, claim| {
             let binding = binding.clone();
             Box::pin(async move {
-                let Some(n) = binding.notification(&event, HookTrigger::OnToolCall).await else {
-                    return Ok(None);
-                };
-                n.judge(event, claim.as_deref()).await
+                binding
+                    .tools
+                    .judge_tool_call(event, &binding.channel, None, claim.as_deref())
+                    .await
             })
         }
     }
@@ -102,36 +88,15 @@ impl ToolHooks {
 
 #[derive(Clone)]
 struct Bound {
-    wiring: TurnWiring,
+    tools: ToolHooks,
     channel: ChannelId,
 }
 impl Bound {
     fn new(tools: &ToolHooks, channel: &ChannelId) -> Self {
         Self {
-            wiring: tools.0.clone(),
+            tools: tools.clone(),
             channel: channel.clone(),
         }
-    }
-
-    async fn notification(
-        &self,
-        event: &ToolCallEvent,
-        trigger: HookTrigger,
-    ) -> Option<Notification> {
-        let room = event.room_id.clone()?;
-        let kit = Arc::clone(&self.wiring.kit);
-        let hooks = kit.tool_hooks(trigger, (&room, &event.channel_id), &event.channel_type);
-        Some(
-            Notification::with_hooks(
-                kit,
-                self.wiring.clone(),
-                room,
-                self.channel.clone(),
-                trigger,
-                hooks,
-            )
-            .await,
-        )
     }
 
     fn reporter(
@@ -144,35 +109,38 @@ impl Bound {
                 let claim = crate::current_tool_call_scope().and_then(|scope| {
                     scope.report_claim(&event.tool_call_id, binding.channel.as_str())
                 });
-                let Some(n) = binding.notification(&event, HookTrigger::OnToolCall).await else {
-                    return Ok(());
-                };
-                if n.unreachable() && event.result.is_none() {
-                    return Ok(());
-                }
-                if external {
-                    if !event.cancelled && !event.refused {
-                        n.report_chain(&event).await;
+                let claim = || {
+                    if external {
+                        note_report(&event.tool_call_id);
                     }
-                    note_report(&event.tool_call_id);
+                    claim
+                        .as_ref()
+                        .map_or_else(crate::external_tools::claim_external_report, |right| {
+                            right()
+                        })
+                };
+                if external {
+                    binding
+                        .tools
+                        .report_tool_call(&event, &binding.channel, Some(&claim))
+                        .await
+                } else {
+                    binding
+                        .tools
+                        .observe_failed_tool_call(&event, &binding.channel, Some(&claim))
+                        .await
                 }
-                if claim.map_or_else(crate::external_tools::claim_external_report, |right| {
-                    right()
-                }) {
-                    n.tell(&event).await?;
-                }
-                Ok(())
             })
         }
     }
 }
 
 impl Notification {
-    fn unreachable(&self) -> bool {
+    pub(super) fn unreachable(&self) -> bool {
         !self.hooks.is_empty() && self.context.is_none()
     }
 
-    async fn emit_result(
+    pub(super) async fn emit_result(
         &self,
         kind: &str,
         data: crate::model::Metadata,
@@ -191,12 +159,12 @@ impl Notification {
     }
 
     async fn tell(&self, event: &ToolCallEvent) -> Result<(), RoomKitError> {
-        self.observe(event);
-        self.emit_result("tool_call", Self::completed_data(event))
+        ToolHooks(self.wiring.clone())
+            .tell_tool_call(event, self.context.as_ref(), &self.channel)
             .await
     }
 
-    async fn judge(
+    pub(super) async fn judge(
         self,
         event: ToolCallEvent,
         claim: Option<&(dyn Fn() -> bool + Send + Sync)>,

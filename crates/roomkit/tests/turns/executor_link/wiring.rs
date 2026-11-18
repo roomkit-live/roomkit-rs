@@ -5,6 +5,7 @@ mod public_ports;
 mod text_callbacks;
 mod text_loaders;
 mod tool_callbacks;
+mod tool_methods;
 
 mod observed;
 use super::{Link, link};

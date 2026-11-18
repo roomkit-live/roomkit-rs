@@ -326,6 +326,17 @@ pub(crate) async fn load_context<S: ConversationStore>(
     room_id: &RoomId,
     recent_events: RecentEvents,
 ) -> Result<Option<RoomContext>, StoreError> {
+    load_context_carrying(store, room_id, recent_events, None).await
+}
+
+/// Refresh the room and members, reusing the history of the same snapshot when
+/// it covers the current window (RFC §10.1).
+pub(crate) async fn load_context_carrying<S: ConversationStore>(
+    store: &S,
+    room_id: &RoomId,
+    recent_events: RecentEvents,
+    carrying: Option<&RoomContext>,
+) -> Result<Option<RoomContext>, StoreError> {
     let (room, bindings, participants) = store.load_room_context(room_id).await?;
     let Some(room) = room else {
         return Ok(None);
@@ -334,6 +345,18 @@ pub(crate) async fn load_context<S: ConversationStore>(
     let limit = recent_events.limit(&bindings);
     let (recent_events, history_start_index) = if limit == 0 {
         (Vec::new(), None)
+    } else if let Some(carried) = carrying.filter(|ctx| {
+        ctx.room.id == room.id
+            && ctx.room.created_at == room.created_at
+            && ctx.room.organization_id == room.organization_id
+            && ctx.room.event_count == room.event_count
+            && limit <= recent_events.limit(&ctx.bindings)
+    }) {
+        crate::history::window::bounded_from(
+            carried.recent_events.clone(),
+            limit,
+            carried.history_start_index,
+        )
     } else {
         let options = GetConversationOptions {
             limit: u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1),

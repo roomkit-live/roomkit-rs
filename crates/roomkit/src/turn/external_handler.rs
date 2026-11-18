@@ -2,6 +2,7 @@
 
 mod callbacks;
 mod ordinary;
+mod tool_methods;
 pub use callbacks::ToolHooks;
 
 use super::{
@@ -90,30 +91,26 @@ impl Notification {
         trigger: HookTrigger,
     ) -> Self {
         let hooks = kit.tool_hooks(trigger, (&room, &channel), &ChannelType::AI);
-        Self::with_hooks(kit, wiring, room, channel, trigger, hooks).await
-    }
-
-    async fn with_hooks(
-        kit: Arc<dyn TurnKit>,
-        wiring: crate::turns::TurnWiring,
-        room: RoomId,
-        channel: ChannelId,
-        trigger: HookTrigger,
-        hooks: Registered,
-    ) -> Self {
-        let context = if hooks.is_empty() {
-            None
-        } else {
-            wiring.hook_context(&room, trigger, None).await
-        };
         Self {
             wiring,
             kit,
             room,
             channel,
             hooks,
-            context,
+            context: None,
         }
+        .resolve(trigger, None)
+        .await
+    }
+
+    async fn resolve(mut self, trigger: HookTrigger, carrying: Option<&RoomContext>) -> Self {
+        if !self.hooks.is_empty() {
+            self.context = self
+                .wiring
+                .hook_context(&self.room, trigger, carrying)
+                .await;
+        }
+        self
     }
 
     async fn before(&self, call: ToolCall) -> ExternalToolDecision {
