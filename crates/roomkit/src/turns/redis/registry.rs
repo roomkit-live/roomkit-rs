@@ -63,7 +63,7 @@ pub(super) async fn executors(
     let node = backend.node_id();
     let mut rows: Vec<_> = crate::turns::lock(&backend.0.serving)
         .workers
-        .values()
+        .iter()
         .filter(|worker| !worker.closed())
         .map(|worker| local_info(worker, node))
         .collect();
