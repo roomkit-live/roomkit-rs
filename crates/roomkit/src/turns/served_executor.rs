@@ -9,6 +9,8 @@ use crate::{ConversationStore, RoomKitError, TurnExecutor};
 
 #[cfg(feature = "redis")]
 mod native;
+mod owner;
+pub(crate) use owner::owner_executor;
 
 mod private {
     pub(crate) trait Sealed {

@@ -30,6 +30,7 @@
 
 mod served_executor;
 pub use served_executor::ServedExecutor;
+pub(crate) use served_executor::owner_executor;
 mod public_options;
 pub use public_options::{HookOptions, RoomHookOptions, TakesOptions};
 #[cfg(feature = "redis")]
