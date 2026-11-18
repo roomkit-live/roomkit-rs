@@ -152,6 +152,12 @@ async fn local_executor_queries_follow_registration_and_close() {
     assert_eq!(executor.organizations(), BTreeSet::from(["*".to_owned()]));
     assert!(executor.serves(None) && executor.serves(Some("acme")));
     assert!(!executor.declares(&agent));
+    let declared = ChannelId::new("declared").unwrap();
+    kit.register_channel(roomkit::ChannelDeclaration::new(declared.clone()))
+        .unwrap();
+    assert!(!executor.hosts_channel(&declared));
+    assert!(!executor.declares(&declared));
+    assert!(!executor.takes(&declared, TakesOptions::default()));
     kit.register_channel(RecordingTransport::new(
         agent.clone(),
         ChannelType::SMS,

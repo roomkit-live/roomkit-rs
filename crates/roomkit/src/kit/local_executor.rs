@@ -151,7 +151,12 @@ impl<S: ConversationStore> TurnExecutor<S> {
     /// Whether it hosts this channel, even after closing.
     pub fn hosts_channel(&self, channel_id: &ChannelId) -> bool {
         self.standalone.as_ref().map_or_else(
-            || self.kit.inner.channel(channel_id).is_some(),
+            || {
+                self.kit
+                    .inner
+                    .channel(channel_id)
+                    .is_some_and(|channel| !channel.is_declaration_only())
+            },
             |worker| worker.hosts(channel_id),
         )
     }
