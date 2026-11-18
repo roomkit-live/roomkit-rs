@@ -41,32 +41,38 @@ async def check_turn(owner: list[str], executor: list[str]) -> None:
 async def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rust-peer", type=Path)
-    parser.add_argument(
+    selector = parser.add_mutually_exclusive_group()
+    selector.add_argument(
         "--pair",
         choices=("python-python", "rust-python", "python-rust", "rust-rust"),
         help="select one owner-executor pair for a targeted run",
     )
-    parser.add_argument(
+    selector.add_argument(
         "--history-only",
         action="store_true",
         help="run the two-turn replay on a new Python executor",
     )
+    selector.add_argument(
+        "--liveness-only",
+        action="store_true",
+        help="run the three Redis process-liveness cases",
+    )
     args = parser.parse_args()
-    if args.history_only and args.pair:
-        parser.error("--history-only and --pair select different tests")
+    if args.liveness_only and not args.rust_peer:
+        parser.error("--liveness-only requires --rust-peer")
     peers = {"python": [sys.executable, str(PYTHON_PEER)]}
     if args.rust_peer:
         peers["rust"] = [str(args.rust_peer.resolve(strict=True))]
     if args.pair and "rust" in args.pair and "rust" not in peers:
         parser.error("a Rust pair requires --rust-peer")
-    if not args.history_only:
+    if not args.history_only and not args.liveness_only:
         for owner, owner_command in peers.items():
             for executor, executor_command in peers.items():
                 if args.pair and args.pair != f"{owner}-{executor}":
                     continue
                 await check_turn(owner_command, executor_command)
                 print(f"passed: {owner} owner, {executor} executor", flush=True)
-    if not args.pair:
+    if not args.pair and not args.liveness_only:
         from redis_history import check_history
 
         for owner, owner_command in peers.items():
@@ -75,6 +81,12 @@ async def main() -> None:
                 f"passed: {owner} owner, tool result replayed by a new Python executor",
                 flush=True,
             )
+    if args.rust_peer and not args.pair and not args.history_only:
+        from redis_liveness import check_liveness
+
+        for case in ("stall", "dead", "absent"):
+            await check_liveness(args.rust_peer.resolve(strict=True), case)
+            print(f"passed: Rust owner with Python worker ({case})", flush=True)
 
 
 if __name__ == "__main__":

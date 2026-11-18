@@ -2,6 +2,7 @@
 //! Set `REDIS_URL` and `ROOMKIT_PYTHON` (the reference checkout's interpreter with the Redis extra).
 
 mod history;
+mod liveness;
 
 use std::collections::BTreeSet;
 use std::env;
@@ -190,10 +191,10 @@ async fn peer(role: &str) -> TestResult {
         turn_backend: Some(backend),
         ..RoomKitOptions::default()
     });
-    let observations = if role == "history-owner" {
-        history::replay(&kit).await
-    } else {
-        observe(&kit).await
+    let observations = match role {
+        "history-owner" => history::replay(&kit).await,
+        "liveness-owner" => liveness::observe(&kit).await,
+        _ => observe(&kit).await,
     };
     kit.close().await?;
     writeln!(io::stdout(), "{}", observations?)?;
@@ -202,7 +203,7 @@ async fn peer(role: &str) -> TestResult {
 
 fn main() -> TestResult {
     match env::args().nth(1).as_deref() {
-        Some(role @ ("owner" | "executor" | "history-owner")) => {
+        Some(role @ ("owner" | "executor" | "history-owner" | "liveness-owner")) => {
             tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
                 .enable_all()
