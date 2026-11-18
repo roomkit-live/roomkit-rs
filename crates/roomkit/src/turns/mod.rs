@@ -31,7 +31,7 @@
 mod public_options;
 pub use public_options::{HookOptions, RoomHookOptions, TakesOptions};
 #[cfg(feature = "redis")]
-mod redis;
+pub(crate) mod redis;
 #[cfg(feature = "redis")]
 pub use redis::{RedisTurnBackend, RedisTurnBackendOptions};
 mod presence;

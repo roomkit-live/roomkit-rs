@@ -52,7 +52,7 @@ mod report_claim;
 mod room_context;
 use report_claim::{ReportClaim, RunningCall};
 mod publication_scope;
-mod publish;
+pub(crate) mod publish;
 
 pub(crate) use self::inputs::InputNotification;
 pub use self::loop_hooks::TurnChain;
@@ -671,6 +671,19 @@ impl TurnHost {
     /// while each runs, whether the turn's work emits it during the turn or
     /// after it (RFC §8.3).
     fn emit(&self, event_type: &str, data: Metadata) {
+        #[cfg(feature = "redis")]
+        if self.shared.link.has_remote_owner() {
+            self.shared
+                .link
+                .publish_remote(crate::turns::wire::Frame::FrameworkEvent {
+                    event_type: event_type.to_owned(),
+                    room_id: Some(self.shared.room_id.to_string()),
+                    channel_id: Some(self.shared.channel_id.to_string()),
+                    event_id: None,
+                    data,
+                });
+            return;
+        }
         let ids = (
             Some(self.shared.room_id.clone()),
             Some(self.shared.channel_id.clone()),

@@ -26,6 +26,7 @@ impl WorkerTurn {
         executor_id: String,
         request: TurnRequest,
         build: Build,
+        #[cfg(feature = "redis")] owner: Option<crate::turns::redis::PeerOwner>,
     ) -> Result<Self, RoomKitError> {
         let id: Arc<str> = Arc::from(request.turn_id.as_str());
         let running = turns
@@ -38,13 +39,16 @@ impl WorkerTurn {
         let observers = turns.observers();
         let (frames, received) = pipe(Arc::clone(&id), Carried::Frame, observers.clone());
         let (controls, incoming) = pipe(Arc::clone(&id), Carried::Control, observers);
-        let memory = Arc::new(MemoryTurn::with_context(
+        let memory = MemoryTurn::with_context(
             id,
             frames,
             controls,
             turns.timeouts(),
             TurnContext::default(),
-        ));
+        );
+        #[cfg(feature = "redis")]
+        let memory = MemoryTurn { owner, ..memory };
+        let memory = Arc::new(memory);
         let executor = Executor {
             running,
             stale: false,

@@ -14,6 +14,7 @@ use crate::turns::lock;
 
 #[derive(Default)]
 pub(super) struct Routes {
+    pub(super) turn_owners: VecDeque<Arc<str>>,
     answers: HashMap<String, (String, oneshot::Sender<String>)>,
     turns: HashMap<String, TurnEndpoint>,
     handled: HashMap<(String, String), Option<String>>,
@@ -141,7 +142,7 @@ impl RedisTurnBackend {
         }
     }
 
-    async fn exchange(
+    pub(super) async fn exchange(
         &self,
         peer: &str,
         kind: &str,

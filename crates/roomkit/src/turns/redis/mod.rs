@@ -1,4 +1,6 @@
 //! Redis Streams transport for text turns between processes (RFC §10.6).
+mod after_turn;
+pub(crate) use after_turn::PeerOwner;
 mod control;
 mod dispatch;
 mod outbox;

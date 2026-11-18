@@ -21,6 +21,7 @@ pub(super) struct Declaration {
 #[derive(Deserialize)]
 struct View {
     now: i64,
+    owners: Value,
     executors: Value,
 }
 
@@ -60,6 +61,25 @@ pub(super) async fn executors(
 ) -> Result<Vec<ExecutorInfo>, RoomKitError> {
     let timeout =
         i64::try_from(backend.timeouts().heartbeat_timeout.as_millis()).unwrap_or(i64::MAX);
+    Ok(view(backend, timeout).await?.declared(timeout))
+}
+
+/// Check against Redis server time, the same clock that wrote the owner heartbeat.
+pub(super) async fn owner_alive(
+    backend: &RedisTurnBackend,
+    peer: &str,
+) -> Result<bool, RoomKitError> {
+    let timeout =
+        i64::try_from(backend.timeouts().heartbeat_timeout.as_millis()).unwrap_or(i64::MAX);
+    let current = view(backend, timeout).await?;
+    Ok(current
+        .owners
+        .get(peer)
+        .and_then(Value::as_i64)
+        .is_some_and(|beat| current.now.saturating_sub(beat) < timeout))
+}
+
+async fn view(backend: &RedisTurnBackend, timeout: i64) -> Result<View, RoomKitError> {
     let mut connection = backend.connection().await?;
     let body: String = redis::cmd("EVAL")
         .arg(include_str!("view.lua"))
@@ -71,9 +91,7 @@ pub(super) async fn executors(
         .query_async(&mut connection)
         .await
         .map_err(|error| redis_error(&error))?;
-    let view: View =
-        serde_json::from_str(&body).map_err(|e| RoomKitError::Runtime(e.to_string()))?;
-    Ok(view.declared(timeout))
+    serde_json::from_str(&body).map_err(|e| RoomKitError::Runtime(e.to_string()))
 }
 
 /// The Python and Rust workers publish the same heartbeat, including the node's

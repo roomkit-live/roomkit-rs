@@ -20,7 +20,7 @@ use crate::realtime::{EphemeralEvent, EphemeralEventType};
 
 /// What a turn queued to publish, and whether a task is draining it.
 #[derive(Debug, Default)]
-pub(super) struct Publisher {
+pub(crate) struct Publisher {
     state: Mutex<Queued>,
     /// Whether the turn's reader commits it as a delegated task's trace, once
     /// the kit's executor runs the turn; none outside a turn.
@@ -113,22 +113,57 @@ impl TurnHost {
     #[doc(hidden)]
     pub fn publish_ephemeral(&self, event: EphemeralEvent) {
         let publisher = &self.shared.publisher;
+        #[cfg(feature = "redis")]
+        if self.shared.link.has_remote_owner() {
+            // Only the owner knows whether its reader is tracing this turn.
+            // An ended turn can never carry answer text.
+            if self.answer_unscoped
+                && (event.r#type != EphemeralEventType::TextDelta || self.shared.link.is_open())
+            {
+                self.shared
+                    .link
+                    .publish_remote(crate::turns::wire::Frame::Ephemeral {
+                        channel: format!("room:{}", self.shared.room_id),
+                        event: serde_json::Value::Object(event.to_dict()),
+                    });
+            }
+            return;
+        }
         if !publisher.may_publish(&event) {
             tracing::debug!(target: "roomkit::turns", room_id = %self.shared.room_id, "no trace running: an answer's text is not published");
             return;
         }
-        if !publisher.add(event) {
+        publisher.enqueue(
+            &self.shared.kit,
+            &self.shared.room_id,
+            &self.shared.channel_id,
+            self.shared.context.room.created_at,
+            event,
+        );
+    }
+}
+
+impl Publisher {
+    pub(crate) fn enqueue(
+        self: &Arc<Self>,
+        kit: &Arc<dyn TurnKit>,
+        room: &RoomId,
+        channel: &ChannelId,
+        mark: Timestamp,
+        event: EphemeralEvent,
+    ) {
+        if !self.add(event) {
             return;
         }
         let drain = drain(
-            Arc::clone(publisher),
-            Arc::clone(&self.shared.kit),
-            (self.shared.room_id.clone(), self.shared.channel_id.clone()),
-            self.shared.context.room.created_at,
+            Arc::clone(self),
+            Arc::clone(kit),
+            (room.clone(), channel.clone()),
+            mark,
         );
-        if !self.shared.kit.spawn_publisher(Box::pin(drain)) {
+        if !kit.spawn_publisher(Box::pin(drain)) {
             tracing::debug!(target: "roomkit::turns", "the kit is shut down: a turn publishes nothing");
-            publisher.stop();
+            self.stop();
         }
     }
 }

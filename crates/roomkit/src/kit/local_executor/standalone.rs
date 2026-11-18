@@ -190,7 +190,20 @@ impl<S: ConversationStore> TurnExecutor<S> {
         channel.ok_or_else(|| executor::missing(&id, self.executor_id()))
     }
 
+    #[cfg(test)]
     pub(crate) fn take(&self, carried: CarriedRequest) -> Result<WorkerTurn, RoomKitError> {
+        self.take_from(
+            carried,
+            #[cfg(feature = "redis")]
+            None,
+        )
+    }
+
+    pub(crate) fn take_from(
+        &self,
+        carried: CarriedRequest,
+        #[cfg(feature = "redis")] owner: Option<crate::turns::redis::PeerOwner>,
+    ) -> Result<WorkerTurn, RoomKitError> {
         let request = executor::parse(carried).map_err(|why| RoomKitError::TurnLink {
             reason: "frame_invalid".into(),
             message: Some(why),
@@ -229,6 +242,8 @@ impl<S: ConversationStore> TurnExecutor<S> {
             self.executor_id().to_owned(),
             request,
             build,
+            #[cfg(feature = "redis")]
+            owner,
         )
     }
 }

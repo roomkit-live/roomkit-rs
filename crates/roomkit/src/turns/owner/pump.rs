@@ -123,6 +123,7 @@ pub(super) struct Pump {
     calls: HashMap<String, RunningCall>,
     /// Withdrawn calls still unwinding; their inline work remains the turn's.
     withdrawn: Vec<RunningCall>,
+    publisher: Arc<crate::turn::publish::Publisher>,
     accepted: bool,
     /// The items received, deltas counted: never more than granted.
     received: u64,
@@ -144,6 +145,7 @@ impl Pump {
             turns,
             calls: HashMap::new(),
             withdrawn: Vec::new(),
+            publisher: Arc::default(),
             accepted: false,
             received: 0,
         }
@@ -284,9 +286,27 @@ impl Pump {
                 let turn = self.input_turn();
                 self.turns.inputs.taken(&turn, &request_id, taken);
             }
-            // The ephemerals no owner of 0.1 publishes.
-            Frame::Ephemeral { .. } => {
-                tracing::trace!(target: "roomkit::turns", turn = %self.state.turn.turn_id, "a frame left unread");
+            Frame::Ephemeral {
+                channel: topic,
+                event,
+            } => {
+                let facts = &self.state.facts;
+                if let Some(event) = crate::turns::outside::ephemeral(
+                    &facts.room_id,
+                    &facts.channel_id,
+                    facts.answer_unscoped,
+                    self.state.turn.traced.load(Ordering::Acquire),
+                    &topic,
+                    event,
+                ) {
+                    self.publisher.enqueue(
+                        &self.kit,
+                        &facts.room_id,
+                        &facts.channel_id,
+                        facts.room.created_at,
+                        event,
+                    );
+                }
             }
         }
         None

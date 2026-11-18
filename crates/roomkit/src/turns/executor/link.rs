@@ -514,7 +514,40 @@ impl HostLink {
             verb: verb.to_owned(),
             arguments,
         };
+        #[cfg(feature = "redis")]
+        if let Some(peer) = &self.sender.turn.owner {
+            return peer.call(message).await;
+        }
         turns.room_call(Arc::clone(&self.kit), message).await
+    }
+
+    #[cfg(feature = "redis")]
+    pub(crate) fn has_remote_owner(&self) -> bool {
+        self.sender.turn.owner.is_some()
+    }
+
+    /// Decide under the same lock that ends the turn whether this is a frame on
+    /// its running link or a publication for the owner between turns.
+    #[cfg(feature = "redis")]
+    pub(crate) fn publish_remote(&self, frame: Frame) {
+        use crate::turns::wire::{OwnerMessage, PublicationFrame};
+        let Some(peer) = &self.sender.turn.owner else {
+            return;
+        };
+        let _state = lock(&self.pending);
+        if self.is_open() {
+            if let Err(Uncarried(why)) = self.sender.send(&frame) {
+                tracing::debug!(%why, "a publication could not cross the turn link");
+            }
+        } else if let Ok(frame) = PublicationFrame::try_from(frame) {
+            peer.publish(OwnerMessage::RoomPublication {
+                channel_id: self.facts.channel.clone(),
+                room_id: self.facts.room.clone(),
+                executor_id: self.facts.executor.clone(),
+                turn_id: self.facts.turn.clone(),
+                frame: Box::new(frame),
+            });
+        }
     }
 
     /// The owner answered the verb `call_id`.

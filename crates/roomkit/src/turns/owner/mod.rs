@@ -59,6 +59,7 @@ pub(crate) struct Facts {
     /// The depth of the turn's response (RFC §8.3): what the turn sends is
     /// at least that deep.
     pub(crate) response_depth: u32,
+    pub(crate) answer_unscoped: bool,
     /// The room's organization (RFC §17.2).
     pub(crate) organization_id: Option<String>,
 }
@@ -72,6 +73,10 @@ impl Facts {
             channel_id: binding.channel_id.clone(),
             channel_type: binding.channel_type.clone(),
             event_created_at: event.created_at,
+            answer_unscoped: event
+                .response_visibility
+                .as_ref()
+                .is_none_or(|scope| *scope == roomkit_core::model::Visibility::All),
             response_depth: roomkit_core::rules::chain_depth::response_depth(event),
             organization_id: room.organization_id.clone(),
         }

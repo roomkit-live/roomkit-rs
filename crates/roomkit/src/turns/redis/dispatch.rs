@@ -20,7 +20,7 @@ impl RedisTurnBackend {
                 let Some(route) = self.route_turn(&id, &msg.sender, true) else {
                     return self.answer(msg, "refused".into()).await;
                 };
-                let turn = worker.take(carried)?;
+                let turn = worker.take_from(carried, Some(self.remember_owner(&msg.sender)))?;
                 let backend = self.clone();
                 let peer = msg.sender.clone();
                 self.answer(msg, "taken".into()).await?;

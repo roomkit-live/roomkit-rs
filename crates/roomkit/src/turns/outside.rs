@@ -90,24 +90,11 @@ async fn publish(
             channel: topic,
             event,
         } => {
-            if !scope.unscoped
-                || topic != format!("room:{room}")
-                || !kit.reaches_room(room, channel).await
-            {
-                return;
-            }
-            let Value::Object(fields) = event else { return };
-            let Ok(mut event) = EphemeralEvent::from_dict(fields) else {
-                tracing::warn!(target: "roomkit::turns", %room, %channel, "dropping an invalid ephemeral publication");
+            let Some(mut event) = ephemeral(room, channel, scope.unscoped, false, &topic, event)
+            else {
                 return;
             };
-            if event.r#type == EphemeralEventType::TextDelta
-                || &event.room_id != room
-                || event
-                    .channel_id
-                    .as_ref()
-                    .is_some_and(|named| named != channel)
-            {
+            if !kit.reaches_room(room, channel).await {
                 return;
             }
             event.room_created_at = mark;
@@ -119,4 +106,32 @@ async fn publish(
         }
         _ => unreachable!("PublicationFrame admits only events"),
     }
+}
+
+/// Admit an ephemeral from either owner entry point to its own room and channel.
+pub(super) fn ephemeral(
+    room: &RoomId,
+    channel: &ChannelId,
+    unscoped: bool,
+    traced: bool,
+    topic: &str,
+    event: Value,
+) -> Option<EphemeralEvent> {
+    if !unscoped || topic != format!("room:{room}") {
+        return None;
+    }
+    let Value::Object(fields) = event else {
+        return None;
+    };
+    let Ok(event) = EphemeralEvent::from_dict(fields) else {
+        tracing::warn!(target: "roomkit::turns", %room, %channel, "dropping an invalid ephemeral publication");
+        return None;
+    };
+    ((traced || event.r#type != EphemeralEventType::TextDelta)
+        && &event.room_id == room
+        && event
+            .channel_id
+            .as_ref()
+            .is_none_or(|named| named == channel))
+    .then_some(event)
 }
