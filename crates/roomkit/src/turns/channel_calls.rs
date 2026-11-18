@@ -32,49 +32,90 @@ impl PartialEq for Handover {
 }
 
 impl Handover {
-    fn handed(&self) -> bool {
+    pub(super) fn mark(&self, handed: bool) {
+        self.0.store(handed, Ordering::Release);
+    }
+
+    pub(super) fn handed(&self) -> bool {
         self.0.load(Ordering::Acquire)
     }
 }
 
+/// One named channel verb the owner asks the executor to apply in a room (RFC §10.6.3).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(crate) struct ChannelCall {
-    pub(crate) call_id: String,
-    pub(crate) channel_id: roomkit_core::model::ChannelId,
-    pub(crate) room_id: roomkit_core::model::RoomId,
-    pub(crate) verb: String,
+pub struct ChannelCall {
+    /// Identifier used to correlate the call and its answer.
+    pub call_id: String,
+    /// Channel whose work the message carries.
+    pub channel_id: roomkit_core::model::ChannelId,
+    /// Room in which the work takes place.
+    pub room_id: roomkit_core::model::RoomId,
+    /// Name of the requested operation.
+    pub verb: String,
+    /// Arguments supplied to the call.
     #[serde(default)]
-    pub(crate) arguments: Metadata,
-    pub(crate) organization_id: Option<String>,
+    pub arguments: Metadata,
+    /// Organization of the room, when assigned.
+    pub organization_id: Option<String>,
+    /// Channel state to restore or persist in the room.
     #[serde(default)]
-    pub(crate) room_state: Metadata,
-    pub(crate) previous_turn: Option<PreviousTurn>,
+    pub room_state: Metadata,
+    /// Previous turn that could have changed the channel’s state in this room.
+    pub previous_turn: Option<PreviousTurn>,
     #[serde(skip)]
     pub(crate) handover: Handover,
 }
 
 impl ChannelCall {
+    /// An unsubmitted verb call with empty arguments and room state (RFC §10.6.3).
+    pub fn new(
+        call_id: impl Into<String>,
+        channel_id: roomkit_core::model::ChannelId,
+        room_id: roomkit_core::model::RoomId,
+        verb: impl Into<String>,
+    ) -> Self {
+        Self {
+            call_id: call_id.into(),
+            channel_id,
+            room_id,
+            verb: verb.into(),
+            arguments: Metadata::new(),
+            organization_id: None,
+            room_state: Metadata::new(),
+            previous_turn: None,
+            handover: Handover::default(),
+        }
+    }
+
+    /// Whether the current attempt was handed to an executor. This mark stays on the owner.
+    pub fn handed(&self) -> bool {
+        self.handover.handed()
+    }
+
     /// The transport has handed the call to an executor.
-    #[cfg(any(feature = "redis", test))]
-    pub(crate) fn hand_over(&self) {
-        self.handover.0.store(true, Ordering::Release);
+    pub fn hand_over(&self) {
+        self.handover.mark(true);
     }
 
     /// The executor explicitly refused this attempt without applying it.
-    #[cfg(any(feature = "redis", test))]
-    pub(crate) fn refused(&self) {
-        self.handover.0.store(false, Ordering::Release);
+    pub fn refused(&self) {
+        self.handover.mark(false);
     }
 }
 
+/// A channel verb's result, error and state after the call (RFC §10.6.3).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename = "channel_result")]
-pub(crate) struct ChannelResult {
+pub struct ChannelResult {
+    /// Result returned by the call.
     #[serde(default)]
-    pub(crate) result: Value,
-    pub(crate) error: Option<WireError>,
-    pub(crate) room_state: Option<Metadata>,
-    pub(crate) executor_id: Option<String>,
+    pub result: Value,
+    /// Error reported by the sender, when the operation failed.
+    pub error: Option<WireError>,
+    /// Channel state to restore or persist in the room.
+    pub room_state: Option<Metadata>,
+    /// Executor that accepted the work.
+    pub executor_id: Option<String>,
 }
 
 impl Turns {

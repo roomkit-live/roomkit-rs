@@ -42,13 +42,14 @@ impl TurnScope {
 /// A snapshot taken only at the turn boundary. Driver/delivery contexts
 /// deliberately do not carry turn ancestry into an independent delivery.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct TurnContext {
+pub struct TurnContext {
     execution: ExecutionContext,
     turns: TurnScope,
 }
 
 impl TurnContext {
-    pub(crate) fn current() -> Self {
+    /// Capture the current execution context and turn ancestry for a local backend.
+    pub fn current() -> Self {
         Self {
             execution: ExecutionContext::current(),
             turns: TurnScope::current(),

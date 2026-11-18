@@ -5,21 +5,29 @@ use serde::{Deserialize, Serialize};
 
 /// Python's private link record, including fields older executors omit.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(crate) struct InputRequest {
-    pub(crate) request_id: String,
-    pub(crate) tool_name: String,
+pub struct InputRequest {
+    /// Identifier of the pending human-input request.
+    pub request_id: String,
+    /// Name of the tool being called.
+    pub tool_name: String,
+    /// Arguments supplied to the call.
     #[serde(default)]
-    pub(crate) arguments: Metadata,
+    pub arguments: Metadata,
+    /// Room in which the work takes place.
     #[serde(default)]
-    pub(crate) room_id: Option<String>,
+    pub room_id: Option<String>,
+    /// Channel whose work the message carries.
     #[serde(default)]
-    pub(crate) channel_id: Option<String>,
+    pub channel_id: Option<String>,
+    /// Identifier assigned to the call by the model.
     #[serde(default)]
-    pub(crate) tool_call_id: Option<String>,
+    pub tool_call_id: Option<String>,
+    /// Actor who initiated the call.
     #[serde(default)]
-    pub(crate) actor_id: Option<String>,
+    pub actor_id: Option<String>,
+    /// Time at which the human-input request was created.
     #[serde(default)]
-    pub(crate) created_at: Option<Timestamp>,
+    pub created_at: Option<Timestamp>,
 }
 
 impl From<&crate::human_input::PendingInput> for InputRequest {

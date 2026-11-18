@@ -661,6 +661,7 @@ pub(crate) fn parse(carried: CarriedRequest) -> Result<TurnRequest, String> {
         previous_turn: rest.previous_turn,
         trace: rest.trace,
         channel_rows: carried.channel_rows,
+        handover: super::channel_calls::Handover::default(),
     })
 }
 

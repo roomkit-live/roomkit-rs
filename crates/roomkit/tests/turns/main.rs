@@ -15,6 +15,7 @@ mod delegation;
 mod depth;
 mod host;
 mod named_hooks;
+mod public_wire;
 mod result_tool;
 mod steering;
 mod steering_async;

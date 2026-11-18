@@ -28,13 +28,13 @@ impl Turns {
                 let answer = owner::answer_room_call(&kit, last, call);
                 Some(TurnContext::default().scope(answer).await)
             }
-            OwnerMessage::RoomPublication {
+            OwnerMessage::RoomPublication(super::wire::RoomPublication {
                 channel_id,
                 room_id,
                 executor_id,
                 turn_id,
                 frame,
-            } => {
+            }) => {
                 let scope = {
                     let records = self.records();
                     records

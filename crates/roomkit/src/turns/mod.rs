@@ -47,6 +47,9 @@ pub fn current_turn_id() -> Option<String> {
         .map(|id| id.to_string())
 }
 
+mod backend;
+pub use backend::{ExecutorLink, TurnFuture, TurnLink};
+pub use context::TurnContext;
 mod call_state;
 mod channel_calls;
 mod channel_routing;
@@ -67,7 +70,8 @@ mod pipe;
 mod pulls;
 mod records;
 mod rooms;
-pub(crate) use channel_calls::{ChannelCall, ChannelResult, Handover};
+pub(crate) use channel_calls::Handover;
+pub use channel_calls::{ChannelCall, ChannelResult};
 pub(crate) use error::rebuild_kit_error;
 pub(crate) use rooms::{state_key, stored_state};
 pub(crate) mod served;
@@ -76,7 +80,8 @@ mod submission;
 #[cfg(test)]
 mod tests;
 mod timeouts;
-pub(crate) mod wire;
+pub mod wire;
+pub use wire::{ChannelControl, OwnerTool, PreviousTurn, RoomCall, RoomPublication, TurnRequest};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
@@ -106,10 +111,7 @@ use self::started::StartedTurns;
 pub(crate) use self::started::SteerAddress;
 pub use self::timeouts::TurnTimeouts;
 pub(crate) use self::wire::SEND_EVENT;
-use self::wire::{
-    ChannelControl, ChannelControlEnvelope, OwnerMessage, OwnerMessageEnvelope, RoomCall,
-    RoomCallResult,
-};
+use self::wire::{ChannelControlEnvelope, OwnerMessage, OwnerMessageEnvelope, RoomCallResult};
 use crate::channel::DynChannel;
 use crate::error::RoomKitError;
 use crate::steering::SteeringDirective;

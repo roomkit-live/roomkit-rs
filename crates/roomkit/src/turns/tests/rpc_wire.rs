@@ -68,7 +68,9 @@ fn rewrite(family: &str, value: &Value) -> Value {
                     call.call_id = "rust-call".into();
                     call.turn_id = "rust-turn".into();
                 }
-                OwnerMessage::RoomPublication { turn_id, .. } => *turn_id = "rust-turn".into(),
+                OwnerMessage::RoomPublication(publication) => {
+                    publication.turn_id = "rust-turn".into()
+                }
             },
         ),
         "host_result" => typed(value, |answer: &mut RoomCallResult| {

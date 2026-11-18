@@ -530,7 +530,7 @@ impl HostLink {
     /// its running link or a publication for the owner between turns.
     #[cfg(feature = "redis")]
     pub(crate) fn publish_remote(&self, frame: Frame) {
-        use crate::turns::wire::{OwnerMessage, PublicationFrame};
+        use crate::turns::wire::{OwnerMessage, PublicationFrame, RoomPublication};
         let Some(peer) = &self.sender.turn.owner else {
             return;
         };
@@ -540,13 +540,13 @@ impl HostLink {
                 tracing::debug!(%why, "a publication could not cross the turn link");
             }
         } else if let Ok(frame) = PublicationFrame::try_from(frame) {
-            peer.publish(OwnerMessage::RoomPublication {
+            peer.publish(OwnerMessage::RoomPublication(RoomPublication {
                 channel_id: self.facts.channel.clone(),
                 room_id: self.facts.room.clone(),
                 executor_id: self.facts.executor.clone(),
                 turn_id: self.facts.turn.clone(),
                 frame: Box::new(frame),
-            });
+            }));
         }
     }
 
