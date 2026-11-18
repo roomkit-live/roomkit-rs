@@ -150,8 +150,7 @@ async fn catalogue_preserves_local_predicates_and_channel_calls_follow_organizat
     assert!(!backend.claim_presence("ai", "r1", None).await.unwrap());
 
     let req = request("tenant");
-    let mut call =
-        roomkit::turns::ChannelCall::new("query", req.channel_id, req.room_id, "unknown");
+    let mut call = roomkit::turns::ChannelCall::new(req.channel_id, req.room_id, "unknown");
     call.organization_id = Some("elsewhere".into());
     assert!(
         matches!(backend.control(ChannelControl::ChannelCall(Box::new(call.clone()))).await,Err(RoomKitError::TurnLink{reason,..}) if reason=="no_executor")

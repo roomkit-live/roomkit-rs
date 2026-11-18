@@ -586,13 +586,25 @@ by `new_with_host_predicate` or a worker with an omitted host list. That
 node lists its own active workers in registration order. Its executor snapshots apply the local host selector in `covers`. Other nodes
 place work on advertised channel IDs and trailing-wildcard prefixes.
 
+An application can construct `InMemoryTurnBackend::new()` and share it with a
+room owner and standalone workers. `TurnExecutorOptions::telemetry` installs
+the worker's telemetry provider and preserves an incoming trace parent.
+
+`RoomKitOptions::error_classes` configures the owner and its local executor.
+A standalone executor uses its own `TurnExecutorOptions::error_classes`.
+Register a native error type with `ErrorClasses::register`, its wire class
+name and two functions for reading and writing the record. The decoder tries
+the exact class and then its nearest registered base. For application errors
+`RoomKitError::RemoteTurn` exposes the complete wire record and the native
+error in its details. Its `causes()` exposes each cause with its registered
+type. Forwarding a remote error carries its original record.
+
 The following application contracts remain open for text API parity.
 
 | Python contract | Current Rust behavior |
 | --- | --- |
-| `InMemoryTurnBackend`, `TurnClient` | The kit runs turns locally by default. Standalone application construction of the built-in memory transport and the owner client remains open. |
+| `TurnClient` | Standalone application construction of the owner client remains open. |
 | `TurnExecutor.wire`, `use_wiring`, `wiring` | The SDK wires the channels it registers. Inspection and replacement of that environment by the application remain open. |
-| `TurnExecutor(..., telemetry=..., error_classes=...)`, `RoomKit(..., error_classes=...)` | Built-in remote errors use the SDK's codec. Supplying worker telemetry and an application error-class registry for the worker or kit remains open. |
 
 The Python snapshot lists methods and properties. It omits instance attributes
 such as `link.request` and `RedisTurnBackend.node_id`, which are accessors in

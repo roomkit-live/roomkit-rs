@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Applications can share an explicit in-memory turn backend, supply a standalone worker's telemetry provider, and register native application errors on an owner or worker. Forwarding a remote application error preserves the original record.
+
 - **Breaking (Rust source):** `TurnExecutor::organizations()` now returns `Option<BTreeSet<String>>`. Match `None` for a worker serving rooms without an organization, or `Some(ids)` to read its declaration.
 
 - Accept application turn transports through `RoomKitOptions::turn_backend`. The transport receives the same executor interface for memory, SQLite and PostgreSQL kits, and can give a worker a room-owner port for work after its turn.

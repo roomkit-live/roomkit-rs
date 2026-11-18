@@ -54,35 +54,26 @@ impl ErrorClasses {
     /// Rebuild an application error by its class or nearest registered base.
     /// Foreign records stay available in full, including when they cross again.
     pub fn rebuild(&self, record: &ErrorRecord) -> RoomKitError {
-        let error = match self.decode(record) {
+        let mut error = match self.decode(record) {
             Some(native) => remote_error(record, Some(native)),
             None => super::error::rebuild_kit_error(record),
         };
-        match error {
-            RoomKitError::RemoteTurn {
-                kind,
-                message,
-                bases,
-                detail: Some(mut detail),
-            } => {
-                detail.causes = record
-                    .causes
-                    .iter()
-                    .map(|cause| RemoteTurnDetails {
-                        record: cause.clone(),
-                        native: self.decode(cause),
-                        causes: Vec::new(),
-                    })
-                    .collect();
-                RoomKitError::RemoteTurn {
-                    kind,
-                    message,
-                    bases,
-                    detail: Some(detail),
-                }
-            }
-            other => other,
+        if let RoomKitError::RemoteTurn {
+            detail: Some(detail),
+            ..
+        } = &mut error
+        {
+            detail.causes = record
+                .causes
+                .iter()
+                .map(|cause| RemoteTurnDetails {
+                    record: cause.clone(),
+                    native: self.decode(cause),
+                    causes: Vec::new(),
+                })
+                .collect();
         }
+        error
     }
 
     fn decode(&self, record: &ErrorRecord) -> Option<Box<NativeError>> {
