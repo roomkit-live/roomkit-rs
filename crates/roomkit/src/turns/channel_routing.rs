@@ -22,6 +22,30 @@ impl Turns {
             .filter(|_| channel.is_some_and(DynChannel::is_declaration_only))
     }
 
+    pub(crate) fn carries_controls(&self, channel: Option<&dyn DynChannel>) -> bool {
+        #[cfg(feature = "redis")]
+        if self.remote_for_channel(channel).is_some() {
+            return true;
+        }
+        let _ = channel;
+        self.application.is_some()
+    }
+
+    pub(super) async fn carry_control(
+        &self,
+        message: ChannelControl,
+    ) -> Result<Option<super::ChannelResult>, RoomKitError> {
+        if let Some(app) = &self.application {
+            app.ready().await?;
+            return app.backend.control(message).await;
+        }
+        #[cfg(feature = "redis")]
+        if let Some(backend) = &self.remote {
+            return backend.control_remote(&message).await;
+        }
+        Err(super::TurnError::link_reason("no_executor").into_kit_error())
+    }
+
     pub(crate) async fn release(
         &self,
         channel_id: &ChannelId,
@@ -43,9 +67,8 @@ impl Turns {
     ) -> Result<(), RoomKitError> {
         #[cfg(feature = "redis")]
         self.identify_redis_owner();
-        #[cfg(feature = "redis")]
-        if let Some(backend) = self.remote_for_channel(channel.as_deref()) {
-            backend.control_remote(&message).await?;
+        if self.carries_controls(channel.as_deref()) {
+            self.carry_control(message).await?;
             return Ok(());
         }
         if let Some(message) = self.control(&message) {

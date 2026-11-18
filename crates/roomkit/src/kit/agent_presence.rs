@@ -25,18 +25,13 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     /// The distributed executor registry could not be read.
-    #[cfg_attr(
-        not(feature = "redis"),
-        expect(
-            clippy::unused_async,
-            clippy::unused_async_trait_impl,
-            reason = "Python's public registry reader is asynchronous, including the empty local backend"
-        )
-    )]
     pub async fn executors(&self) -> Result<Vec<ExecutorInfo>, RoomKitError> {
         #[cfg(feature = "redis")]
         if let Some(backend) = &self.inner.turns.remote {
             return backend.executors().await;
+        }
+        if let Some(app) = &self.inner.turns.application {
+            return app.backend.executors().await;
         }
         Ok(Vec::new())
     }
@@ -96,7 +91,15 @@ impl<S: ConversationStore> RoomKit<S> {
             return BTreeSet::new();
         }
         // Both built-in registries read current coverage. A failed read proves nothing.
-        let confirmed = self.executors().await.and_then(|infos| {
+        let infos = if let Some(app) = &self.inner.turns.application {
+            if !app.backend.lists_executors() {
+                return BTreeSet::new();
+            }
+            app.backend.executors_now().await
+        } else {
+            self.executors().await
+        };
+        let confirmed = infos.and_then(|infos| {
             let mut offline = BTreeSet::new();
             for id in declared {
                 if !self
@@ -183,7 +186,7 @@ mod tests {
         )
         .unwrap();
         let kit = RoomKit::new(RoomKitOptions {
-            turn_backend: Some(backend),
+            turn_backend: Some(std::sync::Arc::new(backend)),
             ..Default::default()
         });
         let candidates = ["ana", "bob"].map(|name| ChannelId::new(name).unwrap());

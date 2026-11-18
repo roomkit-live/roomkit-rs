@@ -91,7 +91,7 @@ async fn a_room_turn_reaches_the_worker_served_on_its_owners_backend() {
     let Some((node, _)) = nodes() else { return };
     node.serve(worker("in-process")).await.unwrap();
     let kit = RoomKit::new(RoomKitOptions {
-        turn_backend: Some(node.clone()),
+        turn_backend: Some(std::sync::Arc::new(node.clone())),
         ..Default::default()
     });
     let room: crate::model::RoomId = "r".parse().unwrap();

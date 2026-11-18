@@ -10,14 +10,12 @@ use serde_json::Value;
 
 use super::Turns;
 
-#[cfg(any(test, feature = "redis"))]
 mod submission;
 use super::error::{TurnError, kit_error, turn_failure};
 use super::observe::Carried;
 use super::wire::{ChannelControl, ChannelControlEnvelope, PreviousTurn, WireError};
 use crate::RoomKitError;
 use crate::channel::{ChannelError, DynChannel};
-#[cfg(feature = "redis")]
 use submission::SubmittedRemoteCall;
 
 /// The owner's local knowledge of whether this particular attempt reached an
@@ -131,11 +129,8 @@ impl Turns {
         }
         #[cfg(feature = "redis")]
         self.identify_redis_owner();
-        #[cfg(feature = "redis")]
-        if let Some(backend) = self.remote_for_channel(Some(&*channel)) {
-            return self
-                .remote_channel_call(backend, call, room_created_at)
-                .await;
+        if self.carries_controls(Some(&*channel)) {
+            return self.remote_channel_call(call, room_created_at).await;
         }
         if self.executor_lifecycle.is_closed() {
             return Err(
@@ -269,17 +264,15 @@ fn invalid(error: &serde_json::Error) -> RoomKitError {
     ))
 }
 
-#[cfg(feature = "redis")]
 impl Turns {
     async fn remote_channel_call(
         &self,
-        backend: &super::redis::RedisTurnBackend,
         mut call: ChannelCall,
         created_at: Timestamp,
     ) -> Result<ChannelResult, RoomKitError> {
         let submission = SubmittedRemoteCall::new(self, &mut call, created_at);
         let message = ChannelControl::ChannelCall(Box::new(call));
-        let answer = backend.control_remote(&message).await?.ok_or_else(|| {
+        let answer = self.carry_control(message).await?.ok_or_else(|| {
             TurnError::new(
                 "frame_invalid",
                 "the executor did not answer the channel call",

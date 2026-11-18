@@ -51,6 +51,9 @@ pub fn current_turn_id() -> Option<String> {
 
 pub(crate) mod room_owner;
 pub use room_owner::RoomOwner;
+mod application;
+mod transport;
+pub use transport::TurnBackend;
 mod backend;
 pub use backend::{ExecutorLink, TurnFuture, TurnLink};
 pub use context::TurnContext;
@@ -137,6 +140,7 @@ pub(crate) enum Answer {
 /// registered live, whose turns its own executor takes.
 #[derive(Debug)]
 pub(crate) struct Turns {
+    pub(crate) application: Option<application::Application>,
     #[cfg(feature = "redis")]
     pub(crate) remote: Option<RedisTurnBackend>,
     #[cfg(feature = "redis")]
@@ -177,6 +181,7 @@ impl Default for Turns {
         Self {
             #[cfg(feature = "redis")]
             remote: None,
+            application: None,
             #[cfg(feature = "redis")]
             serving_backends: redis::ServingBackends::default(),
             worker_owner: Mutex::default(),
@@ -216,13 +221,21 @@ impl Drop for Reading {
 }
 
 impl Turns {
-    #[cfg(feature = "redis")]
-    pub(crate) fn with_backend(remote: Option<RedisTurnBackend>) -> Self {
+    pub(crate) fn with_backend(backend: Option<Arc<dyn TurnBackend>>) -> Self {
         let mut turns = Self::default();
-        if let Some(backend) = &remote {
-            turns.set_timeouts(backend.timeouts());
+        if let Some(backend) = backend {
+            if let Some(timeouts) = backend.timeouts() {
+                turns.set_timeouts(timeouts);
+            }
+            #[cfg(feature = "redis")]
+            if let Some(redis) =
+                (backend.as_ref() as &dyn std::any::Any).downcast_ref::<RedisTurnBackend>()
+            {
+                turns.remote = Some(redis.clone());
+                return turns;
+            }
+            turns.application = Some(application::Application::new(backend));
         }
-        turns.remote = remote;
         turns
     }
 
@@ -340,41 +353,44 @@ impl Turns {
         // The turn's tasks run in a unit of their own, within the call's
         // run's: a close from the turn's work spares them all (RFC
         // §12.10.4).
+        if let Some(app) = &self.application {
+            app.ready()
+                .await
+                .map_err(|e| to_record(&error::kit_error(&e)))?;
+        }
+        let channel = kit.channel(&binding.channel_id);
         #[cfg(feature = "redis")]
-        let (context, channel_rows) = if let Some(backend) = &self.remote
-            && kit
-                .channel(&binding.channel_id)
-                .is_some_and(|c| c.is_declaration_only())
-        {
+        if let Some(backend) = self.remote_for_channel(channel.as_deref()) {
             backend.set_owner(self, kit);
-            let mut context = context;
-            let rows = crate::history::distributed::distributed_rows(
+        }
+        let mut context = context;
+        let channel_rows = if self.carries_controls(channel.as_deref())
+            && channel.is_some_and(|c| c.is_declaration_only())
+        {
+            crate::history::distributed::distributed_rows(
                 kit.as_ref(),
                 binding,
                 &event,
                 &mut context,
             )
-            .await;
-            (context, rows)
+            .await
         } else {
-            (context, Vec::new())
+            Vec::new()
         };
-        #[cfg(not(feature = "redis"))]
-        let channel_rows = Vec::new();
-        let unit = Unit::new();
-        let (mut turn, _following) = Marks::current().with(unit).sync_scope(|| {
-            self.start_turn(
-                kit,
-                binding,
-                submission::Input {
-                    event,
-                    context,
-                    strategy_turn,
-                    channel_rows,
-                },
-                submitted,
-            )
-        })?;
+        let marks = Marks::current().with(Unit::new());
+        let input = submission::Input {
+            event,
+            context,
+            strategy_turn,
+            channel_rows,
+        };
+        let (mut turn, _following) = if let Some(app) = &self.application {
+            marks
+                .scoped(self.start_application(app, kit, binding, input, submitted))
+                .await?
+        } else {
+            marks.sync_scope(|| self.start_turn(kit, binding, input, submitted))?
+        };
         let (output, streams) = turn.output(self.cutting()).await?;
         Ok(if streams {
             Answer::Streamed(Box::new(output), turn)

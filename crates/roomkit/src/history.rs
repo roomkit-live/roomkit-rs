@@ -19,7 +19,6 @@
 //! know them ([`visible_events`]). The history then crosses to the turn's
 //! executor whole, so a turn run apart reads the same rows.
 
-#[cfg(any(test, feature = "redis"))]
 pub(crate) mod distributed;
 pub(crate) mod window;
 

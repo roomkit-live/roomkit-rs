@@ -193,6 +193,11 @@ impl<S: ConversationStore> RoomKit<S> {
                 tracing::warn!(%error, "Closing the Redis turn backend failed");
             }
         }
+        if let Some(app) = &turns.application
+            && let Err(error) = app.backend.close().await
+        {
+            tracing::warn!(%error, "Closing the turn backend failed");
+        }
         self.unwind_turns().await;
         let failures = self.close_channels_with_observers().await;
         // What the channels' closes started is cut, its grace over.

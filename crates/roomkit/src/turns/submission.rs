@@ -32,11 +32,13 @@ pub(super) struct Handover {
     turn: Arc<str>,
     previous: Option<PreviousTurn>,
     pub(super) handed: bool,
+    pub(super) marker: super::Handover,
 }
 
 impl Drop for Handover {
     fn drop(&mut self) {
         if !self.handed
+            && !self.marker.handed()
             && let Some(owner) = self.owner.upgrade()
         {
             owner.records().undo_submission(
@@ -60,6 +62,13 @@ enum Destination {
     #[cfg(feature = "redis")]
     Remote(super::RedisTurnBackend),
 }
+
+type OpenOwner = (
+    OwnerTurn,
+    Arc<MemoryTurn>,
+    super::pipe::PipeReceiver<super::wire::Control>,
+    crate::channel::BoxFuture<'static, ()>,
+);
 
 impl Turns {
     fn destination(
@@ -152,6 +161,7 @@ impl Turns {
             turn: Arc::clone(turn_id),
             previous,
             handed: false,
+            marker: super::Handover::default(),
         };
         Ok(Prepared {
             carried: CarriedRequest {
@@ -193,17 +203,8 @@ impl Turns {
             matches!(destination, Destination::Local(_)),
             &observers,
         )?;
-        let (frames, frames_read) = pipe(Arc::clone(&turn_id), Carried::Frame, observers.clone());
-        let (controls, controls_read) = pipe(Arc::clone(&turn_id), Carried::Control, observers);
-        let memory = Arc::new(MemoryTurn::new(turn_id, frames, controls, self.timeouts()));
-        let (room_id, organization_id) = (facts.room_id.clone(), facts.organization_id.clone());
-        let (turn, pump) = owner::open(
-            Arc::clone(&memory),
-            frames_read,
-            facts,
-            Arc::clone(kit),
-            Arc::clone(self),
-        );
+        let (turn, memory, controls_read, pump) =
+            self.open_owner(kit, turn_id, facts.clone(), observers);
         // Register a pending cut before an executor can take its first step.
         let following = submitted(turn.canceller());
         let taken = kit.spawn(pump)
@@ -234,11 +235,83 @@ impl Turns {
             memory.shut();
             return Err(closed());
         }
+        self.track_owner(&turn, &memory, binding, &facts);
+        Ok((turn, following))
+    }
+
+    fn track_owner(
+        &self,
+        turn: &OwnerTurn,
+        memory: &MemoryTurn,
+        binding: &ChannelBinding,
+        facts: &owner::Facts,
+    ) {
         lock(&self.started).start(
-            (&memory.turn_id, &room_id, &binding.channel_id),
-            organization_id.as_deref(),
+            (&memory.turn_id, &facts.room_id, &binding.channel_id),
+            facts.organization_id.as_deref(),
             turn.steerable(),
         );
+    }
+
+    fn open_owner(
+        self: &Arc<Self>,
+        kit: &Arc<dyn TurnKit>,
+        turn_id: Arc<str>,
+        facts: owner::Facts,
+        observers: Observers,
+    ) -> OpenOwner {
+        let (frames, frames_read) = pipe(Arc::clone(&turn_id), Carried::Frame, observers.clone());
+        let (controls, controls_read) = pipe(Arc::clone(&turn_id), Carried::Control, observers);
+        let memory = Arc::new(MemoryTurn::new(turn_id, frames, controls, self.timeouts()));
+
+        let (turn, pump) = owner::open(
+            Arc::clone(&memory),
+            frames_read,
+            facts,
+            Arc::clone(kit),
+            Arc::clone(self),
+        );
+        (turn, memory, controls_read, pump)
+    }
+
+    pub(super) async fn start_application<G>(
+        self: &Arc<Self>,
+        app: &super::application::Application,
+        kit: &Arc<dyn TurnKit>,
+        binding: &ChannelBinding,
+        input: Input,
+        submitted: impl FnOnce(Canceller) -> G,
+    ) -> Result<(OwnerTurn, G), ErrorRecord> {
+        let mut closing = self.cutting();
+        if self.is_closed() || *closing.borrow() {
+            return Err(closed());
+        }
+        let facts = owner::Facts::of(binding, &input.event, &input.context.room);
+        let turn_id: Arc<str> = Arc::from(format!("turn-{}", Uuid::new_v4().simple()));
+        let observers = self.observers();
+        let Prepared {
+            carried,
+            mut handover,
+            ..
+        } = self.prepare_request(&**kit, binding, input, &turn_id, false, &observers)?;
+        let request = executor::parse(carried).map_err(|why| uncarried(&why))?;
+        handover.marker = request.handover.clone();
+        let link = tokio::select! {
+            biased;
+            _ = closing.wait_for(|closing| *closing) => return Err(closed()),
+            link = app.backend.submit(request) => link.map_err(|e| super::to_record(&super::error::kit_error(&e)))?,
+        };
+        handover.handed = true;
+        drop(handover);
+        let (turn, memory, controls, pump) =
+            self.open_owner(kit, turn_id, facts.clone(), observers);
+        let following = submitted(turn.canceller());
+        let task = super::application::run_link(link, Arc::clone(&memory), controls, pump);
+        if !kit.spawn(Box::pin(task)) {
+            memory.shut();
+            return Err(closed());
+        }
+        self.track_owner(&turn, &memory, binding, &facts);
         Ok((turn, following))
     }
 

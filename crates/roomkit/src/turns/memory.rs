@@ -24,6 +24,7 @@ use crate::discussion_turn::{discussion_notes, discussion_turn};
 pub(crate) struct MemoryTurn {
     pub(crate) turn_id: Arc<str>,
     pub(crate) owner: Option<super::room_owner::WorkerOwner>,
+    pub(super) application_link: std::sync::OnceLock<super::application::ActiveLink>,
     /// Whether its reader commits the turn as a delegated task's trace (RFC
     /// §23.3 step 5), which its publisher reads at each text it publishes.
     pub(crate) traced: Arc<AtomicBool>,
@@ -74,6 +75,7 @@ impl MemoryTurn {
     ) -> Self {
         Self {
             turn_id,
+            application_link: std::sync::OnceLock::new(),
             frames,
             controls,
             timeouts,

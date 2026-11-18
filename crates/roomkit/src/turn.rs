@@ -8,7 +8,6 @@ use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 
-#[cfg(any(test, feature = "redis"))]
 use roomkit_core::model::ChannelBinding;
 use roomkit_core::model::{
     ChannelId, ChannelOutput, ChannelType, DirectEvent, EventContent, EventId, HookAction,
@@ -1352,7 +1351,6 @@ pub(crate) trait TurnKit: Send + Sync {
         room_id: RoomId,
     ) -> BoxFuture<'static, Result<RoomContext, RoomKitError>>;
 
-    #[cfg(any(test, feature = "redis"))]
     fn read_channel_rows(
         &self,
         binding: ChannelBinding,
@@ -1548,7 +1546,6 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
         room_context::read_context(Weak::clone(self), room_id)
     }
 
-    #[cfg(any(test, feature = "redis"))]
     fn read_channel_rows(
         &self,
         binding: ChannelBinding,

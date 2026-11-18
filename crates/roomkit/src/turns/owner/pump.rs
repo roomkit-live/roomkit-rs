@@ -181,7 +181,7 @@ impl Pump {
                 }
                 () = until(deadline) => break Ending::GaveUp,
                 silent = beat.tick_with(|| {
-                    self.state.turn.process_beat.swap(false, Ordering::AcqRel) && self.accepted
+                    self.accepted && (self.state.turn.process_beat.swap(false, Ordering::AcqRel) || self.state.turn.application_link.get().is_some_and(super::super::application::ActiveLink::beat_heard))
                 }) => {
                     let limit = if self.accepted {
                         timeouts.silent_intervals()
@@ -433,7 +433,18 @@ impl Pump {
     /// no executor could take), and the executor is told, best effort (RFC
     /// §10.6.8).
     fn lost(&self) -> Ending {
-        let reason = "executor_lost";
+        let reason = if !self.accepted
+            && self
+                .state
+                .turn
+                .application_link
+                .get()
+                .is_some_and(|link| !link.taken())
+        {
+            "no_executor"
+        } else {
+            "executor_lost"
+        };
         tracing::warn!(
             target: "roomkit::turns",
             turn = %self.state.turn.turn_id,
