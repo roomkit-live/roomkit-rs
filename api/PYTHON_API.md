@@ -630,6 +630,21 @@ reads turn attributes such as `link.request` and `RedisTurnBackend.node_id`,
 and the constructor fields of wire records used by public links, from the
 same pinned Python source. Rust exposes the two attributes as accessors. `ChannelCall::new` and `RoomCall::new` generate a fresh correlation ID. Applications can set an explicit ID. Reading either call from JSON uses the same defaults.
 
+The wiring returned by the executor exposes the current environment, its
+framework emitter, the realtime outlet and the text tool callbacks. These
+are instance APIs. Python keeps their class constructors in private modules.
+The conformance inventory reads their instance methods at the pinned Python
+commit and checks their public Rust counterparts.
+
+| Python call on the returned wiring | Rust call | Observable contract |
+|---|---|---|
+| `wiring.env.emitter()`, `await wiring.emit(event_type, **fields)` | `wiring.env.emitter()`, `wiring.emit(event_type, EmitOptions { .. }).await` | The host supplies the callback at each call. It receives the four optional fields, including the difference between omitted and empty data, and can return an error. |
+| `wiring.realtime.publish(topic, event)`, `publish_to_room(room_id, event)` | `wiring.realtime().publish(topic, event)`, `publish_to_room(&room_id, event)` | Direct topics and room-specific backend overrides are preserved. Direct channel invocations check their room audience on both operations. The room publication carries its creation mark. |
+| `wiring.realtime.subscribe`, `subscribe_to_room`, `unsubscribe`, `close` | The corresponding methods on `wiring.realtime()` | Subscriptions require a host backend. Closing the outlet leaves the host's backend available. Treating the outlet as a generic realtime backend remains in the realtime work. |
+| `wiring.tools.build_before_tool_call_hook`, `build_tool_call_hook`, `build_tool_report_hook`, `build_tool_observer_hook` | The corresponding builders on `wiring.tools()` | A channel can gate its call, obtain the model's verdict, report an external result or report a refusal. The external report keeps the provider's actual result, and a claim prevents duplicate reports. |
+| `executor.wire(channel)` | `executor.wire(&channel)` | The channel retains the environment selected at registration. A custom intelligence channel can report its answer to the executor's observers. The Rust channel bridge carries the callbacks between crates. |
+| `wiring.env.context(room_id, carrying=None)`, `wiring.hook_context(room_id, trigger, carrying=None)` | `roomkit::turns::WiringEnv::context`, `roomkit::turns::TurnWiring::hook_context` | Pass `None` for the omitted context, or `Some(&context)` to borrow one the channel already holds. |
+
 The Python worker constructor also takes `media_resolver` and `attached_media`.
 These belong to the media API.
 

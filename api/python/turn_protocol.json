@@ -27,8 +27,253 @@
       "request"
     ]
   },
-  "commit": "73d16bc6c61195450a6cb36c7903a713469fb994",
+  "commit": "66153f0991804d865eda19d50893f0330b24cc6b",
   "protocol_records": {
+    "roomkit.turns._outlet.FrameworkEmitter": {
+      "__call__": [
+        "async def",
+        "event_type",
+        "*",
+        "room_id=None",
+        "channel_id=None",
+        "event_id=None",
+        "data=None"
+      ]
+    },
+    "roomkit.turns._outlet.TurnRealtime": {
+      "close": [
+        "async def"
+      ],
+      "publish": [
+        "async def",
+        "channel",
+        "event"
+      ],
+      "publish_to_room": [
+        "async def",
+        "room_id",
+        "event"
+      ],
+      "subscribe": [
+        "async def",
+        "channel",
+        "callback"
+      ],
+      "subscribe_to_room": [
+        "async def",
+        "room_id",
+        "callback"
+      ],
+      "unsubscribe": [
+        "async def",
+        "subscription_id"
+      ]
+    },
+    "roomkit.turns._tool_hooks.ToolHooks": {
+      "build_before_tool_call_hook": [
+        "def",
+        "channel_id"
+      ],
+      "build_tool_call_hook": [
+        "def",
+        "channel_id"
+      ],
+      "build_tool_observer_hook": [
+        "def",
+        "channel_id"
+      ],
+      "build_tool_report_hook": [
+        "def",
+        "channel_id"
+      ],
+      "decide_before_tool_use": [
+        "async def",
+        "event",
+        "channel_id",
+        "*",
+        "carrying=None"
+      ],
+      "judge_tool_call": [
+        "async def",
+        "event",
+        "channel_id",
+        "*",
+        "carrying=None",
+        "claim=None"
+      ],
+      "observe_failed_tool_call": [
+        "async def",
+        "event",
+        "channel_id",
+        "*",
+        "claim=None"
+      ],
+      "report_tool_call": [
+        "async def",
+        "event",
+        "channel_id",
+        "*",
+        "claim=None"
+      ],
+      "run_tool_call_chain": [
+        "async def",
+        "event",
+        "room_id",
+        "*",
+        "carrying=None"
+      ],
+      "tell_tool_call": [
+        "async def",
+        "observed",
+        "context",
+        "channel_id"
+      ]
+    },
+    "roomkit.turns._wiring.TurnWiring": {
+      "build_after_response_hook": [
+        "def",
+        "channel_id"
+      ],
+      "build_after_tool_round_hook": [
+        "def"
+      ],
+      "build_before_generation_hook": [
+        "def",
+        "channel_id"
+      ],
+      "build_on_user_input_required_hook": [
+        "def",
+        "channel_id"
+      ],
+      "build_plan_updated_hook": [
+        "def",
+        "channel_id"
+      ],
+      "build_room_tasks_loader": [
+        "def"
+      ],
+      "build_room_vision_loader": [
+        "def"
+      ],
+      "build_speak_decision_hook": [
+        "def"
+      ],
+      "build_thinking_hook": [
+        "def",
+        "channel_id"
+      ],
+      "build_thought_hook": [
+        "def"
+      ],
+      "build_tool_history_loader": [
+        "def",
+        "channel_id"
+      ],
+      "build_tool_usage_loader": [
+        "def",
+        "channel_id"
+      ],
+      "emit": [
+        "async def",
+        "event_type",
+        "*",
+        "room_id=None",
+        "channel_id=None",
+        "event_id=None",
+        "data=None"
+      ],
+      "env": [
+        "property"
+      ],
+      "hook_context": [
+        "async def",
+        "room_id",
+        "trigger",
+        "*",
+        "carrying=None"
+      ],
+      "realtime": [
+        "property"
+      ],
+      "tools": [
+        "property"
+      ],
+      "wire": [
+        "def",
+        "channel"
+      ],
+      "wire_external_tool_handler": [
+        "def",
+        "channel_id",
+        "handler"
+      ]
+    },
+    "roomkit.turns._wiring_env.WiringEnv": {
+      "attached_media": [
+        "property"
+      ],
+      "can_publish_direct": [
+        "async def",
+        "room_id",
+        "channel_id",
+        "created_at"
+      ],
+      "context": [
+        "async def",
+        "room_id",
+        "*",
+        "carrying=None"
+      ],
+      "emitter": [
+        "def"
+      ],
+      "history_rows": [
+        "async def",
+        "room_id",
+        "channel_id",
+        "*",
+        "after_index",
+        "limit"
+      ],
+      "media_resolver": [
+        "property"
+      ],
+      "message_before": [
+        "async def",
+        "room_id",
+        "index"
+      ],
+      "realtime": [
+        "def"
+      ],
+      "room_left": [
+        "def",
+        "room_id",
+        "channel_id"
+      ],
+      "room_mark": [
+        "async def",
+        "room_id"
+      ],
+      "room_tasks": [
+        "async def",
+        "room_id"
+      ],
+      "room_vision": [
+        "def",
+        "context"
+      ],
+      "tool_rows": [
+        "async def",
+        "room_id",
+        "channel_id",
+        "limit"
+      ],
+      "turn_started": [
+        "def",
+        "request"
+      ]
+    },
     "roomkit.turns.wire.CallContext": {
       "__init__": [
         "def",

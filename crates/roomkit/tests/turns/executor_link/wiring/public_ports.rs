@@ -78,6 +78,7 @@ async fn the_text_outlet_retains_destination_room_marks_and_subscription_failure
         sent[1].1.room_created_at,
         Some(link.request.context.room.created_at)
     );
+    outlet.close().await;
     let id = outlet
         .subscribe("custom", Arc::new(|_| Box::pin(async {})))
         .await

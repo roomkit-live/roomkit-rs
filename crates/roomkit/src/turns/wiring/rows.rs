@@ -11,6 +11,7 @@ impl TurnWiring {
     ///
     /// # Errors
     /// Propagates errors reading the store or application environment.
+    #[doc(hidden)]
     pub async fn tool_history(
         &self,
         channel: &ChannelId,

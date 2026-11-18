@@ -1908,3 +1908,16 @@ fn standalone_turn_owner_defaults() {
     // roomkit.TurnClient.steer(turn_id) = None
     assert!(steer.turn_id.is_none());
 }
+
+#[test]
+fn wiring_framework_emitter_defaults() {
+    let options = roomkit::turns::EmitOptions::default();
+    // roomkit.turns._wiring.TurnWiring.emit(room_id) = None
+    assert!(options.room_id.is_none());
+    // roomkit.turns._wiring.TurnWiring.emit(channel_id) = None
+    assert!(options.channel_id.is_none());
+    // roomkit.turns._wiring.TurnWiring.emit(event_id) = None
+    assert!(options.event_id.is_none());
+    // roomkit.turns._wiring.TurnWiring.emit(data) = None
+    assert!(options.data.is_none());
+}

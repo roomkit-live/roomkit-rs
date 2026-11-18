@@ -1,4 +1,5 @@
 //! Public application wiring, including the independent worker's last room context.
+mod application_channel;
 mod ordinary_tools;
 mod public_ports;
 mod text_callbacks;

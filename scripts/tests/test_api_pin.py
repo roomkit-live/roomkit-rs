@@ -71,6 +71,15 @@ class PinTargets(unittest.TestCase):
             module = self.roomkit / f"src/roomkit/{path}.py"
             module.parent.mkdir(parents=True, exist_ok=True)
             module.write_text("", encoding="utf-8")
+        for module, cls in (("_tool_hooks", "ToolHooks"), ("_wiring", "TurnWiring"), ("_wiring_env", "WiringEnv")):
+            (turns / f"{module}.py").write_text(f"class {cls}:\n    def __init__(self): pass\n")
+        (turns / "_outlet.py").write_text(
+            "FrameworkEmitter = Callable[..., Awaitable[None]]\nclass TurnRealtime(RealtimeBackend): pass\n"
+            "async def emit_framework_event(fallback, event_type, *, data=None): pass\n"
+        )
+        realtime = self.roomkit / "src/roomkit/realtime"
+        realtime.mkdir(exist_ok=True)
+        (realtime / "base.py").write_text("class RealtimeBackend: pass\n")
         (turns / "base.py").write_text(f"class TurnLink:\n    request{version}: TurnRequest\n", encoding="utf-8")
         self._git("add", "tests", "src")
         self._git("commit", "-q", "-m", message)

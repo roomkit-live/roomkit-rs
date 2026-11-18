@@ -211,9 +211,11 @@ pub trait Channel: Send + Sync + 'static {
     fn channel_id(&self) -> ChannelId;
 
     /// Give an application channel its worker's context readers and event outlets.
+    #[doc(hidden)]
     fn set_turn_wiring(&self, _wiring: crate::turns::TurnWiring) {}
 
     /// The wiring retained by a channel whose hooks use an executor environment.
+    #[doc(hidden)]
     fn turn_wiring(&self) -> Option<crate::turns::TurnWiring> {
         None
     }

@@ -26,28 +26,28 @@ pub trait WiringEnv: Send + Sync + 'static {
     /// Read the current room for a hook. The caller may already have loaded its history.
     fn context<'a>(
         &'a self,
-        room: &'a RoomId,
+        room_id: &'a RoomId,
         carrying: Option<&'a RoomContext>,
     ) -> TurnFuture<'a, Result<RoomContext, RoomKitError>>;
     /// Read this channel's latest tool-call rows, returned oldest first.
     fn tool_rows<'a>(
         &'a self,
-        room: &'a RoomId,
-        channel: &'a ChannelId,
+        room_id: &'a RoomId,
+        channel_id: &'a ChannelId,
         limit: u64,
     ) -> TurnFuture<'a, Result<Vec<RoomEvent>, RoomKitError>>;
     /// Read the first page of this channel's tool and instruction rows after a position.
     fn history_rows<'a>(
         &'a self,
-        room: &'a RoomId,
-        channel: &'a ChannelId,
-        after: Option<u64>,
+        room_id: &'a RoomId,
+        channel_id: &'a ChannelId,
+        after_index: Option<u64>,
         limit: u64,
     ) -> TurnFuture<'a, Result<Vec<RoomEvent>, RoomKitError>>;
     /// The last message index before this position, or none if no earlier message is available.
     fn message_before<'a>(
         &'a self,
-        room: &'a RoomId,
+        room_id: &'a RoomId,
         index: u64,
     ) -> TurnFuture<'a, Result<Option<u64>, RoomKitError>>;
     /// Whether an authoritative binding currently lets this channel write to
@@ -55,8 +55,8 @@ pub trait WiringEnv: Send + Sync + 'static {
     /// grant this permission. Hosts without a live reader suppress publication.
     fn can_publish_direct<'a>(
         &'a self,
-        _room: &'a RoomId,
-        _channel: &'a ChannelId,
+        _room_id: &'a RoomId,
+        _channel_id: &'a ChannelId,
         _created_at: Timestamp,
     ) -> TurnFuture<'a, bool> {
         Box::pin(async { false })
@@ -70,17 +70,17 @@ pub trait WiringEnv: Send + Sync + 'static {
         None
     }
     /// Creation mark used to scope a publication to the right incarnation of its room.
-    fn room_mark<'a>(&'a self, _room: &'a RoomId) -> TurnFuture<'a, Option<Timestamp>> {
+    fn room_mark<'a>(&'a self, _room_id: &'a RoomId) -> TurnFuture<'a, Option<Timestamp>> {
         Box::pin(async { None })
     }
     /// Remember what a turn of an admitted organization brings.
     fn turn_started(&self, _request: &TurnRequest) {}
     /// Release conversation data when a channel detaches.
-    fn room_left(&self, _room: &RoomId, _channel: &ChannelId) {}
+    fn room_left(&self, _room_id: &RoomId, _channel_id: &ChannelId) {}
     /// Background tasks known to this environment outside a turn.
     fn room_tasks<'a>(
         &'a self,
-        _room: &'a RoomId,
+        _room_id: &'a RoomId,
     ) -> TurnFuture<'a, Result<Vec<Metadata>, RoomKitError>> {
         Box::pin(async { Ok(Vec::new()) })
     }
@@ -115,10 +115,11 @@ impl TurnWiring {
     /// Give an external handler the executor's gate and reporting hooks.
     pub fn wire_external_tool_handler(
         &self,
-        channel: &ChannelId,
-        bridge: &crate::external_tools::ExternalToolBridge,
+        channel_id: &ChannelId,
+        handler: &crate::external_tools::ExternalToolBridge,
     ) {
-        self.kit.wire_external_tools(channel, bridge, self.clone());
+        self.kit
+            .wire_external_tools(channel_id, handler, self.clone());
     }
 
     /// Wire the channel's callbacks and its input handler before registration.
@@ -157,21 +158,21 @@ impl TurnWiring {
     /// Read the hook's room. A failed read leaves the hook without a context.
     pub async fn hook_context(
         &self,
-        room: &RoomId,
+        room_id: &RoomId,
         trigger: HookTrigger,
         carrying: Option<&RoomContext>,
     ) -> Option<RoomContext> {
-        match self.env.context(room, carrying).await {
+        match self.env.context(room_id, carrying).await {
             Ok(context) => Some(context),
             Err(error) => {
-                tracing::warn!(%room, ?trigger, %error, "could not build the room context for a turn hook");
+                tracing::warn!(room = %room_id, ?trigger, %error, "could not build the room context for a turn hook");
                 None
             }
         }
     }
 
     /// Publish an event to its room, through the owner of the current turn when available.
-    pub async fn publish_to_room(&self, event: EphemeralEvent) {
+    pub(crate) async fn publish_to_room(&self, event: EphemeralEvent) {
         if let Some(host) = crate::turn::turn_in_scope() {
             host.publish_from_channel(event);
         } else if let Some(prompt) = DirectPrompt::current() {
@@ -196,6 +197,7 @@ impl TurnWiring {
     ///
     /// # Errors
     /// Propagates failure to read the room's tasks.
+    #[doc(hidden)]
     pub async fn room_tasks(&self, room: &RoomId) -> Result<Vec<Metadata>, RoomKitError> {
         if let Some(host) = crate::current_turn_host().filter(crate::TurnHost::open) {
             return host.room_tasks().await;

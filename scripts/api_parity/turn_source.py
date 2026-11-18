@@ -15,8 +15,10 @@ from pathlib import Path
 
 if __package__:
     from .wire_source import EXTRA_MODULES, wire_shapes
+    from .wiring_source import PORTS, wiring_records
 else:
     from wire_source import EXTRA_MODULES, wire_shapes
+    from wiring_source import PORTS, wiring_records
 
 ATTRIBUTE_CLASSES = {
     "base": {"ExecutorLink", "TurnLink", "RoomOwner", "TurnBackend"},
@@ -97,14 +99,16 @@ def main() -> None:
             ["git", "-C", str(args.checkout), "show", f"{args.commit}:src/roomkit/turns/{module}.py"],
             text=True, encoding="utf-8",
         )
-        for module in (*ATTRIBUTE_CLASSES, "wire")
+        for module in (*ATTRIBUTE_CLASSES, "wire", *PORTS)
     }
-    for name, path in EXTRA_MODULES.items():
+    for name, path in (EXTRA_MODULES | {"realtime_base": "realtime/base"}).items():
         sources[name] = subprocess.check_output(
             ["git", "-C", str(args.checkout), "show", f"{args.commit}:src/roomkit/{path}.py"],
             text=True, encoding="utf-8",
         )
-    print(json.dumps({"commit": args.commit, **extract(sources), "wire_shapes": wire_shapes(sources)}, ensure_ascii=False, indent=2, sort_keys=True))
+    records = extract(sources)
+    records["protocol_records"].update(wiring_records(sources))
+    print(json.dumps({"commit": args.commit, **records, "wire_shapes": wire_shapes(sources)}, ensure_ascii=False, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

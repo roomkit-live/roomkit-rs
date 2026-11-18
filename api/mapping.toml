@@ -1718,3 +1718,57 @@ reason = "The read-only opener of a client's pending input exposes the shared or
 rust = "roomkit::turns::TurnClientOutput"
 approved = "2026-11-18"
 reason = "TurnClient.run returns a ChannelOutput with direct field access and an optional single-reader stream. The core ChannelOutput remains a cloneable value."
+
+[[map]]
+rust = "roomkit::turns::TurnWiring"
+python = "roomkit.turns._wiring.TurnWiring"
+py_spec = "sha256:88cd52809491f17cd6f429dd85509d9d99dadceb19c2e5d5b7d86e8d880fa17c"
+reason = "Reachable through the public executor wiring. The pinned Python definition supplies its members."
+
+[[map]]
+rust = "roomkit::turns::WiringEnv"
+python = "roomkit.turns._wiring_env.WiringEnv"
+py_spec = "sha256:ee05c9a7bf7531211bb4f7a125aa4449a6bc4f3b6032f7d14a21afc72a3d176e"
+reason = "Reachable through the public executor wiring. The pinned Python definition supplies its members."
+
+[[map]]
+rust = "roomkit::turns::TurnRealtime"
+python = "roomkit.turns._outlet.TurnRealtime"
+py_spec = "sha256:ac876e6e6024ffe4eabcb7b9104a7a26043a99e1cd0a88dc92685056c92302b5"
+reason = "Reachable through the public executor wiring. The pinned Python definition supplies its members."
+
+[[map]]
+rust = "roomkit::turns::ToolHooks"
+python = "roomkit.turns._tool_hooks.ToolHooks"
+py_spec = "sha256:f64bb271ad84869ab1d204e5e4e0c5d882bf0229f753b00cf9b54512da8f3973"
+reason = "Reachable through the public executor wiring. The pinned Python definition supplies its members."
+
+[[map]]
+rust = "roomkit::turns::FrameworkEmitter"
+python = "roomkit.turns._outlet.FrameworkEmitter"
+py_spec = "sha256:62ce68ace1b8d5a2d9b80a7cd4b8ca9b32b21ca24871a7e0e416c70dfcb5a64b"
+reason = "The pinned outlet supplies the event type and four keyword fields to the async callback returned by WiringEnv.emitter."
+
+[[missing]]
+python = "roomkit.turns._wiring_env.WiringEnv"
+members = ["attached_media", "media_resolver", "room_vision"]
+scope = "media"
+reason = "not in 0.x: media resolvers and room vision belong to the media implementation."
+
+[[missing]]
+python = "roomkit.turns._wiring.TurnWiring"
+members = ["build_room_vision_loader"]
+scope = "media"
+reason = "not in 0.x: supplies the most recent video analysis to a channel."
+
+[[exception]]
+rust = "roomkit::turns::WiringEnv::context"
+params = ["carrying"]
+approved = "2026-11-18"
+reason = "An explicit Option<&RoomContext> borrows the context carried by a caller. None is Python's omitted carrying=None."
+
+[[exception]]
+rust = "roomkit::turns::TurnWiring::hook_context"
+params = ["carrying"]
+approved = "2026-11-18"
+reason = "The wiring passes the optional borrowed context to its environment. Passing None requests a fresh room read."

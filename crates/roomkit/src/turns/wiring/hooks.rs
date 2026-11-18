@@ -9,6 +9,7 @@ use roomkit_core::rules::hook_registry::HookSpec;
 use std::sync::Arc;
 
 /// A channel's callbacks on its executor, usable inside or outside a turn.
+#[doc(hidden)]
 #[derive(Clone, Debug)]
 pub struct ChannelTurnHooks(Binding);
 
@@ -36,6 +37,7 @@ impl From<TurnHost> for ChannelTurnHooks {
 impl TurnWiring {
     /// The callbacks for a channel's text work in this room. They retain the
     /// current turn when one exists and create no turn when called independently.
+    #[doc(hidden)]
     pub fn channel_hooks(
         &self,
         room: &RoomId,

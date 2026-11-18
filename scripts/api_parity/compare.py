@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from api_parity.mapping import Entry, Literal, Mapping, snake_name, variant_name
 from api_parity.sides import Python, Surface, python_signature
 from api_parity.wire_compare import check_wire
+from api_parity.wiring_source import EMITTER, emitter_matches
 
 # What a struct a caller builds that keeps `#[non_exhaustive]` is found with.
 NON_EXHAUSTIVE = "#[non_exhaustive]: a caller outside the crate cannot build it by struct update"
@@ -210,6 +211,10 @@ class Comparison:
         spec = self.python.specs.get(python)
         if spec is None:
             return  # a Python constant or alias: a name, and no member to compare
+        if python == EMITTER:
+            if not emitter_matches(item, spec["__call__"], self.surface.items):
+                self._find("rust", item["path"], "callback type and options must carry the pinned outlet signature", item["path"], python)
+            return
         if item["kind"] in ("type", "constant"):
             if spec:
                 self._find("rust", item["path"], f"a {item['kind']}: {python} is a class with members", item["path"], python)

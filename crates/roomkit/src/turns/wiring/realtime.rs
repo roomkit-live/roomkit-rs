@@ -97,6 +97,11 @@ impl TurnRealtime {
         })
     }
 
+    /// Close this outlet. The fallback is owned by its host and remains usable.
+    pub fn close(&self) -> impl Future<Output = ()> {
+        std::future::ready(())
+    }
+
     /// Subscribe on the host backend selected at the time of the call.
     ///
     /// # Errors
