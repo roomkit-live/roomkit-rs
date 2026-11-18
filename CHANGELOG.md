@@ -6,6 +6,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- PostgreSQL store initialization reads index uniqueness in its own schema, so concurrent DDL in another schema can proceed independently. Index repair also handles quoted names and predicates containing `UNIQUE`.
+
+- Text tool callbacks refresh the room history when a room is recreated or transferred to another organization.
+
 - A direct prompt on a wired AI or ACP text channel checks the original answer scope and current room binding before each live publication. Tools and framework hooks continue to receive their results when room publication is withheld.
 
 - Applications can share an explicit in-memory turn backend, supply a standalone worker's telemetry provider, and register native application errors on an owner or worker. Forwarding a remote application error preserves the original record.
