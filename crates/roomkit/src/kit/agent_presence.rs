@@ -1,6 +1,8 @@
 //! The local executor's coverage of each room's agents (RFC §10.6.7).
 
 mod call;
+#[cfg(test)]
+mod catalogue_tests;
 pub(in crate::kit) mod detach;
 pub(crate) mod watch;
 
@@ -75,42 +77,72 @@ impl<S: ConversationStore> RoomKit<S> {
         room: &RoomId,
         organization: Option<&str>,
     ) -> BTreeSet<ChannelId> {
-        let declared: Vec<_> = channels
+        let declared: BTreeSet<_> = channels
             .iter()
             .filter(|id| {
                 self.inner
                     .channel(id)
                     .is_some_and(|c| c.is_declaration_only())
             })
+            .cloned()
             .collect();
-        if declared.is_empty() {
-            return BTreeSet::new();
-        }
-        // Both built-in registries read current coverage. A failed read proves nothing.
-        let infos = if let Some(app) = &self.inner.turns.application {
-            let Some(read) = app.backend.executors_now() else {
-                return BTreeSet::new();
-            };
-            read.await
-        } else {
-            self.executors().await
-        };
-        let confirmed = infos.and_then(|infos| {
-            let mut offline = BTreeSet::new();
-            for id in declared {
-                if !self
-                    .presence_of(id, room, organization.map(str::to_owned), &infos)?
-                    .online
-                {
-                    offline.insert(id.clone());
-                }
+        let absent = match self.inner.turns.configured_backend() {
+            Some(backend) => {
+                self.confirm_offline(&**backend, declared, room, organization)
+                    .await
             }
-            Ok(offline)
-        });
-        confirmed.unwrap_or_else(|error| {
+            // The implicit local transport lists no other executors.
+            None => self.absent_from_listing(declared, room, organization, &[]),
+        };
+        absent.unwrap_or_else(|error| {
             tracing::warn!(%error, %room, "Could not establish executor coverage");
             BTreeSet::new()
         })
+    }
+
+    /// A cached absence may have missed a new worker. Confirm only the still
+    /// missing channels before the discussion drops their work (§19.7.5).
+    async fn confirm_offline(
+        &self,
+        backend: &dyn crate::turns::TurnBackend,
+        mut candidates: BTreeSet<ChannelId>,
+        room: &RoomId,
+        organization: Option<&str>,
+    ) -> Result<BTreeSet<ChannelId>, RoomKitError> {
+        use crate::turns::TurnBackend;
+
+        for read in [
+            <dyn TurnBackend>::executors,
+            <dyn TurnBackend>::executors_now,
+        ] {
+            if candidates.is_empty() {
+                break;
+            }
+            let Some(read) = read(backend) else {
+                return Ok(BTreeSet::new());
+            };
+            candidates = self.absent_from_listing(candidates, room, organization, &read.await?)?;
+        }
+        Ok(candidates)
+    }
+
+    fn absent_from_listing(
+        &self,
+        candidates: BTreeSet<ChannelId>,
+        room: &RoomId,
+        organization: Option<&str>,
+        infos: &[ExecutorInfo],
+    ) -> Result<BTreeSet<ChannelId>, RoomKitError> {
+        let mut absent = BTreeSet::new();
+        for id in candidates {
+            if !self
+                .presence_of(&id, room, organization.map(str::to_owned), infos)?
+                .online
+            {
+                absent.insert(id);
+            }
+        }
+        Ok(absent)
     }
 
     pub(super) fn presence_of(
