@@ -29,6 +29,21 @@
   },
   "commit": "66153f0991804d865eda19d50893f0330b24cc6b",
   "protocol_records": {
+    "roomkit.core.hooks.SyncPipelineResult": {
+      "__init__": [
+        "def",
+        "allowed=True",
+        "event=None",
+        "reason=None",
+        "blocked_by=None",
+        "injected_events=<factory>",
+        "tasks=<factory>",
+        "observations=<factory>",
+        "hook_errors=<factory>",
+        "metadata=<factory>",
+        "failed_closed=False"
+      ]
+    },
     "roomkit.turns._outlet.FrameworkEmitter": {
       "__call__": [
         "async def",

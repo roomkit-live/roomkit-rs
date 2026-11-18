@@ -52,6 +52,7 @@ _RULES = {
     "packages",
     "builtins",
     "wire",
+    "extensions",
     "builtin_payloads",
     "literals",
     "builtin_errors",
@@ -104,6 +105,9 @@ class Rules:
     # Exact Python wire definitions compared for each Rust representation.
     wire: dict[str, list[str]] = field(default_factory=dict)
 
+    # A trait defined in an adapter crate adding methods to a public type from another crate.
+    extensions: dict[str, str] = field(default_factory=dict)
+
     @classmethod
     def from_table(cls, table: dict) -> Rules:
         if not _RULES_REQUIRED <= set(table) <= _RULES:
@@ -118,6 +122,12 @@ class Rules:
         _rust_paths("wire", list(wire))
         if any(not isinstance(v, list) or not v or not all(isinstance(k, str) for k in v) for v in wire.values()):
             raise ParityError("[rules.wire] expects a list of pinned Python wire definitions")
+        extensions = table.get("extensions", {})
+        if not isinstance(extensions, dict):
+            raise ParityError("[rules.extensions] expects trait paths mapped to concrete Rust receivers")
+        _rust_paths("extensions", [*extensions, *extensions.values()])
+        if any(name == receiver for name, receiver in extensions.items()):
+            raise ParityError("[rules.extensions] requires a separate concrete receiver")
         builtin_errors = dict(table.get("builtin_errors", {}))
         _rust_paths("builtin_errors", list(builtin_errors))
         return cls(
@@ -130,6 +140,7 @@ class Rules:
             builtin_errors,
             {path: _family(path, raw) for path, raw in table.get("error_families", {}).items()},
             wire,
+            extensions,
         )
 
     def builtin(self, path: str) -> Builtin | None:
@@ -138,7 +149,7 @@ class Rules:
     def ruled_types(self) -> list[str]:
         """The Rust types a rule maps, by path: its builtins, its literals and
         its error families."""
-        return [*self.builtins, *self.literals, *self.error_families, *self.wire]
+        return [*self.builtins, *self.literals, *self.error_families, *self.wire, *self.extensions]
 
     def python_type_name(self, rust: str) -> str:
         """A Rust type's name with its acronyms in Python's casing."""

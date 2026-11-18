@@ -16,6 +16,7 @@ async def emit_framework_event(fallback, event_type, *, channel_id=None, data=No
 class TurnRealtime(RealtimeBackend):
     async def publish(self, channel, event): pass
 """,
+            "core_hooks": "@dataclass\nclass SyncPipelineResult:\n    event: object = None\n    errors: list = field(default_factory=list)",
             "realtime_base": "class RealtimeBackend:\n    async def close(self): pass",
             "_wiring": """
 class TurnWiring:
@@ -34,6 +35,7 @@ class TurnWiring:
         self.assertEqual(records["roomkit.turns._wiring.TurnWiring"], {
             "hook_context": ["async def", "room_id", "*", "carrying=None"], "env": ["property"],
         })
+        self.assertEqual(records["roomkit.core.hooks.SyncPipelineResult"]["__init__"], ["def", "event=None", "errors=<factory>"])
         outlet = records["roomkit.turns._outlet.TurnRealtime"]
         self.assertEqual(outlet, {"close": ["async def"], "publish": ["async def", "channel", "event"]})
         self.assertEqual(records[EMITTER]["__call__"], ["async def", "event_type", "*", "channel_id=None", "data=None"])

@@ -1396,3 +1396,24 @@ class ThePin(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ExtensionReceivers(unittest.TestCase):
+    def test_the_methods_belong_to_the_python_instance_only_with_a_concrete_rust_impl(self):
+        owner = struct("roomkit::Wiring", methods=["pub fn emit(&self)"])
+        extension = {
+            "kind": "trait", "path": "roomkit_ai::WiringExt", "provided": [],
+            "required": [surface_reader.parse_fn("fn think(&self, room_id: &str)")],
+            "implemented_for": [owner["path"]],
+        }
+        python = {"roomkit.Wiring": {"emit": ["def"], "think": ["def", "room_id"]}}
+        rules = {"extensions": {extension["path"]: owner["path"]}}
+        self.assertEqual(found(run([owner, extension], python, rules=rules)), [])
+        extension["implemented_for"] = ["foreign::Wiring"]
+        lost = run([owner, extension], python, rules=rules)
+        self.assertIn(("python", "roomkit.Wiring.think"), found(lost))
+        self.assertTrue(any("no documented implementation" in issue.detail for issue in lost.findings))
+        extension["implemented_for"] = [owner["path"]]
+        extension["required"].append(surface_reader.parse_fn("fn unrelated(&self)"))
+        extra = run([owner, extension], python, rules=rules)
+        self.assertIn(("rust", "roomkit_ai::WiringExt::unrelated"), found(extra))

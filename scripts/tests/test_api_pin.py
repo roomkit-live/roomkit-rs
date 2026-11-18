@@ -77,6 +77,9 @@ class PinTargets(unittest.TestCase):
             "FrameworkEmitter = Callable[..., Awaitable[None]]\nclass TurnRealtime(RealtimeBackend): pass\n"
             "async def emit_framework_event(fallback, event_type, *, data=None): pass\n"
         )
+        hooks = self.roomkit / "src/roomkit/core"
+        hooks.mkdir(exist_ok=True)
+        (hooks / "hooks.py").write_text("@dataclass\nclass SyncPipelineResult:\n    allowed: bool = True\n")
         realtime = self.roomkit / "src/roomkit/realtime"
         realtime.mkdir(exist_ok=True)
         (realtime / "base.py").write_text("class RealtimeBackend: pass\n")

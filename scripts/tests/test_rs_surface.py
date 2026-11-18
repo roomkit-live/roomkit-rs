@@ -392,3 +392,21 @@ class ParsesSignatures(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DownstreamReceivers(unittest.TestCase):
+    def test_only_concrete_types_implemented_by_the_trait_page_are_reported(self):
+        concrete = '<a class="struct" href="../model/struct.Wiring.html" title="struct model::Wiring">Wiring</a>'
+        foreign = '<h3 class="code-header">impl Ext for ' + concrete + '</h3>'
+        blanket = '<h3 class="code-header">impl&lt;T&gt; Ext for T</h3>'
+        borrowed = '<h3 class="code-header">impl Ext for &amp;' + concrete + '</h3>'
+        self.assertEqual(surface._implemented_for({"foreign-impls": foreign, "implementors": blanket + borrowed}, FIXTURES, "app/trait.Ext.html"), ["model::Wiring"])
+
+    def test_the_private_definition_path_can_redirect_to_a_public_reexport(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            doc = Path(temporary)
+            page = doc / "model/private/struct.Wiring.html"
+            page.parent.mkdir(parents=True)
+            page.write_text('<meta http-equiv="refresh" content="0;URL=../struct.Wiring.html">')
+            impl = '<h3 class="code-header">impl Ext for <a class="struct" href="../model/private/struct.Wiring.html" title="struct model::private::Wiring">Wiring</a></h3>'
+            self.assertEqual(surface._implemented_for({"foreign-impls": impl}, doc, "adapter/trait.Ext.html"), ["model::Wiring"])

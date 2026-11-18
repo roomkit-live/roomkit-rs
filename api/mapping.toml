@@ -1772,3 +1772,12 @@ rust = "roomkit::turns::TurnWiring::hook_context"
 params = ["carrying"]
 approved = "2026-11-18"
 reason = "The wiring passes the optional borrowed context to its environment. Passing None requests a fresh room read."
+
+[rules.extensions]
+"roomkit_ai::TurnWiringExt" = "roomkit::turns::TurnWiring"
+
+[[map]]
+rust = "roomkit::turns::SyncPipelineResult"
+python = "roomkit.core.hooks.SyncPipelineResult"
+py_spec = "sha256:29e4cf87a7a5fe640cc52e5af706a6ad8dd761a18e3a365153e1002361d8ddca"
+reason = "The synchronous result returned by the text callbacks carries the fields and defaults of the pinned Python dataclass."

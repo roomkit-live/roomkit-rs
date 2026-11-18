@@ -101,7 +101,7 @@ def main() -> None:
         )
         for module in (*ATTRIBUTE_CLASSES, "wire", *PORTS)
     }
-    for name, path in (EXTRA_MODULES | {"realtime_base": "realtime/base"}).items():
+    for name, path in (EXTRA_MODULES | {"realtime_base": "realtime/base", "core_hooks": "core/hooks"}).items():
         sources[name] = subprocess.check_output(
             ["git", "-C", str(args.checkout), "show", f"{args.commit}:src/roomkit/{path}.py"],
             text=True, encoding="utf-8",

@@ -645,6 +645,11 @@ commit and checks their public Rust counterparts.
 | `executor.wire(channel)` | `executor.wire(&channel)` | The channel retains the environment selected at registration. A custom intelligence channel can report its answer to the executor's observers. The Rust channel bridge carries the callbacks between crates. |
 | `wiring.env.context(room_id, carrying=None)`, `wiring.hook_context(room_id, trigger, carrying=None)` | `roomkit::turns::WiringEnv::context`, `roomkit::turns::TurnWiring::hook_context` | Pass `None` for the omitted context, or `Some(&context)` to borrow one the channel already holds. |
 
+| Python call on the returned wiring | Rust import or output | Observable contract |
+|---|---|---|
+| Thinking, speaking, thought, tool-round, response and generation builders | Import `roomkit_ai::TurnWiringExt` and call its methods on `roomkit::turns::TurnWiring`. | The event types belong to the AI crate. The inventory reads the trait's concrete receiver in rustdoc. |
+| The result returned by `wiring.tools.run_tool_call_chain` and the before-generation hook | `roomkit::turns::SyncPipelineResult<P>` | The result carries the final event, decision, blocking hook, side effects, diagnostics, metadata and fail-closed marker. Mutable collections default to an empty collection for each result. |
+
 The Python worker constructor also takes `media_resolver` and `attached_media`.
 These belong to the media API.
 

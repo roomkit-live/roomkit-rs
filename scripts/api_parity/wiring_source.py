@@ -58,6 +58,28 @@ def instance_methods(cls: ast.ClassDef) -> dict[str, list[str]]:
     return {node.name: method(node) for node in cls.body if isinstance(node, METHODS) and not node.name.startswith("_")}
 
 
+def synchronous_result(source: str) -> dict[str, list[str]]:
+    """The public data the executor returns when a caller runs its synchronous chain."""
+    cls = class_named(ast.parse(source), "SyncPipelineResult")
+    if [ast.unparse(decorator) for decorator in cls.decorator_list] != ["dataclass"]:
+        raise ValueError("the synchronous hook result is no longer a plain dataclass")
+    result = instance_methods(cls)
+    fields = ["def"]
+    for node in cls.body:
+        if not isinstance(node, ast.AnnAssign) or not isinstance(node.target, ast.Name):
+            continue
+        value = node.value
+        if value is None:
+            fields.append(node.target.id)
+        elif isinstance(value, ast.Constant):
+            fields.append(f"{node.target.id}={value.value!r}")
+        elif ast.unparse(value) in ("field(default_factory=list)", "field(default_factory=dict)"):
+            fields.append(f"{node.target.id}=<factory>")
+        else:
+            raise ValueError(f"{cls.name}.{node.target.id}: unsupported default")
+    return result | {"__init__": fields}
+
+
 def wiring_records(sources: dict[str, str]) -> dict:
     trees = {module: ast.parse(sources[module]) for module in (*PORTS, "realtime_base")}
     records = {EMITTER: {"__call__": emitter_signature(trees["_outlet"])}}
@@ -79,6 +101,7 @@ def wiring_records(sources: dict[str, str]) -> dict:
                         if isinstance(target, ast.Attribute) and ast.unparse(target.value) == "self" and not target.attr.startswith("_"):
                             members[target.attr] = ["property"]
         records[path] = members
+    records["roomkit.core.hooks.SyncPipelineResult"] = synchronous_result(sources["core_hooks"])
     return records
 
 

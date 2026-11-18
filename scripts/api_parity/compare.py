@@ -110,6 +110,10 @@ class Comparison:
         the builtin a strong type, a validator's error or a raised
         exception's alias stands for, a `Literal`'s field, or the name by
         its casing."""
+        receiver = self.rules.extensions.get(item["path"])
+        if receiver is not None:
+            target = self.surface.items.get(receiver)
+            return self.python_of(target) if target and target["kind"] == "struct" else None
         entry = self.item_maps.get(item["path"])
         if entry is not None:
             self.applied.add(id(entry))
@@ -133,6 +137,11 @@ class Comparison:
         named = [("builtins", path) for path in self.rules.builtins]
         named += [("literals", path) for path in self.rules.literals]
         named += [("wire", path) for path in self.rules.wire]
+        for trait, receiver in self.rules.extensions.items():
+            ext = items.get(trait, {})
+            if (ext.get("kind") != "trait" or items.get(receiver, {}).get("kind") != "struct" or
+                    receiver not in ext.get("implemented_for", [])):
+                self._find("rust", trait, f"listed in [rules] extensions: no documented implementation for {receiver}", trait, None)
         for table, path in named:
             if path not in items:
                 self._find("rust", path, f"listed in [rules] {table}: no such Rust item", path, None)
@@ -219,6 +228,10 @@ class Comparison:
             if spec:
                 self._find("rust", item["path"], f"a {item['kind']}: {python} is a class with members", item["path"], python)
             return
+        if item["path"] in self.rules.extensions:
+            # Compare just this trait's contribution. The receiver checks every Python member.
+            members = {m["name"] for group in ("required", "provided") for m in item.get(group, [])}
+            spec = {name: signature for name, signature in spec.items() if name in members}
         if item["kind"] != "fn":
             self._class(item, python, spec)
         elif "__call__" in spec:
@@ -306,6 +319,10 @@ class Comparison:
             if python in self.python.specs:
                 bases.append(self.python.specs[python])
             methods |= {m["name"]: (trait["path"], m) for kind in ("required", "provided") for m in trait.get(kind, [])}
+        for path, receiver in self.rules.extensions.items():
+            trait = self.surface.items.get(path, {})
+            if receiver == item["path"] and receiver in trait.get("implemented_for", []):
+                methods.update({m["name"]: (path, m) for group in ("provided", "required") for m in trait.get(group, [])})
         return bases, methods
 
     def _error_family(self, item: dict, cls: _Class) -> None:

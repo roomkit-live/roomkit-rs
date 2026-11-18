@@ -374,7 +374,41 @@ def _parse_member(header: str, where: str, anchor: str) -> dict:
     return parsed
 
 
-def _trait_members(sections: dict[str, str], decl: str, where: str) -> dict:
+@lru_cache(maxsize=None)
+def _redirected_receiver(doc: Path, local: str) -> str | None:
+    """Rustdoc can link a type's private definition module, which redirects to its public re-export."""
+    filename = doc / local
+    if not filename.is_file():
+        return None
+    with filename.open(encoding="utf-8") as stream:
+        first = stream.read(512)
+    redirect = re.search(r'<meta http-equiv="refresh" content="0;URL=([^"]+)">', first)
+    if not redirect:
+        return None
+    target = posixpath.normpath(posixpath.join(posixpath.dirname(local), redirect[1]))
+    match = re.fullmatch(r"([\w/]+)/(?:struct|enum)\.(\w+)\.html", target)
+    return (match[1] + "/" + match[2]).replace("/", "::") if match else None
+
+
+def _implemented_for(sections: dict[str, str], doc: Path, where: str) -> list[str]:
+    """Concrete receivers listed on the trait's page, including those from another crate."""
+    headers = re.findall(r'<h3 class="code-header">(.*?)</h3>', sections.get("foreign-impls", "") + sections.get("implementors", ""), re.S)
+    receivers = set()
+    for header in headers:
+        _, separator, receiver = header.partition(" for ")
+        if separator:
+            # A blanket impl for T, &T, or Box<T> does not implement an extension for T itself.
+            matched = re.match(r'<a class="(?:struct|enum)" href="([^"]*)" title="(?:struct|enum) ([\w:]+)">\w+</a>\s*$', receiver)
+            if matched:
+                href, canonical = matched.groups()
+                local = posixpath.normpath(posixpath.join(posixpath.dirname(where), href))
+                if re.fullmatch(r"[\w/.-]+", local) and not local.startswith(("../", "/")):
+                    canonical = _redirected_receiver(doc, local) or canonical
+                receivers.add(canonical)
+    return sorted(receivers)
+
+
+def _trait_members(sections: dict[str, str], decl: str, where: str, doc: Path) -> dict:
     required, _, required_types = _members(sections.get("required-methods", ""), where)
     provided, _, provided_types = _members(sections.get("provided-methods", ""), where)
     _, _, types = _members(sections.get("required-associated-types", "") + sections.get("provided-associated-types", ""), where)
@@ -388,7 +422,10 @@ def _trait_members(sections: dict[str, str], decl: str, where: str) -> dict:
     listed_types = len(re.findall(r"(?m)^\s*type\s+\w", body))
     if listed_types != len(types) or required_types or provided_types:
         raise SurfaceError(f"{where}: the declaration lists {listed_types} associated types, the page {len(types)}")
-    return {"required": required, "provided": provided, "types": types, "constants": constants}
+    members = {"required": required, "provided": provided, "types": types, "constants": constants}
+    if receivers := _implemented_for(sections, doc, where):
+        members["implemented_for"] = receivers
+    return members
 
 
 def _impls(sections: dict[str, str], where: str) -> list[str]:
@@ -480,7 +517,7 @@ def read_item(doc: Path, crate: str, kind: str, name: str, href: str) -> dict:
     elif kind == "enum":
         item["variants"] = _variants(sections, decl, where)
     else:
-        item.update(_trait_members(sections, decl, where))
+        item.update(_trait_members(sections, decl, where, doc))
     return item
 
 
