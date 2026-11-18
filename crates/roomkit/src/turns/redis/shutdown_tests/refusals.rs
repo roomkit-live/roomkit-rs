@@ -105,7 +105,7 @@ async fn unreadable_channel_and_room_calls_return_a_validation_error() {
             serde_json::from_str(&raw.expect("a result from the live peer")).unwrap();
         assert_eq!(result["type"], kind);
         assert_eq!(result["error"]["kind"], "builtins:ValueError");
-        assert!(!result["error"]["message"].as_str().unwrap().is_empty());
+        assert_ne!(result["error"]["message"].as_str().unwrap(), "");
         if kind == "channel_result" {
             assert_eq!(result["executor_id"], "worker");
         } else {

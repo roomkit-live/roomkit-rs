@@ -69,7 +69,7 @@ fn rewrite(family: &str, value: &Value) -> Value {
                     call.turn_id = "rust-turn".into();
                 }
                 OwnerMessage::RoomPublication(publication) => {
-                    publication.turn_id = "rust-turn".into()
+                    publication.turn_id = "rust-turn".into();
                 }
             },
         ),
