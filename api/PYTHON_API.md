@@ -68,6 +68,8 @@ the mapping and its tests. The check does not generate or update this document.
 | `roomkit::turns::TurnFuture` | An awaitable returned by a link or a backend | A boxed future allows a trait object to call asynchronous application code. |
 | `roomkit::turns::TurnContext` | `contextvars.Context` from `ExecutorLink.turn_context` and `stream_context` | A local link can capture the current execution context. A distributed worker receives a fresh context. |
 | `roomkit::turns::TurnBackend::executors_now` | `TurnBackend._executors_now` | Refresh a cached catalogue before skipping a turn. The default delegates to the transport's ordinary catalogue read. |
+| `roomkit::turns::TurnClientOutput` | `TurnClient.run` returning `ChannelOutput` | The result exposes the channel output fields and an optional response stream. Reading the stream advances the worker. |
+| `roomkit::turns::TurnClientInputs`, `roomkit::turns::TurnClientInputTurn` | `TurnClient.inputs.request(request_id)` | Read the original turn request and the worker's raw input request together. Use the client's `input_request` to read the resolved, organization-filtered event. |
 | `roomkit::turns::ServedExecutor` | `roomkit.TurnBackend.serve(executor)` | A backend accepts an executor backed by any conversation store. The application keeps the typed executor to register hooks. |
 | `roomkit::TurnExecutor::new_with_host_predicate` | `roomkit.TurnExecutor(..., hosts=predicate)` | A closure selects channels on its own node. Cloned local snapshots retain it. |
 | `roomkit::turns::ErrorClasses` | `RoomKit(..., error_classes=...)`, `TurnExecutor(..., error_classes=...)` | Register the native type's encoder and decoder. An exact class match takes precedence over its nearest registered base. |

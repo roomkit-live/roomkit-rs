@@ -15,6 +15,10 @@ pub(super) fn opened(
     request: InputRequest,
 ) {
     let facts = &owner.facts;
+    let raw = facts
+        .client
+        .as_ref()
+        .map(|(_, submitted)| (Arc::clone(submitted), request.clone()));
     let event = PendingInputEvent {
         pending_id: request.request_id,
         tool_name: request.tool_name,
@@ -32,5 +36,5 @@ pub(super) fn opened(
         timestamp: request.created_at.unwrap_or(facts.event_created_at),
         actor_id: request.actor_id,
     };
-    inputs.opened(turn, event, facts.organization_id.clone());
+    inputs.opened(turn, event, facts.organization_id.clone(), raw);
 }

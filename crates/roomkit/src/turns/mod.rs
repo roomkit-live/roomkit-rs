@@ -30,8 +30,8 @@
 
 mod client;
 pub use client::{
-    OwnerEvents, OwnerHost, OwnerTools, TurnClient, TurnClientInputs, TurnClientOptions,
-    TurnClientOutput, TurnRunOptions,
+    OwnerEvents, OwnerHost, OwnerTools, TurnClient, TurnClientInputTurn, TurnClientInputs,
+    TurnClientOptions, TurnClientOutput, TurnRunOptions,
 };
 mod served_executor;
 pub use served_executor::ServedExecutor;

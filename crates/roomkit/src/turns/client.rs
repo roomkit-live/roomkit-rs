@@ -2,7 +2,7 @@
 mod admissions;
 mod calls;
 mod inputs;
-pub use inputs::TurnClientInputs;
+pub use inputs::{TurnClientInputTurn, TurnClientInputs};
 mod output;
 mod port;
 mod ports;

@@ -1703,3 +1703,18 @@ reason = "Python's _executors_now refreshes a cached catalogue before placement 
 "roomkit::turns::wire::ToolEnd" = ["roomkit.turns._codec.encode_end"]
 "roomkit::turns::wire::WireResult" = ["roomkit.turns._codec.encode_result"]
 "roomkit::turns::wire::WireLoopEnd" = ["roomkit.models.streaming.LoopEndMarker"]
+
+[[exception]]
+rust = "roomkit::turns::TurnClientInputs"
+approved = "2026-11-18"
+reason = "Public access to TurnClient.inputs. Its request method returns the opening turn and original wire request, and its answer and reject methods settle it (HITL 7abfab26)."
+
+[[exception]]
+rust = "roomkit::turns::TurnClientInputTurn"
+approved = "2026-11-18"
+reason = "The read-only opener of a client's pending input exposes the shared original TurnRequest. Control and settlement belong to the client (HITL 7abfab26)."
+
+[[exception]]
+rust = "roomkit::turns::TurnClientOutput"
+approved = "2026-11-18"
+reason = "TurnClient.run returns a ChannelOutput with direct field access and an optional single-reader stream. The core ChannelOutput remains a cloneable value."

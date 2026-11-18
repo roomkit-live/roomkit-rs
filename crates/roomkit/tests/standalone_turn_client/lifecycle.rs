@@ -59,10 +59,7 @@ async fn steering_waits_for_the_worker_to_finish_admission_and_close_releases_an
 
 #[tokio::test]
 async fn only_the_requests_tenant_reads_its_inputs_and_an_answer_or_close_withdraws_them() {
-    use roomkit::{
-        InputRequestOptions,
-        turns::wire::{InputOutcome, InputRequest},
-    };
+    use roomkit::turns::wire::{InputOutcome, InputRequest};
     use serde_json::json;
     let backend = Arc::new(Backend::default());
     let client = TurnClient::new(
@@ -94,31 +91,7 @@ async fn only_the_requests_tenant_reads_its_inputs_and_an_answer_or_close_withdr
         .metadata_updates
         .insert("read-by-owner".into(), json!(true));
     assert_eq!(output.output.metadata_updates["read-by-owner"], true);
-    let snapshot = client.inputs().request("one").unwrap();
-    assert_eq!(snapshot.room_id, r.room_id.as_str());
-    assert_eq!(snapshot.channel_id, r.channel_id.as_str());
-    assert_eq!(snapshot.tool_call_id, "model-call");
-    assert_eq!(snapshot.actor_id.as_deref(), Some("operator"));
-    assert_eq!(snapshot.arguments["q"], "time?");
-    assert_eq!(
-        client.input_request(
-            "one",
-            &InputRequestOptions {
-                organization_id: Some("team".into())
-            }
-        ),
-        Some(snapshot)
-    );
-    assert!(
-        client
-            .input_request(
-                "one",
-                &InputRequestOptions {
-                    organization_id: Some("other".into())
-                }
-            )
-            .is_none()
-    );
+    assert_open_input(&client, &backend.requests.lock().unwrap()[0]);
     let inputs = client.inputs();
     let acknowledge = async {
         let Some(Control::InputAnswer {
@@ -159,4 +132,50 @@ async fn only_the_requests_tenant_reads_its_inputs_and_an_answer_or_close_withdr
     client.close().await.unwrap();
     assert!(inputs.request("two").is_none());
     drop(stream);
+}
+
+fn assert_open_input(client: &TurnClient, sent: &roomkit::turns::TurnRequest) {
+    use roomkit::InputRequestOptions;
+    let (opener, request) = client.inputs().request("one").unwrap();
+    let (same_turn, _) = client.inputs().request("two").unwrap();
+    assert!(Arc::ptr_eq(&opener.request, &same_turn.request));
+    assert_eq!(opener.request.turn_id, sent.turn_id);
+    assert_eq!(opener.request.event, sent.event);
+    assert_eq!(opener.request.strategy_turn, sent.strategy_turn);
+    assert_eq!(
+        opener.request.context.room.organization_id.as_deref(),
+        Some("team")
+    );
+    assert_eq!(request.request_id, "one");
+    assert!(
+        request.room_id.is_none() && request.channel_id.is_none() && request.created_at.is_none()
+    );
+    assert_eq!(request.tool_call_id.as_deref(), Some("model-call"));
+    assert_eq!(request.actor_id.as_deref(), Some("operator"));
+    assert_eq!(
+        request.arguments.get("q"),
+        Some(&serde_json::json!("time?"))
+    );
+    let snapshot = client
+        .input_request(
+            "one",
+            &InputRequestOptions {
+                organization_id: Some("team".into()),
+            },
+        )
+        .unwrap();
+    assert_eq!(snapshot.room_id, sent.room_id.as_str());
+    assert_eq!(snapshot.channel_id, sent.channel_id.as_str());
+    assert_eq!(snapshot.timestamp, sent.event.created_at);
+    assert_eq!(snapshot.arguments, request.arguments);
+    assert!(
+        client
+            .input_request(
+                "one",
+                &InputRequestOptions {
+                    organization_id: Some("other".into())
+                }
+            )
+            .is_none()
+    );
 }

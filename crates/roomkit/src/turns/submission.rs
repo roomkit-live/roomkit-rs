@@ -318,7 +318,6 @@ impl Turns {
                 _ = closing.wait_for(|closing| *closing) => return Err(closed().into()),
                 rows = client.channel_rows(&request.binding,&request.event,&request.context) => rows,
             };
-            facts.client = Some((Arc::clone(client), Arc::new(request.clone())));
         }
         handover.marker = request.handover.clone();
         let link = tokio::select! {
@@ -337,6 +336,9 @@ impl Turns {
             )
             .to_record()
             .into());
+        }
+        if let Some(client) = &self.client {
+            facts.client = Some((Arc::clone(client), Arc::new(link.request().clone())));
         }
         handover.handed = true;
         drop(handover);

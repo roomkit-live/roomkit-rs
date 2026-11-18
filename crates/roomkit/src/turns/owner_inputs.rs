@@ -25,7 +25,9 @@ use tokio::time::Instant;
 use crate::human_input::PendingInputEvent;
 
 use super::lock;
-use super::wire::{Control, InputOutcome};
+use super::wire::{Control, InputOutcome, InputRequest, TurnRequest};
+
+type ClientRequest = (Arc<TurnRequest>, InputRequest);
 
 /// How many settled request ids the owner remembers, refusing a second
 /// answer.
@@ -83,6 +85,7 @@ struct OpenRequest {
     turn: Arc<dyn InputTurn>,
     event: PendingInputEvent,
     organization_id: Option<String>,
+    client_request: Option<ClientRequest>,
 }
 
 #[derive(Default)]
@@ -174,6 +177,7 @@ impl OwnerInputs {
         turn: Arc<dyn InputTurn>,
         event: PendingInputEvent,
         organization_id: Option<String>,
+        client_request: Option<ClientRequest>,
     ) {
         let request_id = event.pending_id.as_str();
         let mut record = lock(&self.record);
@@ -192,8 +196,14 @@ impl OwnerInputs {
                 turn,
                 event,
                 organization_id,
+                client_request,
             },
         );
+    }
+
+    /// The standalone owner's request before its defaults are filled in.
+    pub(super) fn client_request(&self, id: &str) -> Option<ClientRequest> {
+        lock(&self.record).open.get(id)?.client_request.clone()
     }
 
     /// An owned snapshot of an open request, scoped to its turn's room.
@@ -423,11 +433,13 @@ mod tests {
             Arc::clone(&owner),
             expected.clone(),
             Some("org-a".to_owned()),
+            None,
         );
         inputs.opened(
             Arc::clone(&another),
             request("p1"),
             Some("org-b".to_owned()),
+            None,
         );
 
         let mut read = inputs.request("p1", Some("org-a")).unwrap();
@@ -452,7 +464,7 @@ mod tests {
             async move { inputs.answer("p1", "Early", HOLD).await }
         });
         settle().await;
-        inputs.opened(Arc::clone(&handle), request("p1"), None);
+        inputs.opened(Arc::clone(&handle), request("p1"), None, None);
         settle().await;
         assert_eq!(turn.values(), [Some("Early".to_owned())]);
         assert!(!answering.is_finished());
@@ -470,7 +482,7 @@ mod tests {
                 .answer("p1", "Early", Duration::from_millis(20))
                 .await
         );
-        inputs.opened(handle, request("p1"), None);
+        inputs.opened(handle, request("p1"), None, None);
         settle().await;
         assert_eq!(turn.values(), Vec::<Option<String>>::new());
     }
@@ -480,7 +492,7 @@ mod tests {
     async fn an_answer_the_request_settled_without_says_so() {
         let inputs = Arc::new(OwnerInputs::default());
         let (_turn, handle) = turn();
-        inputs.opened(Arc::clone(&handle), request("p1"), None);
+        inputs.opened(Arc::clone(&handle), request("p1"), None, None);
         let answering = tokio::spawn({
             let inputs = Arc::clone(&inputs);
             async move { inputs.answer("p1", "Second", HOLD).await }
@@ -497,7 +509,7 @@ mod tests {
     async fn an_answer_awaiting_its_verdict_when_the_turn_ends_was_not_taken() {
         let inputs = Arc::new(OwnerInputs::default());
         let (_turn, handle) = turn();
-        inputs.opened(Arc::clone(&handle), request("p1"), None);
+        inputs.opened(Arc::clone(&handle), request("p1"), None, None);
         let answering = tokio::spawn({
             let inputs = Arc::clone(&inputs);
             async move { inputs.answer("p1", "Answer", HOLD).await }
@@ -513,7 +525,7 @@ mod tests {
         for closed in [true, false] {
             let inputs = OwnerInputs::default();
             let (turn, handle) = turn();
-            inputs.opened(Arc::clone(&handle), request("p1"), None);
+            inputs.opened(Arc::clone(&handle), request("p1"), None, None);
             if closed {
                 inputs.closed(&handle, "p1");
             } else {
@@ -531,10 +543,10 @@ mod tests {
         let inputs = Arc::new(OwnerInputs::default());
         let (owner, owner_handle) = turn();
         let (other, other_handle) = turn();
-        inputs.opened(Arc::clone(&owner_handle), request("p1"), None);
+        inputs.opened(Arc::clone(&owner_handle), request("p1"), None, None);
         // Another turn opening, closing or judging the same id changes
         // nothing.
-        inputs.opened(Arc::clone(&other_handle), request("p1"), None);
+        inputs.opened(Arc::clone(&other_handle), request("p1"), None, None);
         inputs.closed(&other_handle, "p1");
         let answering = tokio::spawn({
             let inputs = Arc::clone(&inputs);
@@ -566,7 +578,7 @@ mod tests {
         assert!(!oldest.await.unwrap());
         let (turn, handle) = turn();
         let last = format!("p{HELD_KEPT}");
-        inputs.opened(handle, request(&last), None);
+        inputs.opened(handle, request(&last), None, None);
         assert_eq!(turn.values(), [Some(last)]);
         for task in answering {
             task.abort();
