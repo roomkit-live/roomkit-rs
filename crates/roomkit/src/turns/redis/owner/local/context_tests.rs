@@ -116,7 +116,7 @@ async fn local_turn_inherits_submission_context_then_its_first_readers_context()
     )
     .unwrap();
     let (request, owner, incoming, mut received) = link();
-    backend.submit_here(worker.clone(), request, &owner, incoming, || {});
+    backend.submit_here(Arc::new(worker.clone()), request, &owner, incoming, || {});
     let reads = tokio::time::timeout(Duration::from_secs(2), async {
         let mut text = Vec::new();
         loop {
@@ -217,9 +217,15 @@ async fn closing_after_admission_releases_the_reader_and_finishes_the_local_work
     .unwrap();
     let (request, owner, incoming, mut received) = link();
     let (accepted, taken) = tokio::sync::oneshot::channel();
-    backend.submit_here(worker.clone(), request, &owner, incoming, move || {
-        accepted.send(()).unwrap();
-    });
+    backend.submit_here(
+        Arc::new(worker.clone()),
+        request,
+        &owner,
+        incoming,
+        move || {
+            accepted.send(()).unwrap();
+        },
+    );
     tokio::time::timeout(Duration::from_secs(2), async {
         taken.await.unwrap();
         assert!(matches!(

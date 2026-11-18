@@ -2,15 +2,16 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use super::Worker;
 use super::registry::{Beat, Declaration, write_beat};
 use super::{RedisTurnBackend, redis_error};
+use crate::RoomKitError;
 use crate::turns::lock;
-use crate::{RoomKitError, TurnExecutor};
 
 #[derive(Default)]
 pub(super) struct Serving {
     /// Registration order resolves the first eligible worker in this process.
-    pub(super) workers: Vec<TurnExecutor>,
+    pub(super) workers: Vec<Worker>,
     pub(super) owner: bool,
     generation: u64,
     retiring: Vec<String>,
@@ -18,7 +19,7 @@ pub(super) struct Serving {
 }
 
 impl RedisTurnBackend {
-    pub(super) fn worker(&self, id: &str) -> Option<TurnExecutor> {
+    pub(super) fn worker(&self, id: &str) -> Option<Worker> {
         lock(&self.0.serving)
             .workers
             .iter()
@@ -30,13 +31,23 @@ impl RedisTurnBackend {
     ///
     /// # Errors
     /// A registration on a closed backend fails, as does publishing its first Redis heartbeat.
-    pub async fn serve(&self, executor: TurnExecutor) -> Result<(), RoomKitError> {
-        {
+    pub async fn serve<S: crate::ConversationStore>(
+        &self,
+        executor: crate::TurnExecutor<S>,
+    ) -> Result<(), RoomKitError> {
+        self.serve_erased(Arc::new(executor)).await
+    }
+
+    pub(crate) async fn serve_erased(&self, executor: Worker) -> Result<(), RoomKitError> {
+        let owned = {
             let mut serving = lock(&self.0.serving);
             if serving.closing {
                 return Err(super::routes::closed());
             }
-            executor.served_by(self);
+            let owned = self.0.owner_worker.get().is_some() && self.is_own(&executor);
+            if !owned {
+                executor.native().served_by(self);
+            }
             let id = executor.executor_id();
             let Serving {
                 workers, retiring, ..
@@ -52,12 +63,19 @@ impl RedisTurnBackend {
                 }
                 true
             });
-            workers.push(executor);
+            // A kit's own worker can be recovered from the owner's weak handle.
+            // It advertises no remote hosts and must not keep its kit alive.
+            if !owned || executor.hosted().is_some() {
+                workers.push(executor);
+            }
             serving.generation = serving.generation.saturating_add(1);
-        }
+            owned
+        };
         self.start().await?;
-        self.notify_coverage(super::CoverageNotice::ExecutorsChanged)
-            .await;
+        if !owned {
+            self.notify_coverage(super::CoverageNotice::ExecutorsChanged)
+                .await;
+        }
         Ok(())
     }
 
@@ -204,8 +222,8 @@ impl RedisTurnBackend {
                     node: node.into(),
                     executor_id: id.to_owned(),
                     channels,
-                    room_hooks: worker.hooks().defined_room_hooks(),
-                    organizations: worker.advertised_organizations(),
+                    room_hooks: worker.room_hooks(),
+                    organizations: worker.organizations(),
                 };
                 if let Ok(raw) = serde_json::to_string(&decl) {
                     beat.declared.insert(member, raw);

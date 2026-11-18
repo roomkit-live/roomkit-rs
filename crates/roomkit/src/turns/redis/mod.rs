@@ -30,6 +30,9 @@ use super::{ExecutorInfo, TurnTimeouts};
 use crate::RoomKitError;
 use crate::turns::executor::Lifecycle;
 
+type Worker = Arc<dyn super::ServedExecutor>;
+pub(crate) type WorkerLookup = Box<dyn Fn() -> Option<Worker> + Send + Sync>;
+
 /// Keyword arguments of Python's `RedisTurnBackend(url, *, client, key_prefix, timeouts)`.
 #[derive(Clone)]
 pub struct RedisTurnBackendOptions {
@@ -70,6 +73,7 @@ struct Node {
     prefix: String,
     owner: Mutex<Option<owner::OwnerPort>>,
     own_executor: OnceLock<Weak<Lifecycle>>,
+    owner_worker: OnceLock<placement::Reserved>,
     routes: Mutex<routes::Routes>,
     serving: Mutex<process::Serving>,
     reader: OnceCell<tokio::task::AbortHandle>,
@@ -120,6 +124,7 @@ impl RedisTurnBackend {
             prefix: options.key_prefix,
             owner: Mutex::default(),
             own_executor: OnceLock::new(),
+            owner_worker: OnceLock::new(),
             routes: Mutex::default(),
             serving: Mutex::default(),
             watchers: Mutex::default(),

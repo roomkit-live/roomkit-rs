@@ -3,10 +3,10 @@
 use std::collections::BTreeSet;
 
 use super::RedisTurnBackend;
+use super::Worker;
 use super::placement::Placed;
 use super::registry::Target;
 use crate::RoomKitError;
-use crate::TurnExecutor;
 use crate::turns::channel_calls::{ChannelCall, ChannelResult};
 use crate::turns::wire::{ChannelControl, ChannelControlEnvelope};
 use roomkit_core::model::ChannelId;
@@ -22,6 +22,15 @@ struct Placement<'a> {
 enum Audience<'a> {
     Room(Option<&'a str>),
     AllOrganizations,
+}
+
+impl Audience<'_> {
+    fn includes(&self, worker: &Worker) -> bool {
+        match self {
+            Self::Room(org) => worker.serves(*org),
+            Self::AllOrganizations => true,
+        }
+    }
 }
 
 impl RedisTurnBackend {
@@ -156,14 +165,15 @@ impl RedisTurnBackend {
         channel: &ChannelId,
         audience: Audience<'_>,
     ) -> Result<(), RoomKitError> {
+        if let Some(own) = self.owning(channel) {
+            if own.declares(channel) && audience.includes(&own) {
+                apply_here(&own, raw).await?;
+            }
+            return Ok(());
+        }
         let workers = crate::turns::lock(&self.0.serving).workers.clone();
         for worker in workers {
-            if worker.declares(channel)
-                && match audience {
-                    Audience::Room(org) => worker.serves(org),
-                    Audience::AllOrganizations => true,
-                }
-            {
+            if worker.declares(channel) && audience.includes(&worker) {
                 apply_here(&worker, raw).await?;
             }
         }
@@ -205,7 +215,7 @@ impl RedisTurnBackend {
 }
 
 /// The same serialized control and result as a worker on another node.
-async fn apply_here(worker: &TurnExecutor, raw: &str) -> Result<ChannelResult, RoomKitError> {
+async fn apply_here(worker: &Worker, raw: &str) -> Result<ChannelResult, RoomKitError> {
     let parse_error = |error: serde_json::Error| RoomKitError::Value(error.to_string());
     let envelope: ChannelControlEnvelope = serde_json::from_str(raw).map_err(parse_error)?;
     let answer = worker.control(envelope.message).await?;

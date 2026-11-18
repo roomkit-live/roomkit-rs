@@ -73,11 +73,22 @@ impl<S: ConversationStore> TurnExecutor<S> {
     }
 
     #[cfg(feature = "redis")]
-    pub(crate) fn is_owner(
-        &self,
-        owner: &std::sync::Weak<crate::turns::executor::Lifecycle>,
-    ) -> bool {
-        owner.ptr_eq(&Arc::downgrade(&self.kit.inner.turns.executor_lifecycle))
+    pub(crate) fn look_up(&self) -> crate::turns::redis::WorkerLookup {
+        let kit = self.kit.downgrade();
+        let standalone = self.standalone.as_ref().map(Arc::downgrade);
+        Box::new(move || {
+            let kit = kit.upgrade()?;
+            let standalone = match &standalone {
+                Some(worker) => Some(worker.upgrade()?),
+                None => None,
+            };
+            Some(Arc::new(Self { kit, standalone }))
+        })
+    }
+
+    #[cfg(feature = "redis")]
+    pub(crate) fn lifecycle(&self) -> std::sync::Weak<crate::turns::executor::Lifecycle> {
+        Arc::downgrade(&self.kit.inner.turns.executor_lifecycle)
     }
 
     #[cfg(feature = "redis")]

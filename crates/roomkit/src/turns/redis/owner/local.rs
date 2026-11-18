@@ -1,18 +1,19 @@
 //! An executor on the same backend receives the turn through the in-memory pipes.
 use std::sync::Arc;
 
+use crate::RedisTurnBackend;
 use crate::turns::executor::WorkerOrigin;
 use crate::turns::pipe::PipeReceiver;
+use crate::turns::redis::Worker;
 use crate::turns::wire::Control;
 use crate::turns::{CarriedRequest, MemoryTurn, WorkerTurn};
-use crate::{RedisTurnBackend, TurnExecutor};
 
 impl RedisTurnBackend {
     /// The backend owns the bridge before the worker can start. If closing
     /// refuses admission, dropping `taken` releases the unsubmitted handover.
     pub(super) fn submit_here(
         &self,
-        worker: TurnExecutor,
+        worker: Worker,
         request: CarriedRequest,
         memory: &Arc<MemoryTurn>,
         controls: PipeReceiver<Control>,
@@ -32,7 +33,7 @@ impl RedisTurnBackend {
                 waits_for_writes: true,
                 owner: Some(crate::turns::room_owner::WorkerOwner::Redis(port)),
             };
-            match worker.take_from(request, origin) {
+            match worker.native().take_from(request, origin) {
                 Ok(turn) => {
                     taken();
                     carry(turn, &owner, controls, closing).await;

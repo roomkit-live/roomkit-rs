@@ -7,8 +7,26 @@ use roomkit_core::model::ChannelId;
 use super::{ChannelControl, ChannelResult, ExecutorLink, TakesOptions, TurnFuture, TurnTimeouts};
 use crate::{ConversationStore, RoomKitError, TurnExecutor};
 
+#[cfg(feature = "redis")]
+mod native;
+
+mod private {
+    pub(crate) trait Sealed {
+        #[cfg(feature = "redis")]
+        fn transport(&self, key: super::native::Key) -> &dyn super::native::Native;
+    }
+}
+
+impl<S: ConversationStore> private::Sealed for TurnExecutor<S> {
+    #[cfg(feature = "redis")]
+    fn transport(&self, _: native::Key) -> &dyn native::Native {
+        self
+    }
+}
+
 /// The executor a backend serves (RFC §10.6). A backend can keep executors
-/// backed by different conversation stores in the same registry.
+/// backed by different conversation stores in the same registry. Applications
+/// obtain this view from a [`TurnExecutor`].
 ///
 /// ```
 /// use std::sync::Arc;
@@ -19,7 +37,11 @@ use crate::{ConversationStore, RoomKitError, TurnExecutor};
 ///     Arc::new(kit.turn_executor())
 /// }
 /// ```
-pub trait ServedExecutor: Send + Sync + 'static {
+#[expect(
+    private_bounds,
+    reason = "backends receive the executor view from a RoomKit"
+)]
+pub trait ServedExecutor: private::Sealed + Send + Sync + 'static {
     /// Identifier sent in the turn's acceptance frame.
     fn executor_id(&self) -> &str;
     /// Whether this executor has stopped accepting turns.

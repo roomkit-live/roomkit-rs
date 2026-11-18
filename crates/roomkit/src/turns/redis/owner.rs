@@ -3,8 +3,8 @@ mod local;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use super::Worker;
 use crate::RoomKitError;
-use crate::TurnExecutor;
 use crate::turns::pipe::{LinkFailure, PipeReceiver};
 use crate::turns::submission::Handover;
 use crate::turns::wire::{Control, Frame, RequestRest};
@@ -17,7 +17,7 @@ use super::routes::TurnRoute;
 use super::stream::Message;
 
 enum Delivered {
-    Here(TurnExecutor, Box<CarriedRequest>),
+    Here(Worker, Box<CarriedRequest>),
     Elsewhere(String, TurnRoute),
 }
 

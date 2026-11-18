@@ -4,13 +4,19 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use roomkit_core::model::ChannelId;
 
+use super::Worker;
 use super::registry::{Target, quoted};
 use super::{RedisTurnBackend, redis_error};
+use crate::RoomKitError;
 use crate::turns::{TakesOptions, lock};
-use crate::{RoomKitError, TurnExecutor};
+
+pub(super) struct Reserved {
+    lifecycle: std::sync::Weak<crate::turns::executor::Lifecycle>,
+    look_up: super::WorkerLookup,
+}
 
 pub(super) enum Placed {
-    Here(TurnExecutor),
+    Here(Worker),
     Elsewhere(Target),
 }
 
@@ -24,7 +30,7 @@ impl Placed {
 }
 
 struct Candidates {
-    here: Vec<(String, TurnExecutor)>,
+    here: Vec<(String, Worker)>,
     elsewhere: BTreeMap<String, Target>,
 }
 
@@ -60,6 +66,33 @@ impl Candidates {
 }
 
 impl RedisTurnBackend {
+    /// The room owner's live channels remain exclusively its own even after its
+    /// executor closes. Keeping the kit weak avoids a cycle through its backend.
+    pub(crate) fn reserve_owner(&self, worker: &Worker) {
+        self.0.owner_worker.get_or_init(|| Reserved {
+            lifecycle: worker.native().lifecycle(),
+            look_up: worker.native().look_up(),
+        });
+        lock(&self.0.serving)
+            .workers
+            .retain(|served| !self.is_own(served) || served.hosted().is_some());
+    }
+
+    pub(super) fn is_own(&self, worker: &Worker) -> bool {
+        let own = self
+            .0
+            .owner_worker
+            .get()
+            .map(|owned| &owned.lifecycle)
+            .or_else(|| self.0.own_executor.get());
+        own.is_some_and(|own| own.ptr_eq(&worker.native().lifecycle()))
+    }
+
+    pub(super) fn owning(&self, channel: &ChannelId) -> Option<Worker> {
+        let reserved = self.0.owner_worker.get()?;
+        (reserved.look_up)().filter(|worker| worker.hosts_channel(channel))
+    }
+
     pub(super) async fn place(
         &self,
         channel: &ChannelId,
@@ -69,24 +102,35 @@ impl RedisTurnBackend {
         refused: &BTreeSet<String>,
         spread: bool,
     ) -> Result<Placed, RoomKitError> {
-        let candidates = self
-            .candidates(channel, hooks, organization, refused)
-            .await?;
+        let options = TakesOptions {
+            room_hooks: hooks.to_vec(),
+            organization_id: organization.map(str::to_owned),
+        };
         let holder = self.key(&format!(
             "holder:{}:{}",
             quoted(channel.as_str()),
             quoted(room)
         ));
-        let mut conn = self.connection().await?;
-        let held: Option<String> = redis::cmd("GET")
-            .arg(&holder)
-            .query_async(&mut conn)
-            .await
-            .map_err(|error| redis_error(&error))?;
-        let chosen = candidates
-            .choose(held.as_deref(), self, spread)
-            .ok_or_else(|| no_executor(channel.as_str(), hooks, organization))?;
+        let chosen = if let Some(own) = self.owning(channel) {
+            let member = format!("{}:{}", self.node_id(), own.executor_id());
+            if refused.contains(&member) || !own.takes(channel, options) {
+                return Err(no_executor(channel.as_str(), hooks, organization));
+            }
+            Placed::Here(own)
+        } else {
+            let candidates = self.candidates(channel, &options, refused).await?;
+            let mut conn = self.connection().await?;
+            let held: Option<String> = redis::cmd("GET")
+                .arg(&holder)
+                .query_async(&mut conn)
+                .await
+                .map_err(|error| redis_error(&error))?;
+            candidates
+                .choose(held.as_deref(), self, spread)
+                .ok_or_else(|| no_executor(channel.as_str(), hooks, organization))?
+        };
         if spread {
+            let mut conn = self.connection().await?;
             redis::cmd("SET")
                 .arg(holder)
                 .arg(chosen.member(self.node_id()))
@@ -102,14 +146,9 @@ impl RedisTurnBackend {
     async fn candidates(
         &self,
         channel: &ChannelId,
-        hooks: &[String],
-        organization: Option<&str>,
+        options: &TakesOptions,
         refused: &BTreeSet<String>,
     ) -> Result<Candidates, RoomKitError> {
-        let options = TakesOptions {
-            room_hooks: hooks.to_vec(),
-            organization_id: organization.map(str::to_owned),
-        };
         // Evaluate application predicates outside the backend lock. Keep the selected
         // instance: a concurrent serve of the same id must not retarget the turn.
         let workers = lock(&self.0.serving).workers.clone();
@@ -126,7 +165,11 @@ impl RedisTurnBackend {
             .collect();
         let mut elsewhere = BTreeMap::new();
         for info in super::registry::peers(self).await? {
-            if !info.covers(channel.as_str(), hooks, organization)? {
+            if !info.covers(
+                channel.as_str(),
+                &options.room_hooks,
+                options.organization_id.as_deref(),
+            )? {
                 continue;
             }
             if let Some(node) = info.node {

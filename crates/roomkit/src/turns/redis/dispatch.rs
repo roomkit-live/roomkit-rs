@@ -45,11 +45,7 @@ impl RedisTurnBackend {
         )
     }
 
-    fn accept_request(
-        &self,
-        msg: &Message,
-        worker: crate::TurnExecutor,
-    ) -> Result<(), RoomKitError> {
+    fn accept_request(&self, msg: &Message, worker: super::Worker) -> Result<(), RoomKitError> {
         let carried = CarriedRequest::from_wire(&msg.body).map_err(invalid)?;
         let id = crate::turns::wire::validate_rest(&carried.rest)
             .map_err(invalid)?
@@ -60,7 +56,7 @@ impl RedisTurnBackend {
         let backend = self.clone();
         let message = msg.clone();
         let admitted = self.dispatch(async move {
-            let turn = worker.take_from(
+            let turn = worker.native().take_from(
                 carried,
                 crate::turns::executor::WorkerOrigin {
                     owner: Some(crate::turns::room_owner::WorkerOwner::Redis(
@@ -84,11 +80,7 @@ impl RedisTurnBackend {
         Ok(())
     }
 
-    fn accept_channel(
-        &self,
-        msg: &Message,
-        worker: crate::TurnExecutor,
-    ) -> Result<(), RoomKitError> {
+    fn accept_channel(&self, msg: &Message, worker: super::Worker) -> Result<(), RoomKitError> {
         let control: ChannelControlEnvelope = match serde_json::from_str(&msg.body) {
             Ok(control) => control,
             Err(error) => {
