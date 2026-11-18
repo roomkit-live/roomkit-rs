@@ -649,6 +649,58 @@ async fn a_second_init_waits_on_no_open_transaction() {
     }
 }
 
+/// Python: `test_init_never_locks_another_schemas_index_table`.
+#[tokio::test]
+async fn init_never_locks_another_schemas_index_table() {
+    let Some((home, _store)) = fresh().await else {
+        return;
+    };
+    let client = home.client().await;
+    for table in ["participants", "events"] {
+        let empty = TempSchema::new().await;
+        let store = PostgresStore::new(PostgresStoreOptions {
+            dsn: Some(empty.dsn_with("lock_timeout=500")),
+            ..PostgresStoreOptions::default()
+        });
+        client
+            .batch_execute(&format!(
+                "BEGIN; LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE"
+            ))
+            .await
+            .unwrap();
+        let result = store.init(SMALL_POOL).await;
+        client.batch_execute("ROLLBACK").await.unwrap();
+        assert!(result.is_ok(), "locked foreign {table}: {result:?}");
+    }
+}
+
+/// Python: `test_index_uniqueness_ignores_unique_in_the_predicate`.
+#[tokio::test]
+async fn index_uniqueness_ignores_unique_in_the_predicate() {
+    let Some((schema, store)) = fresh().await else {
+        return;
+    };
+    schema
+        .client()
+        .await
+        .batch_execute(
+            "DROP INDEX idx_events_room_index;
+         CREATE INDEX idx_events_room_index ON events(room_id, index) WHERE room_id <> 'UNIQUE'",
+        )
+        .await
+        .unwrap();
+    let options = DedupeEventIndicesOptions::default();
+    assert_eq!(
+        store.dedupe_event_indices(options).await.unwrap()["now_unique"],
+        false
+    );
+    store.init(SMALL_POOL).await.unwrap();
+    assert_eq!(
+        store.dedupe_event_indices(options).await.unwrap()["now_unique"],
+        true
+    );
+}
+
 /// Python: `test_init_in_a_second_schema_keeps_each_schema_its_own_indexes`:
 /// two deployments in one database, one per schema, the first's on the
 /// `search_path` behind: the tenant reads and writes its own schema only.

@@ -48,6 +48,11 @@ SELECT EXISTS (
 )
 ";
 
+/// Read uniqueness from the catalog even when the index's text mentions "UNIQUE".
+const INDEX_UNIQUE: &str = "\
+SELECT indisunique FROM pg_catalog.pg_index
+WHERE indexrelid = to_regclass(format('%I.%I', current_schema(), $1::text))";
+
 /// The definition of an index of the schema this session writes to.
 const INDEX_DEF: &str =
     "SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() AND indexname = $1";
@@ -100,9 +105,7 @@ pub(crate) async fn prepare(client: &mut Object) -> Result<(), Failure> {
         .into());
     }
     transaction.batch_execute(SCHEMA).await?;
-    if let Some(definition) = index_definition(&transaction, "idx_events_room_index").await?
-        && !definition.contains("UNIQUE")
-    {
+    if events_index_is_unique(&transaction).await? == Some(false) {
         tracing::warn!(
             target: "roomkit.store.postgres",
             "idx_events_room_index is not UNIQUE: duplicate (room_id, index) rows exist, so \
@@ -119,11 +122,10 @@ async fn is_v1(client: &deadpool_postgres::Transaction<'_>) -> Result<bool, Fail
     Ok(row.map(|row| row.try_get(0)).transpose()?.unwrap_or(false))
 }
 
-async fn index_definition(
+async fn events_index_is_unique(
     client: &deadpool_postgres::Transaction<'_>,
-    name: &str,
-) -> Result<Option<String>, Failure> {
-    let row = query_opt(client, INDEX_DEF, &[&name]).await?;
+) -> Result<Option<bool>, Failure> {
+    let row = query_opt(client, INDEX_UNIQUE, &[&"idx_events_room_index"]).await?;
     Ok(row.map(|row| row.try_get(0)).transpose()?)
 }
 
@@ -197,9 +199,7 @@ pub(crate) async fn dedupe_event_indices(
         .iter()
         .map(|row| row.try_get::<_, i64>("extra"))
         .sum::<Result<i64, _>>()?;
-    let unique = index_definition(&transaction, "idx_events_room_index")
-        .await?
-        .is_some_and(|definition| definition.contains("UNIQUE"));
+    let unique = events_index_is_unique(&transaction).await?.unwrap_or(false);
     let state = |action: &str, now_unique: bool| {
         report(json!({
             "duplicate_rows": duplicate_rows,
