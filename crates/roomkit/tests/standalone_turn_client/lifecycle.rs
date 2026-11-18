@@ -79,7 +79,7 @@ async fn only_the_requests_tenant_reads_its_inputs_and_an_answer_or_close_withdr
     worker.send(ask("one"));
     worker.send(ask("two"));
     worker.send(output(true));
-    let stream = client
+    let mut output = client
         .run(
             r.event,
             &r.binding,
@@ -87,9 +87,13 @@ async fn only_the_requests_tenant_reads_its_inputs_and_an_answer_or_close_withdr
             roomkit::turns::TurnRunOptions::default(),
         )
         .await
-        .unwrap()
-        .response_stream
         .unwrap();
+    assert!(output.responded);
+    let stream = output.response_stream.take().unwrap();
+    output
+        .metadata_updates
+        .insert("read-by-owner".into(), json!(true));
+    assert_eq!(output.output.metadata_updates["read-by-owner"], true);
     let snapshot = client.inputs().request("one").unwrap();
     assert_eq!(snapshot.room_id, r.room_id.as_str());
     assert_eq!(snapshot.channel_id, r.channel_id.as_str());

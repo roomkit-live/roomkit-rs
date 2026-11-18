@@ -5,16 +5,32 @@ use crate::turns::{Answer, ErrorClasses, OwnerTurn, RemoteItem, TurnFuture};
 use futures_core::Stream;
 use roomkit_core::model::ChannelOutput;
 use std::fmt;
+use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::task::{Context, Poll, ready};
 
-/// The completed turn output and the optional stream to read from its executor.
+/// A channel output with its optional caller-paced stream. Its fields are
+/// available directly (e.g. `output.responded`). Use `response_stream.take()`
+/// to keep reading the live metadata while owning the stream.
 pub struct TurnClientOutput {
     /// The channel's output and live response metadata.
     pub output: ChannelOutput,
     /// Pull this stream to advance the executor. Dropping it closes the turn's stream.
     pub response_stream: Option<ResponseStream>,
 }
+impl Deref for TurnClientOutput {
+    type Target = ChannelOutput;
+    fn deref(&self) -> &Self::Target {
+        &self.output
+    }
+}
+
+impl DerefMut for TurnClientOutput {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.output
+    }
+}
+
 impl fmt::Debug for TurnClientOutput {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TurnClientOutput")

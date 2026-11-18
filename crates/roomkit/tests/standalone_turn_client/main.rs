@@ -70,7 +70,9 @@ async fn runs_without_a_local_worker_and_keeps_previous_turns_and_hooks() {
     worker.send(output(false));
     worker.send(Frame::End);
     let answer = run(&client).await.unwrap();
-    assert!(answer.output.responded);
+    let source: &roomkit::model::ChannelOutput = &answer;
+    assert!(source.responded);
+    assert!(answer.responded);
     assert!(answer.response_stream.is_none());
     let request = backend.requests.lock().unwrap()[0].clone();
     assert_eq!(request.room_hooks, ["a"]);
