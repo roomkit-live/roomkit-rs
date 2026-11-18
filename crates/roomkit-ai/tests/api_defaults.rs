@@ -821,3 +821,14 @@ fn default_chat_dialect_matches_the_standard_openai_dialect() {
         roomkit_ai::OPENAI_CHAT
     );
 }
+
+#[test]
+fn a_single_provider_call_is_the_last_by_default() {
+    let raw = serde_json::Value::String("{".into());
+    // roomkit.providers.ai.call_cut(last) = True
+    assert!(roomkit_ai::call_cut(&raw, None, Default::default()));
+    // roomkit.providers.ai.call_partial(last) = True
+    assert!(roomkit_ai::CallPartialOptions::default().last);
+    // roomkit.providers.ai.call_garbled(last) = True
+    assert!(!roomkit_ai::call_garbled(&raw, None, Default::default()));
+}

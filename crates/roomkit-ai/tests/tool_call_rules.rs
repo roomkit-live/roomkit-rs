@@ -17,9 +17,9 @@ fn provider_inputs_follow_the_python_call_rules() {
         assert_eq!(
             (
                 unreadable_arguments(&raw),
-                call_partial(&raw, reason, last),
-                call_cut(&raw, reason, last),
-                call_garbled(&raw, reason, last)
+                call_partial(&raw, reason, roomkit_ai::CallPartialOptions { last }),
+                call_cut(&raw, reason, roomkit_ai::CallCutOptions { last }),
+                call_garbled(&raw, reason, roomkit_ai::CallGarbledOptions { last })
             ),
             (unreadable, partial, cut, garbled),
             "{raw:?}, {reason:?}, last={last}"

@@ -25,7 +25,10 @@ use std::pin::Pin;
 
 use futures_core::Stream;
 
-pub use self::call_rules::{call_cut, call_garbled, call_partial, unreadable_arguments};
+pub use self::call_rules::{
+    CallCutOptions, CallGarbledOptions, CallPartialOptions, call_cut, call_garbled, call_partial,
+    unreadable_arguments,
+};
 pub(crate) use self::catalog::BILLED_USAGE_COUNTERS;
 pub use self::catalog::{ModelInfo, ModelPricing, listing};
 pub use self::chat_dialect::{ChatDialect, ChatDialectOptions, OPENAI_CHAT};

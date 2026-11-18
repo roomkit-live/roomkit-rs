@@ -4,6 +4,38 @@ use serde_json::Value;
 
 use super::response::{cuts_calls, read_arguments};
 
+// Each function has its own options type, following the public API convention.
+// All three interpret the same position within a round of tool calls.
+macro_rules! position_options {
+    ($name:ident, $doc:literal) => {
+        #[doc = $doc]
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub struct $name {
+            /// Whether this is the last call in the provider response.
+            pub last: bool,
+        }
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self { last: true }
+            }
+        }
+    };
+}
+
+position_options!(
+    CallCutOptions,
+    "Position of the call checked by [`call_cut`]."
+);
+position_options!(
+    CallPartialOptions,
+    "Position of the call checked by [`call_partial`]."
+);
+position_options!(
+    CallGarbledOptions,
+    "Position of the call checked by [`call_garbled`]."
+);
+
 /// Whether the raw arguments cannot be read as an object. A populated
 /// mapping, no arguments, blank text and JSON `null` are readable.
 pub fn unreadable_arguments(raw: &Value) -> bool {
@@ -15,19 +47,18 @@ pub fn unreadable_arguments(raw: &Value) -> bool {
 }
 
 /// Whether the model's last call failed to arrive whole under a cut.
-pub fn call_cut(raw: &Value, finish_reason: Option<&str>, last: bool) -> bool {
-    ArgumentStatus::of(raw, finish_reason, last).cut
+pub fn call_cut(raw: &Value, finish_reason: Option<&str>, options: CallCutOptions) -> bool {
+    ArgumentStatus::of(raw, finish_reason, options.last).cut
 }
 
-/// Whether the call must be refused. Pass `true` for `last` for a lone
-/// call, the default in Python.
-pub fn call_partial(raw: &Value, finish_reason: Option<&str>, last: bool) -> bool {
-    ArgumentStatus::of(raw, finish_reason, last).partial
+/// Whether the call must be refused.
+pub fn call_partial(raw: &Value, finish_reason: Option<&str>, options: CallPartialOptions) -> bool {
+    ArgumentStatus::of(raw, finish_reason, options.last).partial
 }
 
 /// Whether the provider supplied unreadable arguments without a cut.
-pub fn call_garbled(raw: &Value, finish_reason: Option<&str>, last: bool) -> bool {
-    ArgumentStatus::of(raw, finish_reason, last).garbled
+pub fn call_garbled(raw: &Value, finish_reason: Option<&str>, options: CallGarbledOptions) -> bool {
+    ArgumentStatus::of(raw, finish_reason, options.last).garbled
 }
 
 /// Python's `str.strip()` also treats the four ASCII separators as space.

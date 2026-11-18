@@ -148,16 +148,17 @@ pub use self::provider::{
     is_context_overflow_message, round_parts, speech_tags, stream_call_of, thinking_parts_of,
     tool_arguments, tool_call_of, with_speech_tags,
 };
+pub use self::provider::{
+    CallCutOptions, CallGarbledOptions, CallPartialOptions, call_cut, call_garbled, call_partial,
+    chat_tool_declarations, declared_parameters, is_truncation, some_vendor_accepts_tool_name,
+    unreadable_arguments,
+};
 pub use self::provider::{ChatDialect, ChatDialectOptions, OPENAI_CHAT, chat_messages};
 #[doc(hidden)]
 pub use self::provider::{FirstToken, listing, read_tool_calls};
 pub use self::provider::{
     ResponseSchemaError, ResponseSchemaErrorOptions, ResponseSchemaFailure, SchemaMismatchOptions,
     check_portable_schema, schema_mismatch,
-};
-pub use self::provider::{
-    call_cut, call_garbled, call_partial, chat_tool_declarations, declared_parameters,
-    is_truncation, some_vendor_accepts_tool_name, unreadable_arguments,
 };
 #[doc(hidden)]
 pub use self::provider::{check_schema_answer, checked_stream, schema_for_generate};
