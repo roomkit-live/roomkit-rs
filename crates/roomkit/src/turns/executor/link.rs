@@ -7,6 +7,9 @@
 //! runs.
 
 mod host_call;
+mod tool_answer;
+
+use self::tool_answer::tool_answer;
 
 use self::host_call::{HostReply, ToolReply, call_context};
 use std::collections::{HashMap, HashSet};
@@ -687,37 +690,6 @@ impl HostLink {
     }
 }
 
-/// The answer of an owner's tool as the model's call reads it: a served
-/// call's result, its `value` as the codec writes it; a refusal's, a
-/// failure's or an unserved call's error.
-fn tool_answer(
-    outcome: ToolOutcome,
-    result: Option<Value>,
-    error: Option<&WireError>,
-) -> OwnerToolAnswer {
-    let message = || error.map(|error| error.message.clone()).unwrap_or_default();
-    match (outcome, result) {
-        (ToolOutcome::Served, Some(result)) => {
-            if let Some(parts) = result.get("parts").and_then(Value::as_array) {
-                return OwnerToolAnswer::Parts(parts.clone());
-            }
-            OwnerToolAnswer::Served(result.get("value").cloned().unwrap_or(result))
-        }
-        (ToolOutcome::Refused, _) => OwnerToolAnswer::Refused(message()),
-        (ToolOutcome::Unserved, _) => OwnerToolAnswer::Unserved(message()),
-        (ToolOutcome::Served | ToolOutcome::Failed, _) => match error {
-            Some(error) => OwnerToolAnswer::Failed {
-                kind: error.kind.clone(),
-                message: error.message.clone(),
-            },
-            None => OwnerToolAnswer::Failed {
-                kind: "RuntimeError".to_owned(),
-                message: "The room owner answered a call without its result".to_owned(),
-            },
-        },
-    }
-}
-
 /// A call withdrawn, the owner told, when its caller stops waiting before
 /// its answer (its bound, its turn cut, RFC §10.6.5 `call_cancel`).
 struct Withdraw<'a> {
@@ -736,23 +708,5 @@ impl Drop for Withdraw<'_> {
         if let Some(call_id) = self.call_id.take() {
             self.link.withdraw(&call_id, true);
         }
-    }
-}
-
-#[cfg(test)]
-mod result_shapes {
-    use super::{OwnerToolAnswer, ToolOutcome, tool_answer};
-    use serde_json::json;
-
-    #[test]
-    fn an_owner_can_return_the_same_array_as_content_parts_or_as_an_ordinary_value() {
-        let parts = vec![
-            json!({"type":"text","text":"one"}),
-            json!({"type":"text","text":"two"}),
-        ];
-        let ordinary = tool_answer(ToolOutcome::Served, Some(json!({"value":parts})), None);
-        let typed = tool_answer(ToolOutcome::Served, Some(json!({"parts":parts})), None);
-        assert_eq!(ordinary, OwnerToolAnswer::Served(json!(parts)));
-        assert_eq!(typed, OwnerToolAnswer::Parts(parts));
     }
 }

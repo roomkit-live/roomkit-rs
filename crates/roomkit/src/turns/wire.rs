@@ -25,7 +25,9 @@ pub(crate) use request::{ContextRest, validate_rest};
 pub use request::{OwnerTool, PreviousTurn, TurnRequest};
 mod output;
 pub(crate) use output::ErrorRecord as WireError;
-pub use output::{ErrorRecord, Item, ToolEnd, WireLoopEnd, WireOutput, WireResult};
+pub use output::{ErrorRecord, Item, ToolEnd, WireLoopEnd, WireOutput};
+mod tool_result;
+pub use tool_result::WireResult;
 mod messages;
 pub use messages::{
     CallContext, Control, Frame, InputOutcome, RecordChanges, ToolCall, ToolOutcome,

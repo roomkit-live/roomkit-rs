@@ -1,4 +1,5 @@
 //! Results, failures and stream items carried by a running turn.
+use super::WireResult;
 use roomkit_core::model::{
     Metadata, Observation, RoomEvent, Task, ToolCallOutcome, ToolCallStatus,
 };
@@ -65,29 +66,6 @@ pub struct WireOutput {
     pub error: Option<ErrorRecord>,
 }
 
-/// A call's result as a tool-call end carries it: a JSON value, or the
-/// content parts the Python implementation's tools may answer with.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum WireResult {
-    /// The tool returned an ordered list of content parts.
-    Parts {
-        /// Structured content parts returned by the tool.
-        parts: Vec<Value>,
-    },
-    /// The tool returned a JSON value.
-    Value {
-        /// Value returned by the operation.
-        value: Value,
-    },
-}
-
-impl From<Value> for WireResult {
-    fn from(value: Value) -> Self {
-        Self::Value { value }
-    }
-}
-
 /// A call's end, as `tool_ended` carries it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ToolEnd {
@@ -96,26 +74,23 @@ pub struct ToolEnd {
     /// Identifier of this tool call.
     pub tool_id: String,
     /// Arguments supplied to the call.
-    #[serde(default)]
     pub arguments: Metadata,
     /// Result returned by the call.
     pub result: WireResult,
     /// Status at completion of the tool call.
     pub status: ToolCallStatus,
     /// Elapsed duration of the call in milliseconds.
-    #[serde(default)]
     pub duration_ms: u64,
     /// Error reported by the sender, when the operation failed.
-    #[serde(default)]
+    #[serde(deserialize_with = "Option::deserialize")]
     pub error: Option<String>,
     /// Structured result returned beside the text.
-    #[serde(default)]
+    #[serde(deserialize_with = "Option::deserialize")]
     pub structured_content: Option<Metadata>,
     /// Outcome of the operation as recorded by the sender.
-    #[serde(default)]
+    #[serde(deserialize_with = "Option::deserialize")]
     pub outcome: Option<ToolCallOutcome>,
     /// Whether execution took place despite a refusal.
-    #[serde(default)]
     pub refused_but_ran: bool,
     /// Purpose attached to this tool call.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -147,10 +122,9 @@ pub enum Item {
         /// Identifier of this tool call.
         tool_id: String,
         /// Arguments supplied to the call.
-        #[serde(default)]
         arguments: Metadata,
         /// Arguments the tool handler actually received.
-        #[serde(default)]
+        #[serde(deserialize_with = "Option::deserialize")]
         ran_with: Option<Metadata>,
         /// Purpose attached to this tool call.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -166,26 +140,23 @@ pub enum Item {
         /// Identifier of this tool call.
         tool_id: String,
         /// Arguments supplied to the call.
-        #[serde(default)]
         arguments: Metadata,
         /// Result returned by the call.
         result: WireResult,
         /// Status at completion of the tool call.
         status: ToolCallStatus,
         /// Elapsed duration of the call in milliseconds.
-        #[serde(default)]
         duration_ms: u64,
         /// Error reported by the sender, when the operation failed.
-        #[serde(default)]
+        #[serde(deserialize_with = "Option::deserialize")]
         error: Option<String>,
         /// Structured result returned beside the text.
-        #[serde(default)]
+        #[serde(deserialize_with = "Option::deserialize")]
         structured_content: Option<Metadata>,
         /// Outcome of the operation as recorded by the sender.
-        #[serde(default)]
+        #[serde(deserialize_with = "Option::deserialize")]
         outcome: Option<ToolCallOutcome>,
         /// Whether execution took place despite a refusal.
-        #[serde(default)]
         refused_but_ran: bool,
         /// Purpose attached to this tool call.
         #[serde(default, skip_serializing_if = "Option::is_none")]

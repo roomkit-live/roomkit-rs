@@ -260,7 +260,7 @@ pub enum Control {
         /// Outcome of the operation as recorded by the sender.
         outcome: ToolOutcome,
         /// Result returned by the call.
-        #[serde(default)]
+        #[serde(default, deserialize_with = "tool_payload")]
         result: Option<Value>,
         /// Error reported by the sender, when the operation failed.
         #[serde(default)]
@@ -310,6 +310,12 @@ pub enum ToolOutcome {
     Failed,
     /// Nothing on the owner serves it.
     Unserved,
+}
+
+fn tool_payload<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Value>, D::Error> {
+    Ok(Option::<Metadata>::deserialize(deserializer)?.map(Value::Object))
 }
 
 fn one() -> u32 {

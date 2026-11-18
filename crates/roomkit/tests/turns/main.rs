@@ -29,3 +29,4 @@ mod support;
 mod tap;
 mod told_ends;
 mod waiters;
+mod wire_tool_records;
