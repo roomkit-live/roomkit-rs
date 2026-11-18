@@ -105,7 +105,7 @@ impl Turns {
             strategy_turn,
             channel_rows,
         } = input;
-        let room_hooks = request_room_hooks(kit, &event.room_id, &binding.channel_id)?;
+        let room_hooks = request_room_hooks(kit, &event.room_id, &binding.channel_id, local)?;
         let owner_tools = kit.owner_tools(&binding.channel_id, &event.room_id);
         let trace = current_trace();
         let history = std::mem::take(&mut context.recent_events);

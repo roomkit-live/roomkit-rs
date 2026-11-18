@@ -609,9 +609,11 @@ fn request_room_hooks(
     kit: &dyn TurnKit,
     room: &RoomId,
     channel: &ChannelId,
+    local: bool,
 ) -> Result<Vec<String>, ErrorRecord> {
     let names = kit.room_hook_names(room);
-    if !kit.defines_room_hooks(&names) {
+    // The target worker, not the owner, supplies the hooks of a distributed turn.
+    if local && !kit.defines_room_hooks(&names) {
         return Err(TurnError::new(
             "no_executor",
             format!("No executor takes {channel} with room hooks {names:?}"),
