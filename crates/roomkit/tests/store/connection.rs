@@ -107,3 +107,41 @@ async fn delegation_reads_the_parent_history_and_author_register_in_one_scope() 
     }
     kit.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn a_wired_hooks_carried_or_refreshed_history_shares_the_context_connection() {
+    use roomkit::model::{HookResult, RoomContext, hook::AllowOptions};
+    use roomkit::{HookOptions, HookTrigger, RoomKit, RoomKitOptions, ToolCallEvent};
+
+    let store = super::connection_store::ScopedReads::default();
+    let room = Room::new(RoomId::new("parent").unwrap());
+    store.create_room(room.clone()).await.unwrap();
+    let kit = RoomKit::new(RoomKitOptions::with_store(store));
+    kit.hook(
+        HookTrigger::OnToolCall,
+        |_: ToolCallEvent, _: RoomContext| async { HookResult::allow(AllowOptions::default()) },
+        HookOptions::default(),
+    )
+    .unwrap();
+    let current = RoomContext::new(room.clone());
+    let mut previous = current.clone();
+    previous.room.event_count += 1;
+    let wiring = kit.turn_executor().wiring();
+    for (context, expected_reads) in [(current, 1), (previous, 2)] {
+        // This store records every parent history and author-register read
+        // and returns a known error after that final read.
+        let error = wiring
+            .env
+            .context(&room.id, Some(&context))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("parent register unavailable"));
+        let reads = std::mem::take(&mut *kit.store().parent_reads.lock().unwrap());
+        assert_eq!(reads.len(), expected_reads);
+        assert!(
+            matches!(reads.first(), Some(Some(id)) if reads.iter().all(|scope| *scope == Some(*id))),
+            "{reads:?}"
+        );
+    }
+    kit.close().await.unwrap();
+}
