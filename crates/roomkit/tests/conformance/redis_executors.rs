@@ -18,6 +18,7 @@ use crate::identity::RunSlot;
 use channel::WorkerChannel;
 
 const SUPPORTED: &[&str] = &[
+    "discussion/an-offline-agent-s-turn-is-skipped-not-failed",
     "executors/a-channel-call-no-executor-takes-fails-no-executor",
     "executors/a-declared-agent-s-turn-runs-on-the-executor-hosting-it",
     "executors/a-delegation-to-a-declared-worker-runs-on-its-executor",

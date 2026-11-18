@@ -707,6 +707,14 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             self.not_given(state, &entry, changes);
             return Ok(None);
         };
+        if !entry.post
+            && kit
+                .known_offline(&entry.agent, &self.room_id, self.organization_id.as_deref())
+                .await
+        {
+            self.skip_offline(state, &entry, &answered, changes);
+            return Ok(None);
+        }
         // At the depth its ask stands at when that is deeper than its own.
         if let Some(ask) = entry.answered() {
             answered.chain_depth = answered.chain_depth.max(ask.depth);
@@ -748,6 +756,23 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             mark,
             max_depth: self.config().max_depth,
         }))
+    }
+
+    fn skip_offline(
+        &self,
+        state: &mut SpeakQueueState,
+        entry: &Entry,
+        answered: &RoomEvent,
+        changes: &mut Vec<Change>,
+    ) {
+        state.remove(entry);
+        changes.push((
+            SpeakQueueChange::TurnSkipped,
+            vec![entry.agent.clone()],
+            Some(answered.id.to_string()),
+        ));
+        self.drop_instructions(std::slice::from_ref(entry), state, changes);
+        tracing::info!(target: "roomkit::orchestration::discussion", room_id = %self.room_id, agent = %entry.agent, "No online executor serves this queued agent");
     }
 
     fn not_given(&self, state: &mut SpeakQueueState, entry: &Entry, changes: &mut Vec<Change>) {

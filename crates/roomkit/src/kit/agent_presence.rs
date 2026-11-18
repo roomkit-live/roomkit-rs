@@ -75,6 +75,33 @@ impl<S: ConversationStore> RoomKit<S> {
             .collect()
     }
 
+    /// A queued turn can be dropped only for a declaration confirmed offline by a fresh read.
+    pub(crate) async fn known_offline(
+        &self,
+        channel: &ChannelId,
+        room: &RoomId,
+        organization: Option<&str>,
+    ) -> bool {
+        if !self
+            .inner
+            .channel(channel)
+            .is_some_and(|c| c.is_declaration_only())
+        {
+            return false;
+        }
+        // Both built-in registries read current coverage. A failed read proves nothing.
+        let presence = self.executors().await.and_then(|infos| {
+            self.presence_of(channel, room, organization.map(str::to_owned), &infos)
+        });
+        match presence {
+            Ok(seen) => !seen.online,
+            Err(error) => {
+                tracing::warn!(%error, %channel, %room, "Could not establish executor coverage");
+                false
+            }
+        }
+    }
+
     pub(super) fn presence_of(
         &self,
         channel_id: &ChannelId,
