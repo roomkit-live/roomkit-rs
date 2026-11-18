@@ -12,14 +12,37 @@ impl RedisTurnBackend {
             return self.refuse_closing(msg);
         }
         let executor = lock(&self.0.serving).workers.get(&msg.target).cloned();
-        match msg.kind.as_str() {
-            "request" | "channel" => match executor.filter(|w| !w.closed()) {
-                Some(worker) if msg.kind == "request" => self.accept_request(msg, worker),
-                Some(worker) => self.accept_channel(msg, worker),
-                None => self.answer(msg, "refused".into()),
-            },
+        match (msg.kind.as_str(), executor) {
+            ("request", Some(worker)) if !worker.closed() => self.accept_request(msg, worker),
+            ("channel", Some(worker)) if !worker.closed() => self.accept_channel(msg, worker),
+            ("channel", None) => {
+                let missing = RoomKitError::TurnLink {
+                    reason: "no_executor".into(),
+                    message: Some(format!("Executor {} no longer serves", msg.target)),
+                };
+                self.channel_error(msg, &missing, None)
+            }
+            ("request" | "channel", _) => self.answer(msg, "refused".into()),
             _ => self.owner_message(msg),
         }
+    }
+
+    fn channel_error(
+        &self,
+        msg: &Message,
+        error: &RoomKitError,
+        executor_id: Option<String>,
+    ) -> Result<(), RoomKitError> {
+        let result = crate::turns::ChannelResult {
+            result: serde_json::Value::Null,
+            error: Some(crate::turns::error::kit_error(error)),
+            room_state: None,
+            executor_id,
+        };
+        self.answer(
+            msg,
+            serde_json::to_string(&result).map_err(|e| invalid(e.to_string()))?,
+        )
     }
 
     fn accept_request(
@@ -58,8 +81,16 @@ impl RedisTurnBackend {
         msg: &Message,
         worker: crate::TurnExecutor,
     ) -> Result<(), RoomKitError> {
-        let control: ChannelControlEnvelope =
-            serde_json::from_str(&msg.body).map_err(|e| invalid(e.to_string()))?;
+        let control: ChannelControlEnvelope = match serde_json::from_str(&msg.body) {
+            Ok(control) => control,
+            Err(error) => {
+                return self.channel_error(
+                    msg,
+                    &RoomKitError::Value(error.to_string()),
+                    Some(worker.executor_id().to_owned()),
+                );
+            }
+        };
         let backend = self.clone();
         let message = msg.clone();
         let admitted = self.dispatch(async move {
@@ -82,20 +113,29 @@ impl RedisTurnBackend {
     }
 
     pub(super) fn refuse_closing(&self, msg: &Message) -> Result<(), RoomKitError> {
-        let body = match msg.kind.as_str() {
-            "request" | "channel" => "refused".into(),
-            "owner" => {
-                let result = crate::turns::wire::RoomCallResult {
-                    call_id: String::new(),
-                    result: serde_json::Value::Null,
-                    error: Some(crate::turns::error::kit_error(&super::routes::closed())),
-                    record_changes: None,
-                };
-                serde_json::to_string(&result).map_err(|e| invalid(e.to_string()))?
-            }
-            _ => return Ok(()),
+        match msg.kind.as_str() {
+            "request" | "channel" => self.answer(msg, "refused".into()),
+            "owner" => self.owner_error(msg, &super::routes::closed()),
+            _ => Ok(()),
+        }
+    }
+
+    /// The receiver has a question reference even when it could not read the call id.
+    pub(super) fn owner_error(
+        &self,
+        msg: &Message,
+        error: &RoomKitError,
+    ) -> Result<(), RoomKitError> {
+        let result = crate::turns::wire::RoomCallResult {
+            call_id: String::new(),
+            result: serde_json::Value::Null,
+            error: Some(crate::turns::error::kit_error(error)),
+            record_changes: None,
         };
-        self.answer(msg, body)
+        self.answer(
+            msg,
+            serde_json::to_string(&result).map_err(|e| invalid(e.to_string()))?,
+        )
     }
 
     async fn forward_worker(

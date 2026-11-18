@@ -172,8 +172,12 @@ impl RedisTurnBackend {
 
     pub(super) fn owner_message(&self, incoming: &Message) -> Result<(), RoomKitError> {
         use crate::turns::wire::{OwnerMessage, OwnerMessageEnvelope, RoomCallResult};
-        let parsed: OwnerMessageEnvelope =
-            serde_json::from_str(&incoming.body).map_err(|e| invalid(e.to_string()))?;
+        let parsed: OwnerMessageEnvelope = match serde_json::from_str(&incoming.body) {
+            Ok(envelope) => envelope,
+            Err(error) => {
+                return self.owner_error(incoming, &RoomKitError::Value(error.to_string()));
+            }
+        };
         let owner = crate::turns::lock(&self.0.owner).clone();
         let backend = self.clone();
         let message = incoming.clone();

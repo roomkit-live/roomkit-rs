@@ -323,3 +323,5 @@ async fn an_undeclared_worker_stays_alive_while_a_channel_call_returns_its_resul
     executor.close().await;
     owner.close().await.unwrap();
 }
+
+mod refusals;

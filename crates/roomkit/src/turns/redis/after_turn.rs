@@ -72,16 +72,18 @@ impl PeerOwner {
             let owner = lock(&backend.0.owner).clone().ok_or_else(no_owner)?;
             owner(envelope).await.ok_or_else(no_owner)?
         };
+        // A refusal can precede decoding the call and therefore carry an empty call id.
+        // The Redis question reference already correlates the answer with this caller.
+        if let Some(error) = result.error {
+            return Err(rebuild_kit_error(&error));
+        }
         if result.call_id != call_id {
             return Err(RoomKitError::TurnLink {
                 reason: "frame_invalid".into(),
                 message: Some("the room owner answered a different call".into()),
             });
         }
-        match result.error {
-            Some(error) => Err(rebuild_kit_error(&error)),
-            None => Ok(result.result),
-        }
+        Ok(result.result)
     }
 
     /// Enqueue immediately: a subsequent room call must follow this work
