@@ -12,7 +12,9 @@
 mod carried_request;
 pub(crate) use carried_request::validate_rest;
 mod input_request;
+mod peer_errors;
 pub(crate) use input_request::InputRequest;
+pub(crate) use peer_errors::{native_class, peer_error_payload};
 
 use std::collections::BTreeMap;
 

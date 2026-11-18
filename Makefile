@@ -219,6 +219,7 @@ turns-rpc-fixture:
 	PYTHONPATH="$$ROOMKIT_DIR/src" "$$ROOMKIT_DIR/.venv/bin/python" \
 		$(TURNS_FIXTURES)/rpc_contract.py write-python
 	ROOMKIT_WRITE_TURNS_FIXTURE=1 $(CARGO) test --locked -p roomkit --lib turns::tests::rpc_wire
+	ROOMKIT_WRITE_TURNS_FIXTURE=1 $(CARGO) test --locked -p roomkit --lib turns::wire::peer_errors
 	PYTHONPATH="$$ROOMKIT_DIR/src" "$$ROOMKIT_DIR/.venv/bin/python" \
 		$(TURNS_FIXTURES)/rpc_contract.py read-rust
 	@git -C "$$ROOMKIT_DIR" rev-parse HEAD > $(TURNS_FIXTURES)/RPC_ROOMKIT_COMMIT

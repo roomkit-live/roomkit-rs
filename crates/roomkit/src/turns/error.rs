@@ -425,6 +425,16 @@ fn local_record(error: &WireError) -> ErrorRecord {
 
 /// `error`, a kit's, as it crosses: its variant among its attributes.
 pub(crate) fn kit_error(error: &RoomKitError) -> WireError {
+    if let RoomKitError::RemoteTurn {
+        kind,
+        message,
+        bases,
+    } = error
+    {
+        let mut record = one(kind, message.clone());
+        record.bases.clone_from(bases);
+        return record;
+    }
     let mut record = one(KIT_ERROR, error.to_string());
     let (variant, fields) = variant_of(error);
     record
@@ -444,18 +454,45 @@ pub(crate) fn kit_error(error: &RoomKitError) -> WireError {
 /// `TurnLinkError`; any other as its `RemoteTurnError`, keeping its kind,
 /// its message and its bases.
 pub(crate) fn rebuild_kit_error(error: &WireError) -> RoomKitError {
-    if error.kind == KIT_ERROR
-        && let Some(rebuilt) = rebuilt_variant(error)
+    if matches!(
+        error.kind.as_str(),
+        KIT_ERROR | "roomkit.core.exceptions:RoomKitError"
+    ) && let Some(rebuilt) = error
+        .attributes
+        .get(VARIANT)
+        .and_then(Value::as_str)
+        .and_then(|variant| rebuilt_variant(error, variant))
     {
         return rebuilt;
     }
     // A builtin crosses as itself, as the Python implementation's codec
     // rebuilds it: a `ValueError` is the kit's.
-    if error.kind == VALUE_ERROR {
+    if matches!(error.kind.as_str(), VALUE_ERROR | "builtins:ValueError") {
         return RoomKitError::Value(error.message.clone());
     }
-    if error.kind == RUNTIME_ERROR {
+    if matches!(error.kind.as_str(), RUNTIME_ERROR | "builtins:RuntimeError") {
         return RoomKitError::Runtime(error.message.clone());
+    }
+    match error.kind.as_str() {
+        "builtins:TypeError" => return RoomKitError::Type(error.message.clone()),
+        "roomkit.core.exceptions:TurnLinkError" => {
+            if let Some(reason) = error.attributes.get("reason").and_then(Value::as_str) {
+                return RoomKitError::TurnLink {
+                    reason: reason.to_owned(),
+                    message: Some(error.message.clone()),
+                };
+            }
+        }
+        kind => {
+            if let Some(variant) = kind
+                .strip_prefix("roomkit.core.exceptions:")
+                .and_then(|name| name.strip_suffix("Error"))
+                && let Some(rebuilt) = rebuilt_variant(error, variant)
+                && rebuilt.to_string() == error.message
+            {
+                return rebuilt;
+            }
+        }
     }
     if is_link_reason(&error.kind) {
         return TurnError::new(error.kind.clone(), error.message.clone()).into_kit_error();
@@ -467,8 +504,7 @@ pub(crate) fn rebuild_kit_error(error: &WireError) -> RoomKitError {
     }
 }
 
-fn rebuilt_variant(error: &WireError) -> Option<RoomKitError> {
-    let variant = error.attributes.get(VARIANT)?.as_str()?;
+fn rebuilt_variant(error: &WireError, variant: &str) -> Option<RoomKitError> {
     Some(match variant {
         "NoRecipient" => RoomKitError::no_recipient(
             error.attributes.get("channel_id")?.as_str()?,

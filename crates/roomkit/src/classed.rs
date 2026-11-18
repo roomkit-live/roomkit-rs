@@ -57,6 +57,12 @@ impl ClassedError {
     /// A task interprets only its own failure wrappers. Keep the module for
     /// names that would otherwise turn an unrelated error into one of them.
     pub(crate) fn record_class(&self) -> &str {
+        if let Some((package, name)) = self.class.rsplit_once(':')
+            && let Some((native, _)) = crate::turns::wire::native_class(name, None)
+            && package != native
+        {
+            return &self.class;
+        }
         match self.class() {
             "TurnCutShortError" | "TaskCutShortError" | "TaskTurnFailedError" => &self.class,
             other => other,

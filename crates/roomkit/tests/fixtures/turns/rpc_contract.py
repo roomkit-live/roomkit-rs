@@ -12,8 +12,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from roomkit.core.exceptions import TaskTurnFailedError, ToolTimeoutError
 from roomkit.turns import wire
 from roomkit.turns._codec import decode_end, decode_item, request_json
+from roomkit.turns._error_codec import ROOMKIT_ERRORS
 from roomkit.turns.host import VERBS
 
 HERE = Path(__file__).parent
@@ -321,6 +323,24 @@ if __name__ == "__main__":
                 wanted["direction"],
                 wanted["message"],
             ), index
-        print(f"Python read {len(output)} Rust text turn messages")
+        errors = []
+        for line in (HERE / "rust-rpc-errors.jsonl").read_text().splitlines():
+            result = wire.HostResult.model_validate_json(line)
+            assert result.error is not None
+            errors.append(ROOMKIT_ERRORS.rebuild(result.error))
+        assert [type(error) for error in errors] == [
+            TypeError,
+            ValueError,
+            RuntimeError,
+            TaskTurnFailedError,
+        ]
+        wrapper = errors[-1]
+        assert isinstance(wrapper, TaskTurnFailedError)
+        assert (wrapper.reason, wrapper.narration) == ("interrupted", "working")
+        assert type(wrapper.__cause__) is ToolTimeoutError
+        assert (wrapper.__cause__.name, wrapper.__cause__.timeout) == ("lookup", 0.5)
+        print(
+            f"Python read {len(output)} Rust text turn messages and rebuilt {len(errors)} native errors"
+        )
     else:
         raise SystemExit("expected write-python or read-rust")
