@@ -215,11 +215,7 @@ fn published_tags(tool: &Tool) -> Vec<String> {
 /// Whether some vendor accepts `name` for a tool (RFC §6.7): letters,
 /// digits, `_`, `.`, `:` and `-`, and at most [`NAME_LIMIT`] of them.
 fn is_tool_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= NAME_LIMIT
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'))
+    name.len() <= NAME_LIMIT && roomkit_ai::some_vendor_accepts_tool_name(name)
 }
 
 #[cfg(test)]

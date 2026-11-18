@@ -155,6 +155,9 @@ pub use self::provider::{
     ResponseSchemaError, ResponseSchemaErrorOptions, ResponseSchemaFailure, SchemaMismatchOptions,
     check_portable_schema, schema_mismatch,
 };
+pub use self::provider::{
+    chat_tool_declarations, declared_parameters, some_vendor_accepts_tool_name,
+};
 #[doc(hidden)]
 pub use self::provider::{check_schema_answer, checked_stream, schema_for_generate};
 pub use self::router::{

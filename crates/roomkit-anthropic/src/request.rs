@@ -182,15 +182,7 @@ fn tools(config: &AnthropicConfig, context: &AiContext) -> Result<Value, Provide
                 refused.before_request = true;
                 return Err(refused);
             }
-            let mut parameters = tool.parameters.clone();
-            if parameters.as_object().is_some_and(Map::is_empty) {
-                parameters = json!({"type":"object", "properties":{}});
-            }
-            if let Some(fields) = parameters.as_object_mut()
-                && fields.get("type").is_none_or(Value::is_null)
-            {
-                fields.insert("type".into(), "object".into());
-            }
+            let parameters = roomkit_ai::declared_parameters(Some(&tool.parameters));
             let mut declared = json!({"name":tool.name, "description":tool.description, "input_schema":parameters});
             if defers && tool.defer_loading { put(&mut declared, "defer_loading", true.into()); }
             Ok(declared)

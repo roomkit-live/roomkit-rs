@@ -16,6 +16,7 @@ mod response;
 mod response_schema;
 mod round_parts;
 mod thinking_blocks;
+mod tool_declaration;
 
 use std::future::Future;
 use std::pin::Pin;
@@ -53,6 +54,9 @@ pub use self::response_schema::{
 pub use self::response_schema::{check_schema_answer, checked_stream, schema_for_generate};
 pub use self::round_parts::{RoundTranscript, round_parts};
 pub use self::thinking_blocks::ThinkingBlocks;
+pub use self::tool_declaration::{
+    chat_tool_declarations, declared_parameters, some_vendor_accepts_tool_name,
+};
 use crate::stream::{Yielder, items, next};
 
 /// The metadata key for a credential lent to one generation.

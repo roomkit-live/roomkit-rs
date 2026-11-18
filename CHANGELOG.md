@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Expose tool schema normalization, ordered Chat Completions function declarations and the shared provider tool-name check through `roomkit_ai`. Returned schemas own their nested data.
+
 - Expose custom provider tool-name rules through `roomkit_ai::ToolNameRule`, using the native Rust `fancy-regex` syntax for whole-name matching.
 
 - Expose `roomkit_ai::stream_call_of` and `tool_call_of` to copy complete and streamed tool calls while retaining all fields.

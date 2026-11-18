@@ -32,7 +32,7 @@ pub(crate) struct CompletionRequest<'a> {
     model: &'a str,
     messages: &'a [Value],
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    tools: Vec<WireTool<'a>>,
+    tools: Vec<Value>,
     /// Sent only when true: a completion answered whole names no `stream`,
     /// as Python's `generate` sends none.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -53,20 +53,6 @@ struct StreamOptions {
     include_usage: bool,
 }
 
-#[derive(Debug, Serialize)]
-struct WireTool<'a> {
-    #[serde(rename = "type")]
-    kind: &'static str,
-    function: WireToolFunction<'a>,
-}
-
-#[derive(Debug, Serialize)]
-struct WireToolFunction<'a> {
-    name: &'a str,
-    description: &'a str,
-    parameters: &'a Value,
-}
-
 impl<'a> CompletionRequest<'a> {
     /// The request asking `config`'s model to answer `request`: its system
     /// prompt when it has one, its conversation, its tools, and Python's
@@ -78,18 +64,7 @@ impl<'a> CompletionRequest<'a> {
     pub(crate) fn new(config: &'a OpenAiConfig, request: &'a Request, streamed: bool) -> Self {
         let model = config.model.as_str();
         let messages = &request.messages;
-        let tools = request
-            .tools
-            .iter()
-            .map(|tool| WireTool {
-                kind: "function",
-                function: WireToolFunction {
-                    name: &tool.name,
-                    description: &tool.description,
-                    parameters: &tool.parameters,
-                },
-            })
-            .collect();
+        let tools = roomkit_ai::chat_tool_declarations(&request.tools);
         // No bound from the turn nor the configuration sends none.
         let bound = request.max_tokens.or(config.max_tokens);
         let (max_tokens, max_completion_tokens) = if config.takes_max_completion_tokens() {

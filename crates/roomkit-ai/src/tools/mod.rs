@@ -141,11 +141,7 @@ impl AiTool {
 
     /// Refuses `name` when no vendor accepts it (RFC §6.7).
     pub(crate) fn checked(name: &str) -> Result<(), AiError> {
-        let accepted = !name.is_empty()
-            && name
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'));
-        if accepted {
+        if crate::provider::some_vendor_accepts_tool_name(name) {
             Ok(())
         } else {
             Err(AiError::ToolName {
