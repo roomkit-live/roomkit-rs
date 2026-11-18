@@ -213,3 +213,44 @@ async fn closing_the_transport_wakes_waiters_and_keeps_the_executor_independent(
     gate.notify_one();
     worker.close().await;
 }
+
+#[tokio::test]
+async fn a_standalone_turn_client_runs_a_real_worker_on_the_builtin_memory_transport() {
+    use roomkit::turns::{TurnClient, TurnClientOptions, TurnRunOptions};
+    use roomkit_core::rules::transcoding::text_of;
+
+    let backend = Arc::new(InMemoryTurnBackend::new());
+    let worker = echo("actual memory worker");
+    let client = TurnClient::new(
+        Arc::<InMemoryTurnBackend>::clone(&backend),
+        TurnClientOptions {
+            executor: Some(Arc::<TurnExecutor>::clone(&worker)),
+            ..Default::default()
+        },
+    );
+    let request = request("standalone");
+    let answer = tokio::time::timeout(
+        Duration::from_secs(5),
+        client.run(
+            request.event,
+            &request.binding,
+            request.context,
+            TurnRunOptions::default(),
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(answer.output.responded);
+    assert!(answer.response_stream.is_none());
+    let [event] = <&[_; 1]>::try_from(answer.output.response_events.as_slice()).unwrap();
+    assert_eq!(text_of(&event.content), "actual memory worker");
+    assert_eq!(event.room_id, request.room_id);
+    assert_eq!(event.source.channel_id, request.channel_id);
+    assert!(
+        backend.executors().await.unwrap().is_empty(),
+        "the client's own worker is excluded from its catalogue"
+    );
+    client.close().await.unwrap();
+    worker.close().await;
+}
