@@ -27,6 +27,8 @@ impl Notification {
             observed.result = Some(read);
             result
         });
+        let replaces_copy = chain.replaced_copy
+            && (event.structured_content.is_some() || observed.structured_content.is_some());
         let copy = observed
             .structured_content
             .as_ref()
@@ -39,7 +41,7 @@ impl Notification {
                 object
             });
         (
-            ToolCallVerdict::new(replacement, false, chain.replaced_copy, copy, detail),
+            ToolCallVerdict::new(replacement, false, replaces_copy, copy, detail),
             observed,
         )
     }

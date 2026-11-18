@@ -228,3 +228,49 @@ async fn the_gate_denies_an_unreadable_room_and_a_fail_closed_result_is_withheld
     );
     worker.close().await;
 }
+
+#[tokio::test]
+async fn a_temporary_structured_replacement_cleared_by_the_last_hook_stays_absent() {
+    let (link, _, _) = link(false);
+    let req = &link.request;
+    let worker = worker();
+    worker.use_wiring(Arc::new(Env::new(req.context.clone())));
+    for (priority, value) in [(10, json!({"temporary": true})), (20, json!(null))] {
+        worker
+            .hook(
+                HookTrigger::OnToolCall,
+                move |_: ToolCallEvent, _: RoomContext| {
+                    let copy = value.clone();
+                    async move {
+                        let mut answer = HookResult::allow(AllowOptions::default());
+                        answer.metadata.insert("structured_content".into(), copy);
+                        answer
+                    }
+                },
+                HookOptions {
+                    priority,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+    let mut event = ToolCallEvent::new(
+        req.channel_id.clone(),
+        ChannelType::AI,
+        "c",
+        "lookup",
+        Metadata::new(),
+    );
+    event.room_id = Some(req.room_id.clone());
+    event.result = Some(json!("original"));
+    let verdict = worker
+        .wiring()
+        .tools()
+        .build_tool_call_hook(&req.channel_id)(event, None)
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(verdict.structured_content().is_none());
+    assert!(!verdict.replaces_structured());
+    worker.close().await;
+}
