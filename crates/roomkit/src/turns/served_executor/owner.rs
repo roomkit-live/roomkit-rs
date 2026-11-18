@@ -85,8 +85,7 @@ impl<S: ConversationStore> ServedExecutor for OwnerExecutor<S> {
     }
 
     fn organizations(&self) -> Option<BTreeSet<String>> {
-        self.worker()
-            .and_then(|worker| worker.advertised_organizations())
+        self.worker().and_then(|worker| worker.organizations())
     }
 
     fn serves(&self, organization: Option<&str>) -> bool {

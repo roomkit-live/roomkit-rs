@@ -203,13 +203,6 @@ impl<S: ConversationStore> TurnExecutor<S> {
             .and_then(|worker| worker.hosts.clone())
     }
 
-    /// The kit's executor returns the wildcard for all organizations (§10.6.7).
-    /// A standalone worker configured with no organization declaration returns an
-    /// empty set here and serves rooms without an organization.
-    pub fn organizations(&self) -> BTreeSet<String> {
-        self.advertised_organizations().unwrap_or_default()
-    }
-
     /// Whether it serves this organization; the kit's executor serves all.
     pub fn serves(&self, organization_id: Option<&str>) -> bool {
         self.standalone

@@ -566,6 +566,10 @@ conversation store. Application code still registers hooks on its typed
 `TurnExecutor<S>`. A worker can retain a `RoomOwner` for calls and publications
 after the turn by calling `reach_owner`.
 
+`TurnExecutor::organizations()` returns `Option<BTreeSet<String>>`. An ordinary
+kit returns a set containing `"*"`. A standalone worker can serve rooms without
+an organization by leaving its declaration at `None`.
+
 A backend implements `submit`, `serve`, `control`, `claim_presence` and
 `close`. A single-process transport can delegate `claim_presence` to a
 `LocalPresenceClaims` field. A transport that tracks executor availability
@@ -587,7 +591,6 @@ The following application contracts remain open for text API parity.
 | Python contract | Current Rust behavior |
 | --- | --- |
 | `InMemoryTurnBackend`, `TurnClient` | The kit runs turns locally by default. Standalone application construction of the built-in memory transport and the owner client remains open. |
-| `TurnExecutor.organizations` | The standalone constructor accepts `None` for rooms without an organization and rejects an explicitly empty collection. Its public getter returns an empty set in the former case. The Redis declaration preserves null. The kit's executor serves `"*"`. |
 | `TurnExecutor.wire`, `use_wiring`, `wiring` | The SDK wires the channels it registers. Inspection and replacement of that environment by the application remain open. |
 | `TurnExecutor(..., telemetry=..., error_classes=...)`, `RoomKit(..., error_classes=...)` | Built-in remote errors use the SDK's codec. Supplying worker telemetry and an application error-class registry for the worker or kit remains open. |
 

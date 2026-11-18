@@ -150,7 +150,9 @@ impl Standalone {
 }
 
 impl<S: ConversationStore> TurnExecutor<S> {
-    pub(crate) fn advertised_organizations(&self) -> Option<BTreeSet<String>> {
+    /// The kit serves every organization (`Some({"*"})`). A standalone worker with
+    /// no organization declaration serves rooms without an organization (`None`).
+    pub fn organizations(&self) -> Option<BTreeSet<String>> {
         self.standalone.as_ref().map_or_else(
             || Some(BTreeSet::from(["*".to_owned()])),
             |worker| worker.organizations.clone(),

@@ -60,7 +60,7 @@ async fn a_python_request_uses_one_lazy_build_for_two_distinct_turns() {
         options(),
     )
     .unwrap();
-    assert_eq!(executor.advertised_organizations(), None);
+    assert_eq!(executor.organizations(), None);
     let mut first = executor.take_carried(request("one", None)).unwrap();
     let mut second = executor.take_carried(request("two", None)).unwrap();
     for (turn, id) in [(&mut first, "one"), (&mut second, "two")] {

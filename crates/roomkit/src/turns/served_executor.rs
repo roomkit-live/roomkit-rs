@@ -100,7 +100,7 @@ impl<S: ConversationStore> ServedExecutor for TurnExecutor<S> {
         self.hosted()
     }
     fn organizations(&self) -> Option<BTreeSet<String>> {
-        self.advertised_organizations()
+        self.organizations()
     }
     fn serves(&self, organization_id: Option<&str>) -> bool {
         self.serves(organization_id)

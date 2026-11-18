@@ -149,7 +149,10 @@ async fn local_executor_queries_follow_registration_and_close() {
     let executor = kit.turn_executor();
     let agent = ChannelId::new("agent").unwrap();
     assert!(executor.hosted().is_none());
-    assert_eq!(executor.organizations(), BTreeSet::from(["*".to_owned()]));
+    assert_eq!(
+        executor.organizations(),
+        Some(BTreeSet::from(["*".to_owned()]))
+    );
     assert!(executor.serves(None) && executor.serves(Some("acme")));
     assert!(!executor.declares(&agent));
     let declared = ChannelId::new("declared").unwrap();
