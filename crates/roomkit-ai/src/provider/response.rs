@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use roomkit::model::{Metadata, Observation, Task};
 use serde_json::Value;
 
+use super::call_rules::{ArgumentStatus, blank};
 use super::context::AiThinkingPart;
 
 /// The endings under which a response ran out of room: the output cap, the
@@ -166,12 +167,12 @@ impl AiToolCall {
         finish_reason: Option<&str>,
         last: bool,
     ) -> Self {
-        let unreadable = read_arguments(raw).is_none();
-        let cut = last && cuts_calls(finish_reason) && (unreadable || raw.trim().is_empty());
+        let read = read_arguments(raw);
+        let status = ArgumentStatus::from_read(read.is_none(), !blank(raw), finish_reason, last);
         Self {
-            arguments: tool_arguments(raw),
-            partial: unreadable || cut,
-            garbled: unreadable && !cut,
+            arguments: arguments_or_raw(raw, read),
+            partial: status.partial,
+            garbled: status.garbled,
             ..Self::new(id, name)
         }
     }
@@ -257,7 +258,11 @@ fn minted_call_id(name: &str) -> String {
 /// assert_eq!(json!(tool_arguments("[1, 2]")), json!({ "raw": "[1, 2]" }));
 /// ```
 pub fn tool_arguments(raw: &str) -> Metadata {
-    read_arguments(raw).unwrap_or_else(|| {
+    arguments_or_raw(raw, read_arguments(raw))
+}
+
+fn arguments_or_raw(raw: &str, read: Option<Metadata>) -> Metadata {
+    read.unwrap_or_else(|| {
         let mut kept = Metadata::new();
         kept.insert("raw".to_owned(), Value::String(raw.to_owned()));
         kept
@@ -265,12 +270,11 @@ pub fn tool_arguments(raw: &str) -> Metadata {
 }
 
 /// `raw` as a mapping, `None` when it does not read as one.
-fn read_arguments(raw: &str) -> Option<Metadata> {
-    let text = raw.trim();
-    if text.is_empty() {
+pub(super) fn read_arguments(raw: &str) -> Option<Metadata> {
+    if blank(raw) {
         return Some(Metadata::new());
     }
-    match serde_json::from_str::<Value>(text) {
+    match serde_json::from_str::<Value>(raw) {
         Ok(Value::Object(arguments)) => Some(arguments),
         Ok(Value::Null) => Some(Metadata::new()),
         Ok(_) | Err(_) => None,
@@ -280,9 +284,9 @@ fn read_arguments(raw: &str) -> Option<Metadata> {
 /// Whether a response that ended for `finish_reason` may have stopped its
 /// last call mid-arguments: it ran out of room, a filter or a refusal
 /// stopped it, or its stream ended with no reason at all.
-fn cuts_calls(finish_reason: Option<&str>) -> bool {
+pub(super) fn cuts_calls(finish_reason: Option<&str>) -> bool {
     finish_reason.is_none_or(|reason| {
-        ran_out_of_room(Some(reason)) || CUTTING.contains(&reason.to_ascii_lowercase().as_str())
+        is_truncation(Some(reason)) || CUTTING.contains(&reason.to_ascii_lowercase().as_str())
     })
 }
 
@@ -301,7 +305,7 @@ pub(crate) fn is_malformed_call(finish_reason: Option<&str>) -> bool {
 }
 
 /// Whether a response that ended for `finish_reason` ran out of room.
-pub(crate) fn ran_out_of_room(finish_reason: Option<&str>) -> bool {
+pub fn is_truncation(finish_reason: Option<&str>) -> bool {
     finish_reason.is_some_and(|reason| OUT_OF_ROOM.contains(&reason.to_ascii_lowercase().as_str()))
 }
 

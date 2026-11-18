@@ -14,7 +14,7 @@ use crate::ContinuationPolicy;
 use crate::error::AiError;
 use crate::provider::{
     ProviderError, ResponseSchemaError, ResponseSchemaErrorOptions, ResponseSchemaFailure,
-    is_malformed_call, ran_out_of_room,
+    is_malformed_call, is_truncation,
 };
 use crate::turn_budget::TurnBudget;
 
@@ -227,7 +227,7 @@ fn empty_round_nudge(
     if !is_blank(text) || !had_tool_round {
         return None;
     }
-    if ran_out_of_room(finish_reason) {
+    if is_truncation(finish_reason) {
         tracing::warn!(
             target: "roomkit::ai",
             finish_reason,
@@ -271,7 +271,7 @@ pub(super) fn final_round_reason(
     if !is_blank(text) || !had_tool_round {
         return LoopEndReason::Completed;
     }
-    if ran_out_of_room(finish_reason) {
+    if is_truncation(finish_reason) {
         return LoopEndReason::Truncated;
     }
     limit.unwrap_or(LoopEndReason::EmptyResponse)

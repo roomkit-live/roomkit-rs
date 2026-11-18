@@ -156,7 +156,8 @@ pub use self::provider::{
     check_portable_schema, schema_mismatch,
 };
 pub use self::provider::{
-    chat_tool_declarations, declared_parameters, some_vendor_accepts_tool_name,
+    call_cut, call_garbled, call_partial, chat_tool_declarations, declared_parameters,
+    is_truncation, some_vendor_accepts_tool_name, unreadable_arguments,
 };
 #[doc(hidden)]
 pub use self::provider::{check_schema_answer, checked_stream, schema_for_generate};
@@ -185,6 +186,7 @@ pub use self::speaking::{
     SpeakTurn, Thinker, Thought, ThoughtEvent,
 };
 pub use self::steering::SteerOptions;
+pub use self::texts::{cut_call_error, partial_call_error, unreadable_call_error};
 pub use self::tool_search::{TOOL_FIND_TOOLS, TOOL_LIST_TOOLS, TOOL_SEARCH_INFRA_TOOL_NAMES};
 pub use self::tools::{
     AiTool, AiToolHandle, BeforeToolDecision, ExternalToolFuture, ExternalToolHandler,

@@ -2,6 +2,7 @@
 //! `roomkit.providers.ai.AIProvider`, what one generation is asked and what
 //! it answers.
 
+mod call_rules;
 mod catalog;
 mod chat_dialect;
 mod chat_messages;
@@ -24,6 +25,7 @@ use std::pin::Pin;
 
 use futures_core::Stream;
 
+pub use self::call_rules::{call_cut, call_garbled, call_partial, unreadable_arguments};
 pub(crate) use self::catalog::BILLED_USAGE_COUNTERS;
 pub use self::catalog::{ModelInfo, ModelPricing, listing};
 pub use self::chat_dialect::{ChatDialect, ChatDialectOptions, OPENAI_CHAT};
@@ -45,10 +47,10 @@ pub use self::model_tags::{
 };
 pub use self::response::{
     AiResponse, AiToolCall, CallIds, ServedCall, StreamDone, StreamEvent, StreamTextDelta,
-    StreamThinkingDelta, StreamToolCall, StreamToolCallDelta, StreamUsage, read_tool_calls,
-    stream_call_of, thinking_parts_of, tool_arguments, tool_call_of,
+    StreamThinkingDelta, StreamToolCall, StreamToolCallDelta, StreamUsage, is_truncation,
+    read_tool_calls, stream_call_of, thinking_parts_of, tool_arguments, tool_call_of,
 };
-pub(crate) use self::response::{is_malformed_call, ran_out_of_room, response_events};
+pub(crate) use self::response::{is_malformed_call, response_events};
 pub use self::response_schema::{
     ResponseSchemaError, ResponseSchemaErrorOptions, ResponseSchemaFailure,
 };

@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Expose the text-provider rules for cut and unreadable tool calls, including their structured model errors.
+
 - Expose the URI, decoded bytes and canonical base64 forms of image parts embedded in text-provider messages.
 
 - Register an opted-in application channel with `register_channel(framework_aware(channel))` to give it a weak handle to the same kit and store.

@@ -8,7 +8,7 @@ use std::fmt;
 use serde_json::{Map, Value};
 
 use super::json_schema::{SchemaMismatchOptions, check_portable_schema, schema_mismatch};
-use super::response::{is_malformed_call, ran_out_of_room};
+use super::response::{is_malformed_call, is_truncation};
 use super::{
     AiContext, ProviderError, ProviderErrorOptions, ProviderStream, StreamDone, StreamEvent,
 };
@@ -228,7 +228,7 @@ pub fn check_schema_answer(
         let message = format!("the model declined to answer: {refusal}");
         return Err(failed(message, ResponseSchemaFailure::Refusal, provider));
     }
-    if ran_out_of_room(finish_reason) {
+    if is_truncation(finish_reason) {
         let message = format!(
             "the JSON answer was cut ({}): raise max_tokens, or shorten the context",
             finish_reason.unwrap_or_default()
