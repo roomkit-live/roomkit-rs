@@ -71,6 +71,8 @@ pub(crate) use detach_state::{DetachTicket, PendingDetaches};
 mod codec;
 pub(crate) mod context;
 mod error;
+mod error_classes;
+pub use error_classes::{ErrorClasses, RemoteTurnDetails};
 pub(crate) mod executor;
 mod memory;
 mod observe;
@@ -83,6 +85,7 @@ mod records;
 mod rooms;
 pub(crate) use channel_calls::Handover;
 pub use channel_calls::{ChannelCall, ChannelResult};
+#[cfg(feature = "redis")]
 pub(crate) use error::rebuild_kit_error;
 pub(crate) use rooms::{state_key, stored_state};
 pub(crate) mod served;
@@ -150,6 +153,7 @@ pub(crate) struct Turns {
     #[cfg(feature = "redis")]
     pub(crate) serving_backends: redis::ServingBackends,
     worker_owner: Mutex<Option<room_owner::OwnerPort>>,
+    error_classes: RwLock<ErrorClasses>,
     timeouts: RwLock<TurnTimeouts>,
     observers: RwLock<Observers>,
     /// The id the kit's own executor answers with.
@@ -189,6 +193,7 @@ impl Default for Turns {
             #[cfg(feature = "redis")]
             serving_backends: redis::ServingBackends::default(),
             worker_owner: Mutex::default(),
+            error_classes: RwLock::default(),
             timeouts: RwLock::new(TurnTimeouts::default()),
             observers: RwLock::new(Observers::default()),
             executor_id: executor_id(),
@@ -254,6 +259,20 @@ impl Turns {
             return None;
         }
         self.application.as_ref()
+    }
+
+    pub(crate) fn set_error_classes(&self, classes: ErrorClasses) {
+        *self
+            .error_classes
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = classes;
+    }
+
+    pub(crate) fn error_classes(&self) -> ErrorClasses {
+        self.error_classes
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// The bounds of the turns submitted from now on.
@@ -473,7 +492,7 @@ impl Turns {
             .ok_or_else(|| RoomKitError::Value("a room call did not receive its result".into()))?;
         let answered: RoomCallResult = cross(&observers, Carried::RoomCallResult, &answered)?;
         match answered.error {
-            Some(error) => Err(rebuild_kit_error(&error)),
+            Some(error) => Err(self.error_classes().rebuild(&error)),
             None => Ok(answered.result),
         }
     }

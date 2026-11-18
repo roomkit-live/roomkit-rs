@@ -258,7 +258,10 @@ impl Turns {
     ) -> OpenOwner {
         let (frames, frames_read) = pipe(Arc::clone(&turn_id), Carried::Frame, observers.clone());
         let (controls, controls_read) = pipe(Arc::clone(&turn_id), Carried::Control, observers);
-        let memory = Arc::new(MemoryTurn::new(turn_id, frames, controls, self.timeouts()));
+        let memory = Arc::new(MemoryTurn {
+            error_classes: self.error_classes(),
+            ..MemoryTurn::new(turn_id, frames, controls, self.timeouts())
+        });
 
         let (turn, pump) = owner::open(
             Arc::clone(&memory),

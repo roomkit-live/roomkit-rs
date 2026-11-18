@@ -10,7 +10,7 @@ use uuid::Uuid;
 use super::stream::Message;
 use super::{Node, RedisTurnBackend};
 use crate::RoomKitError;
-use crate::turns::error::rebuild_kit_error;
+use crate::turns::ErrorClasses;
 use crate::turns::lock;
 use crate::turns::wire::{OwnerMessage, OwnerMessageEnvelope, RoomCall, RoomCallResult};
 use crate::turns::{RoomOwner, RoomPublication, TurnFuture};
@@ -49,10 +49,14 @@ impl PeerOwner {
             .peer(self.turn_id.as_deref()?)
     }
 
-    pub(crate) async fn call(&self, call: RoomCall) -> Result<Value, RoomKitError> {
+    pub(crate) async fn call(
+        &self,
+        call: RoomCall,
+        error_classes: &ErrorClasses,
+    ) -> Result<Value, RoomKitError> {
         let result = self.call_result(call).await?;
         if let Some(error) = result.error {
-            return Err(rebuild_kit_error(&error));
+            return Err(error_classes.rebuild(&error));
         }
         Ok(result.result)
     }

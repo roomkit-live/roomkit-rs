@@ -269,6 +269,9 @@ pub enum RoomKitError {
         kind: String,
         /// The classes that class derives from, nearest first.
         bases: Vec<String>,
+        /// The original foreign record and its reconstructed native cause.
+        #[source]
+        detail: Option<Box<turns::RemoteTurnDetails>>,
     },
     /// Python's `TurnLinkError(reason, message=None)`: a turn the turn
     /// backend could not carry to its end (RFC §10.6.8). `reason` is
@@ -1075,6 +1078,7 @@ mod tests {
             message: "the provider failed".to_owned(),
             kind: "shop.errors:ProviderError".to_owned(),
             bases: vec!["roomkit.providers:ProviderError".to_owned()],
+            detail: None,
         };
         assert_eq!(
             [&closed, &lost, &remote].map(|error| (error.to_string(), error.class_name())),

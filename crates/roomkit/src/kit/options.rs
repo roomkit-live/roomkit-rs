@@ -52,6 +52,8 @@ const DELIVERY_GAP_TIMEOUT: Duration = Duration::from_secs(30);
 pub struct RoomKitOptions<S = InMemoryStore> {
     /// Python `turn_backend=None`: transport for the kit’s turns and channel controls.
     pub turn_backend: Option<Arc<dyn crate::turns::TurnBackend>>,
+    /// Application errors reconstructed on the owner and its own executor.
+    pub error_classes: crate::turns::ErrorClasses,
     /// Python `store=None`: where rooms and their timelines live (RFC §14),
     /// an in-memory store by default. The kit shares it, as Python's object
     /// is shared: a router built over it reads what the kit writes
@@ -184,6 +186,7 @@ impl<S> RoomKitOptions<S> {
     pub fn with_store(store: S) -> Self {
         Self {
             turn_backend: None,
+            error_classes: crate::turns::ErrorClasses::default(),
             store: Arc::new(store),
             inbound_router: None,
             max_chain_depth: MAX_CHAIN_DEPTH,

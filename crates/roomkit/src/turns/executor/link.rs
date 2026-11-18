@@ -502,7 +502,7 @@ impl HostLink {
                         .into_kit_error(),
                 )
             })?
-            .finish(carried.as_ref())
+            .finish(carried.as_ref(), &self.sender.turn.error_classes)
     }
 
     /// Runs `verb` as work the turn began, after it ended (RFC §10.6.3
@@ -523,7 +523,7 @@ impl HostLink {
             if !owner.reachable(turns.is_some()) && !self.lacks_owner_port() {
                 return Err(RoomKitError::KitClosed);
             }
-            return owner.call(message).await;
+            return owner.call(message, &self.sender.turn.error_classes).await;
         }
         let turns = turns.ok_or(RoomKitError::KitClosed)?;
         turns.room_call(Arc::clone(&self.kit), message).await

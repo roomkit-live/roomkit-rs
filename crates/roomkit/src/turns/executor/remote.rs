@@ -54,6 +54,7 @@ impl WorkerTurn {
             MemoryTurn::with_context(id, frames, controls, turns.timeouts(), origin.context);
         let memory = MemoryTurn {
             owner: origin.owner,
+            error_classes: turns.error_classes(),
             ..memory
         };
         let memory = Arc::new(memory);

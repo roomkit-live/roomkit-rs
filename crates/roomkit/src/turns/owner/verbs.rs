@@ -69,7 +69,7 @@ pub(super) async fn serve(
     context: &CallContext,
 ) -> Result<Value, Box<WireError>> {
     if let Some(declared) = kit.declared_verb(verb) {
-        return super::call_context::invoke(declared.verb, arguments).await;
+        return super::call_context::invoke(kit.error_classes(), declared.verb, arguments).await;
     }
     let scope = Scope {
         room_id: &facts.room_id,
@@ -361,6 +361,7 @@ pub(crate) async fn answer_room_call(
         let room = room_after_turn(kit, &room_id, room_created_at).await?;
         if let Some(declared) = declared {
             return super::call_context::between_turns(
+                kit.error_classes(),
                 declared.verb,
                 room,
                 channel_id.clone(),

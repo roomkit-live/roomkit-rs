@@ -23,6 +23,7 @@ use crate::discussion_turn::{discussion_notes, discussion_turn};
 #[derive(Debug)]
 pub(crate) struct MemoryTurn {
     pub(crate) turn_id: Arc<str>,
+    pub(super) error_classes: super::ErrorClasses,
     pub(crate) owner: Option<super::room_owner::WorkerOwner>,
     pub(super) application_link: std::sync::OnceLock<super::application::ActiveLink>,
     /// Whether its reader commits the turn as a delegated task's trace (RFC
@@ -81,6 +82,7 @@ impl MemoryTurn {
             timeouts,
             traced: Arc::default(),
             owner: None,
+            error_classes: super::ErrorClasses::default(),
             process_beat: AtomicBool::new(false),
             contexts: Mutex::new(Contexts {
                 turn: context,

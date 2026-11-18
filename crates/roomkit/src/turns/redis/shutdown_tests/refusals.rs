@@ -60,7 +60,10 @@ async fn a_captured_host_reports_the_closing_owners_refusal() {
     let mut draining = owner.0.draining.subscribe();
     let after_cut = async {
         drop(draining.wait_for(|closing| *closing).await.unwrap());
-        let reason = port.call(call).await.unwrap_err();
+        let reason = port
+            .call(call, &crate::turns::ErrorClasses::default())
+            .await
+            .unwrap_err();
         release.notify_one();
         reason
     };

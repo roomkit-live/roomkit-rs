@@ -64,18 +64,22 @@ impl WorkerOwner {
             && (executor_alive || matches!(self, Self::Application { .. }))
     }
 
-    pub(crate) async fn call(&self, message: RoomCall) -> Result<Value, RoomKitError> {
+    pub(crate) async fn call(
+        &self,
+        message: RoomCall,
+        error_classes: &super::ErrorClasses,
+    ) -> Result<Value, RoomKitError> {
         match self {
             Self::Unreachable => Err(ended(&message.verb)),
             Self::Application { port, .. } => {
                 let reply = port.0.room_call(message).await?;
                 match reply.error {
-                    Some(error) => Err(super::error::rebuild_kit_error(&error)),
+                    Some(error) => Err(error_classes.rebuild(&error)),
                     None => Ok(reply.result),
                 }
             }
             #[cfg(feature = "redis")]
-            Self::Redis(peer) => peer.call(message).await,
+            Self::Redis(peer) => peer.call(message, error_classes).await,
         }
     }
 

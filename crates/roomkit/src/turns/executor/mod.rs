@@ -254,7 +254,7 @@ impl Executor {
             };
             if let Err(error) = rooms.ready(&*built.channel, &key, stored, stale).await {
                 drop(sender.send(&Frame::Error {
-                    error: super::error::turn_failure(&*error),
+                    error: turn.error_classes.record(&*error),
                 }));
                 return;
             }

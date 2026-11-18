@@ -1344,6 +1344,10 @@ pub(crate) struct OwnerCall {
 }
 
 pub(crate) trait TurnKit: Send + Sync {
+    fn error_classes(&self) -> crate::turns::ErrorClasses {
+        crate::turns::ErrorClasses::default()
+    }
+
     fn declared_verb(&self, name: &str) -> Option<crate::turns::declared::Declaration>;
     fn external_tool_context(&self, room_id: RoomId) -> BoxFuture<'static, Option<RoomContext>>;
     fn room_context(
@@ -1533,6 +1537,12 @@ pub(crate) trait TurnKit: Send + Sync {
 }
 
 impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
+    fn error_classes(&self) -> crate::turns::ErrorClasses {
+        self.upgrade()
+            .map(|kit| kit.turns.error_classes())
+            .unwrap_or_default()
+    }
+
     fn declared_verb(&self, name: &str) -> Option<crate::turns::declared::Declaration> {
         self.upgrade()?.declared_verbs.get(name)
     }

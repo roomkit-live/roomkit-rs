@@ -20,6 +20,9 @@ use roomkit::{
 use serde_json::{Value, json};
 use tokio::sync::Notify;
 
+#[path = "channel_calls/error_classes.rs"]
+mod error_classes;
+
 #[derive(Default)]
 struct State {
     rooms: Mutex<HashMap<RoomId, Metadata>>,
@@ -88,6 +91,9 @@ impl Channel for Agent {
         verb: String,
         arguments: Metadata,
     ) -> Result<Value, ChannelError> {
+        if verb == "quota" {
+            return Err(error_classes::Quota(7).into());
+        }
         if verb == "type_error" {
             return Err(RoomKitError::Type("wrong shape".to_owned()).into());
         }
@@ -146,7 +152,10 @@ fn options() -> ChannelCallOptions {
     }
 }
 async fn kit() -> (RoomKit, Arc<State>, TurnTap) {
-    let kit = RoomKit::new(RoomKitOptions::default());
+    kit_with_options(RoomKitOptions::default()).await
+}
+async fn kit_with_options(options: RoomKitOptions) -> (RoomKit, Arc<State>, TurnTap) {
+    let kit = RoomKit::new(options);
     let state = Arc::new(State::default());
     kit.register_channel(Agent(Arc::clone(&state))).unwrap();
     kit.register_channel(RecordingTransport::new(

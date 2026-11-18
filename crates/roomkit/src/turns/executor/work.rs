@@ -20,7 +20,7 @@ use crate::discussion_turn::IssuedMark;
 use crate::stream::{ResponseItem, ResponseStream, UsageMarker};
 use crate::turn::TurnHost;
 use crate::turns::codec::{encode_loop_end, encode_output};
-use crate::turns::error::{CHANNEL_ERROR, one, stream_failure, turn_failure};
+use crate::turns::error::{CHANNEL_ERROR, one, stream_failure};
 use crate::turns::pipe::Uncarried;
 use crate::turns::pulls::PullGate;
 use crate::turns::wire::{Frame, Item, TurnRequest};
@@ -98,7 +98,7 @@ pub(super) async fn work(
     let output = match answered {
         Ok(output) => output,
         Err(error) => {
-            let error = turn_failure(&*error);
+            let error = turn.error_classes.record(&*error);
             return refuse_or_send(&sender, &Frame::Error { error });
         }
     };
@@ -299,7 +299,10 @@ impl Pump<'_> {
                 .map(drop),
             Some(Err(error)) => {
                 // The ends told early crossed before it (`report_told_ends`).
-                let error = stream_failure(&*error);
+                let error = self
+                    .turn
+                    .error_classes
+                    .encode_with(&*error, || stream_failure(&*error));
                 refuse_or_send(self.sender, &Frame::Error { error });
                 return false;
             }

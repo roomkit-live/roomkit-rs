@@ -164,7 +164,7 @@ impl<S: ConversationStore> RoomKit<S> {
                 .await?;
         }
         match answer.error {
-            Some(error) => Err(crate::turns::rebuild_kit_error(&error)),
+            Some(error) => Err(self.inner.turns.error_classes().rebuild(&error)),
             None => Ok(answer.result),
         }
     }

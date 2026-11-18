@@ -191,18 +191,20 @@ fn owner_context(facts: &Facts, context: &CallContext) -> OwnerToolContext {
 
 /// Invoke inside the scope, including synchronous work constructing the future.
 pub(super) async fn invoke(
+    error_classes: crate::turns::ErrorClasses,
     verb: DeclaredVerb,
     arguments: Metadata,
 ) -> Result<Value, Box<WireError>> {
     verb.call(arguments).await.map_err(|error| {
         Box::new(match error.downcast_ref::<RoomKitError>() {
             Some(error) => kit_error(error),
-            None => channel_error(error.as_ref()),
+            None => error_classes.encode_with(error.as_ref(), || channel_error(error.as_ref())),
         })
     })
 }
 
 pub(super) async fn between_turns(
+    error_classes: crate::turns::ErrorClasses,
     verb: DeclaredVerb,
     room: Room,
     channel_id: ChannelId,
@@ -220,7 +222,7 @@ pub(super) async fn between_turns(
     });
     let work = within_tool_call_scope(
         Arc::new(scope),
-        within_tool_turn_depth(0, invoke(verb, arguments)),
+        within_tool_turn_depth(0, invoke(error_classes, verb, arguments)),
     );
     crate::turn::without_turn_host(crate::turn_record::without_turn_record(work)).await
 }

@@ -11,7 +11,7 @@ use serde_json::Value;
 use super::Turns;
 
 mod submission;
-use super::error::{TurnError, kit_error, turn_failure};
+use super::error::{TurnError, kit_error};
 use super::observe::Carried;
 use super::wire::{ChannelControl, ChannelControlEnvelope, PreviousTurn, WireError};
 use crate::RoomKitError;
@@ -251,7 +251,7 @@ impl Turns {
             Err(error) => {
                 let record = error
                     .downcast_ref::<RoomKitError>()
-                    .map_or_else(|| turn_failure(&*error), kit_error);
+                    .map_or_else(|| self.error_classes().record(&*error), kit_error);
                 (Value::Null, Some(record))
             }
         };

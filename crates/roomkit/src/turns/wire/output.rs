@@ -30,6 +30,13 @@ pub struct ErrorRecord {
     pub bases: Vec<String>,
 }
 
+impl ErrorRecord {
+    /// Record an error whose message is its only argument.
+    pub fn new(kind: impl Into<String>, message: impl Into<String>) -> Self {
+        crate::turns::error::one(kind, message.into())
+    }
+}
+
 /// A channel's output without its stream (RFC §10.6.3 `output`).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]

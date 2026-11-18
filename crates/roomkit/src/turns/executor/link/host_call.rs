@@ -4,7 +4,7 @@ use roomkit_core::model::Metadata;
 use serde_json::Value;
 
 use crate::turn::OwnerToolAnswer;
-use crate::turns::error::rebuild_kit_error;
+use crate::turns::ErrorClasses;
 use crate::turns::wire::{CallContext, RecordChanges, WireError};
 use crate::{RoomKitError, current_tool_call_scope, current_turn_record};
 
@@ -42,10 +42,14 @@ pub(super) struct HostReply {
 }
 
 impl HostReply {
-    pub(super) fn finish(self, carried: Option<&Metadata>) -> Result<Value, RoomKitError> {
+    pub(super) fn finish(
+        self,
+        carried: Option<&Metadata>,
+        error_classes: &ErrorClasses,
+    ) -> Result<Value, RoomKitError> {
         take_changes(carried, self.record_changes);
         match self.error {
-            Some(error) => Err(rebuild_kit_error(&error)),
+            Some(error) => Err(error_classes.rebuild(&error)),
             None => Ok(self.result),
         }
     }

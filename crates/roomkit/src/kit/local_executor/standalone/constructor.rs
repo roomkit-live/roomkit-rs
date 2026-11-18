@@ -23,6 +23,8 @@ pub struct TurnExecutorOptions {
     pub executor_id: Option<String>,
     /// The heartbeat bounds for work on this executor.
     pub timeouts: TurnTimeouts,
+    /// Application error types this standalone worker can reconstruct and report.
+    pub error_classes: crate::turns::ErrorClasses,
     /// Build, cache and close channels. Disable for a host-owned registry lookup on every use.
     pub owns_channels: bool,
     /// Maximum idle and running builds to retain. Active work can temporarily exceed the bound.
@@ -36,6 +38,7 @@ impl Default for TurnExecutorOptions {
             organizations: None,
             executor_id: None,
             timeouts: TurnTimeouts::default(),
+            error_classes: crate::turns::ErrorClasses::default(),
             owns_channels: true,
             max_channels: None,
         }
@@ -138,6 +141,7 @@ impl TurnExecutor<InMemoryStore> {
         }
         let kit = RoomKit::new(RoomKitOptions::default());
         kit.inner.turns.set_timeouts(options.timeouts.bounded());
+        kit.inner.turns.set_error_classes(options.error_classes);
         let id = options
             .executor_id
             .filter(|id| !id.is_empty())

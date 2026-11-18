@@ -17,7 +17,7 @@ use crate::classed::ClassedError;
 use crate::error::RoomKitError;
 
 /// At most this many causes cross with an error.
-const CAUSES_KEPT: usize = 16;
+pub(super) const CAUSES_KEPT: usize = 16;
 
 /// The kind a channel's error crosses as: the name the core records a
 /// channel's failure under.
@@ -83,6 +83,7 @@ impl TurnError {
             message: self.message,
             kind: self.kind,
             bases: Vec::new(),
+            detail: None,
         }
     }
 
@@ -429,8 +430,12 @@ pub(crate) fn kit_error(error: &RoomKitError) -> WireError {
         kind,
         message,
         bases,
+        detail,
     } = error
     {
+        if let Some(detail) = detail {
+            return detail.record().clone();
+        }
         let mut record = one(kind, message.clone());
         record.bases.clone_from(bases);
         return record;
@@ -497,11 +502,7 @@ pub(crate) fn rebuild_kit_error(error: &WireError) -> RoomKitError {
     if is_link_reason(&error.kind) {
         return TurnError::new(error.kind.clone(), error.message.clone()).into_kit_error();
     }
-    RoomKitError::RemoteTurn {
-        message: error.message.clone(),
-        kind: error.kind.clone(),
-        bases: error.bases.clone(),
-    }
+    super::error_classes::remote_error(error, None)
 }
 
 fn rebuilt_variant(error: &WireError, variant: &str) -> Option<RoomKitError> {
@@ -813,20 +814,25 @@ mod tests {
         let reentrant = || RoomKitError::ReentrantCall {
             room_id: RoomId::new("room_1").unwrap(),
         };
-        let rebuilt = [RoomKitError::KitClosed, unknown(), reentrant()]
-            .map(|error| rebuild_kit_error(&kit_error(&error)));
         assert_eq!(
-            rebuilt,
-            [
-                RoomKitError::KitClosed,
-                unknown(),
-                RoomKitError::RemoteTurn {
-                    message: reentrant().to_string(),
-                    kind: "RoomKitError".to_owned(),
-                    bases: Vec::new(),
-                }
-            ]
+            rebuild_kit_error(&kit_error(&RoomKitError::KitClosed)),
+            RoomKitError::KitClosed
         );
+        assert_eq!(rebuild_kit_error(&kit_error(&unknown())), unknown());
+        let original = kit_error(&reentrant());
+        let RoomKitError::RemoteTurn {
+            kind,
+            message,
+            detail: Some(detail),
+            ..
+        } = rebuild_kit_error(&original)
+        else {
+            panic!("expected a remote error preserving the original record");
+        };
+        assert_eq!(kind, original.kind);
+        assert_eq!(message, original.message);
+        assert_eq!(detail.record(), &original);
+        assert!(detail.native_error().is_none());
     }
 
     #[test]

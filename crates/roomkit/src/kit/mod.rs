@@ -391,6 +391,7 @@ impl<S: ConversationStore> RoomKit<S> {
     ) -> Self {
         let RoomKitOptions {
             turn_backend,
+            error_classes,
             store,
             inbound_router,
             max_chain_depth,
@@ -497,6 +498,7 @@ impl<S: ConversationStore> RoomKit<S> {
             agent_presence: Arc::default(),
             on_presence_room_close: agent_presence::watch::on_room_close(Weak::clone(kit)),
         });
+        inner.turns.set_error_classes(error_classes);
         inner.subscribe_status_bus();
         inner.name_held_deliveries();
         let kit = Self { inner };
