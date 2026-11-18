@@ -28,6 +28,8 @@
 //! call that first read it, so a tool that calls the kit keeps the
 //! reentrancy rules it would have in the owner's own code.
 
+mod served_executor;
+pub use served_executor::ServedExecutor;
 mod public_options;
 pub use public_options::{HookOptions, RoomHookOptions, TakesOptions};
 #[cfg(feature = "redis")]
