@@ -214,9 +214,7 @@ impl RedisTurnBackend {
         room_id: &str,
         online: Option<bool>,
     ) -> Result<bool, RoomKitError> {
-        if *self.0.stop.borrow() {
-            return Err(super::routes::closed());
-        }
+        self.ensure_open()?;
         self.listen().await;
         let key = self.key(&format!(
             "presence:{}:{}",

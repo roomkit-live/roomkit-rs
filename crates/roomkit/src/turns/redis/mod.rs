@@ -144,9 +144,17 @@ impl RedisTurnBackend {
     /// Locally served executors and other nodes' declarations. Only remote entries have a last heartbeat.
     ///
     /// # Errors
-    /// The registry must be reachable and answer within its configured timeout.
+    /// Returns `backend_closed` once shutdown starts, or an error if the registry is unreachable.
     pub async fn executors(&self) -> Result<Vec<ExecutorInfo>, RoomKitError> {
+        self.ensure_open()?;
         registry::executors(self).await
+    }
+
+    fn ensure_open(&self) -> Result<(), RoomKitError> {
+        if *self.0.draining.borrow() {
+            return Err(routes::closed());
+        }
+        Ok(())
     }
 
     async fn connection(&self) -> Result<ConnectionManager, RoomKitError> {

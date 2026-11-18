@@ -187,6 +187,13 @@ async fn a_closing_owner_answers_admitted_calls_and_refuses_new_work_without_app
                 super::routes::closed()
             );
             assert_eq!(host.attend().await.unwrap_err(), super::routes::closed());
+            assert_eq!(host.executors().await.unwrap_err(), super::routes::closed());
+            assert_eq!(
+                host.claim_presence("agent", "room", Some(true))
+                    .await
+                    .unwrap_err(),
+                super::routes::closed()
+            );
             release.notify_one();
         };
         let (closed, ()) = tokio::join!(host.close(), during_close);
@@ -196,6 +203,13 @@ async fn a_closing_owner_answers_admitted_calls_and_refuses_new_work_without_app
     let returned: Value = serde_json::from_str(&first.unwrap()).unwrap();
     assert_eq!(returned["call_id"], "first");
     assert_eq!(returned["result"], "settled");
+    assert_eq!(host.executors().await.unwrap_err(), super::routes::closed());
+    // The refused claim wrote nothing that another owner could mistake for a duplicate.
+    assert!(
+        peer.claim_presence("agent", "room", Some(true))
+            .await
+            .unwrap()
+    );
     peer.close().await.unwrap();
 }
 
