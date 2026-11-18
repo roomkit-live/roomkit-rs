@@ -19,7 +19,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use roomkit_core::model::{
@@ -104,10 +104,10 @@ impl Sends {
         emit: impl Fn(CoreEvent),
     ) -> Result<Result<ChannelOutput, ChannelError>, CircuitOpen> {
         let channel_id = binding.channel_id.clone();
-        if !self.breaker(&channel_id).allows(Instant::now()) {
+        let Some(admission) = self.breaker(&channel_id).entry().admit(Instant::now()) else {
             tracing::warn!(target: "roomkit::delivery", channel_id = %channel_id, "the channel's circuit breaker is open: the send is skipped");
             return Err(CircuitOpen);
-        }
+        };
         if let Some(limit) = &binding.rate_limit {
             self.wait_for_token(&channel_id, limit).await;
         }
@@ -122,16 +122,17 @@ impl Sends {
             None => channel.deliver(event, binding, context).await,
         };
         let transition = match &answered {
-            Ok(_) => self.breaker(&channel_id).succeeded(),
+            Ok(_) => self.breaker(&channel_id).entry().succeeded(),
             Err(error) => {
                 if let Some(RoomKitError::NoRecipient { recipient_key, .. }) =
                     error.downcast_ref::<RoomKitError>()
                 {
+                    self.breaker(&channel_id).entry().release_probe(&admission);
                     tracing::warn!(target: "roomkit::core::delivery", channel_id = %channel_id, recipient_key,
                         "Delivery to {channel_id} refused: the binding has no {recipient_key}");
                     None
                 } else {
-                    self.breaker(&channel_id).failed(Instant::now())
+                    self.breaker(&channel_id).entry().failed(Instant::now())
                 }
             }
         };
@@ -188,20 +189,6 @@ impl<'a, T: Default> Guard<'a, T> {
     }
 }
 
-impl Guard<'_, Breaker> {
-    fn allows(&mut self, now: Instant) -> bool {
-        self.entry().allows(now)
-    }
-
-    fn succeeded(&mut self) -> Option<Transition> {
-        self.entry().succeeded()
-    }
-
-    fn failed(&mut self, now: Instant) -> Option<Transition> {
-        self.entry().failed(now)
-    }
-}
-
 impl Guard<'_, Bucket> {
     fn take(&mut self, rate: f64, now: Instant) -> bool {
         self.entry().take(rate, now)
@@ -228,21 +215,38 @@ enum Transition {
 struct Breaker {
     failures: u32,
     opened_at: Option<Instant>,
-    probe_at: Option<Instant>,
+    probe: Option<Arc<Instant>>,
+}
+
+/// Only an attempt admitted during recovery owns a probe it can release.
+enum Admission {
+    Ordinary,
+    Probe(Arc<Instant>),
 }
 
 impl Breaker {
-    /// Whether a send may be attempted at `now`.
-    fn allows(&mut self, now: Instant) -> bool {
+    fn admit(&mut self, now: Instant) -> Option<Admission> {
         let Some(opened_at) = self.opened_at else {
-            return true;
+            return Some(Admission::Ordinary);
         };
         let recovered = |since: Instant| now.duration_since(since) >= RECOVERY;
-        if recovered(opened_at) && self.probe_at.is_none_or(recovered) {
-            self.probe_at = Some(now);
-            return true;
+        if recovered(opened_at) && self.probe.as_deref().is_none_or(|&at| recovered(at)) {
+            let probe = Arc::new(now);
+            self.probe = Some(Arc::clone(&probe));
+            return Some(Admission::Probe(probe));
         }
-        false
+        None
+    }
+
+    fn release_probe(&mut self, admission: &Admission) {
+        if let Admission::Probe(owner) = admission
+            && self
+                .probe
+                .as_ref()
+                .is_some_and(|active| Arc::ptr_eq(active, owner))
+        {
+            self.probe = None;
+        }
     }
 
     /// A send succeeded: the breaker closes, which is a transition when it
@@ -262,7 +266,7 @@ impl Breaker {
         }
         let was_open = self.opened_at.is_some();
         self.opened_at = Some(now);
-        self.probe_at = None;
+        self.probe = None;
         (!was_open).then_some(Transition::Opened)
     }
 }
@@ -406,11 +410,11 @@ mod tests {
         let mut breaker = Breaker::default();
         let opened: Vec<Option<Transition>> = (0..5).map(|_| breaker.failed(at(0))).collect();
         let allowed = [
-            breaker.allows(at(59)),
-            breaker.allows(at(60)),
-            breaker.allows(at(61)),
-            breaker.allows(at(119)),
-            breaker.allows(at(120)),
+            breaker.admit(at(59)).is_some(),
+            breaker.admit(at(60)).is_some(),
+            breaker.admit(at(61)).is_some(),
+            breaker.admit(at(119)).is_some(),
+            breaker.admit(at(120)).is_some(),
         ];
         assert_eq!(
             (
@@ -424,5 +428,28 @@ mod tests {
                 Some(Transition::Closed)
             )
         );
+    }
+
+    #[test]
+    fn a_late_refusal_can_only_release_its_own_probe() {
+        let mut breaker = Breaker::default();
+        let start = Instant::now();
+        let ordinary = breaker.admit(start).unwrap();
+        for _ in 0..FAILURE_THRESHOLD {
+            breaker.failed(start);
+        }
+        let expired = breaker.admit(start + RECOVERY).unwrap();
+        let now = start + 2 * RECOVERY;
+        let active = breaker.admit(now).unwrap();
+
+        for stale in [&ordinary, &expired] {
+            breaker.release_probe(stale);
+            assert!(breaker.admit(now).is_none());
+        }
+        breaker.release_probe(&active);
+        assert_eq!(breaker.failures, FAILURE_THRESHOLD);
+        assert_eq!(breaker.opened_at, Some(start));
+        assert!(breaker.admit(now).is_some());
+        assert_eq!(breaker.succeeded(), Some(Transition::Closed));
     }
 }

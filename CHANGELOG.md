@@ -8,7 +8,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Expose the five text error types for channel refusals, elapsed tool deadlines, interrupted turns and delegated worker failures. Applications can inspect the original worker error through the standard error source.
 
-- Allow application channels to report a missing recipient before sending. The public delivery result carries the refusal and the provider circuit breaker keeps its state.
+- Allow application channels to report a missing recipient before sending. The public delivery result carries the refusal. During circuit breaker recovery, the next delivery can immediately take the unused probe.
 
 - Expose the existing result fallback and status subscriber types as `roomkit::orchestration::MissingResult` and `StatusCallback`.
 
