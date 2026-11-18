@@ -208,14 +208,6 @@ impl TurnClient {
             .inputs
             .request(request_id, options.organization_id.as_deref())
     }
-    /// Answer an input request, including an answer that arrived just before it opened.
-    pub async fn answer_input(&self, id: &str, value: &str) -> bool {
-        self.state.turns.answer_input(id, value).await
-    }
-    /// Reject an input request with the given reason.
-    pub async fn reject_input(&self, id: &str, reason: &str) -> bool {
-        self.state.turns.reject_input(id, reason).await
-    }
     /// Steer this owner's running turns in the room and return the number of loops reached.
     pub async fn steer(
         &self,
