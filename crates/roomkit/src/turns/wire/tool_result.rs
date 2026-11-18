@@ -33,6 +33,26 @@ impl<'de> Deserialize<'de> for WireResult {
 }
 
 impl WireResult {
+    /// Strict interpretation of a hook's replacement. Unknown fields make a mapping
+    /// ordinary data. The wire decoder is more permissive when a sender already named parts.
+    pub(crate) fn strict_parts(items: &[Value]) -> Option<Vec<Value>> {
+        if items.is_empty() {
+            return None;
+        }
+        items
+            .iter()
+            .map(|item| {
+                let fields = item.as_object()?;
+                fields.get("type")?;
+                let part = content_part(item.clone()).ok()?;
+                fields
+                    .keys()
+                    .all(|key| part.get(key).is_some())
+                    .then_some(part)
+            })
+            .collect()
+    }
+
     /// Python's `decode_result` reads parts first, including when a value is also present.
     pub(in crate::turns) fn read(mut record: Metadata) -> Result<Self, ResultError> {
         if let Some(parts) = record.shift_remove("parts") {

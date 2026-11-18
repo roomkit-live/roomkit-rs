@@ -44,6 +44,7 @@ use crate::{DelegateOptions, RoomKit, SendEventOptions, UpdateRoomMetadataOption
 
 mod declared;
 mod external_handler;
+pub use external_handler::ToolHooks;
 mod external_tools;
 mod inputs;
 mod loop_hooks;
@@ -1065,6 +1066,8 @@ fn renderable(copy: Value) -> Option<Value> {
 struct ToolCallChain {
     current: ToolCallEvent,
     served: bool,
+    replaced: bool,
+    replaced_copy: bool,
     errors: Vec<(String, String)>,
 }
 
@@ -1084,22 +1087,8 @@ impl ToolCallChain {
             event.result = None;
         }
         let mut chain = ToolCallChain::new(event);
-        for (spec, handler) in hooks
-            .iter()
-            .filter(|(spec, _)| spec.execution == HookExecution::Sync)
-        {
-            let ran = hooks::run_traced(
-                spec,
-                Arc::clone(handler),
-                chain.current.clone(),
-                context.clone(),
-                |_| None,
-            )
-            .await;
-            timeout(spec, &ran);
-            if let Some(reason) = chain.read(spec, ran) {
-                return withheld(report, &reason);
-            }
+        if let Some(reason) = chain.run(hooks, context, timeout).await {
+            return withheld(report, &reason);
         }
         let Some(result) = chain.current.result else {
             // Nothing served the call: the loop reports it failed, once,
@@ -1115,9 +1104,37 @@ impl ToolCallChain {
         report
     }
 
+    async fn run(
+        &mut self,
+        hooks: &[(HookSpec, Arc<dyn HookHandler<ToolCallEvent>>)],
+        context: &RoomContext,
+        timeout: impl Fn(&HookSpec, &HookOutcome<ToolCallEvent>),
+    ) -> Option<String> {
+        for (spec, handler) in hooks
+            .iter()
+            .filter(|(spec, _)| spec.execution == HookExecution::Sync)
+        {
+            let ran = hooks::run_traced(
+                spec,
+                Arc::clone(handler),
+                self.current.clone(),
+                context.clone(),
+                |_| None,
+            )
+            .await;
+            timeout(spec, &ran);
+            if let Some(reason) = self.read(spec, ran) {
+                return Some(reason);
+            }
+        }
+        None
+    }
+
     fn new(event: ToolCallEvent) -> Self {
         Self {
             served: event.result.is_some(),
+            replaced: false,
+            replaced_copy: false,
             current: event,
             errors: Vec::new(),
         }
@@ -1144,6 +1161,9 @@ impl ToolCallChain {
         let mut rewrote = false;
         match (result.action, result.event) {
             (HookAction::Modify, Some(modified)) => {
+                self.replaced |= self.current.result != modified.result;
+                self.replaced_copy |=
+                    self.current.structured_content != modified.structured_content;
                 self.current = modified;
                 rewrote = true;
             }
@@ -1167,9 +1187,11 @@ impl ToolCallChain {
     /// a hook empties stays served, its result `null`.
     fn fold(&mut self, metadata: &Metadata) {
         if let Some(result) = metadata.get("result") {
+            self.replaced |= self.current.result.is_some() || !result.is_null();
             self.current.result = (!result.is_null()).then(|| result.clone());
         }
         if let Some(copy) = metadata.get("structured_content") {
+            self.replaced_copy |= self.current.structured_content.is_some() || copy.is_object();
             self.current.structured_content = renderable(copy.clone());
         }
         if self.served && self.current.result.is_none() {

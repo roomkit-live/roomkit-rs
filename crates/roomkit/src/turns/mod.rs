@@ -75,6 +75,7 @@ mod channel_calls;
 mod channel_routing;
 pub(crate) mod declared;
 pub(crate) mod wiring;
+pub use crate::turn::ToolHooks;
 pub use wiring::{
     ChannelTurnHooks, DirectPrompt, EmitOptions, FrameworkEmitter, TurnRealtime, TurnWiring,
     WiringEnv,

@@ -1,6 +1,8 @@
 //! Hook callbacks for registered handlers, including calls outside a turn.
 
+mod callbacks;
 mod ordinary;
+pub use callbacks::ToolHooks;
 
 use super::{
     Arc, ChannelId, ChannelType, ConversationStore, GateChain, GateEnd, HookExecution, HookOutcome,
@@ -12,7 +14,7 @@ use crate::external_tools::{
 };
 use crate::hooks::HookHandler;
 
-type ToolHooks = Vec<(HookSpec, Arc<dyn HookHandler<ToolCallEvent>>)>;
+type Registered = Vec<(HookSpec, Arc<dyn HookHandler<ToolCallEvent>>)>;
 
 impl<S: ConversationStore> Inner<S> {
     pub(crate) fn wire_external_tools(
@@ -75,7 +77,7 @@ struct Notification {
     kit: Arc<dyn TurnKit>,
     room: RoomId,
     channel: ChannelId,
-    hooks: ToolHooks,
+    hooks: Registered,
     context: Option<RoomContext>,
 }
 
@@ -88,6 +90,17 @@ impl Notification {
         trigger: HookTrigger,
     ) -> Self {
         let hooks = kit.tool_hooks(trigger, (&room, &channel), &ChannelType::AI);
+        Self::with_hooks(kit, wiring, room, channel, trigger, hooks).await
+    }
+
+    async fn with_hooks(
+        kit: Arc<dyn TurnKit>,
+        wiring: crate::turns::TurnWiring,
+        room: RoomId,
+        channel: ChannelId,
+        trigger: HookTrigger,
+        hooks: Registered,
+    ) -> Self {
         let context = if hooks.is_empty() {
             None
         } else {
@@ -122,8 +135,14 @@ impl Notification {
         if chain.ended.is_none() {
             self.observe(&chain.current);
         }
+        self.emit("before_tool_use", Self::before_data(event, &chain))
+            .await;
+        Some(chain)
+    }
+
+    fn before_data(event: &ToolCallEvent, chain: &GateChain) -> Metadata {
         let (allowed, reason) = chain.verdict();
-        let data = Metadata::from_iter([
+        Metadata::from_iter([
             ("tool_name".to_owned(), Value::from(event.name.as_str())),
             (
                 "tool_call_id".to_owned(),
@@ -131,9 +150,7 @@ impl Notification {
             ),
             ("allowed".to_owned(), Value::Bool(allowed)),
             ("reason".to_owned(), reason.map_or(Value::Null, Value::from)),
-        ]);
-        self.emit("before_tool_use", data).await;
-        Some(chain)
+        ])
     }
 
     async fn gate(&self, event: ToolCallEvent) -> GateChain {
@@ -189,13 +206,20 @@ impl Notification {
 
     async fn observe_completed(&self, event: &ToolCallEvent) {
         self.observe(event);
+        self.emit("tool_call", Self::completed_data(event)).await;
+    }
+
+    fn completed_data(event: &ToolCallEvent) -> Metadata {
         let mut data = Metadata::from_iter([
             ("tool_name".to_owned(), Value::from(event.name.as_str())),
             (
                 "tool_call_id".to_owned(),
                 Value::from(event.tool_call_id.as_str()),
             ),
-            ("channel_type".to_owned(), Value::from("ai")),
+            (
+                "channel_type".to_owned(),
+                Value::from(event.channel_type.as_str()),
+            ),
         ]);
         for (key, set) in [
             ("is_error", event.is_error),
@@ -207,7 +231,7 @@ impl Notification {
                 data.insert(key.to_owned(), Value::Bool(true));
             }
         }
-        self.emit("tool_call", data).await;
+        data
     }
 
     async fn report_chain(&self, event: &ToolCallEvent) {
@@ -215,24 +239,9 @@ impl Notification {
             return;
         };
         let mut chain = ToolCallChain::new(event.clone());
-        for (spec, handler) in self
-            .hooks
-            .iter()
-            .filter(|(s, _)| s.execution == HookExecution::Sync)
-        {
-            let ran = hooks::run_traced(
-                spec,
-                Arc::clone(handler),
-                chain.current.clone(),
-                context.clone(),
-                |_| None,
-            )
+        let _blocked = chain
+            .run(&self.hooks, context, |spec, ran| self.timeout(spec, ran))
             .await;
-            self.timeout(spec, &ran);
-            if chain.read(spec, ran).is_some() {
-                break;
-            }
-        }
     }
 
     fn observe(&self, event: &ToolCallEvent) {

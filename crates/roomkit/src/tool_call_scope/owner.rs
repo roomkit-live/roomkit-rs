@@ -35,6 +35,15 @@ pub trait ToolCallScope: Any + Send + Sync {
     fn into_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync>;
     fn owner_context(&self) -> OwnerToolContext;
 
+    /// The owning channel's right to report this occurrence, when it announced one.
+    fn report_claim(
+        &self,
+        _call_id: &str,
+        _channel_id: &str,
+    ) -> Option<Arc<dyn Fn() -> bool + Send + Sync>> {
+        None
+    }
+
     /// Snapshot the structured copy a handler wrote on this call.
     fn structured_content(&self) -> Option<Metadata> {
         None

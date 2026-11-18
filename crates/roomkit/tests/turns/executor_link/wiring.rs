@@ -1,6 +1,7 @@
 //! Public application wiring, including the independent worker's last room context.
 mod ordinary_tools;
 mod public_ports;
+mod tool_callbacks;
 
 mod observed;
 use super::{Link, link};

@@ -33,6 +33,14 @@ impl ToolCallScope for Scope {
         }
     }
 
+    fn report_claim(
+        &self,
+        call_id: &str,
+        channel_id: &str,
+    ) -> Option<Arc<dyn Fn() -> bool + Send + Sync>> {
+        super::turn_report_claim(call_id, channel_id)
+    }
+
     fn structured_content(&self) -> Option<roomkit::model::Metadata> {
         self.turn
             .call
