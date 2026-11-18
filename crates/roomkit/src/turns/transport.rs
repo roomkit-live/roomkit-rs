@@ -24,6 +24,14 @@ pub trait TurnBackend: std::any::Any + Send + Sync {
     fn attend(&self, _owner: Arc<dyn RoomOwner>) -> TurnFuture<'_, Result<(), RoomKitError>> {
         Box::pin(async { Ok(()) })
     }
+    /// Claim one presence change, or forget the room/channel pair when it detaches.
+    /// Single-process backends can delegate to [`super::LocalPresenceClaims`].
+    fn claim_presence<'a>(
+        &'a self,
+        channel_id: &'a str,
+        room_id: &'a str,
+        online: Option<bool>,
+    ) -> TurnFuture<'a, Result<bool, RoomKitError>>;
     /// Read the catalogue, excluding the owner's own executor.
     fn executors(&self) -> TurnFuture<'_, Result<Vec<ExecutorInfo>, RoomKitError>> {
         Box::pin(async { Ok(Vec::new()) })

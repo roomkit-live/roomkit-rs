@@ -33,8 +33,7 @@ pub(in crate::kit) async fn run<S: ConversationStore>(
                 .detached(
                     &binding.room_id,
                     &binding.channel_id,
-                    #[cfg(feature = "redis")]
-                    owner.turns.remote.as_ref(),
+                    owner.turns.configured_backend(),
                 )
                 .await;
         })

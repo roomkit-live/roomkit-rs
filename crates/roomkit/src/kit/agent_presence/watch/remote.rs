@@ -1,8 +1,10 @@
 //! Discover changes to declared agents' coverage and claim their publications across owners.
 
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(feature = "redis")]
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Mutex, PoisonError};
 
 use roomkit_core::model::{ChannelId, RoomId, RoomStatus};
 
@@ -28,6 +30,7 @@ pub(super) struct Monitor {
 }
 
 impl<S: ConversationStore> RoomKit<S> {
+    #[cfg(feature = "redis")]
     pub(in crate::kit) fn wire_presence_watch(&self) {
         if let Some(backend) = &self.inner.turns.remote {
             let weak = self.downgrade();
@@ -51,7 +54,12 @@ impl<S: ConversationStore> RoomKit<S> {
     }
 
     pub(in crate::kit) fn start_presence_watch(&self) {
-        let Some(backend) = &self.inner.turns.remote else {
+        let Some(backend) = self
+            .inner
+            .turns
+            .configured_backend()
+            .filter(|b| b.lists_executors())
+        else {
             return;
         };
         let watch = &self.inner.agent_presence.remote;
@@ -65,7 +73,7 @@ impl<S: ConversationStore> RoomKit<S> {
         }
         let weak = self.downgrade();
         let mut closing = self.inner.turns.cutting();
-        let interval = backend.timeouts().interval();
+        let interval = backend.timeouts().unwrap_or_default().interval();
         // A permanent registry monitor is idle between heartbeats and must not hold
         // a kit task open. Dropping or closing the owner stops it, including a pending read.
         drop(tokio::spawn(async move {

@@ -36,7 +36,9 @@ pub use public_options::{HookOptions, RoomHookOptions, TakesOptions};
 pub(crate) mod redis;
 #[cfg(feature = "redis")]
 pub use redis::{RedisTurnBackend, RedisTurnBackendOptions};
+mod local_presence_claims;
 mod presence;
+pub use local_presence_claims::LocalPresenceClaims;
 pub(crate) use presence::LocalHosts;
 pub use presence::{AgentPresence, ExecutorInfo, ExecutorInfoOptions};
 
@@ -238,6 +240,14 @@ impl Turns {
             turns.application = Some(application::Application::new(backend));
         }
         turns
+    }
+
+    pub(crate) fn configured_backend(&self) -> Option<&dyn TurnBackend> {
+        #[cfg(feature = "redis")]
+        if let Some(redis) = &self.remote {
+            return Some(redis);
+        }
+        self.application.as_ref().map(|app| app.backend.as_ref())
     }
 
     /// The bounds of the turns submitted from now on.

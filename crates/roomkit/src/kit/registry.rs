@@ -111,7 +111,6 @@ impl<S: ConversationStore> RoomKit<S> {
             }
             Ok(())
         })?;
-        #[cfg(feature = "redis")]
         self.start_presence_watch();
         drop(self.inner.emit(registered));
         Ok(())

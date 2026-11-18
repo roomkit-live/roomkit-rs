@@ -26,12 +26,8 @@ impl<S: ConversationStore> RoomKit<S> {
     /// # Errors
     /// The distributed executor registry could not be read.
     pub async fn executors(&self) -> Result<Vec<ExecutorInfo>, RoomKitError> {
-        #[cfg(feature = "redis")]
-        if let Some(backend) = &self.inner.turns.remote {
+        if let Some(backend) = self.inner.turns.configured_backend() {
             return backend.executors().await;
-        }
-        if let Some(app) = &self.inner.turns.application {
-            return app.backend.executors().await;
         }
         Ok(Vec::new())
     }
