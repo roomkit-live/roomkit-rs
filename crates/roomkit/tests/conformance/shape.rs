@@ -8,11 +8,13 @@
 
 use serde_json::Value;
 
+// `rules` and `requirements` cite the RFC for the checker; the runner ignores them.
 const TOP: &[&str] = &[
     "$schema",
     "id",
     "title",
     "rules",
+    "requirements",
     "reentrancy",
     "notes",
     "setup",
@@ -1548,6 +1550,18 @@ fn model_call(call: &Value, path: &str, found: &mut Vec<String>) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // Python: tests/conformance/test_scenario_shape.py::test_requirement_citations_pass_and_unknown_members_do_not
+    #[test]
+    fn requirement_citations_pass_and_unknown_members_do_not() {
+        for (member, problems) in [
+            ("requirements", Vec::<String>::new()),
+            ("requirement", vec!["$: requirement".to_owned()]),
+        ] {
+            let scenario = json!({"id": "x", "rules": ["§10.4"], member: ["RK-10.4-003"]});
+            assert_eq!(unknown_members(&scenario), problems);
+        }
+    }
 
     // Python: tests/conformance/test_turn_bounds_fixture.py
     #[test]
