@@ -781,6 +781,8 @@ pub(crate) type BoxFuture<'call, T> = Pin<Box<dyn Future<Output = T> + Send + 'c
 /// A [`Channel`] behind a trait object, so the kit holds channels of any
 /// type: its calls, and the synchronous members a router reads.
 pub(crate) trait DynChannel: Send + Sync {
+    fn is_declaration_only(&self) -> bool;
+
     fn name(&self) -> Option<String>;
 
     fn role(&self) -> Option<String>;
@@ -888,6 +890,10 @@ pub(crate) trait DynChannel: Send + Sync {
 }
 
 impl<C: Channel> DynChannel for C {
+    fn is_declaration_only(&self) -> bool {
+        std::any::TypeId::of::<C>() == std::any::TypeId::of::<crate::DeclaredChannel>()
+    }
+
     fn update_binding(
         &self,
         room_id: &RoomId,

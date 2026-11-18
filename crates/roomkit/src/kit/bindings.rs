@@ -90,6 +90,15 @@ impl<S: ConversationStore> RoomKit<S> {
         let binding = options.apply(declaration.binding(room_id.clone(), environment.now()));
         let binding = match self.inner.channel(channel_id) {
             Some(channel) => {
+                if channel.is_declaration_only()
+                    && binding.category != roomkit_core::model::ChannelCategory::Intelligence
+                {
+                    return Err(RoomKitError::Value(format!(
+                        "Channel {} is registered by its declaration alone: \
+                         it can be attached as an intelligence channel only",
+                        crate::error::repr(channel_id.as_str())
+                    )));
+                }
                 named_correspondent(binding, &*channel, declaration.recipient_key.as_deref())
             }
             None => binding,

@@ -988,8 +988,27 @@ impl<S: ConversationStore> RoomKit<S> {
             // A live agent the kit holds no channel for is registered below;
             // one under a held id is the kit's channel, an agent only when it
             // is an intelligence channel (decided 2026-11-02, HITL 91d5d8e9).
-            if agent.live().is_some() && held.is_none() {
+            if let Some(live) = agent.live()
+                && held.is_none()
+            {
+                if live.channel.is_declaration_only() {
+                    super::declared_hooks::check_declaration(
+                        &self.config().hooks,
+                        agent.channel_id(),
+                        &live.config.channel_type,
+                    )?;
+                }
                 continue;
+            }
+            if let (Some(registered), Some(given)) = (held.as_ref(), agent.live())
+                && registered.is_declaration_only()
+                && !Arc::ptr_eq(registered, &given.channel)
+            {
+                let id = crate::error::repr(agent.channel_id().as_str());
+                return Err(RoomKitError::Value(format!(
+                    "Channel {id} is registered by its declaration alone: \
+                     give the strategy its id, {id}, not an agent object"
+                )));
             }
             let declaration = held.map(|channel| channel.declaration()).ok_or_else(|| {
                 RoomKitError::ChannelNotRegistered {

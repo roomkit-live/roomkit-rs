@@ -96,7 +96,8 @@ impl<S: ConversationStore> HookEngine<S> {
                 "A room hook defined on a turn executor needs a name".to_owned(),
             ));
         }
-        self.given(hook, HookRegistry::define_room_hook).map(drop)
+        self.given(None, hook, HookRegistry::define_room_hook)
+            .map(drop)
     }
 
     /// Removes every definition under `name`, returning whether it existed.
@@ -152,7 +153,7 @@ impl<S: ConversationStore> HookEngine<S> {
         hook: HookRegistration,
     ) -> Result<HookRegistration, RoomKitError> {
         self.named_side(&hook)?;
-        self.given(hook, |registry, spec| {
+        self.given(Some(room_id), hook, |registry, spec| {
             let id = registry.add_owner_room_hook(room_id.clone(), spec)?;
             Ok((id, None))
         })

@@ -36,6 +36,7 @@ impl HookRegistry {
         self.named.definitions.push(Registered {
             id,
             room: None,
+            executor: true,
             spec,
             held: Arc::new(()),
         });

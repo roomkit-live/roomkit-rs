@@ -18,7 +18,8 @@ use crate::registered::{Registered, RegisteredChannel};
 use crate::store::ConversationStore;
 
 impl<S: ConversationStore> RoomKit<S> {
-    /// Registers a channel, then emits `channel_registered`. Wrap a
+    /// Registers a live channel or an intelligence channel's declaration,
+    /// then emits `channel_registered`. Wrap a
     /// [`FrameworkAwareChannel`](crate::FrameworkAwareChannel) with
     /// [`framework_aware`](crate::framework_aware) to receive this kit.
     /// An injection error leaves the channel registered and unannounced.
@@ -78,6 +79,13 @@ impl<S: ConversationStore> RoomKit<S> {
             human_input.map(|handler| (channel_id.clone(), handler, Arc::clone(&channel)));
         self.inner.try_change_config(|config| {
             config.register_channel(declaration)?;
+            if channel.is_declaration_only() {
+                super::declared_hooks::check_declaration(
+                    &config.hooks,
+                    &channel_id,
+                    &channel.declaration().channel_type,
+                )?;
+            }
             // The channel is in place before an operation can see its
             // declaration.
             write(&self.inner.channel_order).push(channel_id.clone());

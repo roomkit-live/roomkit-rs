@@ -105,7 +105,7 @@ impl<S: ConversationStore> HookEngine<S> {
             )));
         }
         self.refuse_router(&hook, None)?;
-        self.given(hook, |registry, spec| {
+        self.given(None, hook, |registry, spec| {
             if self.turns {
                 registry.register_executor_hook(spec)
             } else if spec.trigger.is_tool_trigger() {
@@ -138,7 +138,7 @@ impl<S: ConversationStore> HookEngine<S> {
     ) -> Result<HookRegistration, RoomKitError> {
         self.takes_room_hooks(&hook)?;
         self.refuse_router(&hook, Some(room_id))?;
-        self.given(hook, |registry, spec| {
+        self.given(Some(room_id), hook, |registry, spec| {
             registry
                 .add_room_hook(room_id.clone(), spec)
                 .map(|id| (id, None))
@@ -161,7 +161,7 @@ impl<S: ConversationStore> HookEngine<S> {
     ) -> Result<HookRegistration, RoomKitError> {
         self.takes_room_hooks(&hook)?;
         self.refuse_router(&hook, Some(room_id))?;
-        self.given(hook, |registry, spec| {
+        self.given(Some(room_id), hook, |registry, spec| {
             registry.replace_room_hook(room_id.clone(), spec)
         })
     }
@@ -280,6 +280,7 @@ impl<S: ConversationStore> HookEngine<S> {
     /// the registration held.
     pub(super) fn given(
         &self,
+        room: Option<&RoomId>,
         hook: HookRegistration,
         register: impl FnOnce(
             &mut HookRegistry,
@@ -297,6 +298,9 @@ impl<S: ConversationStore> HookEngine<S> {
         let kept = hook.r#fn;
         let inner = &self.kit.inner;
         let (held, replaced) = inner.try_change_config(|config| {
+            if !self.turns {
+                inner.check_kit_hook(&spec, room)?;
+            }
             let (id, replaced) = register(&mut config.hooks, spec.clone())?;
             // The handler is in place before an operation can see the hook.
             write(&inner.hooks).insert(id, kept.clone());
@@ -367,7 +371,7 @@ impl<S> Inner<S> {
 }
 
 /// `trigger` as Python prints it, its serialized name.
-fn trigger_name(trigger: HookTrigger) -> String {
+pub(super) fn trigger_name(trigger: HookTrigger) -> String {
     serde_json::to_value(trigger)
         .ok()
         .and_then(|value| value.as_str().map(str::to_owned))

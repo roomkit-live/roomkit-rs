@@ -34,9 +34,11 @@ mod sealed {
     pub trait Sealed {}
     impl<C: super::Channel> Sealed for C {}
     impl<C> Sealed for super::FrameworkAware<C> {}
+    impl Sealed for crate::ChannelDeclaration {}
 }
 
-/// An ordinary [`Channel`] or the value returned by [`framework_aware`].
+/// An ordinary [`Channel`], a [`ChannelDeclaration`](crate::ChannelDeclaration)
+/// or the value returned by [`framework_aware`].
 pub trait ChannelRegistration<S: ConversationStore>: sealed::Sealed {
     #[doc(hidden)]
     fn register_on(self, kit: &RoomKit<S>) -> Result<(), RoomKitError>;
@@ -57,6 +59,12 @@ fn register<S: ConversationStore, C: Channel>(
 impl<S: ConversationStore, C: Channel> ChannelRegistration<S> for C {
     fn register_on(self, kit: &RoomKit<S>) -> Result<(), RoomKitError> {
         register(kit, Arc::new(self), None)
+    }
+}
+
+impl<S: ConversationStore> ChannelRegistration<S> for crate::ChannelDeclaration {
+    fn register_on(self, kit: &RoomKit<S>) -> Result<(), RoomKitError> {
+        crate::DeclaredChannel::new(self)?.register_on(kit)
     }
 }
 

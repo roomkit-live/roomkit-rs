@@ -33,6 +33,7 @@ mod channel_release;
 pub(crate) mod channel_state;
 pub use channel_state::ChannelCallOptions;
 mod channel_registration;
+mod declared_hooks;
 mod delivery;
 mod delivery_keys;
 pub(crate) mod discussions;

@@ -664,6 +664,8 @@ struct Registered {
     id: HookId,
     /// The room it was added for; `None` for the kit's.
     room: Option<RoomId>,
+    /// A hook explicitly given to a turn executor only covers that executor.
+    executor: bool,
     spec: HookSpec,
     /// Shared by every copy of the registry that holds the registration:
     /// once none does, no operation can ask for the hook any more.
@@ -789,6 +791,7 @@ impl HookRegistry {
         self.hooks.push(Registered {
             id,
             room,
+            executor,
             spec,
             held: Arc::new(()),
         });
@@ -854,6 +857,15 @@ impl HookRegistry {
             .iter()
             .chain(&self.named.definitions)
             .any(|hook| keep(&hook.spec))
+    }
+
+    /// The turn hooks registered through the kit and their scope (RFC §10.6.6).
+    #[doc(hidden)]
+    pub fn kit_turn_hooks(&self) -> impl Iterator<Item = (&HookSpec, Option<&RoomId>)> {
+        self.hooks
+            .iter()
+            .filter(|hook| !hook.executor && hook.spec.trigger.is_turn_trigger())
+            .map(|hook| (&hook.spec, hook.room.as_ref()))
     }
 
     /// The ids of the kit's hooks and of those the room `room_id` was given.

@@ -55,6 +55,7 @@ mod content_logging;
 mod context;
 mod cursors;
 mod deadline;
+mod declared_channel;
 pub mod delivery;
 mod delivery_keys;
 mod discussion_turn;
@@ -179,6 +180,7 @@ pub use self::channel::{
 #[doc(hidden)]
 pub use self::classed::ClassedError;
 pub use self::content_logging::{content_logging_enabled, set_content_logging};
+pub use self::declared_channel::DeclaredChannel;
 pub use self::text_errors::{
     ChannelRefusalError, TaskCutShortError, TaskTurnFailedError, ToolTimeoutError,
     TurnCutShortError,
