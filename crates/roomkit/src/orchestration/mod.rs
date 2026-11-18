@@ -67,7 +67,7 @@ pub use self::state::{
 };
 pub use self::status::{
     HasCompletedOptions, PostAsyncOptions, PostOptions, RecentOptions, StatusBus, StatusBusOptions,
-    StatusEntry, StatusLevel,
+    StatusCallback, StatusEntry, StatusLevel,
 };
 #[doc(inline)]
 pub use self::strategies::discussion::dispatch::{
@@ -93,4 +93,4 @@ pub use self::tool_audit::{
     ConsoleToolAuditor, ConsoleToolAuditorOptions, JsonlToolAuditor, ToolAuditEntry, ToolAuditor,
 };
 #[doc(inline)]
-pub use crate::tasks::result_tool::ResultTool;
+pub use crate::tasks::result_tool::{MissingResult, ResultTool};

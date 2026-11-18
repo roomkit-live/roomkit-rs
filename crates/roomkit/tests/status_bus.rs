@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use roomkit::orchestration::backend::{RecentOptions as BackendRecentOptions, StatusBackend};
 use roomkit::orchestration::{
     InMemoryStatusBackend, PostAsyncOptions, PostOptions, RecentOptions, StatusBus,
-    StatusBusOptions, StatusEntry, StatusLevel,
+    StatusBusOptions, StatusCallback, StatusEntry, StatusLevel,
 };
 use roomkit::{RoomKit, RoomKitOptions};
 
@@ -22,8 +22,6 @@ struct Closing {
 
 type Future<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
 
-type Callback = Arc<dyn Fn(StatusEntry) -> Future<'static, ()> + Send + Sync>;
-
 impl StatusBackend for Closing {
     fn publish(&self, entry: StatusEntry) -> Future<'_, ()> {
         self.kept.publish(entry)
@@ -33,11 +31,11 @@ impl StatusBackend for Closing {
         self.kept.recent(n, options)
     }
 
-    fn subscribe(&self, callback: Callback) -> Future<'_, ()> {
+    fn subscribe(&self, callback: StatusCallback) -> Future<'_, ()> {
         self.kept.subscribe(callback)
     }
 
-    fn unsubscribe(&self, callback: Callback) -> Future<'_, ()> {
+    fn unsubscribe(&self, callback: StatusCallback) -> Future<'_, ()> {
         self.kept.unsubscribe(callback)
     }
 
@@ -198,7 +196,7 @@ impl StatusBackend for Late {
         self.kept.recent(n, options)
     }
 
-    fn subscribe(&self, callback: Callback) -> Future<'_, ()> {
+    fn subscribe(&self, callback: StatusCallback) -> Future<'_, ()> {
         Box::pin(async move {
             tokio::time::sleep(std::time::Duration::from_millis(1)).await;
             self.kept.subscribe(callback).await;
@@ -206,7 +204,7 @@ impl StatusBackend for Late {
         })
     }
 
-    fn unsubscribe(&self, callback: Callback) -> Future<'_, ()> {
+    fn unsubscribe(&self, callback: StatusCallback) -> Future<'_, ()> {
         self.kept.unsubscribe(callback)
     }
 }
@@ -466,7 +464,7 @@ impl StatusBackend for FirstTryHangs {
         self.kept.recent(n, options)
     }
 
-    fn subscribe(&self, callback: Callback) -> Future<'_, ()> {
+    fn subscribe(&self, callback: StatusCallback) -> Future<'_, ()> {
         Box::pin(async move {
             if self.tries.fetch_add(1, Ordering::SeqCst) == 0 {
                 std::future::pending::<()>().await;
@@ -475,7 +473,7 @@ impl StatusBackend for FirstTryHangs {
         })
     }
 
-    fn unsubscribe(&self, callback: Callback) -> Future<'_, ()> {
+    fn unsubscribe(&self, callback: StatusCallback) -> Future<'_, ()> {
         self.kept.unsubscribe(callback)
     }
 }
@@ -555,7 +553,7 @@ impl StatusBackend for Answered {
         self.kept.recent(n, options)
     }
 
-    fn subscribe(&self, callback: Callback) -> Future<'_, ()> {
+    fn subscribe(&self, callback: StatusCallback) -> Future<'_, ()> {
         Box::pin(async move {
             self.asked.send_replace(true);
             drop(self.answer.subscribe().wait_for(|answer| *answer).await);
@@ -563,7 +561,7 @@ impl StatusBackend for Answered {
         })
     }
 
-    fn unsubscribe(&self, callback: Callback) -> Future<'_, ()> {
+    fn unsubscribe(&self, callback: StatusCallback) -> Future<'_, ()> {
         self.kept.unsubscribe(callback)
     }
 }

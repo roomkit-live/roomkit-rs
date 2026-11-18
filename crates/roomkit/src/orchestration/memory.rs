@@ -6,8 +6,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use super::backend::{RecentOptions, StatusBackend, StatusCallback, StatusFuture, same_callback};
-use super::status::StatusEntry;
+use super::backend::{RecentOptions, StatusBackend, StatusFuture, same_callback};
+use super::status::{StatusCallback, StatusEntry};
 use crate::unwind::{message, unwinding};
 
 /// How many entries the backend keeps by default, Python's

@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{ChannelType, Metadata, TaskStatus};
+use roomkit::orchestration::MissingResult;
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, CreateRoomOptions, DelegateOptions, ResultTool, RoomKit, RoomKitOptions,
@@ -55,6 +56,12 @@ fn the_public_default_result_tool() {
 
 /// `submit_verdict`, read as it was called; never called, a refusal.
 fn verdict() -> ResultTool {
+    let on_missing: MissingResult = Arc::new(|_role: &str, _last_output: &str, _attempts: u32| {
+        let mut refused = Metadata::new();
+        refused.insert("approved".to_owned(), json!(false));
+        refused.insert("next_task".to_owned(), json!(null));
+        refused
+    });
     ResultTool::new(
         json!({
             "name": "submit_verdict",
@@ -62,12 +69,7 @@ fn verdict() -> ResultTool {
             "parameters": { "type": "object" },
         }),
         Arc::new(|arguments: &Metadata| arguments.clone()),
-        Arc::new(|_role: &str, _last_output: &str, _attempts: u32| {
-            let mut refused = Metadata::new();
-            refused.insert("approved".to_owned(), json!(false));
-            refused.insert("next_task".to_owned(), json!(null));
-            refused
-        }),
+        on_missing,
         REMINDER,
     )
 }

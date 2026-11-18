@@ -6,6 +6,9 @@ use std::sync::Arc;
 use roomkit_core::model::Metadata;
 use serde_json::Value;
 
+/// Build the fallback payload from the agent role, its last output and the number of attempts.
+pub type MissingResult = Arc<dyn Fn(&str, &str, u32) -> Metadata + Send + Sync>;
+
 /// The tool a delegated agent must call to hand its work back, and how it
 /// is read: Python's `ResultTool(tool, normalize, on_missing, reminder)`.
 ///
@@ -49,11 +52,7 @@ pub struct ResultTool {
     pub normalize: Arc<dyn Fn(&Metadata) -> Metadata + Send + Sync>,
     /// Builds the payload returned when the agent never called the tool,
     /// from its role, its last output and the attempts made.
-    #[expect(
-        clippy::type_complexity,
-        reason = "Python's callable written out: a public alias would be a name Python lacks"
-    )]
-    pub on_missing: Arc<dyn Fn(&str, &str, u32) -> Metadata + Send + Sync>,
+    pub on_missing: MissingResult,
     /// The message sent when a turn ends without the call.
     pub reminder: String,
 }
@@ -61,14 +60,10 @@ pub struct ResultTool {
 impl ResultTool {
     /// The tool `tool`, read by `normalize`, given up on with
     /// `on_missing`, reminded with `reminder`.
-    #[expect(
-        clippy::type_complexity,
-        reason = "Python's callable written out: a public alias would be a name Python lacks"
-    )]
     pub fn new(
         tool: Value,
         normalize: Arc<dyn Fn(&Metadata) -> Metadata + Send + Sync>,
-        on_missing: Arc<dyn Fn(&str, &str, u32) -> Metadata + Send + Sync>,
+        on_missing: MissingResult,
         reminder: impl Into<String>,
     ) -> Self {
         Self {

@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Expose the existing result fallback and status subscriber types as `roomkit::orchestration::MissingResult` and `StatusCallback`.
+
 - Expose the text-provider rules for cut and unreadable tool calls, including their structured model errors.
 
 - Expose the URI, decoded bytes and canonical base64 forms of image parts embedded in text-provider messages.

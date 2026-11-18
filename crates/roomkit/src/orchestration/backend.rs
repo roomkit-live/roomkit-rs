@@ -6,19 +6,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use super::status::{StatusEntry, StatusLevel};
+use super::status::{StatusCallback, StatusEntry, StatusLevel};
 
 /// What a status backend's methods return: a boxed future, since a bus
 /// holds its backend as an object.
 pub(crate) type StatusFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
-
-/// What a subscriber runs for each entry posted: Python's `StatusCallback`,
-/// `(entry) -> Awaitable[None] | None`. A callback that panics is logged,
-/// and the others run all the same. A subscriber is told apart by its
-/// `Arc`: [`unsubscribe`](StatusBackend::unsubscribe) takes the one
-/// [`subscribe`](StatusBackend::subscribe) was given, or a clone of it.
-pub(crate) type StatusCallback =
-    Arc<dyn Fn(StatusEntry) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
 /// What [`StatusBackend::recent`] takes beside how many entries: Python's
 /// `recent(n, *, agent_id=None, status=None)`.

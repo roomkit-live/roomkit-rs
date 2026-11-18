@@ -171,6 +171,7 @@ the mapping and its tests. The check does not generate or update this document.
 | `roomkit_ai::orchestration::HANDOFF_TOOL` | — | Whole type |
 | `roomkit::SUBMIT_RESULT`, `roomkit::orchestration::SUBMIT_RESULT` | `roomkit.SUBMIT_RESULT`, `roomkit.orchestration.SUBMIT_RESULT` | Both paths share one lazily initialized `ResultTool`. Its tool definition contains owned JSON and its fields contain callbacks. |
 | `roomkit_ai::tasks::DELEGATE_TOOL` | — | Whole type |
+| `roomkit::orchestration::MissingResult` | `roomkit.orchestration.MissingResult` | The callable protocol for `ResultTool.on_missing` is an owned Rust callback taking the role, last output and attempt count, and returning metadata. |
 | `roomkit::orchestration::OnHandoffComplete` | — | Whole type |
 | `roomkit::orchestration::DoneFn` | — | Whole type |
 | — | `roomkit.HookEngine` | `FAIL_CLOSED_TRIGGERS`, `__init__`, `drain_observers`, `fail_closed_hook`, `has_hooks_for`, `has_off_lock_hooks`, `has_sync_hooks`, `holds`, `remove_hook`, `run_async_hooks`, `run_observers`, `run_sync_hooks`, `running_observers` |

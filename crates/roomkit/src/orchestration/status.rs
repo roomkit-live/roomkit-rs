@@ -4,6 +4,7 @@
 use std::fmt;
 use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -11,13 +12,21 @@ use roomkit_core::model::Metadata;
 use roomkit_core::ops::Environment;
 use serde::{Deserialize, Serialize};
 
-use super::backend::{self, StatusBackend, StatusCallback};
+use super::backend::{self, StatusBackend};
 use super::memory::{InMemoryStatusBackend, InMemoryStatusBackendOptions};
 use crate::context::ExecutionContext;
 use crate::environment::SystemEnvironment;
 use crate::error::{RoomKitError, repr};
 use crate::start_order::StartOrder;
 use crate::tasks::{Kind, Tasks};
+
+/// What a subscriber runs for each entry posted: Python's `StatusCallback`,
+/// `(entry) -> Awaitable[None] | None`. A callback that panics is logged,
+/// and the others run all the same. A subscriber is told apart by its
+/// `Arc`: [`unsubscribe`](StatusBackend::unsubscribe) takes the one
+/// [`subscribe`](StatusBackend::subscribe) was given, or a clone of it.
+pub type StatusCallback =
+    Arc<dyn Fn(StatusEntry) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
 /// How many entries [`StatusBus::recent`] reads by default, Python's
 /// `n=10`.

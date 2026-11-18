@@ -31,8 +31,9 @@ use crate::driver;
 use crate::error::RoomKitError;
 use crate::events::FrameworkEvent;
 use crate::hooks::{self, HookHandler, Kept};
-use crate::orchestration::backend::StatusCallback;
-use crate::orchestration::{DispatchDecisionEvent, SpeakQueueEvent, StatusBus, StatusEntry};
+use crate::orchestration::{
+    DispatchDecisionEvent, SpeakQueueEvent, StatusBus, StatusCallback, StatusEntry,
+};
 use crate::store::ConversationStore;
 use crate::tasks::Kind;
 use crate::telemetry::within_kit;
