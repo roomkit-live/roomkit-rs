@@ -1,4 +1,6 @@
 //! A channel's initial callback and its stream each inherit their owner's caller.
+use std::collections::BTreeSet;
+use std::future::ready;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,11 +12,14 @@ use crate::model::{
 };
 use crate::stream::ResponseItem;
 use crate::turns::context::{TurnContext, TurnScope};
-use crate::turns::observe::Carried;
+use crate::turns::observe::{Carried, Observers};
 use crate::turns::pipe::pipe;
 use crate::turns::wire::{Control, Frame, Item};
 use crate::turns::{CarriedRequest, MemoryTurn};
-use crate::{Channel, ChannelError, RedisTurnBackend, TurnExecutor};
+use crate::{
+    Channel, ChannelError, RedisTurnBackend, RedisTurnBackendOptions, TurnExecutor,
+    TurnExecutorOptions, TurnTimeouts,
+};
 use futures_core::Stream;
 
 struct Reader(bool, Arc<AtomicBool>);
@@ -49,33 +54,33 @@ impl Channel for Probe {
     fn channel_type(&self) -> ChannelType {
         ChannelType::AI
     }
-    async fn handle_inbound(
+    fn handle_inbound(
         &self,
         msg: InboundMessage,
         ctx: RoomContext,
-    ) -> Result<RoomEvent, ChannelError> {
-        Ok(crate::default_inbound_event(self, &msg, &ctx))
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Ok(crate::default_inbound_event(self, &msg, &ctx)))
     }
-    async fn deliver(
+    fn deliver(
         &self,
         _: RoomEvent,
         _: ChannelBinding,
         _: RoomContext,
-    ) -> Result<ChannelOutput, ChannelError> {
-        Ok(ChannelOutput::empty())
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        ready(Ok(ChannelOutput::empty()))
     }
-    async fn on_event(
+    fn on_event(
         &self,
         _: RoomEvent,
         _: ChannelBinding,
         _: RoomContext,
-    ) -> Result<ChannelOutput, ChannelError> {
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
         let scope = TurnScope::current();
         assert!(scope.contains("submitter"));
         assert!(!scope.contains("reader"));
-        Ok(crate::current_turn_host()
-            .unwrap()
-            .respond_with_stream(Box::pin(Reader(false, Arc::clone(&self.1)))))
+        ready(Ok(crate::current_turn_host().unwrap().respond_with_stream(
+            Box::pin(Reader(false, Arc::clone(&self.1))),
+        )))
     }
 }
 
@@ -90,13 +95,13 @@ fn link() -> (
     let body = &sample["message"];
     let id: Arc<str> = Arc::from(body["turn_id"].as_str().unwrap());
     let request = CarriedRequest::from_wire(&body.to_string()).unwrap();
-    let (frames, received) = pipe(id.clone(), Carried::Frame, Default::default());
-    let (controls, incoming) = pipe(id.clone(), Carried::Control, Default::default());
+    let (frames, received) = pipe(Arc::clone(&id), Carried::Frame, Observers::default());
+    let (controls, incoming) = pipe(Arc::clone(&id), Carried::Control, Observers::default());
     let owner = Arc::new(MemoryTurn::with_context(
         id,
         frames,
         controls,
-        Default::default(),
+        TurnTimeouts::default(),
         TurnContext::current().in_turn("submitter".into()),
     ));
     (request, owner, incoming, received)
@@ -104,10 +109,10 @@ fn link() -> (
 
 #[tokio::test]
 async fn local_turn_inherits_submission_context_then_its_first_readers_context() {
-    let backend = RedisTurnBackend::new(None, Default::default()).unwrap();
+    let backend = RedisTurnBackend::new(None, RedisTurnBackendOptions::default()).unwrap();
     let worker = TurnExecutor::new(
         |id| async move { Ok(Some(Probe(id, Arc::default()))) },
-        Default::default(),
+        TurnExecutorOptions::default(),
     )
     .unwrap();
     let (request, owner, incoming, mut received) = link();
@@ -116,6 +121,10 @@ async fn local_turn_inherits_submission_context_then_its_first_readers_context()
         let mut text = Vec::new();
         loop {
             let (_, frame) = received.get().await.unwrap();
+            #[expect(
+                clippy::wildcard_enum_match_arm,
+                reason = "the context probe reads only stream text and ignores unrelated notifications"
+            )]
             match frame {
                 Frame::Output { streams: true, .. } => {
                     TurnContext::current()
@@ -152,9 +161,9 @@ async fn a_backend_closed_after_placement_refuses_the_local_turn_before_handover
     };
     let backend = RedisTurnBackend::new(
         Some(&url),
-        crate::RedisTurnBackendOptions {
+        RedisTurnBackendOptions {
             key_prefix: format!("roomkit:placement:{}", uuid::Uuid::new_v4()),
-            timeouts: crate::TurnTimeouts {
+            timeouts: TurnTimeouts {
                 heartbeat_interval: Duration::from_millis(20),
                 ..Default::default()
             },
@@ -164,7 +173,7 @@ async fn a_backend_closed_after_placement_refuses_the_local_turn_before_handover
     .unwrap();
     let worker = TurnExecutor::new(
         |id| async move { Ok(Some(Probe(id, Arc::default()))) },
-        crate::TurnExecutorOptions {
+        TurnExecutorOptions {
             hosts: Some(["ai".to_owned()].into()),
             ..Default::default()
         },
@@ -173,7 +182,7 @@ async fn a_backend_closed_after_placement_refuses_the_local_turn_before_handover
     backend.serve(worker).await.unwrap();
     let channel = "ai".parse().unwrap();
     let placed = backend
-        .place(&channel, "r1", &[], None, &Default::default(), true)
+        .place(&channel, "r1", &[], None, &BTreeSet::new(), true)
         .await
         .unwrap();
     let crate::turns::redis::placement::Placed::Here(worker) = placed else {
@@ -195,7 +204,7 @@ async fn a_backend_closed_after_placement_refuses_the_local_turn_before_handover
 
 #[tokio::test]
 async fn closing_after_admission_releases_the_reader_and_finishes_the_local_worker() {
-    let backend = RedisTurnBackend::new(None, Default::default()).unwrap();
+    let backend = RedisTurnBackend::new(None, RedisTurnBackendOptions::default()).unwrap();
     let dropped = Arc::new(AtomicBool::new(false));
     let hook = Arc::clone(&dropped);
     let worker = TurnExecutor::new(
@@ -203,7 +212,7 @@ async fn closing_after_admission_releases_the_reader_and_finishes_the_local_work
             let signal = Arc::clone(&hook);
             async move { Ok(Some(Probe(id, signal))) }
         },
-        Default::default(),
+        TurnExecutorOptions::default(),
     )
     .unwrap();
     let (request, owner, incoming, mut received) = link();

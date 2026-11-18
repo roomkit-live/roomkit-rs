@@ -7,7 +7,7 @@ use crate::model::{
     ChannelCategory, ChannelType, EventContent, EventType, InboundMessage, TextContent,
 };
 use crate::store::ListEventsOptions;
-use crate::testing::{EchoAgent, RecordingTransport};
+use crate::testing::{EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions};
 use crate::{
     AgentIdentity, AttachChannelOptions, ChannelDeclaration, ConversationStore, CreateRoomOptions,
     ProcessInboundOptions, RoomKit, RoomKitOptions, TurnExecutor, TurnExecutorOptions,
@@ -32,7 +32,7 @@ fn nodes() -> Option<(RedisTurnBackend, RedisTurnBackend)> {
 
 fn worker(name: &'static str) -> TurnExecutor {
     TurnExecutor::new(
-        move |id| async move { Ok(Some(EchoAgent::new(id, name, Default::default()))) },
+        move |id| async move { Ok(Some(EchoAgent::new(id, name, EchoAgentOptions::default()))) },
         TurnExecutorOptions {
             executor_id: Some(name.into()),
             hosts: Some(BTreeSet::from(["agent".into()])),
@@ -100,7 +100,7 @@ async fn a_room_turn_reaches_the_worker_served_on_its_owners_backend() {
     kit.register_channel(RecordingTransport::new(
         tx.clone(),
         ChannelType::SMS,
-        Default::default(),
+        RecordingTransportOptions::default(),
     ))
     .unwrap();
     kit.register_channel(ChannelDeclaration {
@@ -114,7 +114,7 @@ async fn a_room_turn_reaches_the_worker_served_on_its_owners_backend() {
     })
     .await
     .unwrap();
-    kit.attach_channel(&room, &tx, Default::default())
+    kit.attach_channel(&room, &tx, AttachChannelOptions::default())
         .await
         .unwrap();
     kit.attach_channel(
