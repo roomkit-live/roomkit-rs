@@ -21,6 +21,27 @@ impl ChannelTurnHooks {
         )
     }
 
+    /// Run an external agent's report hooks against the consumed value. Only
+    /// observers hear a channel-decided permission failure, refusal or cancellation.
+    #[doc(hidden)]
+    pub async fn report_external_tool_call(&self, report: &ToolCallReport, observe_only: bool) {
+        if let Some(host) = self.host() {
+            if observe_only {
+                host.observe_external_tool_call(report).await;
+            } else {
+                host.report_external_tool_call(report).await;
+            }
+            return;
+        }
+        if let Some(notification) = self.tool_notification(HookTrigger::OnToolCall).await {
+            let event = notification.event(report);
+            if !observe_only && !event.cancelled && !event.refused {
+                notification.report_chain(&event).await;
+            }
+            notification.observe_completed(&event).await;
+        }
+    }
+
     /// Run the ordinary tool gate, claiming the occurrence on a turn when it starts.
     #[doc(hidden)]
     pub async fn before_tool_use(

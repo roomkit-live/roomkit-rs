@@ -1,14 +1,15 @@
 //! Delegate one closed call's report, falling back only before observers heard it.
 
+use roomkit::ToolCallReport;
 use roomkit::model::{RoomId, ToolCallOutcome};
-use roomkit::{ToolCallReport, TurnHost};
+use roomkit::turns::ChannelTurnHooks;
 use roomkit_ai::{
     ExternalToolHandler, OnToolCancelledOptions, OnToolRefusedOptions, OnToolResultOptions,
     ToolError,
 };
 
 pub(super) async fn report(
-    host: Option<&TurnHost>,
+    callbacks: Option<&ChannelTurnHooks>,
     handler: Option<&dyn ExternalToolHandler>,
     room: &RoomId,
     report: ToolCallReport,
@@ -30,12 +31,10 @@ pub(super) async fn report(
             }
         }
     }
-    if let Some(host) = host {
-        if observe_only {
-            host.observe_external_tool_call(&report).await;
-        } else {
-            host.report_external_tool_call(&report).await;
-        }
+    if let Some(callbacks) = callbacks {
+        callbacks
+            .report_external_tool_call(&report, observe_only)
+            .await;
     }
 }
 

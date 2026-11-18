@@ -6,6 +6,22 @@ use super::{
     ToolCallChain, ToolCallOutcome, ToolCallReport, TurnHost, Weak, hooks,
 };
 
+impl crate::turns::ChannelTurnHooks {
+    /// Capture the execution context before starting the external agent's callback tasks.
+    #[doc(hidden)]
+    pub fn external_agent_context<F: Future>(
+        &self,
+        future: F,
+    ) -> impl Future<Output = F::Output> + use<F> {
+        self.host()
+            .map_or_else(
+                crate::context::ExecutionContext::current,
+                TurnHost::external_context,
+            )
+            .scope(future)
+    }
+}
+
 impl TurnHost {
     /// Captures an external agent's callback context while its own stream
     /// is being read. The copy keeps live admission and budget accounting,
@@ -17,9 +33,11 @@ impl TurnHost {
         &self,
         future: F,
     ) -> impl Future<Output = F::Output> + use<F> {
-        crate::context::ExecutionContext::current()
-            .external_agent(self.room_id())
-            .scope(future)
+        self.external_context().scope(future)
+    }
+
+    fn external_context(&self) -> crate::context::ExecutionContext {
+        crate::context::ExecutionContext::current().external_agent(self.room_id())
     }
 
     /// Reports an external call (RFC §9.3), as Python's executor wiring

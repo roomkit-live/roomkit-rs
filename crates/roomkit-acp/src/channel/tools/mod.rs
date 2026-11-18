@@ -8,10 +8,10 @@ mod reports;
 
 use std::sync::{Mutex, PoisonError};
 
+use roomkit::ResponseItem;
 use roomkit::model::{ChannelId, RoomId};
 use roomkit::realtime::{EphemeralEvent, EphemeralEventType};
 use roomkit::turns::ChannelTurnHooks;
-use roomkit::{ResponseItem, TurnHost};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
@@ -60,14 +60,14 @@ pub(super) struct Tools {
 
 impl Tools {
     pub(super) fn new(
-        host: Option<TurnHost>,
+        callbacks: Option<ChannelTurnHooks>,
         room_id: RoomId,
         channel_id: ChannelId,
         outlet: Option<ChannelTurnHooks>,
         publishes_text: bool,
         handler: Option<std::sync::Arc<dyn roomkit_ai::ExternalToolHandler>>,
     ) -> Self {
-        let reports = Reports::new(host, handler, room_id.clone());
+        let reports = Reports::new(callbacks, handler, room_id.clone());
         Self {
             state: Mutex::default(),
             outlet,

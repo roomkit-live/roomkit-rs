@@ -1,7 +1,8 @@
 //! Tool callbacks run in their turn's captured context, not the connection's.
 
 use roomkit::model::{RoomId, ToolCall};
-use roomkit::{ToolCallReport, TurnHost, keep_context};
+use roomkit::turns::ChannelTurnHooks;
+use roomkit::{ToolCallReport, keep_context};
 use roomkit_ai::ExternalToolHandler;
 use std::sync::{Arc, Mutex, PoisonError};
 use tokio::sync::{mpsc, oneshot};
@@ -13,7 +14,7 @@ type Message = (ToolCallReport, bool, oneshot::Sender<()>);
 type Permission = (ToolCall, String, oneshot::Sender<Decision>);
 
 struct Waiting {
-    host: Option<TurnHost>,
+    callbacks: Option<ChannelTurnHooks>,
     reports: mpsc::UnboundedReceiver<Message>,
     permissions: mpsc::UnboundedReceiver<Permission>,
 }
@@ -28,7 +29,7 @@ pub(super) struct Reports {
 
 impl Reports {
     pub(super) fn new(
-        host: Option<TurnHost>,
+        callbacks: Option<ChannelTurnHooks>,
         handler: Option<Arc<dyn ExternalToolHandler>>,
         room: RoomId,
     ) -> Self {
@@ -38,7 +39,7 @@ impl Reports {
             sender,
             permission,
             waiting: Mutex::new(Some(Waiting {
-                host,
+                callbacks,
                 reports,
                 permissions,
             })),
@@ -58,21 +59,21 @@ impl Reports {
             return;
         };
         let Waiting {
-            host,
+            callbacks,
             reports,
             permissions,
         } = waiting;
         spawn(
-            host.as_ref(),
+            callbacks.as_ref(),
             report_loop(
-                host.clone(),
+                callbacks.clone(),
                 self.handler.clone(),
                 self.room.clone(),
                 reports,
             ),
         );
         spawn(
-            host.as_ref(),
+            callbacks.as_ref(),
             permission_loop(self.handler.clone(), self.room.clone(), permissions),
         );
     }
@@ -94,14 +95,14 @@ impl Reports {
 }
 
 async fn report_loop(
-    host: Option<TurnHost>,
+    callbacks: Option<ChannelTurnHooks>,
     handler: Option<Arc<dyn ExternalToolHandler>>,
     room: RoomId,
     mut reports: mpsc::UnboundedReceiver<Message>,
 ) {
     while let Some((report, observe_only, done)) = reports.recv().await {
         super::handler::report(
-            host.as_ref(),
+            callbacks.as_ref(),
             handler.as_deref(),
             &room,
             report,
@@ -132,9 +133,9 @@ async fn permission_loop(
     }
 }
 
-fn spawn(host: Option<&TurnHost>, future: impl Future<Output = ()> + Send + 'static) {
-    if let Some(host) = host {
-        tokio::spawn(keep_context(host.external_agent_context(future)));
+fn spawn(callbacks: Option<&ChannelTurnHooks>, future: impl Future<Output = ()> + Send + 'static) {
+    if let Some(callbacks) = callbacks {
+        tokio::spawn(keep_context(callbacks.external_agent_context(future)));
     } else {
         // The standalone stream owns a record too, even without a TurnHost.
         tokio::spawn(keep_context(future));

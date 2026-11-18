@@ -109,7 +109,7 @@ impl<T: AcpTransport> TurnStream<T> {
             shared.publish_thinking_text,
         ));
         let tools = Arc::new(Tools::new(
-            host.clone(),
+            callbacks.clone(),
             room_id.clone(),
             channel_id.clone(),
             outlet.clone(),

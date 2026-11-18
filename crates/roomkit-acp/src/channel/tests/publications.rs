@@ -1,12 +1,13 @@
 //! Real registered-channel publications at boundaries the shared DSL cannot hold.
 
+mod direct_reports;
 mod foreign_scope;
 mod idle;
 mod tool_text;
 
 use std::sync::{Arc, Mutex, atomic::Ordering};
 
-use roomkit::model::{ChannelBinding, ChannelOutput, ChannelType, RoomId};
+use roomkit::model::{ChannelBinding, ChannelOutput, ChannelType, RoomId, Visibility};
 use roomkit::realtime::{
     EphemeralCallback, EphemeralEvent, EphemeralEventType, RealtimeBackend, RealtimeFuture,
 };
@@ -81,8 +82,17 @@ async fn direct_in_room(
     channel: &AcpChannel<fixture::Direct>,
     room: roomkit::model::Room,
 ) -> ChannelOutput {
+    direct_prompt(channel, room, None).await
+}
+
+async fn direct_prompt(
+    channel: &AcpChannel<fixture::Direct>,
+    room: roomkit::model::Room,
+    visibility: Option<Visibility>,
+) -> ChannelOutput {
     let mut input = test_input("r1");
     input.context.room = room;
+    input.trigger.response_visibility = visibility;
     let binding = ChannelBinding::new(
         channel.channel_id(),
         input.context.room.id.clone(),
