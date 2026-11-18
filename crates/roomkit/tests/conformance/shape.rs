@@ -582,16 +582,9 @@ fn binding_arguments(call: &str) -> Option<&'static [&'static str]> {
     })
 }
 
-/// Every member of `scenario` the runner does not know, as `path: member`.
-pub(crate) fn unknown_members(scenario: &Value) -> Vec<String> {
-    let mut found = Vec::new();
-    members(scenario, TOP, "$", &mut found);
-    let setup = &scenario["setup"];
-    optional(setup, SETUP, "setup", &mut found);
-    optional(&setup["kit"], KIT, "setup.kit", &mut found);
-    identity(setup, &mut found);
-    strategies(setup, &mut found);
+fn executor_setup(setup: &Value, found: &mut Vec<String>) {
     for (position, executor) in items(&setup["executors"]) {
+        let path = format!("setup.executors[{position}]");
         members(
             executor,
             &[
@@ -601,11 +594,30 @@ pub(crate) fn unknown_members(scenario: &Value) -> Vec<String> {
                 "started",
                 "builds",
                 "max_channels",
+                "hooks",
+                "room_hooks",
             ],
-            &format!("setup.executors[{position}]"),
-            &mut found,
+            &path,
+            found,
         );
+        for name in ["hooks", "room_hooks"] {
+            for (index, spec) in items(&executor[name]) {
+                hook(spec, &format!("{path}.{name}[{index}]"), found);
+            }
+        }
     }
+}
+
+/// Every member of `scenario` the runner does not know, as `path: member`.
+pub(crate) fn unknown_members(scenario: &Value) -> Vec<String> {
+    let mut found = Vec::new();
+    members(scenario, TOP, "$", &mut found);
+    let setup = &scenario["setup"];
+    optional(setup, SETUP, "setup", &mut found);
+    optional(&setup["kit"], KIT, "setup.kit", &mut found);
+    identity(setup, &mut found);
+    strategies(setup, &mut found);
+    executor_setup(setup, &mut found);
     for (position, process) in items(&setup["processes"]) {
         members(
             process,

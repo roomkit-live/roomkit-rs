@@ -110,7 +110,7 @@ pub(crate) async fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Cal
         _ => Ok(finish(
             run,
             name,
-            register(run, name, &spec["hook"])?,
+            register(run, &kit.turn_executor(), name, &spec["hook"])?,
             |()| Value::Null,
         )),
     }
@@ -120,71 +120,80 @@ pub(crate) async fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Cal
     clippy::wildcard_enum_match_arm,
     reason = "owner triggers use a generic payload to exercise the executor-side refusal"
 )]
-fn register(
+pub(crate) fn register(
     run: &Arc<Run>,
+    executor: &roomkit::TurnExecutor<impl roomkit::ConversationStore>,
     name: &str,
     hook: &Value,
 ) -> Result<Result<(), RoomKitError>, Unreadable> {
     use crate::ai_hooks::turn_hook_handler;
     let trigger: HookTrigger = field(hook, "trigger")?;
     match trigger {
-        HookTrigger::BeforeToolUse | HookTrigger::OnToolCall => {
-            given(run, name, hook, crate::agents::tool_hook_handler(hook, run))
-        }
+        HookTrigger::BeforeToolUse | HookTrigger::OnToolCall => given(
+            executor,
+            name,
+            hook,
+            crate::agents::tool_hook_handler(hook, run),
+        ),
         HookTrigger::BeforeAiGeneration => given(
-            run,
+            executor,
             name,
             hook,
             turn_hook_handler::<AiGenerationEvent>(hook, run),
         ),
         HookTrigger::AfterToolRound => given(
-            run,
+            executor,
             name,
             hook,
             turn_hook_handler::<ToolRoundEvent>(hook, run),
         ),
         HookTrigger::OnAiResponse => given(
-            run,
+            executor,
             name,
             hook,
             turn_hook_handler::<AiResponseEvent>(hook, run),
         ),
         HookTrigger::OnSpeakDecision => given(
-            run,
+            executor,
             name,
             hook,
             turn_hook_handler::<roomkit_ai::SpeakDecisionEvent>(hook, run),
         ),
         HookTrigger::OnThought => given(
-            run,
+            executor,
             name,
             hook,
             turn_hook_handler::<roomkit_ai::ThoughtEvent>(hook, run),
         ),
         HookTrigger::OnPlanUpdated => given(
-            run,
+            executor,
             name,
             hook,
             turn_hook_handler::<PlanUpdatedEvent>(hook, run),
         ),
         HookTrigger::OnAiThinking => given(
-            run,
+            executor,
             name,
             hook,
             turn_hook_handler::<ThinkingEvent>(hook, run),
         ),
         HookTrigger::OnUserInputRequired => given(
-            run,
+            executor,
             name,
             hook,
             crate::input_calls::input_hook_handler(hook, run),
         ),
-        _ => given(run, name, hook, crate::scripted::hook_handler(hook, run)),
+        _ => given(
+            executor,
+            name,
+            hook,
+            crate::scripted::hook_handler(hook, run),
+        ),
     }
 }
 
 fn given<P, F, Fut, R>(
-    run: &Arc<Run>,
+    executor: &roomkit::TurnExecutor<impl roomkit::ConversationStore>,
     name: &str,
     hook: &Value,
     handler: F,
@@ -196,7 +205,6 @@ where
     R: IntoHookReturn<P>,
 {
     let trigger: HookTrigger = field(hook, "trigger")?;
-    let executor = run.kit().turn_executor();
     let defaults = ExecutorHookOptions::default();
     let options = ExecutorHookOptions {
         name: field(hook, "name")?,

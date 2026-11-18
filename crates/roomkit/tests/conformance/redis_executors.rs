@@ -1,18 +1,16 @@
 //! RFC §6.4 and §10.6. The normal runner places declared channels on workers
 //! with independent Redis nodes and compares the complete scenario expectations.
 mod channel;
+mod topology;
 
 use futures_core::future::BoxFuture;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use roomkit::{
-    RedisTurnBackend, RedisTurnBackendOptions, RoomKitError, TurnExecutor, TurnExecutorOptions,
-};
+use roomkit::{RedisTurnBackend, RoomKitError, TurnExecutor, TurnExecutorOptions};
 use serde::Deserialize;
 use serde_json::Value;
-use uuid::Uuid;
 
 use crate::identity::RunSlot;
 use channel::WorkerChannel;
@@ -22,13 +20,18 @@ const SUPPORTED: &[&str] = &[
     "executors/a-channel-call-no-executor-takes-fails-no-executor",
     "executors/a-declared-agent-s-turn-runs-on-the-executor-hosting-it",
     "executors/a-delegation-to-a-declared-worker-runs-on-its-executor",
+    "executors/a-detach-forgets-what-the-room-kept-for-a-channel",
+    "executors/a-later-turn-on-another-executor-replays-the-instruction-it-read",
     "executors/a-live-agent-s-turn-stays-on-the-kit-s-executor",
     "executors/a-provider-the-factory-hands-every-build-outlives-a-build-let-go",
     "executors/a-released-channel-is-built-anew-for-the-next-turn",
     "executors/a-room-s-agent-presence-names-the-executors-covering-each-agent",
     "executors/a-room-whose-executor-builds-nothing-for-its-agent-stays-on-it",
     "executors/a-room-whose-executor-closed-moves-to-another",
+    "executors/a-skill-activated-on-one-executor-rides-the-next-turn-on-another",
+    "executors/a-turn-apart-asks-a-person-through-the-room-owner",
     "executors/a-turn-apart-calls-a-tool-the-room-owner-serves",
+    "executors/a-turn-apart-calls-the-host-verbs-during-and-after-it",
     "executors/a-turn-apart-emits-its-framework-events",
     "executors/a-turn-apart-publishes-its-thinking-and-tool-calls-to-the-room",
     "executors/a-turn-cut-on-its-executor-names-it-in-its-record",
@@ -39,9 +42,12 @@ const SUPPORTED: &[&str] = &[
     "executors/an-agent-its-executor-builds-nothing-for-fails-no-executor",
     "executors/an-executor-builds-an-agent-at-its-first-turn-not-when-a-room-attaches-it",
     "executors/an-executor-declaring-every-agent-takes-the-turns-of-agents-it-was-never-named",
+    "executors/an-executor-lacking-a-room-s-hook-does-not-cover-its-agent-there",
+    "executors/an-executor-lacking-a-room-s-hook-does-not-take-its-turn",
     "executors/an-executor-past-its-bound-closes-the-agent-it-used-least-recently",
     "executors/an-executor-serving-every-organization-takes-every-room-s-turns",
     "executors/an-executor-takes-the-turns-of-the-organizations-it-serves-alone",
+    "executors/another-executor-replays-the-tool-calls-of-the-first",
     "executors/attach-and-detach-reach-every-executor-declaring-the-channel",
     "executors/executors-declaring-prefixes-take-only-the-agents-under-them",
     "executors/one-build-serving-two-rooms-reads-each-turn-s-room-alone",
@@ -55,7 +61,7 @@ pub(super) fn run(
 ) -> Option<Vec<String>> {
     if !scenario["id"]
         .as_str()
-        .is_some_and(|id| SUPPORTED.contains(&id))
+        .is_some_and(|id| SUPPORTED.contains(&id) || topology::is_presence(id))
     {
         return None;
     }
@@ -85,6 +91,10 @@ struct Worker {
     started: Option<bool>,
     builds: Option<BTreeSet<String>>,
     max_channels: Option<usize>,
+    #[serde(default)]
+    hooks: Vec<Value>,
+    #[serde(default)]
+    room_hooks: Vec<Value>,
     #[serde(skip)]
     counts: Arc<std::sync::Mutex<BTreeMap<String, usize>>>,
 }
@@ -123,8 +133,7 @@ impl Worker {
 }
 
 struct Workers {
-    url: String,
-    options: RedisTurnBackendOptions,
+    topology: topology::Topology,
     declarations: Vec<Worker>,
     channels: Arc<Vec<Value>>,
     slot: RunSlot,
@@ -132,10 +141,6 @@ struct Workers {
 }
 
 impl Workers {
-    fn backend(&self) -> Result<RedisTurnBackend, RoomKitError> {
-        RedisTurnBackend::new(Some(&self.url), self.options.clone())
-    }
-
     fn build(&self, worker: &Worker) -> Result<TurnExecutor, RoomKitError> {
         let declarations = Arc::clone(&self.channels);
         let observed = self.slot.clone();
@@ -166,7 +171,20 @@ impl Workers {
             )));
         }
         let executor = self.build(worker)?;
-        let hosting = self.backend()?;
+        let run = self
+            .slot
+            .run()
+            .ok_or_else(|| RoomKitError::Runtime("scenario owner is unavailable".into()))?;
+        for (kind, hooks) in [
+            ("kit_executor.hook", &worker.hooks),
+            ("kit_executor.room_hook", &worker.room_hooks),
+        ] {
+            for hook in hooks {
+                crate::kit_executor::register(&run, &executor, kind, hook)
+                    .map_err(RoomKitError::Value)??;
+            }
+        }
+        let hosting = self.topology.worker()?;
         hosting.serve(executor.clone()).await?;
         active.insert(id.to_owned(), (hosting, executor));
         Ok(())
@@ -176,13 +194,22 @@ impl Workers {
         let entry = self.active.lock().await.remove(id);
         let (hosting, executor) =
             entry.ok_or_else(|| RoomKitError::Value(format!("executor {id} is not started")))?;
-        let removed = hosting.close().await;
-        executor.close().await;
-        removed
+        self.topology.close_worker(&hosting, &executor).await
     }
 }
 
 impl crate::run::WorkerControl for Workers {
+    fn start_all(&self) -> BoxFuture<'_, Result<(), RoomKitError>> {
+        Box::pin(async move {
+            for worker in &self.declarations {
+                if worker.started.unwrap_or(true) {
+                    self.start(&worker.id).await?;
+                }
+            }
+            Ok(())
+        })
+    }
+
     fn change<'a>(
         &'a self,
         operation: &'a str,
@@ -204,22 +231,13 @@ async fn exercise(url: &str, scenario: &Value) -> Result<Vec<String>, RoomKitErr
     let setup = &scenario["setup"];
     let parse_error = |e: serde_json::Error| RoomKitError::Value(e.to_string());
     let workers = Arc::new(Workers {
-        url: url.to_owned(),
-        options: RedisTurnBackendOptions {
-            key_prefix: format!("roomkit:test:scenario:{}", Uuid::new_v4()),
-            ..RedisTurnBackendOptions::default()
-        },
+        topology: topology::Topology::new(url, scenario)?,
         declarations: serde_json::from_value(setup["executors"].clone()).map_err(parse_error)?,
         channels: Arc::new(serde_json::from_value(setup["channels"].clone()).map_err(parse_error)?),
         slot: RunSlot::default(),
         active: Mutex::default(),
     });
-    let owner = workers.backend()?;
-    for worker in &workers.declarations {
-        if worker.started.unwrap_or(true) {
-            workers.start(&worker.id).await?;
-        }
-    }
+    let owner = workers.topology.owner().clone();
     let problems = crate::harness::run_with(
         scenario,
         workers.slot.clone(),

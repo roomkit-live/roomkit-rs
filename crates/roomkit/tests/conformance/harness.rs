@@ -272,6 +272,12 @@ async fn set_up(run: &Arc<Run>, setup: &Value) -> Result<(), String> {
         calls::register_channel(run, channel)?
             .map_err(|error| format!("register {channel}: {error}"))?;
     }
+    if let Some(workers) = &run.workers {
+        workers
+            .start_all()
+            .await
+            .map_err(|error| error.to_string())?;
+    }
     crate::member_calls::store_identities(run, &setup["identities"]).await?;
     for room in setup["rooms"].as_array().into_iter().flatten() {
         if let Err(error) = calls::create_room(run, room, None).await? {

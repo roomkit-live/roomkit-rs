@@ -104,6 +104,7 @@ pub(crate) struct Check {
 
 /// Lifecycle operations offered by the distributed executor fixture of this pass.
 pub(crate) trait WorkerControl: Send + Sync {
+    fn start_all(&self) -> BoxFuture<'_, Result<(), roomkit::RoomKitError>>;
     fn change<'a>(
         &'a self,
         operation: &'a str,
