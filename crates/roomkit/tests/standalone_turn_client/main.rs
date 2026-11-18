@@ -1,6 +1,9 @@
 //! An application drives a standalone room owner without supplying a store.
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 mod backend;
+mod close;
+mod lifecycle;
+mod ports;
 use backend::Backend;
 use roomkit::RoomKitError;
 use roomkit::turns::wire::{Control, ErrorRecord, Frame, WireOutput};
@@ -19,7 +22,7 @@ fn fixture() -> TurnRequest {
             .unwrap(),
     )
     .unwrap();
-    serde_json::from_value(row["message"].clone()).unwrap()
+    serde_json::from_value(row.get("message").unwrap().clone()).unwrap()
 }
 async fn run(client: &TurnClient) -> Result<roomkit::turns::TurnClientOutput, RoomKitError> {
     let r = fixture();
@@ -52,7 +55,10 @@ fn output(streams: bool) -> Frame {
 #[tokio::test]
 async fn runs_without_a_local_worker_and_keeps_previous_turns_and_hooks() {
     let backend = Arc::new(Backend::default());
-    let client = TurnClient::new(backend.clone(), TurnClientOptions::default());
+    let client = TurnClient::new(
+        Arc::<Backend>::clone(&backend),
+        TurnClientOptions::default(),
+    );
     let r = fixture();
     for name in ["z", "a", "z"] {
         client.enable_room_hook(&r.room_id, name);
@@ -92,7 +98,17 @@ async fn runs_without_a_local_worker_and_keeps_previous_turns_and_hooks() {
 #[tokio::test]
 async fn rebuilds_the_original_error_before_output_and_during_a_pulled_stream() {
     let backend = Arc::new(Backend::default());
-    let client = TurnClient::new(backend.clone(), Default::default());
+    let mut classes = roomkit::turns::ErrorClasses::default();
+    classes.register::<std::io::Error>(
+        "example:Recoverable",
+        |row| Some(std::io::Error::other(row.message.clone())),
+        |error| ErrorRecord::new("example:Recoverable", error.to_string()),
+    );
+    let options = TurnClientOptions {
+        error_classes: classes,
+        ..TurnClientOptions::default()
+    };
+    let client = TurnClient::new(Arc::<Backend>::clone(&backend), options);
     let mut error = ErrorRecord::new("example:Unavailable", "retry after the backup");
     error.bases = vec!["example:Recoverable".into()];
     error.args = vec![json!(3)];
@@ -134,6 +150,7 @@ async fn rebuilds_the_original_error_before_output_and_during_a_pulled_stream() 
             panic!("expected a remote error with its record")
         };
         assert_eq!(detail.record(), &error);
+        assert!(detail.native_error().unwrap().is::<std::io::Error>());
     }
     client.close().await.unwrap();
 }

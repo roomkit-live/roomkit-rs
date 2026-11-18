@@ -14,6 +14,7 @@ pub(in crate::turns) struct Services {
     pub(in crate::turns) events: Option<Arc<dyn OwnerEvents>>,
     pub(in crate::turns) errors: ErrorClasses,
     pub(in crate::turns) telemetry: Option<Arc<dyn TelemetryProvider>>,
+    admissions: super::admissions::Admissions,
     hooks: Mutex<HashMap<RoomId, Vec<String>>>,
 }
 
@@ -34,6 +35,7 @@ impl Services {
             events: o.events,
             errors: o.error_classes,
             telemetry: o.telemetry,
+            admissions: super::admissions::Admissions::default(),
             hooks: Mutex::default(),
         }
     }
@@ -76,6 +78,21 @@ impl Services {
     }
     pub(in crate::turns) fn hook_names(&self, room: &RoomId) -> Vec<String> {
         lock(&self.hooks).get(room).cloned().unwrap_or_default()
+    }
+    pub(super) async fn wait_for_admissions(
+        &self,
+        address: crate::turns::SteerAddress<'_>,
+        timeout: std::time::Duration,
+    ) {
+        self.admissions.wait(address, timeout).await;
+    }
+    pub(in crate::turns) fn admitting<'a>(
+        &'a self,
+        request: &crate::turns::TurnRequest,
+        id: &Arc<str>,
+    ) -> super::admissions::Admission<'a> {
+        self.admissions
+            .start(id, &request.room_id, &request.channel_id)
     }
     pub(in crate::turns) async fn channel_rows(
         &self,

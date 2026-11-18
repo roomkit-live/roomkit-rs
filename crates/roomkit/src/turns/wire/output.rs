@@ -82,6 +82,12 @@ pub enum WireResult {
     },
 }
 
+impl From<Value> for WireResult {
+    fn from(value: Value) -> Self {
+        Self::Value { value }
+    }
+}
+
 /// A call's end, as `tool_ended` carries it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ToolEnd {

@@ -7,7 +7,7 @@ use roomkit::turns::{
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 #[derive(Default)]
 pub(super) struct Backend {
@@ -17,6 +17,7 @@ pub(super) struct Backend {
     pub(super) owner: Mutex<Option<Arc<dyn RoomOwner>>>,
     pub(super) released: Arc<AtomicUsize>,
     connections: Mutex<Vec<Connection>>,
+    delay: Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
 }
 struct Connection {
     frames: mpsc::UnboundedReceiver<(u64, Frame)>,
@@ -34,6 +35,12 @@ impl Worker {
     }
 }
 impl Backend {
+    pub(super) fn delay_next(&self) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
+        let (entered, wait) = oneshot::channel();
+        let (resume, resumed) = oneshot::channel();
+        *self.delay.lock().unwrap() = Some((entered, resumed));
+        (wait, resume)
+    }
     pub(super) fn connect(&self) -> Worker {
         let (frames, frame_rx) = mpsc::unbounded_channel();
         let (controls, control_rx) = mpsc::unbounded_channel();
@@ -71,6 +78,11 @@ impl TurnBackend for Backend {
                 return Err(RoomKitError::Value("submission refused".into()));
             };
             request.hand_over();
+            let barrier = self.delay.lock().unwrap().take();
+            if let Some((entered, resume)) = barrier {
+                entered.send(()).unwrap();
+                resume.await.unwrap();
+            }
             self.requests.lock().unwrap().push(request.clone());
             let link: Arc<dyn TurnLink> = Arc::new(Link {
                 request,

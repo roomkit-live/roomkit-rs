@@ -35,6 +35,12 @@ pub(crate) struct SteerAddress<'a> {
 }
 
 impl StartedTurns {
+    pub(super) fn abandon(&mut self) {
+        for turn in self.turns.drain(..) {
+            turn.steerable.abandon();
+        }
+    }
+
     /// Records the turn `turn_id` of `channel_id` in `room_id`, started
     /// now; the turns that are over are forgotten.
     pub(crate) fn start(

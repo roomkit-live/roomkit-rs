@@ -52,6 +52,12 @@ impl Steerable {
         }
     }
 
+    pub(in crate::turns) fn abandon(&self) {
+        if let Some(state) = self.state.upgrade() {
+            state.turn.shut();
+        }
+    }
+
     /// Whether the turn is over for the owner.
     pub(crate) fn over(&self) -> bool {
         self.state

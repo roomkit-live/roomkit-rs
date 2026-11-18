@@ -231,7 +231,7 @@ pub(crate) fn read(value: &Value) -> ToolResult {
 /// `value` as parts, when it is a non-empty list whose every item is a
 /// mapping with a part's type and only that part's fields, each of its
 /// type; `None` otherwise. Python's `_content_parts`.
-fn as_parts(value: &Value) -> Option<Vec<ToolResultPart>> {
+pub(super) fn as_parts(value: &Value) -> Option<Vec<ToolResultPart>> {
     let Value::Array(items) = value else {
         return None;
     };

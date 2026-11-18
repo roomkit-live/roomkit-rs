@@ -30,8 +30,8 @@
 
 mod client;
 pub use client::{
-    OwnerEvents, OwnerHost, OwnerTools, TurnClient, TurnClientOptions, TurnClientOutput,
-    TurnRunOptions,
+    OwnerEvents, OwnerHost, OwnerTools, TurnClient, TurnClientInputs, TurnClientOptions,
+    TurnClientOutput, TurnRunOptions,
 };
 mod served_executor;
 pub use served_executor::ServedExecutor;
@@ -425,12 +425,10 @@ impl Turns {
         // §12.10.4).
         self.ready()
             .await
-            .map_err(|e| to_record(&error::kit_error(&e)))?;
+            .map_err(|e| TurnFailure::crossed(&self.error_classes().record(&e)))?;
         let channel = kit.channel(&binding.channel_id);
         let mut context = context;
-        let channel_rows = if let Some(client) = &self.client {
-            client.channel_rows(binding, &event, &context).await
-        } else if self.sends_channel_rows(channel.as_deref()) {
+        let channel_rows = if self.client.is_none() && self.sends_channel_rows(channel.as_deref()) {
             crate::history::distributed::distributed_rows(
                 kit.as_ref(),
                 binding,

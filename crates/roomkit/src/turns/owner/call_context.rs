@@ -107,19 +107,15 @@ pub(super) async fn serve_tool(
                 );
             };
             return match tools.serve(request, call).await {
-                Ok(value) => (OwnerToolAnswer::Served(value), None),
+                Ok(crate::turns::wire::WireResult::Value { value }) => {
+                    (OwnerToolAnswer::Served(value), None)
+                }
+                Ok(crate::turns::wire::WireResult::Parts { parts }) => {
+                    (OwnerToolAnswer::Parts(parts), None)
+                }
                 Err(error) => {
                     let record = client.errors.record(error.as_ref());
-                    let outcome = match record.kind.rsplit(':').next().unwrap_or(&record.kind) {
-                        "UnservedToolCallError" => {
-                            OwnerToolAnswer::Unserved(record.message.clone())
-                        }
-                        "ToolRefusedError" => OwnerToolAnswer::Refused(record.message.clone()),
-                        _ => OwnerToolAnswer::Failed {
-                            kind: record.kind.clone(),
-                            message: record.message.clone(),
-                        },
-                    };
+                    let outcome = failed_tool(&record);
                     (outcome, Some(record))
                 }
             };
@@ -136,14 +132,37 @@ pub(super) async fn serve_tool(
     };
     let served = scoped(facts, &context, run).await;
     let (outcome, error) = served.outcome;
-    let structured_content = matches!(outcome, OwnerToolAnswer::Served(_))
-        .then_some(served.structured_content)
-        .flatten();
+    let structured_content = matches!(
+        outcome,
+        OwnerToolAnswer::Served(_) | OwnerToolAnswer::Parts(_)
+    )
+    .then_some(served.structured_content)
+    .flatten();
     ToolAnswer {
         outcome,
         error,
         structured_content,
         record_changes: served.record_changes,
+    }
+}
+
+// An application error may inherit a known refusal class (RFC §10.6.8).
+fn failed_tool(record: &WireError) -> OwnerToolAnswer {
+    for class in std::iter::once(&record.kind).chain(&record.bases) {
+        match class
+            .strip_prefix("roomkit.core.exceptions:")
+            .unwrap_or(class)
+        {
+            "UnservedToolCallError" => return OwnerToolAnswer::Unserved(record.message.clone()),
+            "ChannelRefusalError" | "ToolRefusedError" => {
+                return OwnerToolAnswer::Refused(record.message.clone());
+            }
+            _ => {}
+        }
+    }
+    OwnerToolAnswer::Failed {
+        kind: record.kind.clone(),
+        message: record.message.clone(),
     }
 }
 

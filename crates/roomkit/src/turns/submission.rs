@@ -307,8 +307,17 @@ impl Turns {
             mut handover,
             ..
         } = self.prepare_request(&**kit, binding, input, &turn_id, false, &observers)?;
-        let request = executor::parse(carried).map_err(|why| uncarried(&why))?;
+        let mut request = executor::parse(carried).map_err(|why| uncarried(&why))?;
+        let _admission = self
+            .client
+            .as_ref()
+            .map(|client| client.admitting(&request, &turn_id));
         if let Some(client) = &self.client {
+            request.channel_rows = tokio::select! {
+                biased;
+                _ = closing.wait_for(|closing| *closing) => return Err(closed().into()),
+                rows = client.channel_rows(&request.binding,&request.event,&request.context) => rows,
+            };
             facts.client = Some((Arc::clone(client), Arc::new(request.clone())));
         }
         handover.marker = request.handover.clone();

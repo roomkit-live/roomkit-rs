@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use crate::realtime::EphemeralEvent;
 use crate::turns::TurnFuture;
-use crate::turns::wire::{OwnerTool, RoomCall, ToolCall, TurnRequest};
+use crate::turns::wire::{OwnerTool, RoomCall, ToolCall, TurnRequest, WireResult};
 use crate::{ChannelError, RoomKitError};
 
 /// What a standalone owner runs for the worker's turn host (RFC §10.6.5).
@@ -49,7 +49,7 @@ pub trait OwnerTools: Send + Sync + 'static {
         &'a self,
         request: &'a TurnRequest,
         call: ToolCall,
-    ) -> TurnFuture<'a, Result<Value, ChannelError>>;
+    ) -> TurnFuture<'a, Result<WireResult, ChannelError>>;
 }
 
 /// The standalone owner's destinations for publications from workers (RFC §10.6.3).

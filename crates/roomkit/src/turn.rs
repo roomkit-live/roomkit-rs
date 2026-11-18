@@ -1343,6 +1343,8 @@ fn denied(name: &str) -> String {
 pub enum OwnerToolAnswer {
     /// The handler's answer.
     Served(Value),
+    /// The ordered content parts returned by the handler.
+    Parts(Vec<Value>),
     /// The handler refused the call: nothing ran; the model reads these
     /// words.
     Refused(String),

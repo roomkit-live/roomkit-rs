@@ -1,18 +1,21 @@
 //! Standalone room owner for turns submitted to an application transport.
+mod admissions;
+mod calls;
+mod inputs;
+pub use inputs::TurnClientInputs;
 mod output;
+mod port;
 mod ports;
+use port::ClientOwner;
 pub(super) mod publications;
 mod services;
 pub use output::TurnClientOutput;
 pub use ports::{OwnerEvents, OwnerHost, OwnerTools};
 pub(super) use services::Services;
 
-use super::wire::{HostResult, OwnerMessage, OwnerMessageEnvelope, RoomCall, RoomPublication};
+use super::wire::{HostResult, OwnerMessage, OwnerMessageEnvelope};
 use super::{ChannelControl, ChannelResult};
-use super::{
-    ErrorClasses, RoomOwner, ServedExecutor, SteerAddress, TurnBackend, TurnFuture, TurnTimeouts,
-    Turns,
-};
+use super::{ErrorClasses, ServedExecutor, SteerAddress, TurnBackend, TurnTimeouts, Turns};
 use crate::human_input::PendingInputEvent;
 use crate::steering::SteeringDirective;
 use crate::telemetry::TelemetryProvider;
@@ -22,7 +25,7 @@ use crate::{
 };
 use roomkit_core::model::{ChannelBinding, ChannelId, RoomContext, RoomEvent, RoomId};
 use std::fmt;
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
 /// The optional services of a standalone room owner (RFC §10.6).
 #[derive(Clone, Default)]
@@ -66,6 +69,7 @@ pub struct TurnClient {
 }
 
 struct State {
+    calls: calls::Calls,
     backend: Arc<dyn TurnBackend>,
     services: Arc<Services>,
     turns: Arc<Turns>,
@@ -106,6 +110,7 @@ impl TurnClient {
         turns.set_timeouts(timeouts);
         turns.set_error_classes(services.errors.clone());
         let state = Arc::new(State {
+            calls: calls::Calls::default(),
             backend,
             services,
             turns,
@@ -187,6 +192,11 @@ impl TurnClient {
             .client_control(self.backend().as_ref(), message)
             .await
     }
+    /// Read and settle human-input requests of this owner.
+    pub fn inputs(&self) -> TurnClientInputs<'_> {
+        TurnClientInputs(&self.state.turns)
+    }
+
     /// Read an open human-input request in the requested organization.
     pub fn input_request(
         &self,
@@ -220,6 +230,10 @@ impl TurnClient {
             turn: options.turn_id.as_deref(),
             organization: options.organization_id.as_deref(),
         };
+        self.state
+            .services
+            .wait_for_admissions(address, self.state.turns.timeouts().bounded().accept)
+            .await;
         self.state.turns.steer(&directive.into(), address).await
     }
 
@@ -234,68 +248,10 @@ impl TurnClient {
         if let Some(executor) = self.executor() {
             executor.close().await;
         }
+        super::lock(&state.turns.started).abandon();
+        state.calls.stop().await;
         let closed = state.runtime.close().await;
         state.backend.close().await?;
         closed
-    }
-}
-
-struct ClientOwner(Weak<State>);
-impl RoomOwner for ClientOwner {
-    fn executor(&self) -> Option<Arc<dyn ServedExecutor>> {
-        self.0.upgrade()?.services.executor.clone()
-    }
-    fn room_call(&self, message: RoomCall) -> TurnFuture<'_, Result<HostResult, RoomKitError>> {
-        Box::pin(async move {
-            if let Some(state) = self.0.upgrade().filter(|s| !s.turns.is_closed()) {
-                return state
-                    .receive(OwnerMessage::RoomCall(message))
-                    .await
-                    .ok_or_else(|| RoomKitError::Runtime("Missing room call result".into()));
-            }
-            Ok(HostResult {
-                call_id: message.call_id,
-                result: serde_json::Value::Null,
-                error: Some(super::error::one(
-                    "RuntimeError",
-                    "The room owner has closed".into(),
-                )),
-                record_changes: None,
-            })
-        })
-    }
-    fn room_publication(
-        &self,
-        message: RoomPublication,
-    ) -> TurnFuture<'_, Result<(), RoomKitError>> {
-        Box::pin(async move {
-            if let Some(state) = self.0.upgrade().filter(|s| !s.turns.is_closed()) {
-                state.receive(OwnerMessage::RoomPublication(message)).await;
-            }
-            Ok(())
-        })
-    }
-}
-
-impl RoomOwner for TurnClient {
-    fn executor(&self) -> Option<Arc<dyn ServedExecutor>> {
-        self.state.services.executor.clone()
-    }
-    fn room_call(&self, message: RoomCall) -> TurnFuture<'_, Result<HostResult, RoomKitError>> {
-        Box::pin(async move {
-            ClientOwner(Arc::downgrade(&self.state))
-                .room_call(message)
-                .await
-        })
-    }
-    fn room_publication(
-        &self,
-        message: RoomPublication,
-    ) -> TurnFuture<'_, Result<(), RoomKitError>> {
-        Box::pin(async move {
-            ClientOwner(Arc::downgrade(&self.state))
-                .room_publication(message)
-                .await
-        })
     }
 }

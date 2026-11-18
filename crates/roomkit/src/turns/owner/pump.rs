@@ -19,6 +19,7 @@ use super::{Facts, Main, OwnerState, call_context};
 use crate::context::ExecutionContext;
 use crate::tasks::Unit;
 use crate::turn::TurnKit;
+use crate::turns::client::publications::Publications;
 use crate::turns::codec::decode_end;
 use crate::turns::context::TurnContext;
 use crate::turns::error::{TurnError, one};
@@ -124,7 +125,7 @@ pub(super) struct Pump {
     /// Withdrawn calls still unwinding; their inline work remains the turn's.
     withdrawn: Vec<RunningCall>,
     publisher: Arc<crate::turn::publish::Publisher>,
-    client_publications: crate::turns::client::publications::Publications,
+    client_publications: Publications,
     accepted: bool,
     /// The items received, deltas counted: never more than granted.
     received: u64,
@@ -147,7 +148,7 @@ impl Pump {
             calls: HashMap::new(),
             withdrawn: Vec::new(),
             publisher: Arc::default(),
-            client_publications: Default::default(),
+            client_publications: Publications::default(),
             accepted: false,
             received: 0,
         }
@@ -305,29 +306,33 @@ impl Pump {
                 channel: topic,
                 event,
             } => {
-                let facts = &self.state.facts;
-                if let Some(event) = crate::turns::outside::ephemeral(
-                    &facts.room_id,
-                    &facts.channel_id,
-                    facts.answer_unscoped,
-                    self.state.turn.traced.load(Ordering::Acquire),
-                    &topic,
-                    event,
-                ) {
-                    self.publisher.enqueue(
-                        &self.kit,
-                        &facts.room_id,
-                        &facts.channel_id,
-                        facts.room.created_at,
-                        event,
-                    );
-                }
+                self.publish_ephemeral(&topic, event);
             }
         }
         None
     }
 
     /// An item for the reader, within what it granted.
+    fn publish_ephemeral(&self, topic: &str, event: Value) {
+        let facts = &self.state.facts;
+        if let Some(event) = crate::turns::outside::ephemeral(
+            &facts.room_id,
+            &facts.channel_id,
+            facts.answer_unscoped,
+            self.state.turn.traced.load(Ordering::Acquire),
+            topic,
+            event,
+        ) {
+            self.publisher.enqueue(
+                &self.kit,
+                &facts.room_id,
+                &facts.channel_id,
+                facts.room.created_at,
+                event,
+            );
+        }
+    }
+
     fn item(&mut self, seq: u64, item: Item) -> Option<Ending> {
         let counted = match &item {
             Item::Text {
@@ -580,6 +585,11 @@ fn answer_tool(state: &OwnerState, call_id: String, answered: call_context::Tool
         OwnerToolAnswer::Served(value) => (
             ToolOutcome::Served,
             Some(serde_json::json!({ "value": value })),
+            None,
+        ),
+        OwnerToolAnswer::Parts(parts) => (
+            ToolOutcome::Served,
+            Some(serde_json::json!({"parts":parts})),
             None,
         ),
         OwnerToolAnswer::Refused(message) => (

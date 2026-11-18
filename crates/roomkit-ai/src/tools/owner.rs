@@ -41,6 +41,13 @@ impl DynToolset for OwnerToolset {
                     Ok(ToolResult::Text(text))
                 }
                 OwnerToolAnswer::Served(value) => Ok(ToolResult::Json(value)),
+                OwnerToolAnswer::Parts(parts) => {
+                    super::result::as_parts(&serde_json::Value::Array(parts))
+                        .map(ToolResult::Parts)
+                        .ok_or_else(|| {
+                            ToolError::failed("The owner returned invalid tool result parts")
+                        })
+                }
                 OwnerToolAnswer::Refused(words) => Err(ToolError::Refused(words)),
                 OwnerToolAnswer::Unserved(message) => Err(ToolError::UnservedToolCall(message)),
                 OwnerToolAnswer::Failed { kind, message } => {

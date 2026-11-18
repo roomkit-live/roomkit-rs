@@ -309,7 +309,7 @@ async fn send(
 
 /// Answers a verb an executor made after its turn ended (RFC §10.6.3
 /// `room_call`), as the room's records name its last turn of the channel.
-pub(crate) async fn answer_room_call(
+pub(in crate::turns) async fn answer_room_call(
     kit: &Arc<dyn TurnKit>,
     client: Option<&crate::turns::client::Services>,
     records: impl FnOnce() -> Option<LastTurn>,

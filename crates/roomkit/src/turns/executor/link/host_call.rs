@@ -75,8 +75,10 @@ impl From<OwnerToolAnswer> for ToolReply {
 impl ToolReply {
     pub(super) fn finish(self, carried: Option<&Metadata>) -> OwnerToolAnswer {
         take_changes(carried, self.record_changes);
-        if matches!(self.outcome, OwnerToolAnswer::Served(_))
-            && let (Some(copy), Some(scope)) = (self.structured_content, current_tool_call_scope())
+        if matches!(
+            self.outcome,
+            OwnerToolAnswer::Served(_) | OwnerToolAnswer::Parts(_)
+        ) && let (Some(copy), Some(scope)) = (self.structured_content, current_tool_call_scope())
         {
             scope.set_structured_content(copy);
         }

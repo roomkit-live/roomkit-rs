@@ -698,6 +698,9 @@ fn tool_answer(
     let message = || error.map(|error| error.message.clone()).unwrap_or_default();
     match (outcome, result) {
         (ToolOutcome::Served, Some(result)) => {
+            if let Some(parts) = result.get("parts").and_then(Value::as_array) {
+                return OwnerToolAnswer::Parts(parts.clone());
+            }
             OwnerToolAnswer::Served(result.get("value").cloned().unwrap_or(result))
         }
         (ToolOutcome::Refused, _) => OwnerToolAnswer::Refused(message()),
@@ -733,5 +736,23 @@ impl Drop for Withdraw<'_> {
         if let Some(call_id) = self.call_id.take() {
             self.link.withdraw(&call_id, true);
         }
+    }
+}
+
+#[cfg(test)]
+mod result_shapes {
+    use super::{OwnerToolAnswer, ToolOutcome, tool_answer};
+    use serde_json::json;
+
+    #[test]
+    fn an_owner_can_return_the_same_array_as_content_parts_or_as_an_ordinary_value() {
+        let parts = vec![
+            json!({"type":"text","text":"one"}),
+            json!({"type":"text","text":"two"}),
+        ];
+        let ordinary = tool_answer(ToolOutcome::Served, Some(json!({"value":parts})), None);
+        let typed = tool_answer(ToolOutcome::Served, Some(json!({"parts":parts})), None);
+        assert_eq!(ordinary, OwnerToolAnswer::Served(json!(parts)));
+        assert_eq!(typed, OwnerToolAnswer::Parts(parts));
     }
 }

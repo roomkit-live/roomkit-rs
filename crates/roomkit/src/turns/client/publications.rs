@@ -23,6 +23,10 @@ impl Scope {
         frame: Frame,
         traced: bool,
     ) -> Result<(), RoomKitError> {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "only ephemeral and framework frames can be published"
+        )]
         match frame {
             Frame::FrameworkEvent {
                 event_type,

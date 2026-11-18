@@ -38,7 +38,7 @@ pub(crate) use self::pump::publish_for_room;
 pub(crate) use self::reader::{OwnerTurn, RemoteItem};
 pub(crate) use self::steering::Steerable;
 use self::steering::Steers;
-pub(crate) use self::verbs::{answer_room_call, last_turn};
+pub(super) use self::verbs::{answer_room_call, last_turn};
 use super::error::TurnError;
 use super::pipe::PipeReceiver;
 use super::wire::{Control, Frame, Item, WireError, WireOutput};
