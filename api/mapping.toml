@@ -946,9 +946,9 @@ reason = "The engine is built with its kit; its chains and observer tasks run in
 
 [[missing]]
 python = "roomkit.TurnExecutor"
-members = ["__init__", "take", "reach_owner", "control", "wire", "use_wiring", "wiring"]
+members = ["take", "reach_owner", "control", "wire", "use_wiring", "wiring"]
 scope = "text"
-reason = "The public backend, wire messages and construction of remote executors remain deferred; this type is the kit's local executor handle (HITL ac49c79d, option 1)."
+reason = "Constructing and serving a remote executor is supported. The public wiring and custom transport interfaces listed here still need Rust equivalents."
 
 [[exception]]
 rust = "roomkit::TurnExecutor::hook"

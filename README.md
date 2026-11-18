@@ -128,6 +128,28 @@ Applications normally depend on `roomkit` and the adapters they use.
 `roomkit-core` and the effect protocol are implementation interfaces; see
 [ARCHITECTURE.md](ARCHITECTURE.md) for the boundaries.
 
+## Run an agent on a Redis turn executor
+
+Enable the `redis` feature on the `roomkit` dependency. The room owner and
+each worker create their own `RedisTurnBackend` with the same Redis URL and
+key prefix. Give the owner's backend to `RoomKitOptions::turn_backend` and
+register the remote agent with `ChannelDeclaration::new(channel_id)`.
+
+On the worker, build a `TurnExecutor` with a channel factory and set
+`TurnExecutorOptions::hosts` to the channel IDs or prefixes it serves.
+Call `backend.serve(executor.clone()).await?` before accepting work. The owner
+stores the resulting conversation events. Either process can run the Python
+SDK or the Rust SDK.
+
+The [two-process example used by the interoperability tests](crates/roomkit/tests/redis_interop/main.rs)
+contains both roles. To run the checks against a dedicated Redis, set
+`REDIS_URL` and set `ROOMKIT_PYTHON` to the interpreter of a reference RoomKit
+checkout with its test and Redis dependencies installed.
+
+```sh
+cargo test --locked -p roomkit --features redis --test redis_interop
+```
+
 ## Examples and documentation
 
 | Example | What it demonstrates |
