@@ -49,9 +49,11 @@ pub(crate) fn current_thread() -> tokio::runtime::Runtime {
 /// The area of the scenarios that need a turn executor beside the kit.
 const APART: &str = "executors/";
 
-/// Why no runner of this repository runs that area (RFC §10.6.7): the turn
-/// backend and its executor are private here.
-const NO_EXECUTOR_APART: &str = "§10.6.7: an executor apart needs a public turn backend";
+/// The current pass has no fixture for this separately hosted executor.
+const NO_EXECUTOR_APART: &str =
+    "§10.6.7: this pass does not exercise this remote executor scenario";
+
+pub(crate) type ExecutorPass = fn(&Value, fn() -> tokio::runtime::Runtime) -> Option<Vec<String>>;
 
 /// Whether `id` is a scenario no runner here runs, reported as a known failure.
 #[expect(
@@ -107,6 +109,7 @@ pub(crate) fn every_scenario_gives_what_the_rfc_says(
     pass: &str,
     runtime: fn() -> tokio::runtime::Runtime,
     known: &[(&str, &str)],
+    executor_pass: Option<ExecutorPass>,
 ) {
     let root = suite().join("scenarios");
     let mut paths = Vec::new();
@@ -123,10 +126,15 @@ pub(crate) fn every_scenario_gives_what_the_rfc_says(
         }
         selected += 1;
         let scenario = load(path, &id);
-        if reported_apart(&id, &mut failing) {
-            continue;
-        }
-        let problems = problems(&scenario, runtime);
+        let observed = executor_pass.and_then(|run| run(&scenario, runtime));
+        let problems = if let Some(observed) = observed {
+            observed
+        } else {
+            if reported_apart(&id, &mut failing) {
+                continue;
+            }
+            problems(&scenario, runtime)
+        };
         let listed = known.iter().find(|(listed, _)| *listed == id);
         if !problems.is_empty() {
             failing.push(id.clone());

@@ -54,8 +54,10 @@ impl RedisTurnBackend {
                 .arg(&ids);
         }
         let mut client = self.connection().await?;
-        let rows: Vec<Vec<Option<i64>>> =
-            pipe.query_async(&mut client).await.map_err(|error| redis_error(&error))?;
+        let rows: Vec<Vec<Option<i64>>> = pipe
+            .query_async(&mut client)
+            .await
+            .map_err(|error| redis_error(&error))?;
         let mut rows = rows.into_iter();
         let scores = members
             .into_iter()

@@ -29,6 +29,7 @@ const SETUP: &[&str] = &[
     "strategies",
     "session_auditor",
     "processes",
+    "executors",
     "event_handlers",
 ];
 const PROCESS: &[&str] = &["id"];
@@ -87,6 +88,7 @@ const DELIVERY_BACKEND: &[&str] = &[
     "max_dead_letter_size",
 ];
 const CHANNEL: &[&str] = &[
+    "declared",
     "id",
     "type",
     "category",
@@ -585,6 +587,14 @@ pub(crate) fn unknown_members(scenario: &Value) -> Vec<String> {
     optional(&setup["kit"], KIT, "setup.kit", &mut found);
     identity(setup, &mut found);
     strategies(setup, &mut found);
+    for (position, executor) in items(&setup["executors"]) {
+        members(
+            executor,
+            &["id", "hosts"],
+            &format!("setup.executors[{position}]"),
+            &mut found,
+        );
+    }
     for (position, process) in items(&setup["processes"]) {
         members(
             process,

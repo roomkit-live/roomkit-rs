@@ -195,6 +195,7 @@ fn every_scenario_gives_what_the_rfc_says() {
         "one thread",
         scenarios::current_thread,
         KNOWN_FAILURES,
+        None,
     );
 }
 

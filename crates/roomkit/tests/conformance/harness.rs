@@ -162,10 +162,19 @@ impl RealtimeBackend for TextRecorder {
 
 /// Runs `scenario`; returns every mismatch with its expectations.
 pub(crate) async fn run(scenario: &Value) -> Vec<String> {
+    run_with(scenario, RunSlot::default(), std::convert::identity).await
+}
+
+/// Use the same steps and assertions with the supplied turn transport.
+/// A worker's model obtains its observation sink through the shared weak slot.
+pub(crate) async fn run_with(
+    scenario: &Value,
+    slot: RunSlot,
+    configure: impl FnOnce(RoomKitOptions<crate::Store>) -> RoomKitOptions<crate::Store>,
+) -> Vec<String> {
     // The store's file, when it has one, goes once the run is over; another
     // process opens it too.
     let setup = scenario.get("setup").cloned().unwrap_or_default();
-    let slot = RunSlot::default();
     let backend = delivery_backend(&setup["kit"]);
     let queue = backend.clone();
     let (strategies, default) = match crate::strategy_calls::strategies(&setup, &slot) {
@@ -194,7 +203,7 @@ pub(crate) async fn run(scenario: &Value) -> Vec<String> {
             options.delivery_backend = Some(Arc::new(backend));
         }
         options.orchestration = default;
-        options
+        configure(options)
     })
     .await;
     let Some(store) = shared_store else {

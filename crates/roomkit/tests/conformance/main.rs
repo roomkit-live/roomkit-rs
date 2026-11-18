@@ -46,7 +46,14 @@ mod member_calls;
 mod memory;
 mod normalize;
 mod process_tests;
+#[cfg(feature = "redis")]
+mod redis_executors;
 mod report_claims;
+
+#[cfg(feature = "redis")]
+const EXECUTOR_PASS: Option<scenarios::ExecutorPass> = Some(redis_executors::run);
+#[cfg(not(feature = "redis"))]
+const EXECUTOR_PASS: Option<scenarios::ExecutorPass> = None;
 mod room_calls;
 mod room_queries;
 mod routing_calls;
@@ -185,6 +192,7 @@ fn every_scenario_gives_what_the_rfc_says() {
         "one thread",
         scenarios::current_thread,
         KNOWN_FAILURES,
+        EXECUTOR_PASS,
     );
 }
 
@@ -200,5 +208,10 @@ fn four_workers() -> tokio::runtime::Runtime {
 /// Every scenario gives the same on four workers as on one thread.
 #[test]
 fn every_scenario_gives_the_same_on_several_workers() {
-    scenarios::every_scenario_gives_what_the_rfc_says("four workers", four_workers, KNOWN_FAILURES);
+    scenarios::every_scenario_gives_what_the_rfc_says(
+        "four workers",
+        four_workers,
+        KNOWN_FAILURES,
+        EXECUTOR_PASS,
+    );
 }

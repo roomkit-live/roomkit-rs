@@ -773,7 +773,10 @@ pub(crate) fn register_channel_with_skills(
     let Ok(id) = ChannelId::new(channel["id"].as_str().unwrap_or_default()) else {
         return Ok(Err(named("invalid_argument")));
     };
-    let registered = if channel["type"] == "host" {
+    let registered = if channel["declared"] == true {
+        run.kit()
+            .register_channel(roomkit::ChannelDeclaration::new(id))
+    } else if channel["type"] == "host" {
         run.kit()
             .register_channel(HostChannel::new(roomkit::HostChannelOptions {
                 channel_id: id,
