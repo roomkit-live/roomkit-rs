@@ -218,3 +218,12 @@ fn an_application_can_construct_the_public_models_with_the_python_defaults() {
         json!({"type":"room_publication","channel_id":"c","room_id":"r","executor_id":"worker","turn_id":"turn","frame":frame})
     );
 }
+
+#[test]
+fn the_wire_error_constructor_preserves_the_absence_of_arguments() {
+    let record = roomkit::turns::wire::ErrorRecord::new("shop:Quota", "exceeded");
+    let minimal: roomkit::turns::wire::ErrorRecord =
+        serde_json::from_value(json!({"kind":"shop:Quota","message":"exceeded"})).unwrap();
+    assert_eq!(record, minimal);
+    assert!(record.args.is_empty());
+}

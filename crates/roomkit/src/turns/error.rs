@@ -621,13 +621,8 @@ fn variant_of(error: &RoomKitError) -> (&'static str, Metadata) {
 /// argument.
 pub(crate) fn one(kind: impl Into<String>, message: String) -> WireError {
     WireError {
-        kind: kind.into(),
         args: vec![Value::String(message.clone())],
-        message,
-        attributes: Metadata::new(),
-        causes: Vec::new(),
-        traceback: None,
-        bases: Vec::new(),
+        ..WireError::new(kind, message)
     }
 }
 

@@ -99,11 +99,10 @@ impl ErrorClasses {
             return original.clone();
         }
         let mut recorded = fallback();
-        if self.0.is_empty() {
-            return recorded;
-        }
         let native_causes = std::mem::take(&mut recorded.causes);
-        let mut record = self.encode_one(error).unwrap_or(recorded);
+        let encoded = self.encode_one(error);
+        let custom = encoded.is_some();
+        let mut record = encoded.unwrap_or(recorded);
         let mut cause = error.source();
         for index in 0..super::error::CAUSES_KEPT {
             let Some(next) = cause else {
@@ -119,11 +118,13 @@ impl ErrorClasses {
                     .extend(tail.into_iter().take(super::error::CAUSES_KEPT - index - 1));
                 break;
             }
-            let row = self
+            if let Some(row) = self
                 .encode_one(next)
                 .or_else(|| native_causes.get(index).cloned())
-                .unwrap_or_else(|| ErrorRecord::new("Error", next.to_string()));
-            record.causes.push(row);
+                .or_else(|| custom.then(|| super::error::one("Error", next.to_string())))
+            {
+                record.causes.push(row);
+            }
             cause = next.source();
         }
         record

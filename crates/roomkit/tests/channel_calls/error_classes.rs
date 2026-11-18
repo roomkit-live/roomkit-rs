@@ -173,3 +173,25 @@ fn python_reads_its_relayed_subclass_and_a_native_rust_error() -> Result<(), Box
     assert!(reader.wait()?.success());
     Ok(())
 }
+
+#[test]
+fn a_foreign_error_wrapped_by_its_receiver_keeps_its_fields_and_ordered_causes() {
+    #[derive(Debug, thiserror::Error)]
+    #[error("retry failed")]
+    struct Retry(#[source] RoomKitError);
+
+    let registry = ErrorClasses::default();
+    let mut remote = ErrorRecord::new("foreign:Limit", "quota");
+    remote.args = vec![json!(9)];
+    remote.attributes.insert("limit".into(), json!(9));
+    remote.traceback = Some("remote worker".into());
+    remote.bases = vec!["foreign:Error".into()];
+    remote
+        .causes
+        .push(ErrorRecord::new("foreign:Cause", "original failure"));
+
+    let forwarded = registry.record(&Retry(registry.rebuild(&remote)));
+    let original_causes = std::mem::take(&mut remote.causes);
+    let expected: Vec<_> = std::iter::once(remote).chain(original_causes).collect();
+    assert_eq!(forwarded.causes, expected);
+}

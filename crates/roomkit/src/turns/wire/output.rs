@@ -31,9 +31,17 @@ pub struct ErrorRecord {
 }
 
 impl ErrorRecord {
-    /// Record an error whose message is its only argument.
+    /// Record a kind and message, leaving arguments, attributes, bases and causes empty.
     pub fn new(kind: impl Into<String>, message: impl Into<String>) -> Self {
-        crate::turns::error::one(kind, message.into())
+        Self {
+            kind: kind.into(),
+            message: message.into(),
+            args: Vec::new(),
+            attributes: Metadata::new(),
+            causes: Vec::new(),
+            traceback: None,
+            bases: Vec::new(),
+        }
     }
 }
 

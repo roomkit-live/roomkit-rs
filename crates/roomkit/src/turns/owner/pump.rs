@@ -636,6 +636,7 @@ mod tests {
         })
         .unwrap();
         let facts = Facts {
+            client: None,
             room_id: RoomId::new("r1").unwrap(),
             room: Arc::new(roomkit_core::model::Room::new(RoomId::new("r1").unwrap())),
             room_metadata: Arc::default(),
@@ -665,6 +666,7 @@ mod tests {
     #[test]
     fn a_turn_emits_only_its_kinds_about_its_own_room_and_channel() {
         let facts = Facts {
+            client: None,
             room_id: RoomId::new("r1").unwrap(),
             room: Arc::new(roomkit_core::model::Room::new(RoomId::new("r1").unwrap())),
             room_metadata: Arc::default(),
