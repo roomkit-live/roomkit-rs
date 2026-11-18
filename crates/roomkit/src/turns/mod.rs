@@ -36,6 +36,8 @@ pub use client::{
 mod served_executor;
 pub use served_executor::ServedExecutor;
 pub(crate) use served_executor::owner_executor;
+mod sync_pipeline;
+pub use sync_pipeline::SyncPipelineResult;
 mod public_options;
 pub use public_options::{HookOptions, RoomHookOptions, TakesOptions};
 #[cfg(feature = "redis")]
