@@ -15,8 +15,8 @@ fn reads_refresh_the_lru_and_empty_plans_are_retained() {
     assert_eq!(planner.plan_for(&"new".parse().unwrap()), None);
 }
 
-#[test]
-fn validation_is_atomic_and_notes_quote_titles_with_known_status_icons() {
+#[tokio::test]
+async fn validation_is_atomic_and_notes_quote_titles_with_known_status_icons() {
     let planner = TaskPlanner::default();
     let room = "r".parse().unwrap();
     let original = tasks::validated(Some(&json!([
@@ -33,7 +33,7 @@ fn validation_is_atomic_and_notes_quote_titles_with_known_status_icons() {
         serde_json::from_value(json!({"tasks":[{"title":"Valid", "status":"pending"}, null]}))
             .unwrap();
     assert_eq!(
-        planner.handle(&invalid, &context),
+        planner.handle(&invalid, &context).await,
         ToolResult::Text("{\"error\": \"Invalid plan: task 1 must be an object\"}".into())
     );
     assert_eq!(planner.plan_for(&room), Some(original));

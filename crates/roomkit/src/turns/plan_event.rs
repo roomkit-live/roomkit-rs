@@ -1,10 +1,10 @@
 //! The observed plan payload, separate from the private planner's validation.
 
-use roomkit::model::Timestamp;
-use roomkit::{HookTrigger, TurnPayload};
+use crate::model::Timestamp;
+use crate::{HookTrigger, TurnPayload};
 use roomkit_core::ops::{Environment, SystemEnvironment};
 
-use crate::PlanTaskHandle;
+use super::PlanTaskHandle;
 
 /// A room's newly stored plan (RFC §9.2), observed by `ON_PLAN_UPDATED` on
 /// the turn executor. Python's `PlanUpdatedEvent`; the hook also runs when
@@ -25,7 +25,7 @@ pub struct PlanUpdatedEvent {
 
 impl PlanUpdatedEvent {
     /// An empty plan for `channel_id` in `room_id`, now, without validating ids.
-    /// Other values can be supplied by struct update, as for [`crate::ThinkingEvent`].
+    /// Other values can be supplied by struct update.
     pub fn new(room_id: String, channel_id: String) -> Self {
         Self {
             room_id,

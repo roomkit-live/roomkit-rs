@@ -38,6 +38,13 @@ pub use served_executor::ServedExecutor;
 pub(crate) use served_executor::owner_executor;
 mod sync_pipeline;
 pub use sync_pipeline::SyncPipelineResult;
+mod plan_event;
+mod plan_task;
+// The public SDK names for these observer types are re-exported by roomkit-ai.
+#[doc(hidden)]
+pub use plan_event::PlanUpdatedEvent;
+#[doc(hidden)]
+pub use plan_task::PlanTaskHandle;
 mod public_options;
 pub use public_options::{HookOptions, RoomHookOptions, TakesOptions};
 #[cfg(feature = "redis")]

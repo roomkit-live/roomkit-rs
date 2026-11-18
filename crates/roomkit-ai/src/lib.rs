@@ -84,8 +84,6 @@ mod loop_events;
 pub mod memory;
 mod mock;
 pub mod orchestration;
-mod plan_event;
-mod plan_task;
 mod planning;
 mod provider;
 mod tool_name_rule;
@@ -138,8 +136,6 @@ pub use self::loop_events::{
     response_transcript,
 };
 pub use self::mock::{MockAiProvider, MockAiProviderOptions};
-pub use self::plan_event::PlanUpdatedEvent;
-pub use self::plan_task::PlanTaskHandle;
 pub use self::provider::{
     API_KEY_METADATA_KEY, AiContentPart, AiContext, AiImagePart, AiMessage, AiMessageContent,
     AiProvider, AiResponse, AiRole, AiTextPart, AiThinkingPart, AiToolCall, AiToolCallPart,
@@ -209,6 +205,8 @@ pub use self::tools::{
 };
 pub use self::turn_config::AiChannelTurnConfig;
 pub use self::turn_notes::{add_turn_note, split_turn_notes};
+#[doc(inline)]
+pub use roomkit::turns::{PlanTaskHandle, PlanUpdatedEvent};
 pub use roomkit_core::rules::transcript::TURN_NOTES_HEADER;
 #[doc(inline)]
 pub use sandbox::{SandboxExecutor, SandboxResult};

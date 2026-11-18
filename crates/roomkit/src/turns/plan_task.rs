@@ -2,9 +2,9 @@
 
 use std::sync::{Arc, PoisonError, RwLock};
 
-use roomkit::model::Metadata;
+use crate::model::Metadata;
 
-/// An open task object in [`crate::PlanUpdatedEvent::tasks`]. Clones share
+/// An open task object in [`super::PlanUpdatedEvent::tasks`]. Clones share
 /// the object, including the one the planner reads on later turns. The
 /// event's list is independent: changing that list does not change the plan.
 ///

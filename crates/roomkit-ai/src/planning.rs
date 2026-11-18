@@ -66,14 +66,14 @@ impl TaskPlanner {
         vec![lines.join("\n")]
     }
 
-    fn handle(&self, arguments: &Metadata, context: &ToolContext) -> ToolResult {
+    async fn handle(&self, arguments: &Metadata, context: &ToolContext) -> ToolResult {
         let tasks = match tasks::validated(arguments.get("tasks")) {
             Ok(tasks) => tasks,
             Err(error) => return ToolResult::Text(crate::texts::error_envelope(&error)),
         };
         let tasks: Vec<_> = tasks.into_iter().map(PlanTaskHandle::new).collect();
         self.store(&context.room_id, tasks.clone());
-        notify(context, &tasks);
+        notify(context, &tasks).await;
         ToolResult::Text(tasks::summary(
             &tasks.iter().map(PlanTaskHandle::get).collect::<Vec<_>>(),
         ))
@@ -87,7 +87,7 @@ impl TaskPlanner {
 /// Publishing hands the event to the turn's proxy, without waiting for the
 /// physical backend. The hook sees stored state, even with no backend; its
 /// observer work is tracked by the existing turn machinery (RFC §10.6.6).
-fn notify(context: &ToolContext, tasks: &[PlanTaskHandle]) {
+async fn notify(context: &ToolContext, tasks: &[PlanTaskHandle]) {
     let Some(turn) = context
         .callbacks
         .as_ref()
@@ -114,7 +114,7 @@ fn notify(context: &ToolContext, tasks: &[PlanTaskHandle]) {
         tasks: tasks.to_vec(),
         ..PlanUpdatedEvent::new(context.room_id.to_string(), context.channel_id.to_string())
     };
-    turn.observe(&event, || {});
+    turn.observe_after_context(&event).await;
 }
 
 impl DynToolset for TaskPlanner {
@@ -123,6 +123,6 @@ impl DynToolset for TaskPlanner {
         call: ToolCall,
         context: ToolContext,
     ) -> BoxFuture<'_, Result<ToolResult, ToolError>> {
-        Box::pin(async move { Ok(self.handle(&call.arguments, &context)) })
+        Box::pin(async move { Ok(self.handle(&call.arguments, &context).await) })
     }
 }

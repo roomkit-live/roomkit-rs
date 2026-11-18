@@ -1,6 +1,7 @@
 //! Public application wiring, including the independent worker's last room context.
 mod application_channel;
 mod ordinary_tools;
+mod plan_updated;
 mod public_ports;
 mod text_callbacks;
 mod text_loaders;
@@ -89,6 +90,7 @@ async fn wiring_retains_the_last_admitted_room_until_its_last_channel_detaches()
 
 struct Env {
     realtime: Option<Arc<dyn roomkit::realtime::RealtimeBackend>>,
+    context_gate: Option<Arc<tokio::sync::Notify>>,
     rows: Vec<RoomEvent>,
     tasks: Vec<roomkit::model::Metadata>,
     row_reads: Mutex<Vec<Option<u64>>>,
@@ -103,6 +105,7 @@ impl Env {
         Self {
             context,
             realtime: None,
+            context_gate: None,
             events: Arc::default(),
             reads: std::sync::atomic::AtomicUsize::new(0),
             fields: Arc::default(),
@@ -143,7 +146,12 @@ impl WiringEnv for Env {
         _: &'a RoomId,
         _: Option<&'a RoomContext>,
     ) -> TurnFuture<'a, Result<RoomContext, RoomKitError>> {
-        Box::pin(async { Ok(self.context.clone()) })
+        Box::pin(async {
+            if let Some(gate) = &self.context_gate {
+                gate.notified().await;
+            }
+            Ok(self.context.clone())
+        })
     }
     fn tool_rows<'a>(
         &'a self,
