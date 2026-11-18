@@ -1868,15 +1868,11 @@ fn redis_turn_transport_option_defaults() {
 
 fn assert_no_app_error(registry: &roomkit::turns::ErrorClasses) {
     let record = roomkit::turns::wire::ErrorRecord::new("example:AppError", "failed");
-    let roomkit::RoomKitError::RemoteTurn {
-        detail: Some(detail),
-        ..
-    } = registry.rebuild(&record)
-    else {
-        panic!("unregistered application error should keep its wire record");
-    };
-    assert!(detail.native_error().is_none());
-    assert_eq!(detail.record(), &record);
+    assert!(matches!(
+        registry.rebuild(&record),
+        roomkit::RoomKitError::RemoteTurn { detail: Some(detail), .. }
+            if detail.native_error().is_none() && detail.record() == &record
+    ));
 }
 
 #[test]
