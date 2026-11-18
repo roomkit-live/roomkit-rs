@@ -18,6 +18,7 @@ mod routes;
 #[cfg(test)]
 mod shutdown_tests;
 mod stream;
+mod transport;
 use std::fmt;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;

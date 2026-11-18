@@ -1,5 +1,6 @@
 //! Deliver a declaration-only channel's turn, and forward its numbered messages.
 mod local;
+mod submitted;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -29,7 +30,9 @@ impl RedisTurnBackend {
         controls: PipeReceiver<Control>,
         mut handover: Handover,
     ) {
-        let result = self.hand_over(carried, &memory, &mut handover).await;
+        let result = self
+            .hand_over(carried, &memory, |handed| handover.handed = handed)
+            .await;
         match result {
             Ok(Delivered::Here(worker, request)) => {
                 self.submit_here(worker, *request, &memory, controls, move || {
@@ -52,7 +55,7 @@ impl RedisTurnBackend {
         &self,
         carried: CarriedRequest,
         memory: &Arc<MemoryTurn>,
-        handover: &mut Handover,
+        mut mark: impl FnMut(bool) + Send,
     ) -> Result<Delivered, RoomKitError> {
         self.attend().await?;
         let rest: RequestRest =
@@ -84,7 +87,10 @@ impl RedisTurnBackend {
                 .get_or_insert_with(|| carried.to_wire())
                 .as_ref()
                 .map_err(|why| invalid(why.clone()))?;
-            if let Some(delivered) = self.hand_elsewhere(&target, memory, handover, body).await? {
+            if let Some(delivered) = self
+                .hand_elsewhere(&target, memory, &mut mark, body)
+                .await?
+            {
                 return Ok(delivered);
             }
             refused.insert(target.member());
@@ -95,7 +101,7 @@ impl RedisTurnBackend {
         &self,
         target: &Target,
         memory: &Arc<MemoryTurn>,
-        handover: &mut Handover,
+        mark: &mut (impl FnMut(bool) + Send),
         body: &str,
     ) -> Result<Option<Delivered>, RoomKitError> {
         let route = self
@@ -107,7 +113,8 @@ impl RedisTurnBackend {
                     invalid("turn already submitted".into())
                 }
             })?;
-        handover.handed = true;
+        mark(true);
+        let mut pending = PendingHandover::new(self, &target.node, &memory.turn_id);
         let answer = self
             .ask(
                 &target.node,
@@ -117,13 +124,14 @@ impl RedisTurnBackend {
                 self.timeouts().accept,
             )
             .await;
+        pending.armed = false;
         match answer.as_deref() {
             Ok("taken") => {
                 self.watch_process(target, memory);
                 Ok(Some(Delivered::Elsewhere(target.node.clone(), route)))
             }
             Ok("refused") => {
-                handover.handed = false;
+                mark(false);
                 Ok(None)
             }
             _ => {
@@ -179,6 +187,42 @@ impl RedisTurnBackend {
     }
 }
 
+/// Dropping a pending submission also lets the remote worker go if it received the request.
+struct PendingHandover<'a> {
+    backend: &'a RedisTurnBackend,
+    peer: &'a str,
+    turn: &'a str,
+    armed: bool,
+}
+
+impl<'a> PendingHandover<'a> {
+    fn new(backend: &'a RedisTurnBackend, peer: &'a str, turn: &'a str) -> Self {
+        Self {
+            backend,
+            peer,
+            turn,
+            armed: true,
+        }
+    }
+}
+
+impl Drop for PendingHandover<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            let release = Message::new(
+                "released",
+                self.backend.node_id(),
+                self.turn.to_owned(),
+                self.turn,
+                "",
+            );
+            if let Err(error) = self.backend.post_unconfirmed(self.peer, &release) {
+                tracing::debug!(%error, "could not release a cancelled Redis handover");
+            }
+        }
+    }
+}
+
 fn refuse(memory: &MemoryTurn, error: &RoomKitError) {
     drop(memory.frames.put(&Frame::Error {
         error: crate::turns::error::kit_error(error),
@@ -205,11 +249,13 @@ impl RedisTurnBackend {
     ) {
         let turns = Arc::downgrade(turns);
         let kit = Arc::clone(kit);
-        *crate::turns::lock(&self.0.owner) = Some(Arc::new(move |message| {
-            let turns = turns.upgrade();
-            let kit = Arc::clone(&kit);
-            Box::pin(async move { turns?.receive_owner_message(kit, message).await })
-        }));
+        crate::turns::lock(&self.0.owner).get_or_insert_with(|| {
+            Arc::new(move |message| {
+                let turns = turns.upgrade();
+                let kit = Arc::clone(&kit);
+                Box::pin(async move { turns?.receive_owner_message(kit, message).await })
+            })
+        });
     }
 
     pub(super) fn owner_message(&self, incoming: &Message) -> Result<(), RoomKitError> {

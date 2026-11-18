@@ -17,6 +17,8 @@ mod executor_link;
 mod host;
 mod named_hooks;
 mod public_wire;
+#[cfg(feature = "redis")]
+mod redis_transport;
 mod result_tool;
 mod steering;
 mod steering_async;

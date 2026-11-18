@@ -61,7 +61,7 @@ impl Channel for Agent {
     }
 }
 
-fn worker() -> (TurnExecutor, mpsc::UnboundedReceiver<TurnHost>) {
+pub(crate) fn worker() -> (TurnExecutor, mpsc::UnboundedReceiver<TurnHost>) {
     let (hosts, receiver) = mpsc::unbounded_channel();
     let worker = TurnExecutor::new(
         move |id| {
@@ -71,6 +71,7 @@ fn worker() -> (TurnExecutor, mpsc::UnboundedReceiver<TurnHost>) {
             })))
         },
         TurnExecutorOptions {
+            hosts: Some(["ai".into()].into()),
             executor_id: Some("agent-node".into()),
             ..Default::default()
         },

@@ -108,3 +108,41 @@ async fn an_inbound_frame_is_read_while_an_outgoing_write_is_backed_up() {
     backend.close().await.unwrap();
     assert!(received, "blocked writes must not hold incoming frames");
 }
+
+#[tokio::test]
+#[ignore = "requires REDIS_URL"]
+async fn cancelling_a_redis_handover_after_delivery_releases_the_waiting_worker() {
+    let url = std::env::var("REDIS_URL").unwrap();
+    let backend = RedisTurnBackend::new(
+        Some(&url),
+        RedisTurnBackendOptions {
+            key_prefix: format!("test:roomkit:cancel-handover:{}", Uuid::new_v4()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let id = Arc::<str>::from("pending");
+    let (frames, _frames) = pipe(Arc::clone(&id), Carried::Frame, Observers::default());
+    let (controls, _controls) = pipe(Arc::clone(&id), Carried::Control, Observers::default());
+    let memory = Arc::new(MemoryTurn::new(id, frames, controls, backend.timeouts()));
+    let target = Target {
+        node: "worker".into(),
+        executor_id: "ai".into(),
+    };
+    let key = backend.key("inbox:worker");
+    let mut conn = backend.connection().await.unwrap();
+    let mut hand_over = |_| {};
+    let mut waiting = Box::pin(backend.hand_elsewhere(&target, &memory, &mut hand_over, "{}"));
+    tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::select! {
+            _ = &mut waiting => panic!("the worker never answered"),
+            () = async { while conn.xlen::<_,u64>(&key).await.unwrap() == 0 { tokio::task::yield_now().await; } } => {}
+        }
+        drop(waiting);
+        while conn.xlen::<_,u64>(&key).await.unwrap() < 2 { tokio::task::yield_now().await; }
+        let stream: redis::streams::StreamRangeReply = conn.xrange_all(&key).await.unwrap();
+        let kinds: Vec<String> = stream.ids.iter().filter_map(|item| item.get("kind")).collect();
+        assert_eq!(kinds, ["request","released"]);
+    }).await.unwrap();
+    backend.close().await.unwrap();
+}
