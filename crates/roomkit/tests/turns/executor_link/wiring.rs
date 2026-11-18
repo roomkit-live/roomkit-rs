@@ -1,5 +1,6 @@
 //! Public application wiring, including the independent worker's last room context.
 mod application_channel;
+mod filtered_callbacks;
 mod ordinary_tools;
 mod plan_updated;
 mod public_ports;
@@ -95,6 +96,7 @@ struct Env {
     tasks: Vec<roomkit::model::Metadata>,
     row_reads: Mutex<Vec<Option<u64>>>,
     context: RoomContext,
+    unreadable: bool,
     events: Arc<Mutex<Vec<String>>>,
     reads: std::sync::atomic::AtomicUsize,
     fields: Arc<Mutex<Vec<EmitOptions>>>,
@@ -104,6 +106,7 @@ impl Env {
     fn new(context: RoomContext) -> Self {
         Self {
             context,
+            unreadable: false,
             realtime: None,
             context_gate: None,
             events: Arc::default(),
@@ -149,6 +152,9 @@ impl WiringEnv for Env {
         Box::pin(async {
             if let Some(gate) = &self.context_gate {
                 gate.notified().await;
+            }
+            if self.unreadable {
+                return Err(RoomKitError::Runtime("unavailable".into()));
             }
             Ok(self.context.clone())
         })

@@ -46,7 +46,7 @@ impl TurnWiringExt for TurnWiring {
             let hooks = wiring.channel_hooks(&room, &channel, &ChannelType::AI);
             let channel = channel.clone();
             Box::pin(async move {
-                if hooks.has_turn_hooks::<ThinkingEvent>() {
+                if hooks.trigger_registered::<ThinkingEvent>() {
                     let mut event = ThinkingEvent::new(room, channel, thinking);
                     event.round_index = round;
                     hooks.observe(&event, || {});
@@ -114,7 +114,7 @@ impl TurnWiringExt for TurnWiring {
                             outlet.emit_later("ai_response", data);
                         })
                         .await;
-                } else {
+                } else if hooks.can_report_without_matches::<AiResponseEvent>().await {
                     wiring
                         .emit(
                             "ai_response",

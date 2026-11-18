@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use roomkit_core::model::{ChannelId, ChannelType, RoomId};
+use roomkit_core::model::{ChannelId, RoomId};
 use roomkit_core::rules::hook_registry::{HookSpec, HookSubject, HookTrigger};
 
 use super::{Inner, RoomKit, read};
@@ -100,22 +100,28 @@ impl<S: ConversationStore> Inner<S> {
     pub(crate) fn input_hooks(
         &self,
         (room_id, channel_id): (&RoomId, &ChannelId),
-        channel_type: &ChannelType,
+        event: &PendingInputEvent,
     ) -> Vec<(HookSpec, Arc<dyn HookHandler<PendingInputEvent>>)> {
         let trigger = HookTrigger::OnUserInputRequired;
         let config = Arc::clone(&read(&self.config));
         let handlers = read(&self.hooks);
         let registry = super::named_hooks::registry_for_turn(&config.hooks, room_id);
-        let subject = HookSubject::of_channel(channel_id, channel_type).in_room(room_id);
+        let subject = HookSubject::of_channel(channel_id, &event.channel_type).in_room(room_id);
         registry
             .chain(trigger, subject)
             .into_iter()
             .chain(registry.observers(trigger, subject))
             .filter_map(|id| {
+                let spec = registry.get(id)?;
+                // The bound channel routes the notification. Only the channel
+                // named by the request can match an explicit hook filter.
+                if event.channel_id != channel_id.as_str() && spec.filter.channel_ids.is_some() {
+                    return None;
+                }
                 let Kept::Input(handler) = handlers.get(&id)? else {
                     return None;
                 };
-                Some((registry.get(id)?.clone(), Arc::clone(handler)))
+                Some((spec.clone(), Arc::clone(handler)))
             })
             .collect()
     }

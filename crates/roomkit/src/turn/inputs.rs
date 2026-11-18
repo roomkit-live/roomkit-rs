@@ -59,9 +59,7 @@ impl TurnHost {
         let room = RoomId::new(&event.room_id).unwrap_or_else(|_| self.shared.room_id.clone());
         let channel =
             ChannelId::new(&event.channel_id).unwrap_or_else(|_| self.shared.channel_id.clone());
-        self.shared
-            .kit
-            .input_hooks((&room, &channel), &event.channel_type)
+        self.shared.kit.input_hooks((&room, &channel), event)
     }
 }
 

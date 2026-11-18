@@ -48,8 +48,12 @@ impl TurnWiring {
     ) -> Option<InputNotification> {
         let room = RoomId::new(&event.room_id).ok()?;
         let channel = ChannelId::new(&event.channel_id).unwrap_or_else(|_| registered.clone());
-        let hooks = self.kit.input_hooks((&room, &channel), &event.channel_type);
-        let hooks = if hooks.is_empty() {
+        let hooks = self.kit.input_hooks((&room, &channel), event);
+        let hooks = if hooks.is_empty()
+            && !self
+                .kit
+                .has_registered_hook(HookTrigger::OnUserInputRequired)
+        {
             None
         } else {
             Some((

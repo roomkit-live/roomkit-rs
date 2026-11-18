@@ -139,7 +139,7 @@ impl crate::turns::ChannelTurnHooks {
         effects: Option<&mut SyncPipelineResult<P>>,
     ) -> Result<TurnChain<P>, P> {
         let hooks = self.hooks::<P>();
-        if hooks.is_empty() {
+        if hooks.is_empty() && !self.trigger_registered::<P>() {
             return Ok(TurnChain::unchanged(payload));
         }
         let Some(context) = self.context(P::TRIGGER).await else {
@@ -180,7 +180,7 @@ impl crate::turns::ChannelTurnHooks {
         Option<(TurnHooks<P>, crate::model::RoomContext)>,
     ) {
         let hooks = self.hooks::<P>();
-        if hooks.is_empty() {
+        if hooks.is_empty() && !self.trigger_registered::<P>() {
             return (TurnChain::unchanged(payload), None);
         }
         let Some(context) = self.context(P::TRIGGER).await else {
@@ -196,6 +196,18 @@ impl crate::turns::ChannelTurnHooks {
         };
         let decision = self.chain(&hooks, payload, &context, None).await;
         (decision, Some((hooks, context)))
+    }
+
+    /// The executor reads the room when any hook is registered for the trigger,
+    /// including one a subsequent channel or room filter will exclude.
+    pub fn trigger_registered<P: TurnPayload>(&self) -> bool {
+        self.parts().0.has_registered_hook(P::TRIGGER)
+    }
+
+    /// An immediate framework report still requires a readable room when a hook
+    /// was registered on this trigger for another channel.
+    pub async fn can_report_without_matches<P: TurnPayload>(&self) -> bool {
+        !self.trigger_registered::<P>() || self.context(P::TRIGGER).await.is_some()
     }
 
     /// Whether this executor has a matching hook for the payload.
@@ -215,7 +227,7 @@ impl crate::turns::ChannelTurnHooks {
         then: impl FnOnce() + Send + 'static,
     ) {
         let hooks = self.hooks::<P>();
-        if hooks.is_empty() {
+        if hooks.is_empty() && !self.trigger_registered::<P>() {
             then();
         } else if let Some(context) = self.context(P::TRIGGER).await {
             self.observe_with(&hooks, payload, &context, Some(Box::new(then)));
@@ -225,7 +237,7 @@ impl crate::turns::ChannelTurnHooks {
     /// Schedule every observer, then the completion action once all finish.
     pub fn observe<P: TurnPayload>(&self, payload: &P, then: impl FnOnce() + Send + 'static) {
         let hooks = self.hooks::<P>();
-        if hooks.is_empty() {
+        if hooks.is_empty() && !self.trigger_registered::<P>() {
             then();
             return;
         }

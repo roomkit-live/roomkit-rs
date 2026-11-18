@@ -1501,6 +1501,9 @@ pub(crate) trait TurnKit: Send + Sync {
         channel_type: &ChannelType,
     ) -> Vec<(HookSpec, Arc<dyn HookHandler<ToolCallEvent>>)>;
 
+    /// Whether the executor has registered this trigger before event filtering.
+    fn has_registered_hook(&self, trigger: HookTrigger) -> bool;
+
     /// The `ON_USER_INPUT_REQUIRED` hooks that fire for the requests of
     /// the agent `channel_id` of `channel_type` in the room `room_id`, the
     /// kit's and the room's: its SYNC chain in chain order, then its
@@ -1508,7 +1511,7 @@ pub(crate) trait TurnKit: Send + Sync {
     fn input_hooks(
         &self,
         agent: (&RoomId, &ChannelId),
-        channel_type: &ChannelType,
+        event: &PendingInputEvent,
     ) -> Vec<(HookSpec, Arc<dyn HookHandler<PendingInputEvent>>)>;
 
     /// The hooks of `trigger`, an AI channel's loop trigger, that fire for
@@ -1798,13 +1801,18 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
             .unwrap_or_default()
     }
 
+    fn has_registered_hook(&self, trigger: HookTrigger) -> bool {
+        self.upgrade()
+            .is_some_and(|inner| inner.config().hooks.has_hooks(Some(trigger)))
+    }
+
     fn input_hooks(
         &self,
         agent: (&RoomId, &ChannelId),
-        channel_type: &ChannelType,
+        event: &PendingInputEvent,
     ) -> Vec<(HookSpec, Arc<dyn HookHandler<PendingInputEvent>>)> {
         self.upgrade()
-            .map(|inner| inner.input_hooks(agent, channel_type))
+            .map(|inner| inner.input_hooks(agent, event))
             .unwrap_or_default()
     }
 

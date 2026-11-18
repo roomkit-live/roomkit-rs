@@ -29,13 +29,15 @@ async fn application_reads_the_generation_verdict_and_the_output_names_its_bound
     event.room_id = Some(req.context.room.id.clone());
     let allowed = callback(event.clone()).await.unwrap();
     assert!(allowed.allowed && allowed.event.is_some());
+    let injection = roomkit::model::InjectedEvent::new(req.event.clone());
     worker
         .hook(
             HookTrigger::BeforeAiGeneration,
-            |_: AiGenerationEvent, _: RoomContext| async {
+            move |_: AiGenerationEvent, _: RoomContext| {
                 let mut rejected = HookResult::block("needs review", BlockOptions::default());
+                rejected.injected_events.push(injection.clone());
                 rejected.metadata.insert("tag".into(), "held".into());
-                rejected
+                std::future::ready(rejected)
             },
             HookOptions {
                 name: "policy".into(),
@@ -48,6 +50,7 @@ async fn application_reads_the_generation_verdict_and_the_output_names_its_bound
     assert_eq!(denied.reason.as_deref(), Some("needs review"));
     assert_eq!(denied.blocked_by.as_deref(), Some("policy"));
     assert_eq!(denied.metadata["tag"], "held");
+    assert_eq!(denied.injected_events, []);
     assert_eq!(
         env.fields
             .lock()
