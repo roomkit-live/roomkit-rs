@@ -515,8 +515,8 @@ class Comparison:
     def _params(self, rust_path: str, method: dict, python_path: str, member_spec: list, owner: tuple, renames=None) -> None:
         """A method's parameters against Python's: a positional one for each
         required, an option for each defaulted."""
-        rust = self._rust_params(rust_path, method, owner[0])
         renames = renames or {}
+        rust = self._rust_params(rust_path, method, owner[0], renames)
         taken: set[str] = set()
         for param in python_signature(member_spec):
             if self._union_tag(owner[0], param):
@@ -554,7 +554,7 @@ class Comparison:
         linked = self.surface.items.get(links.get(name, ""))
         return linked or self.surface.named("struct", name, near)
 
-    def _rust_params(self, rust_path: str, method: dict, item: str) -> list[_RustParam]:
+    def _rust_params(self, rust_path: str, method: dict, item: str, renames: dict | None = None) -> list[_RustParam]:
         """A method's parameters, an options struct's fields standing for
         the defaulted ones: `<Method>Options`, or `<Type>Options` for `new`."""
         method_options = f"{_camel(method['name'])}Options"
@@ -566,7 +566,8 @@ class Comparison:
         for param in method["params"]:
             base = _base_type(param["type"])
             options = self._options_struct(base, links, rust_path) if base in wanted else None
-            if options is None and param["name"] == "options" and base.endswith(method_options):
+            if (options is None and param["name"] == "options" and base.endswith(method_options)
+                    and "options" not in (renames or {})):
                 # A scoped name such as TurnRunOptions still carries run's keywords.
                 # Require the linked, defaultable record; its fields are checked below.
                 linked = self.surface.items.get(links.get(base, ""))

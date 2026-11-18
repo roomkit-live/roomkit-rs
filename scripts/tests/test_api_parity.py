@@ -172,6 +172,19 @@ class Members(unittest.TestCase):
         self.assertIn(("python", "roomkit.TurnClient.run(strategy_turn)"), found(run([client, wrong_field], python)))
         self.assertIn(("rust", options["path"]), found(run([client, {**options, "impls": []}], python)))
 
+    def test_an_explicit_mapping_can_keep_a_linked_options_record_as_one_argument(self) -> None:
+        service = struct("roomkit::Service", methods=["pub fn span(&self, options: StartSpanOptions)"])
+        options = struct("roomkit::StartSpanOptions", fields=[("parent_id", "Option<String>")], impls=["Default"])
+        service["methods"][0]["links"] = {"StartSpanOptions": options["path"]}
+        spec = ["def", "**kwargs"]
+        entry = {
+            "rust": "roomkit::Service::span", "python": "roomkit.Service.span",
+            "params": {"options": "kwargs"}, "py_spec": parity.spec_hash(spec),
+            "reason": "The options argument carries the keyword arguments.",
+        }
+        report = run([service, options], {"roomkit.Service": {"span": spec}}, entries={"map": [entry]})
+        self.assertEqual(found(report), [("rust", options["path"])])
+
     def test_an_options_struct_is_the_one_its_signature_links_to(self) -> None:
         # Two `CommitEventOptions`, the kit's and the store's: the link
         # rustdoc writes on the parameter's type tells them apart.
