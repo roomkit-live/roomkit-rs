@@ -216,20 +216,19 @@ impl RedisTurnBackend {
         rx.await.map_err(|_| closed())
     }
 
-    pub(super) async fn answer(&self, msg: &Message, body: String) -> Result<(), RoomKitError> {
+    pub(super) fn answer(&self, msg: &Message, body: String) -> Result<(), RoomKitError> {
         let body = crate::turns::wire::peer_error_payload(body).map_err(RoomKitError::Value)?;
         let key = (msg.sender.clone(), msg.reference.clone());
         if let Some(slot) = lock(&self.0.routes).handled.get_mut(&key) {
             *slot = Some(body.clone());
         }
-        self.post(
+        self.post_unconfirmed(
             &msg.sender,
             &Message::new("answer", self.node_id(), body, "", &msg.reference),
         )
-        .await
     }
 
-    async fn route(&self, msg: Message) -> Result<(), RoomKitError> {
+    fn route(&self, msg: Message) -> Result<(), RoomKitError> {
         match msg.kind.as_str() {
             "answer" => {
                 let mut routes = lock(&self.0.routes);
@@ -254,8 +253,8 @@ impl RedisTurnBackend {
             "request" | "channel" | "owner" | "work" => {
                 let first = lock(&self.0.routes).first(&msg);
                 match first {
-                    Ok(()) => self.handle(&msg).await?,
-                    Err(Some(previous)) => self.answer(&msg, previous).await?,
+                    Ok(()) => self.handle(&msg)?,
+                    Err(Some(previous)) => self.answer(&msg, previous)?,
                     Err(None) => {}
                 }
             }
@@ -305,7 +304,7 @@ async fn receive(node: Weak<Node>, mut stop: watch::Receiver<bool>) {
                 let mut ids = Vec::with_capacity(entries.len());
                 for entry in entries {
                     if let Some(msg) = Message::read(&entry) {
-                        if let Err(error) = backend.route(msg).await {
+                        if let Err(error) = backend.route(msg) {
                             tracing::warn!(%error, "Turn inbox routing failed");
                         }
                     } else {

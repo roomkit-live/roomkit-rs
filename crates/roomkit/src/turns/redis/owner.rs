@@ -170,7 +170,7 @@ impl RedisTurnBackend {
         }));
     }
 
-    pub(super) async fn owner_message(&self, incoming: &Message) -> Result<(), RoomKitError> {
+    pub(super) fn owner_message(&self, incoming: &Message) -> Result<(), RoomKitError> {
         use crate::turns::wire::{OwnerMessage, OwnerMessageEnvelope, RoomCallResult};
         let parsed: OwnerMessageEnvelope =
             serde_json::from_str(&incoming.body).map_err(|e| invalid(e.to_string()))?;
@@ -196,13 +196,13 @@ impl RedisTurnBackend {
             if message.kind == "owner"
                 && let Some(result) = result
                 && let Ok(body) = serde_json::to_string(&result)
-                && let Err(error) = backend.answer(&message, body).await
+                && let Err(error) = backend.answer(&message, body)
             {
                 tracing::warn!(%error, "Sending the room call result failed");
             }
         });
         if !admitted {
-            return self.refuse_closing(incoming).await;
+            return self.refuse_closing(incoming);
         }
         Ok(())
     }

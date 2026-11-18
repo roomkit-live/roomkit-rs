@@ -7,22 +7,22 @@ use crate::turns::wire::ChannelControlEnvelope;
 use crate::turns::{CarriedRequest, WorkerTurn, lock};
 
 impl RedisTurnBackend {
-    pub(super) async fn handle(&self, msg: &Message) -> Result<(), RoomKitError> {
+    pub(super) fn handle(&self, msg: &Message) -> Result<(), RoomKitError> {
         if *self.0.draining.borrow() {
-            return self.refuse_closing(msg).await;
+            return self.refuse_closing(msg);
         }
         let executor = lock(&self.0.serving).workers.get(&msg.target).cloned();
         match msg.kind.as_str() {
             "request" | "channel" => match executor.filter(|w| !w.closed()) {
-                Some(worker) if msg.kind == "request" => self.accept_request(msg, worker).await,
-                Some(worker) => self.accept_channel(msg, worker).await,
-                None => self.answer(msg, "refused".into()).await,
+                Some(worker) if msg.kind == "request" => self.accept_request(msg, worker),
+                Some(worker) => self.accept_channel(msg, worker),
+                None => self.answer(msg, "refused".into()),
             },
-            _ => self.owner_message(msg).await,
+            _ => self.owner_message(msg),
         }
     }
 
-    async fn accept_request(
+    fn accept_request(
         &self,
         msg: &Message,
         worker: crate::TurnExecutor,
@@ -32,14 +32,14 @@ impl RedisTurnBackend {
             .map_err(invalid)?
             .turn_id;
         let Some(route) = self.route_turn(&id, &msg.sender, true) else {
-            return self.answer(msg, "refused".into()).await;
+            return self.answer(msg, "refused".into());
         };
         let backend = self.clone();
         let message = msg.clone();
         let admitted = self.dispatch(async move {
             let turn = worker.take_from(carried, Some(backend.remember_owner(&message.sender)));
             let reply = if turn.is_ok() { "taken" } else { "refused" };
-            if let Err(error) = backend.answer(&message, reply.into()).await {
+            if let Err(error) = backend.answer(&message, reply.into()) {
                 tracing::warn!(%error, "Sending the turn handover result failed");
             } else if let Ok(turn) = turn {
                 backend
@@ -48,12 +48,12 @@ impl RedisTurnBackend {
             }
         });
         if !admitted {
-            return self.answer(msg, "refused".into()).await;
+            return self.answer(msg, "refused".into());
         }
         Ok(())
     }
 
-    async fn accept_channel(
+    fn accept_channel(
         &self,
         msg: &Message,
         worker: crate::TurnExecutor,
@@ -71,17 +71,17 @@ impl RedisTurnBackend {
                     "executor_id":worker.executor_id(),"error":crate::turns::record_of(&error)
                 }).to_string()),
             };
-            if let Ok(body) = body && let Err(error) = backend.answer(&message, body).await {
+            if let Ok(body) = body && let Err(error) = backend.answer(&message, body) {
                 tracing::warn!(%error, "Sending the channel control result failed");
             }
         });
         if !admitted {
-            return self.answer(msg, "refused".into()).await;
+            return self.answer(msg, "refused".into());
         }
         Ok(())
     }
 
-    pub(super) async fn refuse_closing(&self, msg: &Message) -> Result<(), RoomKitError> {
+    pub(super) fn refuse_closing(&self, msg: &Message) -> Result<(), RoomKitError> {
         let body = match msg.kind.as_str() {
             "request" | "channel" => "refused".into(),
             "owner" => {
@@ -95,7 +95,7 @@ impl RedisTurnBackend {
             }
             _ => return Ok(()),
         };
-        self.answer(msg, body).await
+        self.answer(msg, body)
     }
 
     async fn forward_worker(

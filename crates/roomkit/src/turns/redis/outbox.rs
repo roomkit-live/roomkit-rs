@@ -87,8 +87,8 @@ impl RedisTurnBackend {
         Ok(result)
     }
 
-    /// Queue unacknowledged work on the same destination FIFO as requests.
-    pub(super) fn post_work(
+    /// Queue an answer or publication without holding the incoming stream reader.
+    pub(super) fn post_unconfirmed(
         &self,
         destination: &str,
         message: &Message,
@@ -115,9 +115,9 @@ impl RedisTurnBackend {
         loop {
             let result = self.write_pending(destination, &pending).await;
             if let Err(Err(error)) = pending.receipt.send(result)
-                && pending.message.kind == "work"
+                && matches!(pending.message.kind.as_str(), "work" | "answer")
             {
-                tracing::warn!(%error, %destination, "A publication after a turn did not reach its owner");
+                tracing::warn!(%error, %destination, kind = %pending.message.kind, "A queued turn message did not reach its peer");
             }
             // The sender holds this same lock while enqueueing. Observing an empty
             // queue and removing its writer is therefore one operation.

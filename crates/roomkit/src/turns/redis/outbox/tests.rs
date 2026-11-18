@@ -126,3 +126,40 @@ async fn a_publication_precedes_the_next_question_from_the_same_host() {
     conn.del::<_, ()>(key).await.unwrap();
     assert_eq!(kinds, ["work", "owner"]);
 }
+
+#[tokio::test]
+#[ignore = "requires REDIS_URL"]
+async fn a_refusal_to_one_peer_does_not_stall_another_peers_turn() {
+    let backend = backend();
+    let mut conn = backend.connection().await.unwrap();
+    let unavailable = backend.key("inbox:unavailable");
+    conn.set_ex::<_, _, ()>(&unavailable, "not a stream", 300)
+        .await
+        .unwrap();
+    let mut turn = backend.route_turn("active", "healthy", false).unwrap();
+    let question = Message::new("request", "unavailable", String::new(), "absent", "q");
+    let frame = Message::new("frame", "healthy", "heartbeat".to_owned(), "active", "");
+    for incoming in [&question, &question, &frame] {
+        backend.write(backend.node_id(), incoming).await.unwrap();
+    }
+    backend.listen().await;
+    let routed = tokio::time::timeout(Duration::from_secs(2), turn.inbox.recv()).await;
+    conn.del::<_, ()>(&unavailable).await.unwrap();
+    backend.close().await.unwrap();
+    let entries: StreamRangeReply = conn.xrange_all(&unavailable).await.unwrap();
+    conn.del::<_, ()>(&unavailable).await.unwrap();
+    assert_eq!(
+        routed
+            .expect("an unreachable peer must not block the inbox")
+            .unwrap()
+            .body,
+        "heartbeat"
+    );
+    assert_eq!(entries.ids.len(), 2);
+    assert!(
+        entries
+            .ids
+            .iter()
+            .all(|entry| entry.get::<String>("body").as_deref() == Some("refused"))
+    );
+}

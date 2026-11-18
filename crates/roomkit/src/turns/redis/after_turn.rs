@@ -105,7 +105,7 @@ impl PeerOwner {
             };
             let reference = Uuid::new_v4().simple().to_string();
             let message = Message::new("work", backend.node_id(), body, "", &reference);
-            if let Err(error) = backend.post_work(&peer, &message) {
+            if let Err(error) = backend.post_unconfirmed(&peer, &message) {
                 tracing::debug!(%error, "a publication after a turn did not reach its owner");
             }
         } else if let Some(owner) = lock(&backend.0.owner).clone() {
