@@ -191,7 +191,7 @@ async fn a_backend_closed_after_placement_refuses_the_local_turn_before_handover
     backend.close().await.unwrap();
 
     let (request, owner, incoming, mut received) = link();
-    backend.submit_here(worker.clone(), request, &owner, incoming, || {
+    backend.submit_here(Arc::clone(&worker), request, &owner, incoming, || {
         panic!("closed backend accepted a turn")
     });
     let (_, Frame::Error { error }) = received.get().await.unwrap() else {
