@@ -11,3 +11,11 @@ async fn application_turn_backend() {
         scenario::run(schema.initialized_store().await).await;
     }
 }
+
+#[tokio::test]
+async fn retaining_the_owner_port_does_not_keep_an_abandoned_kit_alive() {
+    if support::dsn().is_some() {
+        let schema = support::TempSchema::new().await;
+        scenario::abandon(schema.initialized_store().await).await;
+    }
+}
