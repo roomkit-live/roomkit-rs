@@ -32,6 +32,10 @@ allow = [
     # and hashbrown), behind roomkit-sqlite.
     "Zlib",
 ]
+# The optional Redis Streams transport uses redis 1.8.2, which requires XXH3.
+exceptions = [
+    { crate = "xxhash-rust@=0.8.21", allow = ["BSL-1.0"] },
+]
 confidence-threshold = 0.9
 
 [bans]
