@@ -31,18 +31,22 @@ pub struct TurnExecutorOptions {
     pub timeouts: TurnTimeouts,
 }
 
-type Built = Result<Option<Arc<dyn DynChannel>>, WireError>;
+type Built = Result<Option<Arc<dyn DynChannel>>, Box<WireError>>;
 struct Building(watch::Receiver<Option<Built>>);
 
 impl Building {
     async fn result(&self) -> Built {
         let mut reply = self.0.clone();
-        match reply.wait_for(Option::is_some).await {
-            Ok(done) => done.as_ref().expect("completed build").clone(),
-            Err(_) => Err(executor::factory_error(&RoomKitError::Runtime(
-                "the channel factory task ended without its result".into(),
-            ))),
-        }
+        reply
+            .wait_for(Option::is_some)
+            .await
+            .ok()
+            .and_then(|done| done.clone())
+            .unwrap_or_else(|| {
+                Err(executor::factory_error(&RoomKitError::Runtime(
+                    "the channel factory task ended without its result".into(),
+                )))
+            })
     }
 }
 type Factory = dyn Fn(ChannelId) -> BoxFuture<'static, Built> + Send + Sync;
@@ -224,7 +228,7 @@ impl<S: ConversationStore> TurnExecutor<S> {
         &self,
         id: ChannelId,
         organization: Option<&str>,
-    ) -> Result<WorkerChannel, WireError> {
+    ) -> Result<WorkerChannel, Box<WireError>> {
         if !self.serves(organization) {
             return Err(executor::refused(&id, self.executor_id(), organization));
         }
@@ -237,10 +241,13 @@ impl<S: ConversationStore> TurnExecutor<S> {
             Some(worker) => {
                 let generation = worker.generations.of(&id);
                 let _build = generation.building.read().await;
-                worker
-                    .build(id.clone())
-                    .await?
-                    .map(|channel| generation.using(channel))
+                if let Some(channel) = self.kit.inner.channel(&id) {
+                    return Ok(generation.using(channel).await);
+                }
+                match worker.build(id.clone()).await? {
+                    Some(channel) => Some(generation.using(channel).await),
+                    None => None,
+                }
             }
             None => self.kit.inner.channel(&id).map(WorkerChannel::registered),
         };
@@ -254,8 +261,27 @@ impl<S: ConversationStore> TurnExecutor<S> {
         })?;
         let channel_id = request.channel_id.clone();
         let organization = request.context.room.organization_id.clone();
+        let room = request.room_id.clone();
+        let names = request.room_hooks.clone();
         let facade = self.clone();
         let build = Box::pin(async move {
+            if !facade.serves(organization.as_deref()) {
+                return Err(executor::refused(
+                    &channel_id,
+                    facade.executor_id(),
+                    organization.as_deref(),
+                ));
+            }
+            let hooks = facade.hooks();
+            if !hooks.defines_room_hooks(&names) {
+                return Err(executor::no_executor(format!(
+                    "Executor {} defines no room hook among {names:?}",
+                    facade.executor_id()
+                )));
+            }
+            if facade.standalone.is_some() {
+                hooks.use_room_hooks(&room, names);
+            }
             facade
                 .worker_channel(channel_id, organization.as_deref())
                 .await
@@ -263,7 +289,7 @@ impl<S: ConversationStore> TurnExecutor<S> {
         let kit: Arc<dyn TurnKit> = Arc::new(Arc::downgrade(&self.kit.inner));
         WorkerTurn::start(
             &self.kit.inner.turns,
-            kit,
+            &kit,
             self.executor_id().to_owned(),
             request,
             build,

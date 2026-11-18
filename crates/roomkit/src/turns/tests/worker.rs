@@ -16,7 +16,7 @@ use crate::{TurnExecutor, TurnExecutorOptions};
 
 const REQUESTS: &str = include_str!("../../../tests/fixtures/turns/python-case1.jsonl");
 
-fn request(id: &str, organization: Option<&str>) -> CarriedRequest {
+pub(super) fn request(id: &str, organization: Option<&str>) -> CarriedRequest {
     let mut fixture: Value = serde_json::from_str(REQUESTS.lines().next().unwrap()).unwrap();
     let message = &mut fixture["message"];
     message["turn_id"] = json!(id);
@@ -32,7 +32,7 @@ fn options() -> TurnExecutorOptions {
     }
 }
 
-async fn frame(turn: &mut WorkerTurn, id: &str, seq: u64, expected: &str) -> Value {
+pub(super) async fn frame(turn: &mut WorkerTurn, id: &str, seq: u64, expected: &str) -> Value {
     let raw = timeout(Duration::from_secs(5), turn.next_frame())
         .await
         .unwrap()
@@ -134,11 +134,20 @@ async fn cancellation_crosses_the_pipe_while_the_factory_is_still_running() {
         .await
         .unwrap();
     assert!(executor.take(request("cancel", None)).is_err());
+    turn.control(json!({"turn_id":"cancel","seq":1,"message":{"type":"steer","steer_id":"ask","directive":{"type":"inject_message","content":"early"}}}).to_string());
+    assert_eq!(
+        frame(&mut turn, "cancel", 2, "steer_result").await["loops"],
+        Value::Null
+    );
+    let mut next = executor.take(request("also-building", None)).unwrap();
+    frame(&mut next, "also-building", 1, "accepted").await;
     turn.control(
-        json!({"turn_id":"cancel", "seq":1, "message":{"type":"cancel", "reason":"cancelled"}})
+        json!({"turn_id":"cancel", "seq":2, "message":{"type":"cancel", "reason":"cancelled"}})
             .to_string(),
     );
-    frame(&mut turn, "cancel", 2, "end").await;
+    frame(&mut turn, "cancel", 3, "end").await;
     finish.notify_one();
+    frame(&mut next, "also-building", 2, "output").await;
+    frame(&mut next, "also-building", 3, "end").await;
     executor.close().await;
 }

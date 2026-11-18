@@ -22,7 +22,7 @@ impl WorkerTurn {
     /// Admit one request and run it on the same engine that serves a local owner.
     pub(crate) fn start(
         turns: &Arc<Turns>,
-        kit: Arc<dyn TurnKit>,
+        kit: &Arc<dyn TurnKit>,
         executor_id: String,
         request: TurnRequest,
         build: Build,
@@ -52,7 +52,7 @@ impl WorkerTurn {
             turns: Arc::clone(turns),
             turn: Arc::clone(&memory),
             sender: Arc::new(FrameSender::new(Arc::clone(&memory))),
-            kit: Arc::clone(&kit),
+            kit: Arc::clone(kit),
         };
         let end = Release(Arc::clone(&memory));
         let work = async move {
@@ -95,14 +95,14 @@ impl Drop for Release {
     }
 }
 
-pub(crate) fn factory_error(error: &RoomKitError) -> crate::turns::wire::WireError {
-    crate::turns::error::turn_failure(error)
+pub(crate) fn factory_error(error: &RoomKitError) -> Box<crate::turns::wire::WireError> {
+    Box::new(crate::turns::error::turn_failure(error))
 }
 
 pub(crate) fn missing(
     id: &roomkit_core::model::ChannelId,
     executor: &str,
-) -> crate::turns::wire::WireError {
+) -> Box<crate::turns::wire::WireError> {
     no_executor(format!("Executor {executor} builds no channel '{id}'"))
 }
 
@@ -110,7 +110,7 @@ pub(crate) fn refused(
     id: &roomkit_core::model::ChannelId,
     executor: &str,
     organization: Option<&str>,
-) -> crate::turns::wire::WireError {
+) -> Box<crate::turns::wire::WireError> {
     let room = organization.map_or_else(
         || "a room without an organization".to_owned(),
         |org| format!("organization '{org}'"),
@@ -120,7 +120,7 @@ pub(crate) fn refused(
     ))
 }
 
-pub(crate) fn no_executor(message: String) -> crate::turns::wire::WireError {
+pub(crate) fn no_executor(message: String) -> Box<crate::turns::wire::WireError> {
     let mut error = crate::turns::error::one("roomkit.core.exceptions:TurnLinkError", message);
     error
         .bases
@@ -128,5 +128,5 @@ pub(crate) fn no_executor(message: String) -> crate::turns::wire::WireError {
     error
         .attributes
         .insert("reason".into(), "no_executor".into());
-    error
+    Box::new(error)
 }

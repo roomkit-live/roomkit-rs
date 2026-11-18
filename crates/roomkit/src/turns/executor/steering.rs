@@ -44,7 +44,7 @@ impl Steering {
             let Some(channel) = channel.get() else {
                 drop(sender.send(&Frame::SteerResult {
                     steer_id,
-                    loops: Some(0),
+                    loops: None,
                 }));
                 return;
             };

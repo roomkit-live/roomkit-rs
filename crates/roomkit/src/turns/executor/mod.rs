@@ -82,10 +82,12 @@ pub(super) fn take(
     };
     #[cfg(test)]
     if turns.executor_apart.load(Ordering::SeqCst) {
-        let run = executor.run(controls, Incoming::Local(carried));
+        let run = executor.run(controls, Incoming::Local(Box::new(carried)));
         return kit.spawn(Box::pin(crate::telemetry::within_no_span(run)));
     }
-    kit.spawn(Box::pin(executor.run(controls, Incoming::Local(carried))))
+    kit.spawn(Box::pin(
+        executor.run(controls, Incoming::Local(Box::new(carried))),
+    ))
 }
 
 /// What one turn's task runs with.
@@ -100,11 +102,13 @@ struct Executor {
     kit: Arc<dyn TurnKit>,
 }
 
-type Build =
-    crate::channel::BoxFuture<'static, Result<crate::kit::WorkerChannel, super::wire::WireError>>;
+type Build = crate::channel::BoxFuture<
+    'static,
+    Result<crate::kit::WorkerChannel, Box<super::wire::WireError>>,
+>;
 
 enum Incoming {
-    Local(CarriedRequest),
+    Local(Box<CarriedRequest>),
     Worker(Box<TurnRequest>, Build),
 }
 
@@ -226,7 +230,7 @@ impl Executor {
         Box::pin(async move {
             let (built, stale) = match selected.0 {
                 Selected::Local(channel) => (crate::kit::WorkerChannel::registered(channel), stale),
-                Selected::Worker(build) => match build.await {
+                Selected::Worker(factory) => match factory.await {
                     Ok(built) => {
                         let channel = &built.channel;
                         drop(selected.1.set(Arc::clone(channel)));
@@ -239,7 +243,7 @@ impl Executor {
                         (built, stale)
                     }
                     Err(error) => {
-                        drop(sender.send(&Frame::Error { error }));
+                        drop(sender.send(&Frame::Error { error: *error }));
                         return;
                     }
                 },
@@ -267,7 +271,7 @@ impl Executor {
     /// `None`, its error sent, when either is missing.
     fn ready(&self, incoming: Incoming) -> Option<(TurnRequest, Selected)> {
         let (request, build) = match incoming {
-            Incoming::Local(carried) => (parse(carried), None),
+            Incoming::Local(carried) => (parse(*carried), None),
             Incoming::Worker(request, build) => (Ok(*request), Some(build)),
         };
         let request = match request {
@@ -281,6 +285,9 @@ impl Executor {
                 return None;
             }
         };
+        if let Some(build) = build {
+            return Some((request, Selected::Worker(build)));
+        }
         if !self.kit.defines_room_hooks(&request.room_hooks) {
             drop(self.send(&Frame::Error {
                 error: one(
@@ -292,9 +299,6 @@ impl Executor {
                 ),
             }));
             return None;
-        }
-        if let Some(build) = build {
-            return Some((request, Selected::Worker(build)));
         }
         let Some(channel) = self.kit.channel(&request.channel_id) else {
             let error = one(

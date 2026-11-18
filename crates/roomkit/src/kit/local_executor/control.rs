@@ -32,7 +32,7 @@ impl<S: ConversationStore> TurnExecutor<S> {
                     }
                     Err(error) => ChannelResult {
                         result: serde_json::Value::Null,
-                        error: Some(error),
+                        error: Some(*error),
                         room_state: None,
                         executor_id: Some(self.executor_id().to_owned()),
                     },
@@ -96,10 +96,10 @@ impl<S: ConversationStore> TurnExecutor<S> {
                                 Some(std::sync::Arc::clone(&channel.channel)),
                                 message,
                             )
-                            .await
+                            .await;
                         }
                         Err(error) => {
-                            tracing::warn!(%channel_id, message = %error.message, "could not deliver a committed event")
+                            tracing::warn!(%channel_id, message = %error.message, "could not deliver a committed event");
                         }
                     }
                 }

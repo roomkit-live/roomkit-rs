@@ -39,7 +39,7 @@ impl WorkerChannel {
 }
 
 impl Generation {
-    pub(super) fn using(self: &Arc<Self>, channel: Arc<dyn DynChannel>) -> WorkerChannel {
+    pub(super) async fn using(self: &Arc<Self>, channel: Arc<dyn DynChannel>) -> WorkerChannel {
         // Called under the build lock. A release replaces the lock before
         // taking it for writing, so the current generation is always readable.
         let readers = self
@@ -47,9 +47,7 @@ impl Generation {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
-        let guard = readers
-            .try_read_owned()
-            .expect("current channel generation");
+        let guard = readers.read_owned().await;
         WorkerChannel {
             channel,
             _lease: Some((Arc::clone(self), guard)),
@@ -97,10 +95,8 @@ impl<S: ConversationStore> TurnExecutor<S> {
         let generation = worker.generations.of(id);
         let _pending = generation.building.write().await;
         worker.wait_for_build(id).await;
-        self.kit
-            .inner
-            .channel(id)
-            .map(|channel| generation.using(channel))
+        let channel = self.kit.inner.channel(id)?;
+        Some(generation.using(channel).await)
     }
 
     pub(super) async fn release_channel(&self, id: &ChannelId) -> Result<(), RoomKitError> {

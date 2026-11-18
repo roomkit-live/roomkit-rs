@@ -19,6 +19,7 @@ struct Observed {
     instance: usize,
     events: Events,
     state: Mutex<Metadata>,
+    wait: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
 }
 
 impl Observed {
@@ -50,6 +51,24 @@ impl Channel for Observed {
         _: ChannelBinding,
         _: RoomContext,
     ) -> Result<ChannelOutput, ChannelError> {
+        Ok(ChannelOutput::empty())
+    }
+    async fn on_event(
+        &self,
+        _: RoomEvent,
+        _: ChannelBinding,
+        context: RoomContext,
+    ) -> Result<ChannelOutput, ChannelError> {
+        if let Some((started, finish)) = &self.wait {
+            let host = crate::current_turn_host().unwrap();
+            let rows = host.channel_rows();
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].id.as_str(), "tool-row");
+            assert!(context.recent_events.iter().all(|row| row.id != rows[0].id));
+            started.notify_one();
+            finish.notified().await;
+            self.note("finished");
+        }
         Ok(ChannelOutput::empty())
     }
     async fn on_room_attached(&self, _: RoomId, _: ChannelBinding) -> Result<(), ChannelError> {
@@ -117,6 +136,7 @@ async fn genuine_controls_prepare_call_restore_and_release_the_built_channel() {
                     instance: builds.fetch_add(1, Ordering::SeqCst),
                     events: Arc::clone(&events),
                     state: Mutex::default(),
+                    wait: None,
                 })))
             }
         },
@@ -201,5 +221,72 @@ async fn genuine_controls_prepare_call_restore_and_release_the_built_channel() {
             (1, "event"),
             (1, "close")
         ]
+    );
+}
+
+#[tokio::test]
+async fn a_release_lets_the_next_build_run_before_the_old_turn_finishes() {
+    use super::worker::{frame, request};
+    use roomkit_core::model::{EventId, EventType};
+    use tokio::sync::Notify;
+    use tokio::time::{Duration, timeout};
+
+    let builds = Arc::new(AtomicUsize::new(0));
+    let events = Events::default();
+    let started = Arc::new(Notify::new());
+    let finish = Arc::new(Notify::new());
+    let executor = TurnExecutor::new(
+        {
+            let builds = Arc::clone(&builds);
+            let events = Arc::clone(&events);
+            let wait = (Arc::clone(&started), Arc::clone(&finish));
+            move |_| {
+                std::future::ready(Ok(Some(Observed {
+                    instance: builds.fetch_add(1, Ordering::SeqCst),
+                    events: Arc::clone(&events),
+                    state: Mutex::default(),
+                    wait: Some(wait.clone()),
+                })))
+            }
+        },
+        TurnExecutorOptions::default(),
+    )
+    .unwrap();
+
+    let mut submitted = request("old", None);
+    let mut row = submitted.event.clone();
+    row.id = EventId::new("tool-row").unwrap();
+    row.r#type = EventType::ToolCallEnd;
+    row.source.channel_id = super::support::channel("ai");
+    submitted.channel_rows.push(row.clone());
+    row.source.channel_id = super::support::channel("someone-else");
+    submitted.channel_rows.push(row);
+    let mut turn = executor.take(submitted).unwrap();
+    frame(&mut turn, "old", 1, "accepted").await;
+    timeout(Duration::from_secs(5), started.notified())
+        .await
+        .unwrap();
+    timeout(
+        Duration::from_secs(5),
+        executor.control(envelope("channel_released", |_| {})),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    executor
+        .control(envelope("committed_event", |m| {
+            m["organization_id"] = Value::Null;
+            m["room_hooks"] = json!([]);
+        }))
+        .await
+        .unwrap();
+    assert_eq!(*events.lock().unwrap(), [(1, "event")]);
+    finish.notify_one();
+    frame(&mut turn, "old", 2, "output").await;
+    frame(&mut turn, "old", 3, "end").await;
+    executor.close().await;
+    assert_eq!(
+        *events.lock().unwrap(),
+        [(1, "event"), (0, "finished"), (0, "close"), (1, "close")]
     );
 }
