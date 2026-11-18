@@ -252,22 +252,6 @@ pub(super) type OwnerPort =
     Arc<dyn Fn(crate::turns::wire::OwnerMessageEnvelope) -> OwnerReply + Send + Sync>;
 
 impl RedisTurnBackend {
-    pub(in crate::turns) fn set_owner(
-        &self,
-        turns: &Arc<crate::turns::Turns>,
-        kit: &Arc<dyn crate::turn::TurnKit>,
-    ) {
-        let turns = Arc::downgrade(turns);
-        let kit = Arc::clone(kit);
-        crate::turns::lock(&self.0.owner).get_or_insert_with(|| {
-            Arc::new(move |message| {
-                let turns = turns.upgrade();
-                let kit = Arc::clone(&kit);
-                Box::pin(async move { turns?.receive_owner_message(kit, message).await })
-            })
-        });
-    }
-
     pub(super) fn owner_message(&self, incoming: &Message) -> Result<(), RoomKitError> {
         use crate::turns::wire::{OwnerMessage, OwnerMessageEnvelope, RoomCallResult};
         let parsed: OwnerMessageEnvelope = match serde_json::from_str(&incoming.body) {

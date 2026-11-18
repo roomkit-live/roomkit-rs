@@ -236,7 +236,6 @@ impl Turns {
                 (backend.as_ref() as &dyn std::any::Any).downcast_ref::<RedisTurnBackend>()
             {
                 turns.remote = Some(redis.clone());
-                return turns;
             }
             turns.application = Some(application::Application::new(backend));
         }
@@ -244,11 +243,17 @@ impl Turns {
     }
 
     pub(crate) fn configured_backend(&self) -> Option<&dyn TurnBackend> {
-        #[cfg(feature = "redis")]
-        if let Some(redis) = &self.remote {
-            return Some(redis);
-        }
         self.application.as_ref().map(|app| app.backend.as_ref())
+    }
+
+    /// Native Redis hands the already-carried request directly to its bridge.
+    /// Every configured backend uses the same owner admission before this choice.
+    fn application_driver(&self) -> Option<&application::Application> {
+        #[cfg(feature = "redis")]
+        if self.remote.is_some() {
+            return None;
+        }
+        self.application.as_ref()
     }
 
     /// The bounds of the turns submitted from now on.
@@ -365,20 +370,12 @@ impl Turns {
         // The turn's tasks run in a unit of their own, within the call's
         // run's: a close from the turn's work spares them all (RFC
         // §12.10.4).
-        if let Some(app) = &self.application {
-            app.ready()
-                .await
-                .map_err(|e| to_record(&error::kit_error(&e)))?;
-        }
+        self.ready()
+            .await
+            .map_err(|e| to_record(&error::kit_error(&e)))?;
         let channel = kit.channel(&binding.channel_id);
-        #[cfg(feature = "redis")]
-        if let Some(backend) = self.remote_for_channel(channel.as_deref()) {
-            backend.set_owner(self, kit);
-        }
         let mut context = context;
-        let channel_rows = if self.carries_controls(channel.as_deref())
-            && channel.is_some_and(|c| c.is_declaration_only())
-        {
+        let channel_rows = if self.sends_channel_rows(channel.as_deref()) {
             crate::history::distributed::distributed_rows(
                 kit.as_ref(),
                 binding,
@@ -396,7 +393,7 @@ impl Turns {
             strategy_turn,
             channel_rows,
         };
-        let (mut turn, _following) = if let Some(app) = &self.application {
+        let (mut turn, _following) = if let Some(app) = self.application_driver() {
             marks
                 .scoped(self.start_application(app, kit, binding, input, submitted))
                 .await?

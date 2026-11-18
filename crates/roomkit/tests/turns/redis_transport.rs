@@ -122,4 +122,5 @@ async fn the_public_redis_backend_carries_an_admitted_turn_locally_and_across_no
     }).await.unwrap();
 }
 
+mod configured;
 mod owner;

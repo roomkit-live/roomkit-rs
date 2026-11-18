@@ -134,8 +134,7 @@ impl Turns {
         if self.is_closed() {
             return Err(TurnError::link_reason("backend_closed").into_kit_error());
         }
-        #[cfg(feature = "redis")]
-        self.identify_redis_owner();
+        self.ready().await?;
         if self.carries_controls(Some(&*channel)) {
             return self.remote_channel_call(call, room_created_at).await;
         }

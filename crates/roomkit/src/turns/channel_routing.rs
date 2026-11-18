@@ -17,15 +17,29 @@ impl Turns {
         &self,
         channel: Option<&dyn DynChannel>,
     ) -> Option<&super::redis::RedisTurnBackend> {
-        self.remote
-            .as_ref()
-            .filter(|_| channel.is_some_and(DynChannel::is_declaration_only))
+        self.remote.as_ref().filter(|backend| {
+            channel.is_some_and(|channel| {
+                channel.is_declaration_only()
+                    || self.executor_lifecycle.is_closed()
+                    || !backend.owns_lifecycle(&Arc::downgrade(&self.executor_lifecycle))
+            })
+        })
+    }
+
+    /// A different kit may supply the live channel even when both kits share
+    /// the Redis process. Its worker needs the submitting room's private rows.
+    pub(super) fn sends_channel_rows(&self, channel: Option<&dyn DynChannel>) -> bool {
+        #[cfg(feature = "redis")]
+        if self.remote.is_some() {
+            return self.remote_for_channel(channel).is_some();
+        }
+        self.application.is_some() && channel.is_some_and(DynChannel::is_declaration_only)
     }
 
     pub(crate) fn carries_controls(&self, channel: Option<&dyn DynChannel>) -> bool {
         #[cfg(feature = "redis")]
-        if self.remote_for_channel(channel).is_some() {
-            return true;
+        if self.remote.is_some() {
+            return self.remote_for_channel(channel).is_some();
         }
         let _ = channel;
         self.application.is_some()
@@ -36,12 +50,7 @@ impl Turns {
         message: ChannelControl,
     ) -> Result<Option<super::ChannelResult>, RoomKitError> {
         if let Some(app) = &self.application {
-            app.ready().await?;
             return app.backend.control(message).await;
-        }
-        #[cfg(feature = "redis")]
-        if let Some(backend) = &self.remote {
-            return backend.control_remote(&message).await;
         }
         Err(super::TurnError::link_reason("no_executor").into_kit_error())
     }
@@ -65,8 +74,7 @@ impl Turns {
         message: ChannelControl,
         channel: Option<Arc<dyn DynChannel>>,
     ) -> Result<(), RoomKitError> {
-        #[cfg(feature = "redis")]
-        self.identify_redis_owner();
+        self.ready().await?;
         if self.carries_controls(channel.as_deref()) {
             self.carry_control(message).await?;
             return Ok(());

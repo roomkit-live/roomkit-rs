@@ -59,6 +59,13 @@ struct KitOwner<S> {
 }
 
 impl Turns {
+    pub(super) async fn ready(&self) -> Result<(), RoomKitError> {
+        if let Some(app) = &self.application {
+            app.ready().await?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn bind_application_owner<S: ConversationStore>(&self, kit: &RoomKit<S>) {
         if let Some(application) = &self.application {
             let _owner = application.owner.set(Arc::new(KitOwner {

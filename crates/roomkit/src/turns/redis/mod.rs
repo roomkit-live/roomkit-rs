@@ -20,7 +20,7 @@ mod shutdown_tests;
 mod stream;
 mod transport;
 use std::fmt;
-use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use redis::aio::{ConnectionManager, ConnectionManagerConfig};
@@ -29,7 +29,6 @@ use uuid::Uuid;
 
 use super::{ExecutorInfo, TurnTimeouts};
 use crate::RoomKitError;
-use crate::turns::executor::Lifecycle;
 
 type Worker = Arc<dyn super::ServedExecutor>;
 pub(crate) type WorkerLookup = Box<dyn Fn() -> Option<Worker> + Send + Sync>;
@@ -73,7 +72,6 @@ struct Node {
     id: String,
     prefix: String,
     owner: Mutex<Option<owner::OwnerPort>>,
-    own_executor: OnceLock<Weak<Lifecycle>>,
     owner_worker: OnceLock<placement::Reserved>,
     routes: Mutex<routes::Routes>,
     serving: Mutex<process::Serving>,
@@ -124,7 +122,6 @@ impl RedisTurnBackend {
                 .collect(),
             prefix: options.key_prefix,
             owner: Mutex::default(),
-            own_executor: OnceLock::new(),
             owner_worker: OnceLock::new(),
             routes: Mutex::default(),
             serving: Mutex::default(),

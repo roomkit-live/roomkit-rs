@@ -1,6 +1,5 @@
 //! Executor declarations and heartbeats use Redis server time in milliseconds.
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
 
 use roomkit_core::model::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -55,19 +54,6 @@ impl View {
                 ))
             })
             .collect()
-    }
-}
-
-impl crate::turns::Turns {
-    /// Python's room owner identifies its own executor on the first turn or
-    /// channel control, including work that stays on the local executor.
-    pub(in crate::turns) fn identify_redis_owner(&self) {
-        if let Some(backend) = &self.remote {
-            backend
-                .0
-                .own_executor
-                .get_or_init(|| Arc::downgrade(&self.executor_lifecycle));
-        }
     }
 }
 

@@ -79,13 +79,17 @@ impl RedisTurnBackend {
     }
 
     pub(super) fn is_own(&self, worker: &Worker) -> bool {
-        let own = self
-            .0
+        self.owns_lifecycle(&worker.native().lifecycle())
+    }
+
+    pub(in crate::turns) fn owns_lifecycle(
+        &self,
+        worker: &std::sync::Weak<crate::turns::executor::Lifecycle>,
+    ) -> bool {
+        self.0
             .owner_worker
             .get()
-            .map(|owned| &owned.lifecycle)
-            .or_else(|| self.0.own_executor.get());
-        own.is_some_and(|own| own.ptr_eq(&worker.native().lifecycle()))
+            .is_some_and(|own| own.lifecycle.ptr_eq(worker))
     }
 
     pub(super) fn owning(&self, channel: &ChannelId) -> Option<Worker> {

@@ -92,7 +92,7 @@ impl Room {
         let kit = RoomKit::new(RoomKitOptions {
             realtime: Some(Arc::<InMemoryRealtime>::clone(&self.realtime)),
             store: Arc::clone(&self.store),
-            turn_backend: Some(std::sync::Arc::new(node)),
+            turn_backend: Some(Arc::new(node)),
             ..Default::default()
         });
         kit.register_channel(ChannelDeclaration {
@@ -440,7 +440,7 @@ async fn attaching_a_live_agent_identifies_an_executor_already_served() {
     };
     let backend = node();
     let owner = RoomKit::new(RoomKitOptions {
-        turn_backend: Some(std::sync::Arc::new(backend.clone())),
+        turn_backend: Some(Arc::new(backend.clone())),
         ..Default::default()
     });
     let own = owner.turn_executor();
@@ -460,4 +460,9 @@ async fn attaching_a_live_agent_identifies_an_executor_already_served() {
     assert_eq!(before.len(), 1);
     assert_eq!(before.first().unwrap().executor_id, own.executor_id());
     assert!(after.is_empty(), "{after:?}");
+    let weak = owner.downgrade();
+    drop(before);
+    drop(own);
+    drop(owner);
+    assert!(weak.upgrade().is_none());
 }

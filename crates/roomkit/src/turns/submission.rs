@@ -77,14 +77,12 @@ impl Turns {
         kit: &dyn TurnKit,
         binding: &ChannelBinding,
     ) -> Result<Destination, ErrorRecord> {
-        if kit
-            .channel(&binding.channel_id)
-            .is_some_and(|c| c.is_declaration_only())
-        {
-            #[cfg(feature = "redis")]
-            if let Some(backend) = self.remote.clone() {
-                return Ok(Destination::Remote(backend));
-            }
+        let channel = kit.channel(&binding.channel_id);
+        #[cfg(feature = "redis")]
+        if let Some(redis) = self.remote_for_channel(channel.as_deref()) {
+            return Ok(Destination::Remote(redis.clone()));
+        }
+        if channel.is_some_and(|channel| channel.is_declaration_only()) {
             return Err(TurnError::new(
                 "no_executor",
                 format!("No executor serves channel '{}'", binding.channel_id),
@@ -185,8 +183,6 @@ impl Turns {
         if self.is_closed() || *self.cut.borrow() {
             return Err(closed());
         }
-        #[cfg(feature = "redis")]
-        self.identify_redis_owner();
         let turn_id: Arc<str> = Arc::from(format!("turn-{}", Uuid::new_v4().simple()));
         let destination = self.destination(&turn_id, &**kit, binding)?;
         let observers = self.observers();
