@@ -1,5 +1,5 @@
 //! Reply references and the two directions of each active remote turn.
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 use tokio::time::Instant;
@@ -7,16 +7,18 @@ use tokio::time::Instant;
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
+use super::liveness::{Observation, Observed};
 use super::stream::Message;
 use super::{Node, RedisTurnBackend};
 use crate::RoomKitError;
-use crate::turns::lock;
+use crate::turns::{MemoryTurn, lock};
 
 #[derive(Default)]
 pub(super) struct Routes {
     pub(super) turn_owners: VecDeque<Arc<str>>,
     answers: HashMap<String, (String, oneshot::Sender<String>)>,
     turns: HashMap<String, TurnEndpoint>,
+    observing: bool,
     handled: HashMap<(String, String), Option<String>>,
     expires: VecDeque<(Instant, (String, String))>,
 }
@@ -25,6 +27,7 @@ struct TurnEndpoint {
     peer: String,
     tx: mpsc::UnboundedSender<Message>,
     worker: bool,
+    watch: Option<(String, Weak<MemoryTurn>)>,
 }
 
 pub(super) struct TurnRoute {
@@ -75,6 +78,36 @@ impl Routes {
         Ok(())
     }
 
+    /// Subscribe this accepted handover. Only the first subscription starts a reader.
+    pub(super) fn watch(&mut self, turn: &Arc<MemoryTurn>, member: String) -> bool {
+        let Some(route) = self.turns.get_mut(&*turn.turn_id) else {
+            return false;
+        };
+        route.watch = Some((member, Arc::downgrade(turn)));
+        !std::mem::replace(&mut self.observing, true)
+    }
+
+    pub(super) fn observed(&mut self) -> Observed {
+        let mut nodes = BTreeMap::<_, Vec<_>>::new();
+        for route in self.turns.values() {
+            if let Some((member, weak)) = &route.watch
+                && let Some(turn) = weak.upgrade()
+            {
+                nodes
+                    .entry(route.peer.clone())
+                    .or_default()
+                    .push(Observation {
+                        member: member.clone(),
+                        turn,
+                    });
+            }
+        }
+        if nodes.is_empty() {
+            self.observing = false;
+        }
+        nodes
+    }
+
     pub(super) fn close(&mut self) {
         self.answers.clear();
         self.turns.clear();
@@ -93,6 +126,7 @@ impl RedisTurnBackend {
             peer: peer.into(),
             tx,
             worker,
+            watch: None,
         });
         Some(TurnRoute {
             inbox,

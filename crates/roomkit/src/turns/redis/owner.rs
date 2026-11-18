@@ -33,7 +33,7 @@ impl RedisTurnBackend {
     async fn hand_over(
         &self,
         carried: CarriedRequest,
-        memory: &MemoryTurn,
+        memory: &Arc<MemoryTurn>,
     ) -> Result<(String, TurnRoute), RoomKitError> {
         self.attend().await?;
         let rest: RequestRest =
@@ -64,7 +64,10 @@ impl RedisTurnBackend {
                 )
                 .await;
             match answer.as_deref() {
-                Ok("taken") => return Ok((target.node, route)),
+                Ok("taken") => {
+                    self.watch_process(&target, memory);
+                    return Ok((target.node, route));
+                }
                 Ok("refused") => {
                     refused.insert(target.member());
                 }

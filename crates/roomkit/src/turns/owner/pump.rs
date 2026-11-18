@@ -180,7 +180,9 @@ impl Pump {
                     }
                 }
                 () = until(deadline) => break Ending::GaveUp,
-                silent = beat.tick() => {
+                silent = beat.tick_with(|| {
+                    self.state.turn.process_beat.swap(false, Ordering::AcqRel) && self.accepted
+                }) => {
                     let limit = if self.accepted {
                         timeouts.silent_intervals()
                     } else {

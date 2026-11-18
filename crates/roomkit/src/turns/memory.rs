@@ -28,6 +28,8 @@ pub(crate) struct MemoryTurn {
     /// Whether its reader commits the turn as a delegated task's trace (RFC
     /// §23.3 step 5), which its publisher reads at each text it publishes.
     pub(crate) traced: Arc<AtomicBool>,
+    /// A fresh process heartbeat confirmed this specific remote turn still runs.
+    pub(super) process_beat: AtomicBool,
     /// Executor to owner.
     pub(crate) frames: Pipe<Frame>,
     /// Owner to executor.
@@ -79,6 +81,7 @@ impl MemoryTurn {
             traced: Arc::default(),
             #[cfg(feature = "redis")]
             owner: None,
+            process_beat: AtomicBool::new(false),
             contexts: Mutex::new(Contexts {
                 turn: context,
                 stream: None,

@@ -4,6 +4,7 @@ pub(crate) use after_turn::PeerOwner;
 mod control;
 mod dispatch;
 mod outbox;
+mod liveness;
 mod owner;
 mod process;
 mod registry;

@@ -130,8 +130,14 @@ impl Beat {
     /// Waits for the next tick: how many intervals in a row the other side
     /// was silent.
     pub(crate) async fn tick(&mut self) -> u32 {
+        self.tick_with(|| false).await
+    }
+
+    /// As `tick`, also counting a fresh transport heartbeat observed during the interval.
+    pub(crate) async fn tick_with(&mut self, external: impl FnOnce() -> bool) -> u32 {
         self.interval.tick().await;
-        self.silent = if self.heard {
+        let external = external();
+        self.silent = if self.heard || external {
             0
         } else {
             self.silent.saturating_add(1)
