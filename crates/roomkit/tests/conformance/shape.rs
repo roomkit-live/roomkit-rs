@@ -471,6 +471,7 @@ fn base_arguments(call: &str) -> Option<&'static [&'static str]> {
         | "kit_executor.closed"
         | "kit_executor.executor_id"
         | "executors" => &[],
+        "executor.start" | "executor.close" => &["executor"],
         "process_inbound" => &["message", "room_id", "defer_delivery"],
         "delivery.cancel" => &["of", "reason", "timeout_ms"],
         "delivery.wait" => &["of"],
@@ -590,7 +591,7 @@ pub(crate) fn unknown_members(scenario: &Value) -> Vec<String> {
     for (position, executor) in items(&setup["executors"]) {
         members(
             executor,
-            &["id", "hosts"],
+            &["id", "hosts", "organizations", "started"],
             &format!("setup.executors[{position}]"),
             &mut found,
         );

@@ -24,6 +24,16 @@ use crate::run::Run;
 pub(crate) async fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Called, Unreadable> {
     let kit = run.kit();
     match name {
+        "executor.start" | "executor.close" => {
+            let id: String = field(spec, "executor")?;
+            let workers = run
+                .workers
+                .as_ref()
+                .ok_or("this pass has no executor fixture")?;
+            Ok(finish(run, name, workers.change(name, &id).await, |()| {
+                Value::Null
+            }))
+        }
         "kit_executor.executor_id" => Ok(finish(
             run,
             name,

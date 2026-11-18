@@ -102,9 +102,19 @@ pub(crate) struct Check {
     pub(crate) outcome: Value,
 }
 
+/// Lifecycle operations offered by the distributed executor fixture of this pass.
+pub(crate) trait WorkerControl: Send + Sync {
+    fn change<'a>(
+        &'a self,
+        operation: &'a str,
+        id: &'a str,
+    ) -> BoxFuture<'a, Result<(), roomkit::RoomKitError>>;
+}
+
 /// One run of one scenario.
 pub(crate) struct Run {
     kit: crate::Kit,
+    pub(crate) workers: Option<Arc<dyn WorkerControl>>,
     /// The other processes of `setup.processes`, by id, in setup order
     /// (README, `processes`).
     processes: Mutex<Vec<(String, crate::Kit)>>,
@@ -244,6 +254,7 @@ impl Run {
             acp_pipes: Mutex::default(),
             chat_dialects: Mutex::default(),
             backend: Mutex::default(),
+            workers: None,
             strategies: Mutex::default(),
             handoff_handlers: Mutex::default(),
             delegate_handlers: Mutex::default(),

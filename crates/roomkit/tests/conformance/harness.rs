@@ -162,7 +162,7 @@ impl RealtimeBackend for TextRecorder {
 
 /// Runs `scenario`; returns every mismatch with its expectations.
 pub(crate) async fn run(scenario: &Value) -> Vec<String> {
-    run_with(scenario, RunSlot::default(), std::convert::identity).await
+    run_with(scenario, RunSlot::default(), None, std::convert::identity).await
 }
 
 /// Use the same steps and assertions with the supplied turn transport.
@@ -170,6 +170,7 @@ pub(crate) async fn run(scenario: &Value) -> Vec<String> {
 pub(crate) async fn run_with(
     scenario: &Value,
     slot: RunSlot,
+    workers: Option<Arc<dyn crate::run::WorkerControl>>,
     configure: impl FnOnce(RoomKitOptions<crate::Store>) -> RoomKitOptions<crate::Store>,
 ) -> Vec<String> {
     // The store's file, when it has one, goes once the run is over; another
@@ -210,7 +211,9 @@ pub(crate) async fn run_with(
         return vec!["setup: the kit took no store".to_owned()];
     };
     let snapshot_store = crate::observer_store(&store, &store_file).await;
-    let run = Arc::new(Run::new(kit, store, snapshot_store, scenario));
+    let mut run = Run::new(kit, store, snapshot_store, scenario);
+    run.workers = workers;
+    let run = Arc::new(run);
     slot.set(&run);
     *lock(&run.backend) = backend;
     *lock(&run.strategies) = strategies;
