@@ -1,4 +1,5 @@
 //! The process heartbeat continues while a turn occupies its runtime.
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,16 +15,16 @@ pub(super) struct Serving {
     pub(super) workers: Vec<Worker>,
     pub(super) owner: bool,
     generation: u64,
-    retiring: Vec<String>,
+    retiring: BTreeSet<String>,
     closing: bool,
 }
 
 impl RedisTurnBackend {
-    pub(super) fn worker(&self, id: &str) -> Option<Worker> {
+    pub(super) fn shared_worker(&self, id: &str) -> Option<Worker> {
         lock(&self.0.serving)
             .workers
             .iter()
-            .find(|worker| worker.executor_id() == id)
+            .find(|worker| worker.executor_id() == id && worker.hosted().is_some())
             .cloned()
     }
 
@@ -39,6 +40,7 @@ impl RedisTurnBackend {
     }
 
     pub(crate) async fn serve_erased(&self, executor: Worker) -> Result<(), RoomKitError> {
+        let shared = executor.hosted().is_some();
         let owned = {
             let mut serving = lock(&self.0.serving);
             if serving.closing {
@@ -53,20 +55,22 @@ impl RedisTurnBackend {
             let Serving {
                 workers, retiring, ..
             } = &mut *serving;
-            retiring.retain(|old| old != id);
+            if shared {
+                retiring.remove(id);
+            }
             workers.retain(|previous| {
-                if previous.executor_id() == id {
-                    return false;
-                }
-                if previous.closed() {
-                    retiring.push(previous.executor_id().to_owned());
+                let replaced = previous.executor_id() == id;
+                if replaced || previous.closed() {
+                    if previous.hosted().is_some() && !(replaced && shared) {
+                        retiring.insert(previous.executor_id().to_owned());
+                    }
                     return false;
                 }
                 true
             });
             // A kit's own worker can be recovered from the owner's weak handle.
             // It advertises no remote hosts and must not keep its kit alive.
-            if !owned || executor.hosted().is_some() {
+            if !owned || shared {
                 workers.push(executor);
             }
             serving.generation = serving.generation.saturating_add(1);
@@ -99,6 +103,14 @@ impl RedisTurnBackend {
                 .await;
         }
         Ok(())
+    }
+
+    /// An earlier beat cannot acknowledge registrations changed while it was being written.
+    pub(super) fn beat_written(&self, generation: u64) {
+        let mut serving = lock(&self.0.serving);
+        if serving.generation == generation {
+            serving.retiring.clear();
+        }
     }
 
     pub(super) async fn worker_closed(&self) -> Result<(), RoomKitError> {

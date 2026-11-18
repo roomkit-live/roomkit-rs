@@ -165,3 +165,59 @@ async fn a_room_turn_reaches_the_worker_served_on_its_owners_backend() {
 }
 
 mod owner;
+
+#[tokio::test]
+async fn a_local_only_replacement_withdraws_its_own_advertisement_and_preserves_a_peer_of_the_same_id()
+ {
+    for predicate in [true, false] {
+        let Some((host, peer)) = nodes() else { return };
+        let shared = worker("same");
+        let other = worker("same");
+        let make = |id| {
+            std::future::ready(Ok(Some(EchoAgent::new(
+                id,
+                "local",
+                EchoAgentOptions::default(),
+            ))))
+        };
+        let options = TurnExecutorOptions {
+            executor_id: Some("same".into()),
+            ..Default::default()
+        };
+        let local = if predicate {
+            TurnExecutor::new_with_host_predicate(make, |id| id.as_str() == "local-agent", options)
+        } else {
+            TurnExecutor::new(make, options)
+        }
+        .unwrap();
+
+        host.serve(shared.clone()).await.unwrap();
+        peer.serve(other.clone()).await.unwrap();
+        assert_eq!(peer.executors().await.unwrap().len(), 2);
+        host.serve(local.clone()).await.unwrap();
+        let seen = peer.executors().await.unwrap();
+        let observed: Vec<_> = seen
+            .iter()
+            .map(|row| (row.node.as_deref(), row.executor_id.as_str()))
+            .collect();
+        assert_eq!(observed, [(Some(peer.node_id()), "same")]);
+        assert!(
+            host.executors()
+                .await
+                .unwrap()
+                .iter()
+                .any(|row| row.node.as_deref() == Some(host.node_id())
+                    && row.covers("local-agent", &[], None).unwrap())
+        );
+        assert!(
+            host.shared_worker("same").is_none(),
+            "a handover already addressed to the old advertisement must be refused"
+        );
+
+        host.close().await.unwrap();
+        peer.close().await.unwrap();
+        shared.close().await;
+        other.close().await;
+        local.close().await;
+    }
+}

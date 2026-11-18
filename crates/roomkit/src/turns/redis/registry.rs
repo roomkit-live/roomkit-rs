@@ -180,7 +180,9 @@ pub(super) async fn write_beat(
         .arg(payload)
         .exec_async(connection)
         .await
-        .map_err(|error| redis_error(&error))
+        .map_err(|error| redis_error(&error))?;
+    backend.beat_written(beat.generation);
+    Ok(())
 }
 
 /// Python's urllib quote(safe="") applied to one key component.
