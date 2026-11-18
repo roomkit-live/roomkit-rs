@@ -1,6 +1,7 @@
 //! A channel's initial callback and its stream each inherit their owner's caller.
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -16,7 +17,13 @@ use crate::turns::{CarriedRequest, MemoryTurn};
 use crate::{Channel, ChannelError, RedisTurnBackend, TurnExecutor};
 use futures_core::Stream;
 
-struct Reader(bool);
+struct Reader(bool, Arc<AtomicBool>);
+
+impl Drop for Reader {
+    fn drop(&mut self) {
+        self.1.store(true, Ordering::Release);
+    }
+}
 
 impl Stream for Reader {
     type Item = Result<ResponseItem, ChannelError>;
@@ -33,7 +40,7 @@ impl Stream for Reader {
     }
 }
 
-struct Probe(ChannelId);
+struct Probe(ChannelId, Arc<AtomicBool>);
 
 impl Channel for Probe {
     fn channel_id(&self) -> ChannelId {
@@ -68,21 +75,22 @@ impl Channel for Probe {
         assert!(!scope.contains("reader"));
         Ok(crate::current_turn_host()
             .unwrap()
-            .respond_with_stream(Box::pin(Reader(false))))
+            .respond_with_stream(Box::pin(Reader(false, Arc::clone(&self.1)))))
     }
 }
 
-#[tokio::test]
-async fn local_turn_inherits_submission_context_then_its_first_readers_context() {
-    let backend = RedisTurnBackend::new(None, Default::default()).unwrap();
-    let worker =
-        TurnExecutor::new(|id| async move { Ok(Some(Probe(id))) }, Default::default()).unwrap();
+fn link() -> (
+    CarriedRequest,
+    Arc<MemoryTurn>,
+    crate::turns::pipe::PipeReceiver<Control>,
+    crate::turns::pipe::PipeReceiver<Frame>,
+) {
     let lines = include_str!("../../../../../tests/fixtures/turns/python-case1.jsonl");
     let sample: serde_json::Value = serde_json::from_str(lines.lines().next().unwrap()).unwrap();
     let body = &sample["message"];
     let id: Arc<str> = Arc::from(body["turn_id"].as_str().unwrap());
     let request = CarriedRequest::from_wire(&body.to_string()).unwrap();
-    let (frames, mut received) = pipe(id.clone(), Carried::Frame, Default::default());
+    let (frames, received) = pipe(id.clone(), Carried::Frame, Default::default());
     let (controls, incoming) = pipe(id.clone(), Carried::Control, Default::default());
     let owner = Arc::new(MemoryTurn::with_context(
         id,
@@ -91,8 +99,19 @@ async fn local_turn_inherits_submission_context_then_its_first_readers_context()
         Default::default(),
         TurnContext::current().in_turn("submitter".into()),
     ));
-    let turn = backend.take_here(&worker, request, &owner).unwrap();
-    backend.serve_here(turn, &owner, incoming);
+    (request, owner, incoming, received)
+}
+
+#[tokio::test]
+async fn local_turn_inherits_submission_context_then_its_first_readers_context() {
+    let backend = RedisTurnBackend::new(None, Default::default()).unwrap();
+    let worker = TurnExecutor::new(
+        |id| async move { Ok(Some(Probe(id, Arc::default()))) },
+        Default::default(),
+    )
+    .unwrap();
+    let (request, owner, incoming, mut received) = link();
+    backend.submit_here(worker.clone(), request, &owner, incoming, || {});
     let reads = tokio::time::timeout(Duration::from_secs(2), async {
         let mut text = Vec::new();
         loop {
@@ -123,5 +142,93 @@ async fn local_turn_inherits_submission_context_then_its_first_readers_context()
     .await
     .unwrap();
     assert_eq!(reads, ["reader=true,submitter=false"]);
+    worker.close().await;
+}
+
+#[tokio::test]
+async fn a_backend_closed_after_placement_refuses_the_local_turn_before_handover() {
+    let Ok(url) = std::env::var("REDIS_URL") else {
+        return;
+    };
+    let backend = RedisTurnBackend::new(
+        Some(&url),
+        crate::RedisTurnBackendOptions {
+            key_prefix: format!("roomkit:placement:{}", uuid::Uuid::new_v4()),
+            timeouts: crate::TurnTimeouts {
+                heartbeat_interval: Duration::from_millis(20),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let worker = TurnExecutor::new(
+        |id| async move { Ok(Some(Probe(id, Arc::default()))) },
+        crate::TurnExecutorOptions {
+            hosts: Some(["ai".to_owned()].into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    backend.serve(worker).await.unwrap();
+    let channel = "ai".parse().unwrap();
+    let placed = backend
+        .place(&channel, "r1", &[], None, &Default::default(), true)
+        .await
+        .unwrap();
+    let crate::turns::redis::placement::Placed::Here(worker) = placed else {
+        panic!("expected local worker")
+    };
+    backend.close().await.unwrap();
+
+    let (request, owner, incoming, mut received) = link();
+    backend.submit_here(worker.clone(), request, &owner, incoming, || {
+        panic!("closed backend accepted a turn")
+    });
+    let (_, Frame::Error { error }) = received.get().await.unwrap() else {
+        panic!("missing refusal")
+    };
+    assert_eq!(error.attributes["reason"], "backend_closed");
+    assert!(matches!(received.get().await, Ok((2, Frame::End))));
+    worker.close().await;
+}
+
+#[tokio::test]
+async fn closing_after_admission_releases_the_reader_and_finishes_the_local_worker() {
+    let backend = RedisTurnBackend::new(None, Default::default()).unwrap();
+    let dropped = Arc::new(AtomicBool::new(false));
+    let hook = Arc::clone(&dropped);
+    let worker = TurnExecutor::new(
+        move |id| {
+            let signal = Arc::clone(&hook);
+            async move { Ok(Some(Probe(id, signal))) }
+        },
+        Default::default(),
+    )
+    .unwrap();
+    let (request, owner, incoming, mut received) = link();
+    let (accepted, taken) = tokio::sync::oneshot::channel();
+    backend.submit_here(worker.clone(), request, &owner, incoming, move || {
+        accepted.send(()).unwrap();
+    });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        taken.await.unwrap();
+        assert!(matches!(
+            received.get().await,
+            Ok((1, Frame::Accepted { .. }))
+        ));
+        assert!(matches!(
+            received.get().await,
+            Ok((2, Frame::Output { streams: true, .. }))
+        ));
+        backend.close().await.unwrap();
+        assert_eq!(received.get().await.unwrap_err().reason(), "backend_closed");
+        assert!(
+            dropped.load(Ordering::Acquire),
+            "the admitted worker's stream was not released"
+        );
+    })
+    .await
+    .unwrap();
     worker.close().await;
 }

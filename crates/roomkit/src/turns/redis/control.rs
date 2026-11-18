@@ -168,10 +168,7 @@ impl RedisTurnBackend {
             }
         }
         let mut pending = tokio::task::JoinSet::new();
-        for info in self.executors().await? {
-            if info.node.as_deref() == Some(self.node_id()) {
-                continue;
-            }
+        for info in super::registry::peers(self).await? {
             let matches_org = match audience {
                 Audience::Room(org) => org,
                 Audience::AllOrganizations => info

@@ -125,10 +125,8 @@ impl RedisTurnBackend {
             .filter(|(member, _)| !refused.contains(member))
             .collect();
         let mut elsewhere = BTreeMap::new();
-        for info in self.executors().await? {
-            if info.node.as_deref() == Some(self.node_id())
-                || !info.covers(channel.as_str(), hooks, organization)?
-            {
+        for info in super::registry::peers(self).await? {
+            if !info.covers(channel.as_str(), hooks, organization)? {
                 continue;
             }
             if let Some(node) = info.node {

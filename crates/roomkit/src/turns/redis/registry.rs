@@ -59,20 +59,25 @@ impl View {
 pub(super) async fn executors(
     backend: &RedisTurnBackend,
 ) -> Result<Vec<ExecutorInfo>, RoomKitError> {
-    let (view, timeout) = read_view(backend).await?;
-    let node = backend.node_id();
+    let elsewhere = peers(backend).await?;
     let mut rows: Vec<_> = crate::turns::lock(&backend.0.serving)
         .workers
         .iter()
         .filter(|worker| !worker.closed())
-        .map(|worker| local_info(worker, node))
+        .map(|worker| local_info(worker, backend.node_id()))
         .collect();
-    rows.extend(
-        view.declared(timeout)
-            .into_iter()
-            .filter(|row| row.node.as_deref() != Some(node)),
-    );
+    rows.extend(elsewhere);
     Ok(rows)
+}
+
+/// Other nodes' declarations. Local workers are read from the backend in serving order.
+pub(super) async fn peers(backend: &RedisTurnBackend) -> Result<Vec<ExecutorInfo>, RoomKitError> {
+    let (view, timeout) = read_view(backend).await?;
+    Ok(view
+        .declared(timeout)
+        .into_iter()
+        .filter(|info| info.node.as_deref() != Some(backend.node_id()))
+        .collect())
 }
 
 /// Locally served workers have live declarations, including workers whose

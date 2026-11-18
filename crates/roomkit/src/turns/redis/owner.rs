@@ -4,10 +4,11 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::RoomKitError;
+use crate::TurnExecutor;
 use crate::turns::pipe::{LinkFailure, PipeReceiver};
 use crate::turns::submission::Handover;
 use crate::turns::wire::{Control, Frame, RequestRest};
-use crate::turns::{CarriedRequest, MemoryTurn, WorkerTurn};
+use crate::turns::{CarriedRequest, MemoryTurn};
 
 use super::RedisTurnBackend;
 use super::placement::Placed;
@@ -16,7 +17,7 @@ use super::routes::TurnRoute;
 use super::stream::Message;
 
 enum Delivered {
-    Here(WorkerTurn),
+    Here(TurnExecutor, Box<CarriedRequest>),
     Elsewhere(String, TurnRoute),
 }
 
@@ -29,17 +30,20 @@ impl RedisTurnBackend {
         mut handover: Handover,
     ) {
         let result = self.hand_over(carried, &memory, &mut handover).await;
-        drop(handover);
         match result {
-            Ok(Delivered::Here(worker)) => self.serve_here(worker, &memory, controls),
+            Ok(Delivered::Here(worker, request)) => {
+                self.submit_here(worker, *request, &memory, controls, move || {
+                    handover.handed = true;
+                    drop(handover);
+                });
+            }
             Ok(Delivered::Elsewhere(peer, route)) => {
-                self.forward_owner(peer, memory, controls, route).await
+                drop(handover);
+                self.forward_owner(peer, memory, controls, route).await;
             }
             Err(error) => {
-                drop(memory.frames.put(&Frame::Error {
-                    error: crate::turns::error::kit_error(&error),
-                }));
-                drop(memory.frames.put(&Frame::End));
+                drop(handover);
+                refuse(&memory, &error);
             }
         }
     }
@@ -72,9 +76,7 @@ impl RedisTurnBackend {
                     continue;
                 }
                 Placed::Here(worker) => {
-                    let turn = self.take_here(&worker, carried, memory)?;
-                    handover.handed = true;
-                    return Ok(Delivered::Here(turn));
+                    return Ok(Delivered::Here(worker, Box::new(carried)));
                 }
                 Placed::Elsewhere(target) => target,
             };
@@ -175,6 +177,13 @@ impl RedisTurnBackend {
         }
         self.release_turn(&peer, &memory.turn_id).await;
     }
+}
+
+fn refuse(memory: &MemoryTurn, error: &RoomKitError) {
+    drop(memory.frames.put(&Frame::Error {
+        error: crate::turns::error::kit_error(error),
+    }));
+    drop(memory.frames.put(&Frame::End));
 }
 
 fn invalid(reason: String) -> RoomKitError {
