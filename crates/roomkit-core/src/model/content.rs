@@ -818,6 +818,7 @@ impl ToolCallContent {
     /// Whether this call supplied an answer the channel keeps in its tool memory.
     /// Historical end rows without an outcome also count as answered.
     #[must_use]
+    #[doc(hidden)]
     pub fn kept_in_tool_memory(&self) -> bool {
         matches!(
             self.outcome,
