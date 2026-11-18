@@ -151,16 +151,45 @@ impl Publisher {
         mark: Timestamp,
         event: EphemeralEvent,
     ) {
+        self.schedule(kit, event, || {
+            drain(
+                Arc::clone(self),
+                Arc::clone(kit),
+                (room.clone(), channel.clone()),
+                mark,
+            )
+        });
+    }
+
+    pub(crate) fn enqueue_outside(
+        self: &Arc<Self>,
+        wiring: &crate::turns::TurnWiring,
+        event: EphemeralEvent,
+    ) {
+        self.schedule(&wiring.kit, event, || {
+            let wiring = wiring.clone();
+            let mut draining = Draining {
+                publisher: Arc::clone(self),
+                finished: false,
+            };
+            async move {
+                while let Some(event) = draining.next() {
+                    wiring.publish_outside(event).await;
+                }
+            }
+        });
+    }
+
+    fn schedule<F: Future<Output = ()> + Send + 'static>(
+        &self,
+        kit: &Arc<dyn TurnKit>,
+        event: EphemeralEvent,
+        drain: impl FnOnce() -> F,
+    ) {
         if !self.add(event) {
             return;
         }
-        let drain = drain(
-            Arc::clone(self),
-            Arc::clone(kit),
-            (room.clone(), channel.clone()),
-            mark,
-        );
-        if !kit.spawn_publisher(Box::pin(drain)) {
+        if !kit.spawn_publisher(Box::pin(drain())) {
             tracing::debug!(target: "roomkit::turns", "the kit is shut down: a turn publishes nothing");
             self.stop();
         }

@@ -113,7 +113,7 @@ impl Loop {
         trigger: &RoomEvent,
         messages: &[Message],
     ) -> bool {
-        if self.callbacks.is_none() {
+        if self.context.callbacks.is_none() {
             return true;
         }
         let Some((built, context)) = self
@@ -138,7 +138,7 @@ impl Loop {
             tools: self.hook_tools(),
             ..self.round_context(messages, self.system_prompt.clone())
         };
-        let Some(turn) = self.callbacks.clone() else {
+        let Some(turn) = self.context.callbacks.clone() else {
             return Some((built.clone(), crate::SharedAiContext::new(built)));
         };
         let event = AiGenerationEvent {
@@ -148,7 +148,10 @@ impl Loop {
             purpose,
             ..AiGenerationEvent::new(built.clone(), self.context.channel_id.clone())
         };
-        let chain = turn.run(event).await;
+        let chain = match turn.run_if_reachable(event).await {
+            Ok(chain) => chain,
+            Err(skipped) => return Some((built, skipped.ai_context)),
+        };
         let blocked_by = chain.blocked.as_ref().map(|(name, reason)| {
             tracing::info!(target: "roomkit::ai", hook = %name, ?reason, "the generation was blocked by a hook");
             name.clone()
@@ -221,7 +224,7 @@ impl Loop {
     /// user's, each copy of a runtime mark replaced (RFC §6.4). A round
     /// that ran no call fires nothing.
     pub(super) async fn after_tool_round(&mut self, round_index: u32, ran: Ran) -> Vec<Message> {
-        let Some(turn) = self.callbacks.clone() else {
+        let Some(turn) = self.context.callbacks.clone() else {
             return Vec::new();
         };
         if ran.calls.is_empty() {
@@ -256,7 +259,7 @@ impl Loop {
     /// then emits `ai_response` once they ended (RFC §8.2, §9.2). Outside a
     /// kit nothing fires.
     pub(super) fn report(&self, reason: LoopEndReason, rounds: u32, spent: &Spent) {
-        let Some(turn) = self.callbacks.clone() else {
+        let Some(turn) = self.context.callbacks.clone() else {
             return;
         };
         let (segments, content) = response_transcript(spent.segments.iter().cloned());

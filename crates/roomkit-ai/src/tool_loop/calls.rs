@@ -160,7 +160,7 @@ impl Loop {
         let (ended, parts) = self.shaped(ended);
         // A skill's activation the hooks left as it served it is read whole.
         let own = kept_whole(&ended.call.name).then(|| ended.result.clone());
-        let ended = match &self.callbacks {
+        let ended = match &self.context.callbacks {
             Some(hooks) => hooks.on_tool_call(ended).await,
             None => ended,
         };
@@ -204,7 +204,7 @@ impl Loop {
             announced_only: false,
             structured_content: reported.structured_content.clone(),
         };
-        if let (None, Some(hooks)) = (&self.turn, &self.callbacks) {
+        if let (None, Some(hooks)) = (&self.turn, &self.context.callbacks) {
             hooks
                 .report_wired_tool(&reported, called.report.callback())
                 .await;
@@ -220,7 +220,7 @@ impl Loop {
     /// reports it to the kit's observers.
     fn tell(&self, called: &Called, nth: usize, reported: &ToolCallReport, end: &ToolEnd) {
         let Some(turn) = &self.turn else {
-            if let Some(hooks) = &self.callbacks {
+            if let Some(hooks) = &self.context.callbacks {
                 hooks.report_abandoned_wired_tool(reported.clone(), called.report.callback());
             } else if end.outcome == ToolCallOutcome::Served {
                 called.report.claim();
@@ -456,7 +456,7 @@ impl Loop {
             }
         };
         let asked = call.arguments.clone();
-        let Some(hooks) = &self.callbacks else {
+        let Some(hooks) = &self.context.callbacks else {
             return Gated::Runs { call, asked };
         };
         let arguments = match hooks.before_tool_use(&call, called.report.callback()).await {

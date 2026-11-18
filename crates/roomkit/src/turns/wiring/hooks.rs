@@ -23,6 +23,7 @@ struct Wired {
     room: RoomId,
     channel: ChannelId,
     kind: ChannelType,
+    publisher: Arc<crate::turn::publish::Publisher>,
 }
 
 impl From<TurnHost> for ChannelTurnHooks {
@@ -50,6 +51,7 @@ impl TurnWiring {
             room: room.clone(),
             channel: channel.clone(),
             kind: kind.clone(),
+            publisher: Arc::default(),
         })))
     }
 }
@@ -90,6 +92,14 @@ impl ChannelTurnHooks {
     pub(crate) fn timeout<P>(&self, spec: &HookSpec, ran: &HookOutcome<P>) {
         if let Some(data) = crate::turn::timeout_data(spec, ran) {
             self.emit_later("hook_timeout", data);
+        }
+    }
+
+    /// Queue a room notification in order through this channel's outlet.
+    pub fn publish_ephemeral(&self, event: crate::realtime::EphemeralEvent) {
+        match &self.0 {
+            Binding::Turn(host) => host.publish_ephemeral(event),
+            Binding::Wired(bound) => bound.publisher.enqueue_outside(&bound.wiring, event),
         }
     }
 

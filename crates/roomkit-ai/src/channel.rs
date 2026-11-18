@@ -1875,7 +1875,8 @@ impl<P: AiProvider> AiChannel<P> {
             shown,
             role,
         )?;
-        let tools = self.tool_context((&event, &context), turn.clone(), stands_alone);
+        let mut tools = self.tool_context((&event, &context), turn.clone(), stands_alone);
+        tools.callbacks = self.channel_callbacks(&context.room.id, turn.as_ref());
         let mut looped = Loop {
             record: record.clone(),
             provider: started.provider,
@@ -1898,7 +1899,6 @@ impl<P: AiProvider> AiChannel<P> {
             reasoning_effort: settings.reasoning_effort.clone(),
             response_schema: settings.response_schema.clone(),
             turn: turn.clone(),
-            callbacks: self.channel_callbacks(&context.room.id, turn.as_ref()),
             context: tools,
             intents: self.intents.on,
             intents_required: self.intents.required,

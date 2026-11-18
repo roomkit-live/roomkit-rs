@@ -100,30 +100,75 @@ impl crate::turns::ChannelTurnHooks {
 
     /// Run the synchronous chain and then its observers if the chain was allowed.
     pub async fn run<P: TurnPayload>(&self, payload: P) -> TurnChain<P> {
+        self.run_if_reachable(payload)
+            .await
+            .unwrap_or_else(TurnChain::unchanged)
+    }
+
+    /// Run the hooks or return the unchanged payload when their room cannot
+    /// be read. A generation skipped for this reason emits no hook result.
+    ///
+    /// # Errors
+    /// Returns the original payload when a registered hook cannot read its room.
+    pub async fn run_if_reachable<P: TurnPayload>(&self, payload: P) -> Result<TurnChain<P>, P> {
         let hooks = self.hooks::<P>();
         if hooks.is_empty() {
-            return TurnChain::unchanged(payload);
+            return Ok(TurnChain::unchanged(payload));
         }
         let Some(context) = self.context(P::TRIGGER).await else {
-            return TurnChain::unchanged(payload);
+            return Err(payload);
         };
         let chain = self.chain(&hooks, payload, &context).await;
         if chain.blocked.is_none() {
             self.observe_with(&hooks, &chain.payload, &context, None);
         }
-        chain
+        Ok(chain)
     }
 
     /// Run the synchronous decision chain without starting observers.
     pub async fn decide<P: TurnPayload>(&self, payload: P) -> TurnChain<P> {
+        self.decision_in_context(payload).await.0
+    }
+
+    /// Run the decision and schedule its observers on the same room snapshot.
+    /// They see the standing payload, including a silence left by a block.
+    pub async fn decide_and_observe<P: TurnPayload>(
+        &self,
+        payload: P,
+        standing: impl FnOnce(TurnChain<P>) -> P,
+    ) -> P {
+        let (decision, selection) = self.decision_in_context(payload).await;
+        let payload = standing(decision);
+        if let Some((hooks, context)) = selection {
+            self.observe_with(&hooks, &payload, &context, None);
+        }
+        payload
+    }
+
+    async fn decision_in_context<P: TurnPayload>(
+        &self,
+        payload: P,
+    ) -> (
+        TurnChain<P>,
+        Option<(TurnHooks<P>, crate::model::RoomContext)>,
+    ) {
         let hooks = self.hooks::<P>();
         if hooks.is_empty() {
-            return TurnChain::unchanged(payload);
+            return (TurnChain::unchanged(payload), None);
         }
         let Some(context) = self.context(P::TRIGGER).await else {
-            return TurnChain::unchanged(payload);
+            let mut decision = TurnChain::unchanged(payload);
+            if let Some((spec, _)) = hooks.iter().find(|(spec, _)| {
+                spec.execution == HookExecution::Sync
+                    && (spec.fail_closed || spec.trigger.fails_closed())
+            }) {
+                decision.failed_closed = true;
+                decision.blocked = Some((spec.name.clone(), None));
+            }
+            return (decision, None);
         };
-        self.chain(&hooks, payload, &context).await
+        let decision = self.chain(&hooks, payload, &context).await;
+        (decision, Some((hooks, context)))
     }
 
     /// Schedule every observer, then the completion action once all finish.

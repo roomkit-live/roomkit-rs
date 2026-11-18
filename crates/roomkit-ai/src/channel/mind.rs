@@ -5,7 +5,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use roomkit::current_turn_host;
+use roomkit::turns::ChannelTurnHooks;
 use tokio::sync::{Notify, oneshot};
 use tokio::task::JoinHandle;
 
@@ -72,6 +72,7 @@ impl Mind {
         self: &Arc<Self>,
         context: SharedAiContext,
         answering: bool,
+        callbacks: Option<ChannelTurnHooks>,
         late: Late,
     ) -> (u64, oneshot::Sender<bool>) {
         let (previous, start) = oneshot::channel();
@@ -94,7 +95,14 @@ impl Mind {
                 }
             };
             let duration = (started.elapsed().as_secs_f64() * 1000.0).round_ties_even();
-            let thought = mind.complete(ticket, spoke, answering, thought, duration);
+            let thought = mind.complete(
+                ticket,
+                spoke,
+                answering,
+                thought,
+                duration,
+                callbacks.as_ref(),
+            );
             if disposition.await.unwrap_or(false)
                 && mind.state().asked == ticket
                 && !thought.want_to_say.is_empty()
@@ -123,6 +131,7 @@ impl Mind {
         answering: bool,
         mut thought: Thought,
         duration_ms: f64,
+        callbacks: Option<&ChannelTurnHooks>,
     ) -> Thought {
         let previous = {
             let mut state = self.state();
@@ -133,6 +142,7 @@ impl Mind {
         };
         if thought != previous {
             report(
+                callbacks,
                 &self.room,
                 &self.channel,
                 thought.clone(),
@@ -198,14 +208,15 @@ impl Mind {
 }
 
 pub(super) fn report(
+    callbacks: Option<&ChannelTurnHooks>,
     room: &str,
     channel: &str,
     thought: Thought,
     previous: Thought,
     duration_ms: Option<f64>,
 ) {
-    if let Some(host) = current_turn_host() {
-        host.observe_turn(
+    if let Some(hooks) = callbacks {
+        hooks.observe(
             &ThoughtEvent {
                 room_id: room.into(),
                 channel_id: channel.into(),

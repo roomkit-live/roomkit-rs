@@ -236,7 +236,6 @@ pub(crate) struct Loop {
     pub(crate) response_schema: Option<Map<String, Value>>,
     /// The kit's turn, whose hooks each call runs; `None` outside the kit.
     pub(crate) turn: Option<TurnHost>,
-    pub(crate) callbacks: Option<roomkit::turns::ChannelTurnHooks>,
     pub(crate) context: ToolContext,
     /// Whether the model writes each call's intent (RFC §6.4).
     pub(crate) intents: bool,
@@ -333,7 +332,7 @@ impl Loop {
                 self.thinking_publication,
             ),
             thinking: ThinkingWindow::new(
-                self.turn.as_ref(),
+                self.context.callbacks.as_ref(),
                 ids,
                 round,
                 self.thinking_publication,

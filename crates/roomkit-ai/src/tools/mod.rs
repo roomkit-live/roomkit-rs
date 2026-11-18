@@ -284,6 +284,7 @@ pub struct ToolContext {
     /// The room snapshot the turn read, for names in tool answers.
     pub(crate) room_metadata: Option<Arc<Metadata>>,
     turn: Option<TurnHost>,
+    pub(crate) callbacks: Option<roomkit::turns::ChannelTurnHooks>,
     /// Whether the turn is an instruction that stands alone, which reads
     /// none of the room's working state (RFC §10.1.1 rule 7).
     pub(crate) stands_alone: bool,
@@ -318,6 +319,7 @@ impl ToolContext {
             channel_id,
             room_metadata: None,
             turn: None,
+            callbacks: None,
             stands_alone: false,
             actor_id: None,
             requester: None,
@@ -343,6 +345,7 @@ impl ToolContext {
 
     /// The same context, within `turn`.
     pub(crate) fn within(mut self, turn: Option<TurnHost>) -> Self {
+        self.callbacks = turn.clone().map(Into::into);
         self.turn = turn;
         self
     }

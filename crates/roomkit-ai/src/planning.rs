@@ -89,7 +89,8 @@ impl TaskPlanner {
 /// observer work is tracked by the existing turn machinery (RFC §10.6.6).
 fn notify(context: &ToolContext, tasks: &[PlanTaskHandle]) {
     let Some(turn) = context
-        .turn()
+        .callbacks
+        .as_ref()
         .filter(|_| !context.room_id.as_str().is_empty())
     else {
         return;
@@ -113,7 +114,7 @@ fn notify(context: &ToolContext, tasks: &[PlanTaskHandle]) {
         tasks: tasks.to_vec(),
         ..PlanUpdatedEvent::new(context.room_id.to_string(), context.channel_id.to_string())
     };
-    turn.observe_turn(&event, || {});
+    turn.observe(&event, || {});
 }
 
 impl DynToolset for TaskPlanner {

@@ -143,28 +143,35 @@ impl<P: AiProvider> AiChannel<P> {
                 decision,
             )
         };
-        Some(hooked(report).await)
+        let callbacks = self.channel_callbacks(&context.room.id, current_turn_host().as_ref());
+        Some(hooked(report, callbacks).await)
     }
 }
 
-async fn hooked(mut report: SpeakDecisionEvent) -> SpeakDecision {
-    let Some(host) = current_turn_host() else {
+async fn hooked(
+    report: SpeakDecisionEvent,
+    callbacks: Option<roomkit::turns::ChannelTurnHooks>,
+) -> SpeakDecision {
+    let Some(hooks) = callbacks else {
         return report.decision;
     };
-    let chain = host.decide_turn(report.clone()).await;
-    report.decision = match chain.blocked {
-        Some((hook, _)) => SpeakDecision {
-            reason: if chain.failed_closed {
-                format!("hook_error:{hook}")
-            } else {
-                format!("blocked by {hook}")
-            },
-            ..SpeakMode::Silent.into()
-        },
-        None => chain.payload.decision,
-    };
-    host.observe_turn(&report, || {});
-    report.decision
+    hooks
+        .decide_and_observe(report, |chain| {
+            let mut standing = chain.payload;
+            if let Some((hook, _)) = chain.blocked {
+                standing.decision = SpeakDecision {
+                    reason: if chain.failed_closed {
+                        format!("hook_error:{hook}")
+                    } else {
+                        format!("blocked by {hook}")
+                    },
+                    ..SpeakMode::Silent.into()
+                };
+            }
+            standing
+        })
+        .await
+        .decision
 }
 
 fn speak_turn(

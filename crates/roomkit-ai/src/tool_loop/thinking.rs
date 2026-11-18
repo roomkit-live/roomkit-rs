@@ -9,9 +9,9 @@
 //! channel, its text only for a channel that opted in
 //! ([`AiChannelOptions::publish_thinking_text`](crate::AiChannelOptions::publish_thinking_text)).
 
-use roomkit::TurnHost;
 use roomkit::model::{ChannelId, Metadata, RoomId};
 use roomkit::realtime::{EphemeralEvent, EphemeralEventType};
+use roomkit::turns::ChannelTurnHooks;
 use serde_json::Value;
 use tokio::time::Instant;
 
@@ -96,7 +96,7 @@ pub(crate) struct ThinkingPublication {
 /// Who observes a turn's reasoning, a turn run by a kit's.
 #[derive(Clone)]
 struct Observers {
-    turn: TurnHost,
+    turn: ChannelTurnHooks,
     room_id: RoomId,
     channel_id: ChannelId,
     /// Whether the room's subscribers read the reasoning's text.
@@ -156,7 +156,7 @@ impl ThinkingWindow {
     /// The window of round `round` of a turn in `room_id`, on `turn`'s kit,
     /// none observing outside a kit.
     pub(super) fn new(
-        turn: Option<&TurnHost>,
+        turn: Option<&ChannelTurnHooks>,
         (room_id, channel_id): (&RoomId, &ChannelId),
         round: u32,
         publication: ThinkingPublication,
@@ -222,7 +222,7 @@ impl ThinkingWindow {
                 block,
             )
         };
-        observers.turn.observe_turn(&event, || {});
+        observers.turn.observe(&event, || {});
     }
 
     /// Closes the window of a try that showed reasoning alone before it

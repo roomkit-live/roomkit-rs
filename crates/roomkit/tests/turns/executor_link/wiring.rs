@@ -1,6 +1,7 @@
 //! Public application wiring, including the independent worker's last room context.
 mod ordinary_tools;
 
+mod observed;
 use super::{Link, link};
 use roomkit::model::{ChannelId, RoomContext, RoomEvent, RoomId};
 use roomkit::testing::{EchoAgent, EchoAgentOptions};
@@ -81,6 +82,7 @@ async fn wiring_retains_the_last_admitted_room_until_its_last_channel_detaches()
 }
 
 struct Env {
+    realtime: Option<Arc<dyn roomkit::realtime::RealtimeBackend>>,
     rows: Vec<RoomEvent>,
     tasks: Vec<roomkit::model::Metadata>,
     row_reads: Mutex<Vec<Option<u64>>>,
@@ -92,6 +94,7 @@ impl Env {
     fn new(context: RoomContext) -> Self {
         Self {
             context,
+            realtime: None,
             events: Mutex::default(),
             rows: Vec::new(),
             tasks: Vec::new(),
@@ -101,6 +104,14 @@ impl Env {
 }
 
 impl WiringEnv for Env {
+    fn realtime(&self) -> Option<Arc<dyn roomkit::realtime::RealtimeBackend>> {
+        self.realtime.clone()
+    }
+
+    fn room_mark<'a>(&'a self, _: &'a RoomId) -> TurnFuture<'a, Option<roomkit::model::Timestamp>> {
+        Box::pin(async { Some(self.context.room.created_at) })
+    }
+
     fn context<'a>(
         &'a self,
         _: &'a RoomId,

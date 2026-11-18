@@ -52,7 +52,7 @@ impl Loop {
         let report =
             ToolCallReport::new(ran).ended(ToolCallOutcome::Cancelled, Value::String(text));
         let Some(turn) = &self.turn else {
-            if let Some(hooks) = &self.callbacks {
+            if let Some(hooks) = &self.context.callbacks {
                 hooks.report_abandoned_wired_tool(report, called.report.callback());
             }
             return;

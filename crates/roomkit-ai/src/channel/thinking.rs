@@ -66,7 +66,14 @@ impl<P: AiProvider> AiChannel<P> {
                 })
             },
         );
-        let (ticket, classified) = mind.ask(input, self.loops.answering_in(&context.room.id), late);
+        let callbacks =
+            self.channel_callbacks(&context.room.id, roomkit::current_turn_host().as_ref());
+        let (ticket, classified) = mind.ask(
+            input,
+            self.loops.answering_in(&context.room.id),
+            callbacks,
+            late,
+        );
         if decision.r#final
             || self.speech.wait.is_zero()
             || !mind.settled(ticket, self.speech.wait).await
@@ -100,6 +107,8 @@ impl<P: AiProvider> AiChannel<P> {
         let now = spoken.said();
         if now != spoken {
             report(
+                self.channel_callbacks(room, roomkit::current_turn_host().as_ref())
+                    .as_ref(),
                 room.as_str(),
                 self.channel_id.as_str(),
                 now,
