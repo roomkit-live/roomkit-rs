@@ -4,9 +4,11 @@
 //! `ROOMKIT_CONFORMANCE_JUNIT` names a directory, a relative one read from
 //! the repository's root, each pass writes `<backend>-<runtime>.xml` there:
 //! one test case per selected scenario, named by its id, under the class
-//! `conformance.<backend>.<runtime>`. Without the variable nothing is
+//! `conformance.<backend>.<runtime>`, and the commit the run was at, with
+//! whether tracked files differed from it. Without the variable nothing is
 //! written.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 /// The variable naming the directory the result files go to.
@@ -29,13 +31,45 @@ pub(crate) struct Case {
     pub(crate) outcome: Outcome,
 }
 
-/// The file the pass of `runtime` on `backend` writes when
-/// `ROOMKIT_CONFORMANCE_JUNIT` asks for one, with the file an earlier run
-/// left there removed: a pass that stops before writing leaves none.
-pub(crate) fn claim(backend: &str, runtime: &str) -> Option<PathBuf> {
-    let directory = std::env::var_os(VARIABLE).filter(|directory| !directory.is_empty())?;
-    // Cargo runs a test from its crate's directory; an absolute path stays.
+/// Where a pass writes its results, and the revision it ran at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Output {
+    pub(crate) file: PathBuf,
+    pub(crate) revision: Revision,
+}
+
+/// The commit a run is at, as git reads it in the repository, `unknown`
+/// when git cannot tell, and whether the tracked files are the commit's:
+/// roomkit-specs records a run only at the commit it ran at, clean.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Revision {
+    pub(crate) commit: String,
+    pub(crate) clean: bool,
+}
+
+/// Where the pass of `runtime` on `backend` writes its results when
+/// `ROOMKIT_CONFORMANCE_JUNIT` asks for it, and the revision it runs at.
+pub(crate) fn claim(backend: &str, runtime: &str) -> Option<Output> {
+    // Cargo runs a test from its crate's directory.
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let file = claim_in(std::env::var_os(VARIABLE), &root, backend, runtime)?;
+    Some(Output {
+        file,
+        revision: revision(&root),
+    })
+}
+
+/// The file of the pass of `runtime` on `backend` in `directory`, a
+/// relative one read from `root`, none without a directory; the file an
+/// earlier run left there is removed, so a pass that stops before writing
+/// leaves none.
+pub(crate) fn claim_in(
+    directory: Option<OsString>,
+    root: &Path,
+    backend: &str,
+    runtime: &str,
+) -> Option<PathBuf> {
+    let directory = directory.filter(|directory| !directory.is_empty())?;
     let file = root
         .join(directory)
         .join(format!("{backend}-{runtime}.xml"));
@@ -49,17 +83,48 @@ pub(crate) fn claim(backend: &str, runtime: &str) -> Option<PathBuf> {
     Some(file)
 }
 
-/// Writes `cases`, the pass of `runtime` on `backend`, to `file`.
-pub(crate) fn write(file: &Path, backend: &str, runtime: &str, cases: &[Case]) {
-    if let Some(directory) = file.parent() {
-        std::fs::create_dir_all(directory).unwrap();
+/// The revision of the repository at `root`, as git reports it.
+pub(crate) fn revision(root: &Path) -> Revision {
+    let git = |arguments: &[&str]| {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(arguments)
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    };
+    let commit = git(&["rev-parse", "HEAD"]);
+    let changes = git(&["status", "--porcelain", "--untracked-files=no"]);
+    match (commit, changes) {
+        (Some(commit), Some(changes)) => Revision {
+            commit,
+            clean: changes.is_empty(),
+        },
+        _ => Revision {
+            commit: "unknown".to_owned(),
+            clean: false,
+        },
     }
-    std::fs::write(file, render(backend, runtime, cases)).unwrap();
 }
 
-/// The report of `cases`, the pass of `runtime` on `backend`: one line per
-/// case, in the order the pass ran them.
-pub(crate) fn render(backend: &str, runtime: &str, cases: &[Case]) -> String {
+/// Writes `cases`, the pass of `runtime` on `backend`, to `output`.
+pub(crate) fn write(output: &Output, backend: &str, runtime: &str, cases: &[Case]) {
+    let file = &output.file;
+    if let Some(directory) = file.parent() {
+        std::fs::create_dir_all(directory)
+            .map_err(|error| format!("cannot create {}: {error}", directory.display()))
+            .unwrap();
+    }
+    std::fs::write(file, render(backend, runtime, &output.revision, cases))
+        .map_err(|error| format!("cannot write {}: {error}", file.display()))
+        .unwrap();
+}
+
+/// The report of `cases`, the pass of `runtime` on `backend` at `revision`:
+/// one line per case, in the order the pass ran them.
+pub(crate) fn render(backend: &str, runtime: &str, revision: &Revision, cases: &[Case]) -> String {
     let class = format!("conformance.{backend}.{runtime}");
     let count =
         |kind: fn(&Outcome) -> bool| cases.iter().filter(|case| kind(&case.outcome)).count();
@@ -69,8 +134,12 @@ pub(crate) fn render(backend: &str, runtime: &str, cases: &[Case]) -> String {
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
          <testsuites name=\"cargo tests\">\n\
          <testsuite name=\"{class}\" tests=\"{}\" failures=\"{failures}\" errors=\"0\" \
-         skipped=\"{skipped}\">\n",
-        cases.len()
+         skipped=\"{skipped}\">\n\
+         <properties><property name=\"commit\" value=\"{}\"/>\
+         <property name=\"clean\" value=\"{}\"/></properties>\n",
+        cases.len(),
+        escape(&revision.commit),
+        revision.clean
     );
     for case in cases {
         let opening = format!(

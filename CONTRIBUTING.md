@@ -80,7 +80,8 @@ thread; `make postgres-test` runs them on PostgreSQL. When
 repository's root, each pass also writes `<backend>-<runtime>.xml` there: a
 JUnit XML report with one case per scenario, named by its id, under the class
 `conformance.<backend>.<runtime>` (runtime `current_thread` or
-`multi_thread_4`), passed, failed or skipped. The scenarios no runner here
+`multi_thread_4`), passed, failed or skipped, and the commit the run was at,
+with whether tracked files differed from it. The scenarios no runner here
 runs are skipped with their reason. Without the variable nothing is written.
 
 ```sh

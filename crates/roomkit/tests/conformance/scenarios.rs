@@ -210,10 +210,10 @@ fn judge(id: String, scenario: &Value, pass: &Pass, known: &[(&str, &str)], run:
 )]
 pub(crate) fn every_scenario_gives_what_the_rfc_says(pass: &Pass, known: &[(&str, &str)]) {
     let filter = std::env::var("ROOMKIT_CONFORMANCE_FILTER").ok();
-    let file = junit::claim(crate::BACKEND, pass.runtime);
+    let output = junit::claim(crate::BACKEND, pass.runtime);
     let run = run(&suite().join("scenarios"), filter.as_deref(), pass, known);
-    if let Some(file) = &file {
-        junit::write(file, crate::BACKEND, pass.runtime, &run.cases);
+    if let Some(output) = &output {
+        junit::write(output, crate::BACKEND, pass.runtime, &run.cases);
     }
     println!(
         "{}: {} scenarios, {} failing: {:?}",
