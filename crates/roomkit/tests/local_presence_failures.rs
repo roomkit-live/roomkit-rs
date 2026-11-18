@@ -270,7 +270,7 @@ async fn a_redis_owner_retries_a_reserved_failure_and_releases_only_unpublished_
         let failures = if delivered { 2 } else { usize::MAX };
         let realtime = Arc::new(Backend::new(failures, EphemeralEventType::PresenceOnline));
         let kit = RoomKit::new(RoomKitOptions {
-            turn_backend: Some(std::sync::Arc::new(owner)),
+            turn_backend: Some(Arc::new(owner)),
             realtime: Some(Arc::<Backend>::clone(&realtime)),
             ..Default::default()
         });

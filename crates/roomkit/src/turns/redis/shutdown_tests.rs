@@ -10,8 +10,8 @@ use tokio::time::timeout;
 use super::stream::Message;
 use super::{RedisTurnBackend, RedisTurnBackendOptions};
 use crate::testing::{EchoAgent, EchoAgentOptions};
-use crate::turns::wire::RoomCallResult;
 use crate::turns::TurnTimeouts;
+use crate::turns::wire::RoomCallResult;
 use crate::{TurnExecutor, TurnExecutorOptions};
 
 const LIMIT: Duration = Duration::from_secs(3);
