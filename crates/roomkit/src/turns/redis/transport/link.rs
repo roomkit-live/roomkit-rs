@@ -1,6 +1,6 @@
 //! A public owner reads the same numbered pipes the built-in driver receives.
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Mutex;
 
 use crate::RoomKitError;
@@ -13,6 +13,7 @@ pub(in crate::turns::redis) struct RedisLink {
     request: TurnRequest,
     pub(in crate::turns::redis) memory: Arc<MemoryTurn>,
     reader: Mutex<Reader>,
+    pub(in crate::turns::redis) read_end: Arc<AtomicBool>,
 }
 
 struct Reader {
@@ -33,6 +34,7 @@ impl RedisLink {
             Self {
                 request,
                 memory,
+                read_end: Arc::default(),
                 reader: Mutex::new(Reader {
                     frames: read,
                     ended: None,
@@ -59,7 +61,12 @@ impl TurnLink for RedisLink {
                 return Err(TurnError::link(error).into_kit_error());
             }
             match read.frames.get().await {
-                Ok(frame) => Ok(frame),
+                Ok((seq, frame)) => {
+                    if matches!(frame, Frame::End) {
+                        self.read_end.store(true, Ordering::Release);
+                    }
+                    Ok((seq, frame))
+                }
                 Err(error) => {
                     let failure = TurnError::link(&error).into_kit_error();
                     read.ended = Some(error);

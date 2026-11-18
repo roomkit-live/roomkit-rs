@@ -39,10 +39,11 @@ impl RedisTurnBackend {
                 let mut pending = PendingHandover::new(self, &peer, &memory.turn_id);
                 let backend = self.clone();
                 let destination = peer.clone();
+                let read_end = Arc::clone(&link.read_end);
                 let memory = Arc::clone(memory);
                 if !self.dispatch(async move {
                     backend
-                        .forward_owner(destination, memory, controls, route)
+                        .forward_owner(destination, memory, controls, route, Some(read_end))
                         .await;
                 }) {
                     return Err(routes::closed());

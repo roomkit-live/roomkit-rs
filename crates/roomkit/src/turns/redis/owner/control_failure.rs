@@ -38,7 +38,7 @@ async fn a_control_redis_refuses_reports_frame_loss_to_the_owner() {
     link.controls.put(&Control::Heartbeat).unwrap();
     tokio::time::timeout(
         Duration::from_secs(3),
-        backend.forward_owner(peer.into(), link, outgoing, route),
+        backend.forward_owner(peer.into(), link, outgoing, route, None),
     )
     .await
     .unwrap();
@@ -87,7 +87,7 @@ async fn an_inbound_frame_is_read_while_an_outgoing_write_is_backed_up() {
     ));
     let route = backend.route_turn(&id, peer, false).unwrap();
     link.controls.put(&Control::Heartbeat).unwrap();
-    let forwarding = backend.forward_owner(peer.into(), link, outgoing, route);
+    let forwarding = backend.forward_owner(peer.into(), link, outgoing, route, None);
     tokio::pin!(forwarding);
     tokio::select! {biased; ()=&mut forwarding=>panic!("owner bridge exited"), ()=std::future::ready(())=>{}}
 
@@ -138,11 +138,61 @@ async fn cancelling_a_redis_handover_after_delivery_releases_the_waiting_worker(
             _ = &mut waiting => panic!("the worker never answered"),
             () = async { while conn.xlen::<_,u64>(&key).await.unwrap() == 0 { tokio::task::yield_now().await; } } => {}
         }
-        drop(waiting);
+        std::thread::scope(|scope| scope.spawn(move || drop(waiting)).join().unwrap());
         while conn.xlen::<_,u64>(&key).await.unwrap() < 2 { tokio::task::yield_now().await; }
         let stream: redis::streams::StreamRangeReply = conn.xrange_all(&key).await.unwrap();
         let kinds: Vec<String> = stream.ids.iter().filter_map(|item| item.get("kind")).collect();
         assert_eq!(kinds, ["request","released"]);
     }).await.unwrap();
+    backend.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires REDIS_URL"]
+async fn releasing_a_public_link_tells_its_peer_only_before_its_end_was_read() {
+    use crate::turns::{TurnLink, TurnRequest};
+    let url = std::env::var("REDIS_URL").unwrap();
+    let backend = RedisTurnBackend::new(
+        Some(&url),
+        RedisTurnBackendOptions {
+            key_prefix: format!("test:roomkit:public-release:{}", Uuid::new_v4()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let fixture = include_str!("../../../../tests/fixtures/turns/python-case1.jsonl");
+    let row: serde_json::Value = serde_json::from_str(fixture.lines().next().unwrap()).unwrap();
+    let request: TurnRequest = serde_json::from_value(row["message"].clone()).unwrap();
+    let mut conn = backend.connection().await.unwrap();
+    for (peer, read_end) in [("reader", true), ("abandoned", false)] {
+        let (link, controls) =
+            super::super::transport::RedisLink::new(request.clone(), backend.timeouts());
+        let route = backend.route_turn(&request.turn_id, peer, false).unwrap();
+        link.memory.frames.put(&Frame::End).unwrap();
+        if read_end {
+            assert!(matches!(link.receive().await.unwrap(), (1, Frame::End)));
+        }
+        link.release();
+        backend
+            .forward_owner(
+                peer.into(),
+                Arc::clone(&link.memory),
+                controls,
+                route,
+                Some(Arc::clone(&link.read_end)),
+            )
+            .await;
+        let stream: redis::streams::StreamRangeReply = conn
+            .xrange_all(backend.key(&format!("inbox:{peer}")))
+            .await
+            .unwrap();
+        let kinds: Vec<String> = stream
+            .ids
+            .iter()
+            .filter_map(|item| item.get("kind"))
+            .collect();
+        let expected = if read_end { vec![] } else { vec!["released"] };
+        assert_eq!(kinds, expected);
+    }
     backend.close().await.unwrap();
 }

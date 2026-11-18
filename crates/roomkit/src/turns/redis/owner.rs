@@ -3,6 +3,7 @@ mod local;
 mod submitted;
 use std::collections::BTreeSet;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::Worker;
 use crate::RoomKitError;
@@ -42,7 +43,8 @@ impl RedisTurnBackend {
             }
             Ok(Delivered::Elsewhere(peer, route)) => {
                 drop(handover);
-                self.forward_owner(peer, memory, controls, route).await;
+                self.forward_owner(peer, memory, controls, route, None)
+                    .await;
             }
             Err(error) => {
                 drop(handover);
@@ -154,6 +156,7 @@ impl RedisTurnBackend {
         memory: Arc<MemoryTurn>,
         mut controls: PipeReceiver<Control>,
         mut route: TurnRoute,
+        read_end: Option<Arc<AtomicBool>>,
     ) {
         let mut write = super::outbox::PendingWrite::default();
         loop {
@@ -183,7 +186,9 @@ impl RedisTurnBackend {
                 break;
             }
         }
-        self.release_turn(&peer, &memory.turn_id).await;
+        if read_end.is_none_or(|read| !read.load(Ordering::Acquire)) {
+            self.release_turn(&peer, &memory.turn_id).await;
+        }
     }
 }
 
@@ -193,6 +198,7 @@ struct PendingHandover<'a> {
     peer: &'a str,
     turn: &'a str,
     armed: bool,
+    runtime: tokio::runtime::Handle,
 }
 
 impl<'a> PendingHandover<'a> {
@@ -202,6 +208,7 @@ impl<'a> PendingHandover<'a> {
             peer,
             turn,
             armed: true,
+            runtime: tokio::runtime::Handle::current(),
         }
     }
 }
@@ -209,6 +216,8 @@ impl<'a> PendingHandover<'a> {
 impl Drop for PendingHandover<'_> {
     fn drop(&mut self) {
         if self.armed {
+            // A Send submission can be dropped from a thread outside the runtime.
+            let _runtime = self.runtime.enter();
             let release = Message::new(
                 "released",
                 self.backend.node_id(),
