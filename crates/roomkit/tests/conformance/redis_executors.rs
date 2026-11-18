@@ -237,12 +237,18 @@ impl crate::run::WorkerControl for Workers {
 }
 
 async fn exercise(url: &str, scenario: &Value) -> Result<Vec<String>, RoomKitError> {
-    let setup = &scenario["setup"];
-    let parse_error = |e: serde_json::Error| RoomKitError::Value(e.to_string());
+    #[derive(Deserialize)]
+    struct Setup {
+        executors: Vec<Worker>,
+        #[serde(default)]
+        channels: Vec<Value>,
+    }
+    let setup: Setup = serde_json::from_value(scenario["setup"].clone())
+        .map_err(|error| RoomKitError::Value(error.to_string()))?;
     let workers = Arc::new(Workers {
         topology: topology::Topology::new(url, scenario)?,
-        declarations: serde_json::from_value(setup["executors"].clone()).map_err(parse_error)?,
-        channels: Arc::new(serde_json::from_value(setup["channels"].clone()).map_err(parse_error)?),
+        declarations: setup.executors,
+        channels: Arc::new(setup.channels),
         slot: RunSlot::default(),
         active: Mutex::default(),
         mortal: scenario["steps"]
@@ -270,4 +276,19 @@ async fn exercise(url: &str, scenario: &Value) -> Result<Vec<String>, RoomKitErr
     }
     owner.close().await?;
     Ok(problems)
+}
+
+#[test]
+fn an_executor_inventory_needs_no_channel_definitions() {
+    if !crate::backend_available() {
+        return;
+    }
+    let scenario = serde_json::json!({
+        "id": "catalog/no-channels",
+        "setup": {"executors": []},
+        "steps": [{"call": "executors", "expect": {"result": []}}]
+    });
+    if let Some(problems) = run(&scenario, crate::scenarios::ONE_THREAD.build) {
+        assert!(problems.is_empty(), "{problems:?}");
+    }
 }
