@@ -19,6 +19,7 @@
 //! know them ([`visible_events`]). The history then crosses to the turn's
 //! executor whole, so a turn run apart reads the same rows.
 
+pub(crate) mod distributed;
 pub(crate) mod window;
 
 use roomkit_core::model::{ChannelBinding, EventType, RoomContext, RoomEvent, RoomId};
@@ -156,7 +157,6 @@ async fn read<S: ConversationStore>(
         include_blocked: true,
         ..EventFilter::default()
     };
-    let rows = tool_rows(binding);
     let options = messages_up_to(event, messages, window, read_through);
     let (mut history, history_start_index) = read_messages(store, event, options, window).await?;
     if !matches!(event.r#type, EventType::Message | EventType::Instruction) {
@@ -167,37 +167,54 @@ async fn read<S: ConversationStore>(
         .map(|known| known.index)
         .chain(answered_index(event))
         .min();
+    history.extend(private_rows(store, binding, &event.room_id, first).await?);
+    history.sort_by_key(|event| event.index);
+    history.dedup_by(|later, earlier| later.id == earlier.id);
+    Ok((history, history_start_index))
+}
+
+/// All rows read by this agent, with older tool-memory rows marked for the
+/// local model's transcript. The distributed wire removes that local marker.
+async fn private_rows<S: ConversationStore>(
+    store: &S,
+    binding: &ChannelBinding,
+    room: &RoomId,
+    first: Option<u64>,
+) -> Result<Vec<RoomEvent>, StoreError> {
     // Where the rows the history replays start: after the room's message
     // before its first event; none for a history with no event.
     let from = match first {
-        Some(first) => Some(message_before(store, &event.room_id, first).await?),
+        Some(first) => Some(message_before(store, room, first).await?),
         None => None,
     };
     let replayed = match from {
-        Some(after) => replayed_rows(store, binding, &event.room_id, after).await?,
+        Some(after) => replayed_rows(store, binding, room, after).await?,
         None => Vec::new(),
     };
     let latest_rows = ListEventsOptions {
         limit: TOOL_ROWS,
-        event_filter: Some(rows),
+        event_filter: Some(tool_rows(binding)),
         newest_first: true,
         ..ListEventsOptions::default()
     };
     let replays = |index: u64| from.is_some_and(|after| after.is_none_or(|after| index > after));
-    let latest = store.list_events(&event.room_id, latest_rows).await?;
-    history.extend(latest.into_iter().map(|mut row| {
-        // One older than the history's rows is the tool memory's alone.
-        row.metadata.shift_remove(TOOL_MEMORY_ONLY);
-        if !replays(row.index) {
-            row.metadata
-                .insert(TOOL_MEMORY_ONLY.to_owned(), Value::Bool(true));
-        }
-        row
-    }));
-    history.extend(replayed);
-    history.sort_by_key(|event| event.index);
-    history.dedup_by(|later, earlier| later.id == earlier.id);
-    Ok((history, history_start_index))
+    let latest = store.list_events(room, latest_rows).await?;
+    let mut rows: Vec<_> = latest
+        .into_iter()
+        .map(|mut row| {
+            // One older than the history's rows is the tool memory's alone.
+            row.metadata.shift_remove(TOOL_MEMORY_ONLY);
+            if !replays(row.index) {
+                row.metadata
+                    .insert(TOOL_MEMORY_ONLY.to_owned(), Value::Bool(true));
+            }
+            row
+        })
+        .collect();
+    rows.extend(replayed);
+    rows.sort_by_key(|row| row.index);
+    rows.dedup_by(|later, earlier| later.id == earlier.id);
+    Ok(rows)
 }
 
 async fn read_messages<S: ConversationStore>(
@@ -407,6 +424,54 @@ mod tests {
             assert_eq!(read.history_start_index, boundary);
             assert!(!read.recent_events.iter().any(|event| event.index == 1));
         }
+    }
+
+    #[tokio::test]
+    async fn a_distributed_request_splits_private_rows_and_keeps_its_visible_trigger() {
+        use crate::{RoomKit, RoomKitOptions};
+        use roomkit_core::model::ChannelCategory;
+
+        let mut deleted = event(0, Some("agent"));
+        deleted.metadata.insert("deleted".to_owned(), true.into());
+        let trigger = event(3, Some("agent"));
+        let store = store(vec![
+            deleted,
+            event(1, None),
+            event(2, Some("other")),
+            trigger.clone(),
+        ])
+        .await;
+        let kit = RoomKit::new(RoomKitOptions::with_store(store));
+        let mut agent = binding("agent", ChannelType::AI);
+        agent.category = ChannelCategory::Intelligence;
+        let mut context = RoomContext::new(Room::new(room_id()));
+        context.bindings.push(agent.clone());
+        let mut context = turn_context(kit.store(), &agent, &trigger, context, 3).await;
+        let original_boundary = context.history_start_index;
+        let mut visible = event(4, Some("other"));
+        visible.r#type = EventType::InstructionRead;
+        context.recent_events.push(visible.clone());
+        let facade = std::sync::Arc::downgrade(&kit.inner);
+        let rows = distributed::distributed_rows(&facade, &agent, &trigger, &mut context).await;
+        assert_eq!(
+            rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+            ["evt_0", "evt_3"]
+        );
+        assert_eq!(rows[0].content, TextContent::new("").into());
+        assert!(
+            rows.iter()
+                .all(|row| !row.metadata.contains_key(TOOL_MEMORY_ONLY))
+        );
+        assert_eq!(context.history_start_index, original_boundary);
+        assert_eq!(
+            context
+                .recent_events
+                .iter()
+                .map(|row| row.id.as_str())
+                .collect::<Vec<_>>(),
+            ["evt_1", "evt_3", "evt_4"]
+        );
+        assert_eq!(context.recent_events.last(), Some(&visible));
     }
 
     fn binding(channel: &str, channel_type: ChannelType) -> ChannelBinding {

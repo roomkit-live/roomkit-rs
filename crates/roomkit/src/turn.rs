@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use roomkit_core::model::{
-    ChannelId, ChannelOutput, ChannelType, DirectEvent, EventContent, EventId, HookAction,
-    Metadata, Observation, Room, RoomContext, RoomEvent, RoomId, Timestamp, ToolCall,
+    ChannelBinding, ChannelId, ChannelOutput, ChannelType, DirectEvent, EventContent, EventId,
+    HookAction, Metadata, Observation, Room, RoomContext, RoomEvent, RoomId, Timestamp, ToolCall,
     ToolCallContent, ToolCallOutcome,
 };
 use roomkit_core::ops::{Environment, SystemEnvironment};
@@ -1324,6 +1324,13 @@ pub(crate) trait TurnKit: Send + Sync {
         room_id: RoomId,
     ) -> BoxFuture<'static, Result<RoomContext, RoomKitError>>;
 
+    fn read_channel_rows(
+        &self,
+        binding: ChannelBinding,
+        room: RoomId,
+        first: Option<u64>,
+    ) -> BoxFuture<'static, Result<Vec<RoomEvent>, RoomKitError>>;
+
     fn room_hook_names(&self, room: &RoomId) -> Vec<String>;
     fn defines_room_hooks(&self, names: &[String]) -> bool;
 
@@ -1510,6 +1517,26 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
         room_id: RoomId,
     ) -> BoxFuture<'static, Result<RoomContext, RoomKitError>> {
         room_context::read_context(Weak::clone(self), room_id)
+    }
+
+    fn read_channel_rows(
+        &self,
+        binding: ChannelBinding,
+        room: RoomId,
+        first: Option<u64>,
+    ) -> BoxFuture<'static, Result<Vec<RoomEvent>, RoomKitError>> {
+        let inner = self.upgrade();
+        Box::pin(async move {
+            let inner = inner.ok_or(RoomKitError::KitClosed)?;
+            crate::history::distributed::read_distributed_rows(
+                &*inner.store,
+                &binding,
+                &room,
+                first,
+            )
+            .await
+            .map_err(RoomKitError::from)
+        })
     }
 
     fn room_hook_names(&self, room: &RoomId) -> Vec<String> {
