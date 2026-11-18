@@ -186,7 +186,7 @@ impl TurnWiring {
                 event.room_created_at = self.env.room_mark(&room).await;
             }
             if let Err(error) = backend.publish_to_room(&room, event).await {
-                tracing::debug!(%room, %error, "could not publish a channel notification");
+                tracing::debug!(%room, %error, "publishing a channel notification failed");
             }
         }
     }
