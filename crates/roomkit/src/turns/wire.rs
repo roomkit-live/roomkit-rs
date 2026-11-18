@@ -36,6 +36,19 @@ use roomkit_core::model::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// The enclosing wire enum writes the discriminator itself when it embeds a typed message.
+fn message_fields<T: Serialize, S: serde::Serializer>(
+    message: &T,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    let mut value = serde_json::to_value(message).map_err(serde::ser::Error::custom)?;
+    let fields = value
+        .as_object_mut()
+        .ok_or_else(|| serde::ser::Error::custom("a wire message must be an object"))?;
+    fields.shift_remove("type");
+    fields.serialize(serializer)
+}
+
 /// A message of one direction of a turn link. The sender borrows its ID and
 /// message while encoding; the receiver owns the deserialized fields.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -64,7 +77,7 @@ pub enum ChannelControl {
         channel_id: ChannelId,
     },
     /// Apply one named channel verb in its room.
-    ChannelCall(Box<super::channel_calls::ChannelCall>),
+    ChannelCall(#[serde(serialize_with = "message_fields")] Box<super::channel_calls::ChannelCall>),
     /// An owner attached the channel to a room.
     RoomAttached {
         /// Channel whose work the message carries.

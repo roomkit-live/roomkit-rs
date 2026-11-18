@@ -43,6 +43,7 @@ impl Handover {
 
 /// One named channel verb the owner asks the executor to apply in a room (RFC §10.6.3).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename = "channel_call")]
 pub struct ChannelCall {
     /// Identifier used to correlate the call and its answer.
     pub call_id: String,

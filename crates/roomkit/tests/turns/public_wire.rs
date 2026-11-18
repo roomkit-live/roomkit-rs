@@ -103,3 +103,57 @@ fn owner_messages_keep_one_python_discriminator_inside_or_outside_the_envelope()
     assert!(seen.contains(&"room_call"));
     assert!(seen.contains(&"room_publication"));
 }
+
+#[test]
+fn a_channel_call_keeps_one_type_in_every_wire_form() {
+    use roomkit::turns::ChannelCall;
+    use roomkit::turns::wire::ChannelControlEnvelope;
+
+    let expected = json!({"type":"channel_call","call_id":"call","channel_id":"ai","room_id":"room",
+        "verb":"status","arguments":{"type":"snapshot","take":1},"organization_id":"org","room_state":{"version":2},"previous_turn":null});
+    let call: ChannelCall = serde_json::from_value(expected.clone()).unwrap();
+    let raw = serde_json::to_string(&call).unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&raw).unwrap(), expected);
+    let envelope = ChannelControlEnvelope {
+        message: ChannelControl::ChannelCall(Box::new(call)),
+    };
+    let raw = serde_json::to_string(&envelope).unwrap();
+    assert_eq!(raw.matches(r#""type":"channel_call""#).count(), 1);
+    assert_eq!(
+        serde_json::from_str::<ChannelControlEnvelope>(&raw).unwrap(),
+        envelope
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&raw).unwrap()["message"],
+        expected
+    );
+}
+
+#[test]
+fn an_input_request_keeps_one_type_in_every_wire_form() {
+    use roomkit::turns::wire::InputRequest;
+
+    let expected = json!({"type":"input_request","request_id":"pending","tool_name":"ask_user",
+        "arguments":{"question":"Which room?"},"room_id":"room","channel_id":"ai",
+        "tool_call_id":"call","actor_id":"alice","created_at":null});
+    let request: InputRequest = serde_json::from_value(expected.clone()).unwrap();
+    let raw = serde_json::to_string(&request).unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&raw).unwrap(), expected);
+    let envelope = FrameEnvelope {
+        turn_id: "turn".into(),
+        seq: 1,
+        message: Frame::InputRequest {
+            request: Box::new(request),
+        },
+    };
+    let raw = serde_json::to_string(&envelope).unwrap();
+    assert_eq!(raw.matches(r#""type":"input_request""#).count(), 1);
+    assert_eq!(
+        serde_json::from_str::<FrameEnvelope>(&raw).unwrap(),
+        envelope
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&raw).unwrap()["message"],
+        expected
+    );
+}

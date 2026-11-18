@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// Python's private link record, including fields older executors omit.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename = "input_request")]
 pub struct InputRequest {
     /// Identifier of the pending human-input request.
     pub request_id: String,

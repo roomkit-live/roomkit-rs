@@ -155,7 +155,7 @@ pub enum Frame {
     /// once.
     InputRequest {
         /// Human-input request to register with the owner.
-        #[serde(flatten)]
+        #[serde(flatten, serialize_with = "super::message_fields")]
         request: Box<InputRequest>,
     },
     /// A request settled where its tool waits, by other than the owner's
