@@ -115,7 +115,7 @@ mod tests {
     fn error_records_round_trip_legacy_and_chained_values() {
         let legacy = serde_json::json!({"error_type":"RuntimeError", "message":"offline"});
         let first: ErrorRecord = serde_json::from_value(legacy.clone()).unwrap();
-        assert!(first.causes.is_empty());
+        assert_eq!(first.causes, Vec::<ErrorRecord>::new());
         assert_eq!(serde_json::to_value(&first).unwrap(), legacy);
         let mut chained = ErrorRecord::new("WorkerError", "failed");
         chained.causes.push(first);
