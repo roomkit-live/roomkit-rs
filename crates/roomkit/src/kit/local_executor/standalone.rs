@@ -155,11 +155,6 @@ impl<S: ConversationStore> TurnExecutor<S> {
         if !self.serves(organization) {
             return Err(executor::refused(&id, self.executor_id(), organization));
         }
-        if !self.hosts_channel(&id) {
-            return Err(executor::no_executor(format!(
-                "No executor serves channel '{id}'"
-            )));
-        }
         let channel = match &self.standalone {
             Some(worker) if !worker.owns_channels => worker
                 .lookup(id.clone())
@@ -233,6 +228,13 @@ impl<S: ConversationStore> TurnExecutor<S> {
             }
             if facade.standalone.is_some() {
                 hooks.use_room_hooks(&room, names);
+            }
+            // Turn placement checks the advertised hosts. A direct channel control
+            // already names the channel whose host registry it is asking.
+            if !facade.hosts_channel(&channel_id) {
+                return Err(executor::no_executor(format!(
+                    "No executor serves channel '{channel_id}'"
+                )));
             }
             facade
                 .worker_channel(channel_id, organization.as_deref(), true)

@@ -165,6 +165,13 @@ pub(crate) fn refused(
     ))
 }
 
+pub(crate) fn closed_build() -> crate::turns::wire::ErrorRecord {
+    crate::turns::error::one(
+        "builtins:RuntimeError",
+        "The executor is closed: it builds no channel".into(),
+    )
+}
+
 pub(crate) fn no_executor(message: String) -> Box<crate::turns::wire::WireError> {
     let mut error = crate::turns::error::one("roomkit.core.exceptions:TurnLinkError", message);
     error

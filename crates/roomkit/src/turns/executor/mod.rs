@@ -27,7 +27,9 @@ mod lifecycle;
 mod link;
 mod record;
 mod remote;
-pub(crate) use remote::{WorkerOrigin, WorkerTurn, factory_error, missing, no_executor, refused};
+pub(crate) use remote::{
+    WorkerOrigin, WorkerTurn, closed_build, factory_error, missing, no_executor, refused,
+};
 mod steering;
 mod work;
 

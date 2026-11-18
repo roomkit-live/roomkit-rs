@@ -2,24 +2,28 @@
 
 use crate::RoomKitError;
 use crate::turns::ChannelResult;
-use crate::turns::wire::ChannelControl;
+use crate::turns::wire::{ChannelControl, ErrorRecord};
 use crate::{ConversationStore, TurnExecutor};
 
 impl<S: ConversationStore> TurnExecutor<S> {
     /// Apply a channel verb or notify a built channel about its room (RFC §10.6.3).
     ///
     /// # Errors
-    /// A closed executor refuses the message. A completed verb reports its own
-    /// error alongside its resulting room state.
+    /// A channel release can fail while withdrawing a live build. A completed
+    /// verb reports its error alongside its resulting room state. Closing the
+    /// worker ends its owned builds. Host-owned channels remain available to
+    /// direct controls through the application's registry.
     pub async fn control(
         &self,
         message: ChannelControl,
     ) -> Result<Option<ChannelResult>, RoomKitError> {
-        if self.closed() {
-            return Err(RoomKitError::TurnLink {
-                reason: "no_executor".into(),
-                message: Some(format!("Executor {} has closed", self.executor_id())),
-            });
+        if self.closed()
+            && self
+                .standalone
+                .as_ref()
+                .is_some_and(|worker| worker.owns_channels)
+        {
+            return Ok(self.control_after_owned_channels_closed(&message));
         }
         match &message {
             ChannelControl::ChannelCall(call) => {
@@ -38,12 +42,7 @@ impl<S: ConversationStore> TurnExecutor<S> {
                             .worker_call(&channel.channel, call, self.executor_id())
                             .await
                     }
-                    Err(error) => ChannelResult {
-                        result: serde_json::Value::Null,
-                        error: Some(*error),
-                        room_state: None,
-                        executor_id: Some(self.executor_id().to_owned()),
-                    },
+                    Err(error) => self.failed_call(*error),
                 };
                 Ok(Some(answer))
             }
@@ -101,6 +100,31 @@ impl<S: ConversationStore> TurnExecutor<S> {
             }
         }
     }
+    fn control_after_owned_channels_closed(
+        &self,
+        message: &ChannelControl,
+    ) -> Option<ChannelResult> {
+        let ChannelControl::ChannelCall(call) = message else {
+            return None;
+        };
+        let organization = call.organization_id.as_deref();
+        let error = if self.serves(organization) {
+            crate::turns::executor::closed_build()
+        } else {
+            *crate::turns::executor::refused(&call.channel_id, self.executor_id(), organization)
+        };
+        Some(self.failed_call(error))
+    }
+
+    fn failed_call(&self, error: ErrorRecord) -> ChannelResult {
+        ChannelResult {
+            result: serde_json::Value::Null,
+            error: Some(error),
+            room_state: None,
+            executor_id: Some(self.executor_id().to_owned()),
+        }
+    }
+
     async fn notify_built(&self, id: roomkit_core::model::ChannelId, message: ChannelControl) {
         let built = self.built_channel(&id).await;
         crate::turns::apply(

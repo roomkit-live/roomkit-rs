@@ -327,3 +327,86 @@ async fn a_release_lets_the_next_build_run_before_the_old_turn_finishes() {
 
 #[cfg(feature = "redis")]
 mod owner_lifecycle;
+
+fn closing_worker(owns_channels: bool, builds: Arc<AtomicUsize>, events: Events) -> TurnExecutor {
+    TurnExecutor::new(
+        move |id| {
+            std::future::ready(Ok(Some(Observed::built(
+                id,
+                builds.fetch_add(1, Ordering::SeqCst),
+                Arc::clone(&events),
+            ))))
+        },
+        TurnExecutorOptions {
+            // Backend placement uses this list. Direct controls explicitly name "ai".
+            hosts: Some(BTreeSet::from(["listed".to_owned()])),
+            owns_channels,
+            executor_id: Some("host".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap()
+}
+
+fn local_control(kind: &str) -> crate::turns::ChannelControl {
+    envelope(kind, |m| {
+        m["organization_id"] = Value::Null;
+        m["room_hooks"] = json!([]);
+        m["previous_turn"] = Value::Null;
+    })
+}
+
+#[tokio::test]
+async fn direct_controls_after_close_respect_who_owns_the_channels() {
+    for owned in [true, false] {
+        let events = Events::default();
+        let builds = Arc::new(AtomicUsize::new(0));
+        let worker = closing_worker(owned, Arc::clone(&builds), Arc::clone(&events));
+        worker.close().await;
+
+        for kind in [
+            "channel_released",
+            "room_attached",
+            "room_detached",
+            "committed_event",
+        ] {
+            assert!(worker.control(local_control(kind)).await.unwrap().is_none());
+        }
+        let answer = worker
+            .control(local_control("channel_call"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(answer.executor_id.as_deref(), Some("host"));
+        if owned {
+            let error = answer.error.unwrap();
+            assert_eq!(error.kind, "builtins:RuntimeError");
+            assert_eq!(
+                error.message,
+                "The executor is closed: it builds no channel"
+            );
+            assert!(answer.room_state.is_none());
+            assert!(events.lock().unwrap().is_empty());
+            assert_eq!(builds.load(Ordering::SeqCst), 0);
+        } else {
+            assert!(answer.error.is_none());
+            assert_eq!(answer.room_state.unwrap()["cursor"], 17);
+            let actions: Vec<_> = events
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(_, action)| *action)
+                .collect();
+            assert_eq!(actions, ["attach", "detach", "event", "call"]);
+            assert_eq!(builds.load(Ordering::SeqCst), 4);
+        }
+        let foreign = worker
+            .control(envelope("channel_call", |m| {
+                m["organization_id"] = json!("elsewhere");
+            }))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(foreign.error.unwrap().attributes["reason"], "no_executor");
+    }
+}
