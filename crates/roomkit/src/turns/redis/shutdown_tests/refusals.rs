@@ -85,6 +85,7 @@ async fn unreadable_channel_and_room_calls_return_a_validation_error() {
         |_| std::future::ready(Ok(None::<EchoAgent>)),
         TurnExecutorOptions {
             executor_id: Some("worker".into()),
+            hosts: Some(["agent".to_string()].into()),
             ..TurnExecutorOptions::default()
         },
     )
@@ -107,7 +108,7 @@ async fn unreadable_channel_and_room_calls_return_a_validation_error() {
         let result: Value =
             serde_json::from_str(&raw.expect("a result from the live peer")).unwrap();
         assert_eq!(result["type"], kind);
-        assert_eq!(result["error"]["kind"], "builtins:ValueError");
+        assert_eq!(result["error"]["kind"], "builtins:ValueError", "{kind}");
         assert_ne!(result["error"]["message"].as_str().unwrap(), "");
         if kind == "channel_result" {
             assert_eq!(result["executor_id"], "worker");
