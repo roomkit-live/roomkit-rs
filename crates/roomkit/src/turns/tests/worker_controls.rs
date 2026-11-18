@@ -49,20 +49,20 @@ impl Channel for Observed {
     fn category(&self) -> ChannelCategory {
         ChannelCategory::Intelligence
     }
-    async fn handle_inbound(
+    fn handle_inbound(
         &self,
         message: InboundMessage,
         context: RoomContext,
-    ) -> Result<RoomEvent, ChannelError> {
-        Ok(crate::default_inbound_event(self, &message, &context))
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        std::future::ready(Ok(crate::default_inbound_event(self, &message, &context)))
     }
-    async fn deliver(
+    fn deliver(
         &self,
         _: RoomEvent,
         _: ChannelBinding,
         _: RoomContext,
-    ) -> Result<ChannelOutput, ChannelError> {
-        Ok(ChannelOutput::empty())
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        std::future::ready(Ok(ChannelOutput::empty()))
     }
     async fn on_event(
         &self,
@@ -82,14 +82,26 @@ impl Channel for Observed {
         }
         Ok(ChannelOutput::empty())
     }
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "fixture observations start when the framework polls the callback"
+    )]
     async fn on_room_attached(&self, _: RoomId, _: ChannelBinding) -> Result<(), ChannelError> {
         self.note("attach");
         Ok(())
     }
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "fixture observations start when the framework polls the callback"
+    )]
     async fn on_room_detached(&self, _: RoomId) -> Result<(), ChannelError> {
         self.note("detach");
         Ok(())
     }
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "fixture observations start when the framework polls the callback"
+    )]
     async fn on_room_event(&self, _: RoomId, _: RoomEvent) -> Result<(), ChannelError> {
         self.note("event");
         Ok(())
@@ -101,6 +113,10 @@ impl Channel for Observed {
         *self.state.lock().unwrap() = state;
         Ok(())
     }
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "fixture observations start when the framework polls the callback"
+    )]
     async fn channel_call(
         &self,
         _: RoomId,
@@ -171,7 +187,7 @@ async fn genuine_controls_prepare_call_restore_and_release_the_built_channel() {
     }
     let refused = executor
         .control(envelope("channel_call", |m| {
-            m["organization_id"] = json!("foreign")
+            m["organization_id"] = json!("foreign");
         }))
         .await
         .unwrap()
@@ -188,7 +204,7 @@ async fn genuine_controls_prepare_call_restore_and_release_the_built_channel() {
         .unwrap();
     let call = executor
         .control(envelope("channel_call", |m| {
-            m["previous_turn"] = Value::Null
+            m["previous_turn"] = Value::Null;
         }))
         .await
         .unwrap()

@@ -24,7 +24,7 @@ async fn dispatch(kit: &RoomKit, message: Value) -> Option<RoomCallResult> {
     kit.inner.turns.receive_owner_message(port, envelope).await
 }
 
-fn publication(turn: &str, executor: &str, frame: Value) -> Value {
+fn publication(turn: &str, executor: &str, frame: &Value) -> Value {
     json!({"type":"room_publication","turn_id":turn,"executor_id":executor,"room_id":"r","channel_id":"app","frame":frame})
 }
 
@@ -88,7 +88,10 @@ async fn the_owner_runs_only_its_exact_last_workers_room_call() {
             assert_eq!(result.error.unwrap().kind, "PermissionError");
         }
     }
-    let saved = kit.get_room(&room, Default::default()).await.unwrap();
+    let saved = kit
+        .get_room(&room, crate::GetRoomOptions::default())
+        .await
+        .unwrap();
     assert_eq!(saved.metadata.get("new"), Some(&Value::from(2)));
     assert!(!saved.metadata.contains_key("old"));
     assert!(!saved.metadata.contains_key("foreign"));
@@ -142,7 +145,7 @@ async fn publications_use_the_named_turns_scope_and_current_executor() {
         ("first", "right", framework("kept", "r")),
     ] {
         assert!(
-            dispatch(&kit, publication(turn, executor, frame))
+            dispatch(&kit, publication(turn, executor, &frame))
                 .await
                 .is_none()
         );
@@ -165,7 +168,7 @@ async fn publications_use_the_named_turns_scope_and_current_executor() {
         event.r#type = kind;
         let frame = json!({"type":"ephemeral","channel":"room:r","event":event.to_dict()});
         assert!(
-            dispatch(&kit, publication(turn, "right", frame))
+            dispatch(&kit, publication(turn, "right", &frame))
                 .await
                 .is_none()
         );

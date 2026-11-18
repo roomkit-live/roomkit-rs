@@ -1,4 +1,4 @@
-//! The bounded and registry-backed forms of Python's TurnExecutor constructor.
+//! The bounded and registry-backed forms of Python's `TurnExecutor` constructor.
 
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicUsize, Ordering};

@@ -36,21 +36,25 @@ impl Channel for Worker {
     fn category(&self) -> ChannelCategory {
         ChannelCategory::Intelligence
     }
-    async fn handle_inbound(
+    fn handle_inbound(
         &self,
         message: InboundMessage,
         context: RoomContext,
-    ) -> Result<RoomEvent, ChannelError> {
-        Ok(roomkit::default_inbound_event(self, &message, &context))
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        std::future::ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
     }
-    async fn deliver(
+    fn deliver(
         &self,
         _: RoomEvent,
         _: ChannelBinding,
         _: RoomContext,
-    ) -> Result<ChannelOutput, ChannelError> {
-        Ok(ChannelOutput::empty())
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        std::future::ready(Ok(ChannelOutput::empty()))
     }
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "the turn host is captured only when the executor polls its event"
+    )]
     async fn on_event(
         &self,
         event: RoomEvent,
@@ -119,7 +123,7 @@ pub(super) async fn run(backend: &RedisTurnBackend) -> TestResult {
                         &room,
                         &agent,
                         TextContent::new("after the turn"),
-                        Default::default(),
+                        roomkit::SendEventOptions::default(),
                     )
                     .await?;
                 reply(event.id.as_str())?;
@@ -130,7 +134,7 @@ pub(super) async fn run(backend: &RedisTurnBackend) -> TestResult {
                         &room,
                         &agent,
                         TextContent::new("stale work"),
-                        Default::default(),
+                        roomkit::SendEventOptions::default(),
                     )
                     .await
                     .err()

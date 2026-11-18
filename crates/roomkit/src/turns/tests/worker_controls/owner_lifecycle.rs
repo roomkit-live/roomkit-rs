@@ -20,19 +20,7 @@ async fn the_owner_routes_all_five_controls_to_the_organization_worker() {
     };
     let hosting = RedisTurnBackend::new(Some(&url), options.clone()).unwrap();
     let events = Events::default();
-    let executor = TurnExecutor::new(
-        {
-            let events = Arc::clone(&events);
-            move |id| std::future::ready(Ok(Some(Observed::built(id, 1, Arc::clone(&events)))))
-        },
-        TurnExecutorOptions {
-            hosts: Some(["ai".to_owned()].into()),
-            organizations: Some(["org".to_owned()].into()),
-            executor_id: Some("worker".to_owned()),
-            ..Default::default()
-        },
-    )
-    .unwrap();
+    let executor = worker_observing(&events);
     hosting.serve(executor.clone()).await.unwrap();
     let kit = RoomKit::new(RoomKitOptions {
         turn_backend: Some(RedisTurnBackend::new(Some(&url), options).unwrap()),
@@ -117,4 +105,20 @@ async fn the_owner_routes_all_five_controls_to_the_organization_worker() {
     kit.close().await.unwrap();
     hosting.close().await.unwrap();
     executor.close().await;
+}
+
+fn worker_observing(events: &Events) -> TurnExecutor {
+    TurnExecutor::new(
+        {
+            let events = Arc::clone(events);
+            move |id| std::future::ready(Ok(Some(Observed::built(id, 1, Arc::clone(&events)))))
+        },
+        TurnExecutorOptions {
+            hosts: Some(["ai".to_owned()].into()),
+            organizations: Some(["org".to_owned()].into()),
+            executor_id: Some("worker".to_owned()),
+            ..Default::default()
+        },
+    )
+    .unwrap()
 }

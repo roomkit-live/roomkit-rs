@@ -1,4 +1,4 @@
-//! Python: test_discussion_memory_handoff.py::test_a_message_is_handed_to_every_agent_s_memory_at_once.
+//! Committed messages reach all discussion memories concurrently (§19.7.5).
 
 use super::*;
 use roomkit::AgentIdentity;
@@ -27,20 +27,20 @@ impl Channel for MeetingAgent {
             ..ChannelDeclaration::new(self.id.clone())
         }
     }
-    async fn handle_inbound(
+    fn handle_inbound(
         &self,
         message: InboundMessage,
         context: RoomContext,
-    ) -> Result<RoomEvent, ChannelError> {
-        Ok(roomkit::default_inbound_event(self, &message, &context))
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        std::future::ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
     }
-    async fn deliver(
+    fn deliver(
         &self,
         _: RoomEvent,
         _: ChannelBinding,
         _: RoomContext,
-    ) -> Result<ChannelOutput, ChannelError> {
-        Ok(ChannelOutput::empty())
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        std::future::ready(Ok(ChannelOutput::empty()))
     }
     async fn on_room_event(&self, _: RoomId, event: RoomEvent) -> Result<(), ChannelError> {
         let EventContent::Text(text) = event.content else {

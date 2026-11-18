@@ -18,14 +18,14 @@ use crate::turns::wire::{
 
 const PYTHON: &str = include_str!("../../../tests/fixtures/turns/python-rpc.jsonl");
 
-fn typed<T: DeserializeOwned + Serialize>(value: Value, update: impl FnOnce(&mut T)) -> Value {
+fn typed<T: DeserializeOwned + Serialize>(value: &Value, update: impl FnOnce(&mut T)) -> Value {
     let mut parsed: T = serde_json::from_value(value.clone()).unwrap();
-    assert_eq!(serde_json::to_value(&parsed).unwrap(), value);
+    assert_eq!(serde_json::to_value(&parsed).unwrap(), *value);
     update(&mut parsed);
     serde_json::to_value(parsed).unwrap()
 }
 
-fn rewrite(family: &str, value: Value) -> Value {
+fn rewrite(family: &str, value: &Value) -> Value {
     match family {
         "request" => {
             let carried = CarriedRequest::from_wire(&value.to_string()).unwrap();
@@ -34,26 +34,25 @@ fn rewrite(family: &str, value: Value) -> Value {
             assert_eq!(carried.event, carried.channel_rows[0]);
             let mut request: TurnRequest =
                 serde_json::from_str(&carried.to_wire().unwrap()).unwrap();
-            assert_eq!(serde_json::to_value(&request).unwrap(), value);
+            assert_eq!(serde_json::to_value(&request).unwrap(), *value);
             request.turn_id = "rust-turn".into();
             serde_json::to_value(request).unwrap()
         }
         "frame" => typed(value, |envelope: &mut FrameEnvelope| {
             envelope.turn_id = "rust-turn".into();
-            match &mut envelope.message {
-                Frame::HostCall { call_id, .. }
-                | Frame::ToolCall { call_id, .. }
-                | Frame::CallCancel { call_id } => *call_id = "rust-call".into(),
-                _ => {}
+            if let Frame::HostCall { call_id, .. }
+            | Frame::ToolCall { call_id, .. }
+            | Frame::CallCancel { call_id } = &mut envelope.message
+            {
+                *call_id = "rust-call".into();
             }
         }),
         "control" => typed(value, |envelope: &mut ControlEnvelope| {
             envelope.turn_id = "rust-turn".into();
-            match &mut envelope.message {
-                Control::HostResult { call_id, .. } | Control::ToolResult { call_id, .. } => {
-                    *call_id = "rust-call".into()
-                }
-                _ => {}
+            if let Control::HostResult { call_id, .. } | Control::ToolResult { call_id, .. } =
+                &mut envelope.message
+            {
+                *call_id = "rust-call".into();
             }
         }),
         "channel_control" => typed(value, |envelope: &mut ChannelControlEnvelope| {
@@ -85,7 +84,7 @@ fn python_and_rust_exchange_requests_and_turn_rpcs() {
     for line in PYTHON.lines() {
         let item: Value = serde_json::from_str(line).unwrap();
         let family = item["direction"].as_str().unwrap();
-        let rewritten = rewrite(family, item["message"].clone());
+        let rewritten = rewrite(family, &item["message"]);
         result += &json!({"direction":family, "message":rewritten}).to_string();
         result.push('\n');
     }
