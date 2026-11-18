@@ -54,6 +54,15 @@ impl ClassedError {
         name.rsplit('.').next().unwrap_or(name)
     }
 
+    /// A task interprets only its own failure wrappers. Keep the module for
+    /// names that would otherwise turn an unrelated error into one of them.
+    pub(crate) fn record_class(&self) -> &str {
+        match self.class() {
+            "TurnCutShortError" | "TaskCutShortError" | "TaskTurnFailedError" => &self.class,
+            other => other,
+        }
+    }
+
     /// The error raised.
     pub fn error(&self) -> &(dyn Error + Send + Sync + 'static) {
         &*self.error

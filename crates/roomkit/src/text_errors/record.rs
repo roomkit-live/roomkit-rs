@@ -38,12 +38,23 @@ impl TaskCutShortError {
 }
 
 impl TaskTurnFailedError {
-    pub(crate) fn cause_record(&self) -> ErrorRecord {
-        let error = self.error.as_ref();
-        if let Some(known) = error.downcast_ref::<crate::RoomKitError>() {
-            return crate::turns::to_record(&crate::turns::described_kit_error(known));
-        }
-        crate::turns::record_of(error)
+    pub(crate) fn record_head(&self) -> ErrorRecord {
+        with_fields(
+            "TaskTurnFailedError",
+            self,
+            [
+                ("reason", Value::from(self.reason.clone())),
+                ("narration", Value::from(self.narration.clone())),
+            ],
+        )
+    }
+}
+
+impl From<&TaskTurnFailedError> for ErrorRecord {
+    fn from(error: &TaskTurnFailedError) -> Self {
+        let mut record = error.record_head();
+        record.causes = crate::turns::cause_records(error);
+        record
     }
 }
 
@@ -60,14 +71,7 @@ pub(crate) fn text_record(error: &(dyn Error + 'static)) -> Option<ErrorRecord> 
         ));
     }
     if let Some(failure) = error.downcast_ref::<TaskTurnFailedError>() {
-        return Some(with_fields(
-            "TaskTurnFailedError",
-            failure,
-            [
-                ("reason", Value::from(failure.reason.clone())),
-                ("narration", Value::from(failure.narration.clone())),
-            ],
-        ));
+        return Some(ErrorRecord::from(failure));
     }
     if let Some(timeout) = error.downcast_ref::<ToolTimeoutError>() {
         return Some(with_fields(

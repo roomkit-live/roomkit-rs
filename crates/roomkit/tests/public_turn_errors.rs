@@ -100,3 +100,23 @@ fn a_failed_task_turn_keeps_the_original_cause_and_its_initial_message() {
     assert_eq!(error.to_string(), "updated");
     assert_eq!(failure.to_string(), "upstream failed");
 }
+
+#[test]
+fn nested_worker_failures_record_their_own_details() {
+    let cause = TaskTurnFailedError::new(
+        Arc::new(std::io::Error::other("unclassified")),
+        "inner",
+        None,
+    );
+    let failure = TaskTurnFailedError::new(Arc::new(cause), "outer", Some("working".into()));
+    let record = roomkit::model::ErrorRecord::from(&failure);
+    assert_eq!(record.causes.len(), 2);
+    assert_eq!(record.attributes["reason"], "outer");
+    assert_eq!(record.causes[0].error_type, "TaskTurnFailedError");
+    assert_eq!(record.causes[0].attributes["reason"], "inner");
+    assert!(record.causes[0].attributes["narration"].is_null());
+    assert_eq!(
+        record.causes[1],
+        roomkit::model::ErrorRecord::new("ChannelError", "unclassified")
+    );
+}

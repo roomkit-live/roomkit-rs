@@ -132,7 +132,6 @@ enum Over {
 /// What the operation's `ReadStream` asks of a stream's read.
 #[derive(Debug)]
 pub(crate) struct StreamRead {
-    pub(crate) worker_cause: Option<crate::text_errors::WorkerCause>,
     /// The intelligence channel whose response it is.
     pub(crate) responder: ChannelBinding,
     /// The event the response answers.
@@ -204,7 +203,6 @@ pub(super) async fn read_kept<S: ConversationStore>(
         target,
         correlation_id,
         as_trace,
-        worker_cause: _,
     } = read;
     if as_trace {
         kept.turn.read_as_trace();
@@ -557,7 +555,6 @@ impl Stops {
 /// reports itself (RFC §19.7.3).
 #[derive(Clone, Debug)]
 pub(super) struct Failing {
-    worker_cause: Option<crate::text_errors::WorkerCause>,
     responder: ChannelBinding,
     answers: RoomEvent,
     correlation_id: String,
@@ -569,7 +566,6 @@ pub(super) struct Failing {
 impl Failing {
     pub(super) fn of(read: &StreamRead) -> Self {
         Self {
-            worker_cause: read.worker_cause.clone(),
             responder: read.responder.clone(),
             answers: read.answers.clone(),
             correlation_id: read.correlation_id.clone(),
@@ -1142,9 +1138,6 @@ impl Producer {
                     self.commit(row).await;
                 }
                 self.hand_loop_end();
-                if let Some(worker) = &self.failing.worker_cause {
-                    worker.capture(&error);
-                }
                 let record = record_of(&*error);
                 self.failed_at = Some(address_of(&error));
                 self.ready.push_back(Err(error));

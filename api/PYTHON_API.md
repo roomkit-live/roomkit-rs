@@ -617,19 +617,29 @@ exposes the base by reference and provides the task's `message_for` formatter.
 `Arc<dyn Error + Send + Sync>`. Its display captures the original message at
 construction. The standard `Error::source` gives access to the same error.
 
-The local channel driver copies the class, message and data of a typed error
-into its error record. A delegated worker that raises a pre-wrapped failure
-from a stream supplies its original cause record to the task if the turn has
-no independent failure marker. When the turn has its own failure marker,
-the task retains the inner wrapper's record and the turn's narration.
+The local channel driver copies a typed error into an `ErrorRecord`. Both
+`ChannelOutput.error` and `DelegatedTaskResult.exception` hold this record
+with its class, message, JSON attributes and `causes`. The causes form one
+list, nearest first, matching the turn protocol's bound of sixteen. The
+turn backend preserves qualified class names supplied in a record. Task
+projection recognizes each built-in worker failure by its Rust name or
+its full Python codec name. A native error whose class is unavailable
+retains its message. A non-finite
+timeout becomes JSON null in the record.
 
-The public Rust fields `ChannelOutput.error` and `DelegatedTaskResult.exception`
-use `ErrorRecord`, which carries a class, message and JSON attributes. A
-buffered output accepts this record. It cannot carry a native exception
-chain. A task's returned wrapper record likewise has no nested source to
-traverse. The standalone `TaskTurnFailedError` retains its complete native
-source while the application holds it. Non-finite floats in native
-`ToolTimeoutError.timeout` become JSON null when projected into a record.
+For a buffered failure, assign `Some(ErrorRecord::from(&failure))` to the
+output's error, where `failure` is a `TaskTurnFailedError`. A stream can
+return the same error through its usual error channel. With no independent
+failure marker the task exposes the worker's original cause, its last
+narration and the wrapper's reason. With an explicit failure marker it
+exposes the wrapper record, including the original worker error at
+`exception.causes[0]`, alongside the turn's own output and reason.
+
+Records serialized without `causes` read with an empty list. Empty lists
+are omitted when writing. `ErrorRecord::new` also starts with an empty
+list. Exhaustive literals must set `causes` or update a record created by
+`new`. Exhaustive destructuring patterns must include `causes` or `..`
+(approved before the first public release, 2026-11-17).
 
 ### Framework injection for application channels
 

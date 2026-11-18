@@ -83,7 +83,7 @@ use uuid::Uuid;
 
 pub(crate) use self::codec::send_event_arguments;
 pub(crate) use self::error::{
-    CHANNEL_ERROR, RemoteError, TURN_LINK_ERROR, described_kit_error, record_of, variant_name,
+    CHANNEL_ERROR, RemoteError, TURN_LINK_ERROR, cause_records, record_of, variant_name,
 };
 pub(crate) use self::error::{TurnError, TurnFailure, to_record};
 pub(crate) use self::executor::{ExecutorInputs, HostLink, InputSettler};

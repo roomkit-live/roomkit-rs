@@ -622,10 +622,6 @@ pub(super) async fn channel<S: ConversationStore>(
             as_trace,
         } => {
             let read = stream::StreamRead {
-                worker_cause: shared
-                    .worker
-                    .as_ref()
-                    .and_then(|worker| worker.for_worker(&responder.channel_id)),
                 responder,
                 answers: *answers,
                 target,
@@ -1474,7 +1470,7 @@ pub(crate) fn channel_failed(error: &ChannelError) -> Outcome {
     let code = match kit_error {
         Some(kit_error) => kit_error.code().unwrap_or_else(|| kit_error.class_name()),
         None => classed
-            .map_or("ChannelError", ClassedError::class)
+            .map_or("ChannelError", ClassedError::record_class)
             .to_owned(),
     };
     Outcome::Failed(ErrorRecord {

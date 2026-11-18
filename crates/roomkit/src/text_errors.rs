@@ -7,9 +7,7 @@ use std::sync::Arc;
 
 use roomkit_core::rules::python_repr;
 mod record;
-mod worker;
 pub(crate) use record::text_record;
-pub(crate) use worker::WorkerCause;
 
 /// A tool call refused by the channel before the tool ran (RFC §9.3).
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]

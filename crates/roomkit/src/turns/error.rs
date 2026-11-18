@@ -177,6 +177,7 @@ pub(crate) fn record_of(error: &(dyn Error + Send + Sync + 'static)) -> ErrorRec
     }
     let classed = error.downcast_ref::<ClassedError>();
     ErrorRecord {
+        causes: cause_records(error),
         attributes: Box::new(
             classed
                 .map(ClassedError::attributes)
@@ -184,7 +185,7 @@ pub(crate) fn record_of(error: &(dyn Error + Send + Sync + 'static)) -> ErrorRec
                 .unwrap_or_default(),
         ),
         ..ErrorRecord::new(
-            classed.map_or(CHANNEL_ERROR, ClassedError::class),
+            classed.map_or(CHANNEL_ERROR, ClassedError::record_class),
             error.to_string(),
         )
     }
@@ -192,23 +193,47 @@ pub(crate) fn record_of(error: &(dyn Error + Send + Sync + 'static)) -> ErrorRec
 
 /// `error`, a channel's, as it crosses, its causes after it.
 pub(crate) fn channel_error(error: &(dyn Error + 'static)) -> WireError {
+    if let Some(record) = crate::text_errors::text_record(error) {
+        return from_record(&record);
+    }
     let mut record = channel_record(error);
-    let mut original = error
-        .downcast_ref::<crate::TaskTurnFailedError>()
-        .map(crate::TaskTurnFailedError::cause_record);
-    let mut cause = error.source();
-    while let Some(next) = cause {
-        if record.causes.len() >= CAUSES_KEPT {
+    record.causes = cause_records(error).iter().map(wire_record).collect();
+    record
+}
+
+/// The native source chain, nearest first, bounded just like Python's error codec.
+pub(crate) fn cause_records(error: &(dyn Error + 'static)) -> Vec<ErrorRecord> {
+    let mut causes = Vec::new();
+    let mut parent = error;
+    while let Some(cause) = parent.source() {
+        if causes.len() == CAUSES_KEPT {
             break;
         }
-        let described = original.take().map_or_else(
-            || recipient_error(next).unwrap_or_else(|| one("Error", next.to_string())),
-            |cause| from_record(&cause),
-        );
-        record.causes.push(described);
-        cause = next.source();
+        let record = if let Some(wrapper) = cause.downcast_ref::<crate::TaskTurnFailedError>() {
+            // The enclosing chain already walks the wrapper's source.
+            wrapper.record_head()
+        } else if let Some(known) = cause.downcast_ref::<RoomKitError>() {
+            to_record(&described_kit_error(known))
+        } else if let Some(known) = crate::text_errors::text_record(cause) {
+            known
+        } else if let Some(classed) = cause.downcast_ref::<ClassedError>() {
+            ErrorRecord {
+                attributes: Box::new(classed.attributes().clone()),
+                ..ErrorRecord::new(classed.record_class(), classed.to_string())
+            }
+        } else {
+            // A wrapper's original failure is the worker channel's error.
+            let kind = if parent.is::<crate::TaskTurnFailedError>() {
+                CHANNEL_ERROR
+            } else {
+                "Error"
+            };
+            ErrorRecord::new(kind, cause.to_string())
+        };
+        causes.push(record);
+        parent = cause;
     }
-    record
+    causes
 }
 
 /// The top-level channel error before the transport includes its causes.
@@ -216,12 +241,9 @@ fn channel_record(error: &(dyn Error + 'static)) -> WireError {
     if let Some(missing) = recipient_error(error) {
         return missing;
     }
-    if let Some(record) = crate::text_errors::text_record(error) {
-        return from_record(&record);
-    }
     let classed = error.downcast_ref::<ClassedError>();
     let mut record = one(
-        classed.map_or(CHANNEL_ERROR, ClassedError::class),
+        classed.map_or(CHANNEL_ERROR, ClassedError::record_class),
         error.to_string(),
     );
     if let Some(classed) = classed {
@@ -274,7 +296,7 @@ fn failure(error: &(dyn Error + Send + Sync + 'static), cancelled: &str) -> Wire
 
 /// The public class and JSON attributes of a kit error, including when a
 /// delegated worker supplies it as the cause of its own failure.
-pub(crate) fn described_kit_error(error: &RoomKitError) -> WireError {
+fn described_kit_error(error: &RoomKitError) -> WireError {
     if let Some(missing) = recipient_error(error) {
         return missing;
     }
@@ -303,7 +325,7 @@ const RETRYABLE: &str = "retryable";
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TurnFailure {
     pub(crate) record: ErrorRecord,
-    pub(crate) declared: Option<DeliveryError>,
+    declared: Option<Box<DeliveryError>>,
 }
 
 impl From<ErrorRecord> for TurnFailure {
@@ -335,7 +357,7 @@ impl TurnFailure {
             });
         Self {
             record: to_record(error),
-            declared,
+            declared: declared.map(Box::new),
         }
     }
 
@@ -345,7 +367,7 @@ impl TurnFailure {
         match self.declared {
             Some(delivery) => ChannelOutcome::Raised(Box::new(Raised {
                 error: self.record,
-                delivery,
+                delivery: *delivery,
             }))
             .into(),
             None => Outcome::Failed(self.record),
@@ -355,22 +377,49 @@ impl TurnFailure {
 
 /// A core error record as it crosses.
 pub(crate) fn from_record(record: &ErrorRecord) -> WireError {
-    WireError {
-        attributes: (*record.attributes).clone(),
-        ..one(record.error_type.clone(), record.message.clone())
+    let mut error = wire_record(record);
+    append_causes(&record.causes, &mut error.causes);
+    error
+}
+
+/// Rust callers can build records recursively. The wire uses one flat chain
+/// and Python bounds it at 16, which also bounds the recursion here.
+fn append_causes(records: &[ErrorRecord], causes: &mut Vec<WireError>) {
+    for record in records {
+        if causes.len() == CAUSES_KEPT {
+            return;
+        }
+        causes.push(wire_record(record));
+        append_causes(&record.causes, causes);
     }
 }
 
-/// The core error record a crossed error is, on the owner, its attributes
-/// kept but a kit error's, which name its variant.
+fn wire_record(record: &ErrorRecord) -> WireError {
+    let mut error = one(record.error_type.clone(), record.message.clone());
+    error.attributes.clone_from(&record.attributes);
+    error
+}
+
+/// The core record of a failure from a turn, including its flat cause chain.
 pub(crate) fn to_record(error: &WireError) -> ErrorRecord {
-    let record = ErrorRecord::new(error.kind.clone(), error.message.clone());
+    let mut record = local_record(error);
     if error.kind == KIT_ERROR {
-        return record;
+        // The outer kit envelope uses attributes to encode its private variant.
+        record.attributes.clear();
     }
+    record.causes = error
+        .causes
+        .iter()
+        .take(CAUSES_KEPT)
+        .map(local_record)
+        .collect();
+    record
+}
+
+fn local_record(error: &WireError) -> ErrorRecord {
     ErrorRecord {
         attributes: Box::new(error.attributes.clone()),
-        ..record
+        ..ErrorRecord::new(error.kind.clone(), error.message.clone())
     }
 }
 
@@ -627,6 +676,50 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_worker_keeps_the_attributes_of_its_cause_named_roomkit_error() {
+        let mut worker = ErrorRecord::new("TaskTurnFailedError", "failure");
+        let mut cause = ErrorRecord::new("RoomKitError", "failure");
+        cause
+            .attributes
+            .insert("request_id".into(), Value::from("r1"));
+        worker.causes.push(cause);
+        assert_eq!(to_record(&from_record(&worker)), worker);
+    }
+
+    #[test]
+    fn the_wire_retains_the_sixteen_nearest_causes() {
+        let mut record = ErrorRecord::new("outer", "");
+        let mut tail = &mut record;
+        for number in 1..=20 {
+            tail.causes
+                .push(ErrorRecord::new(format!("error{number}"), ""));
+            tail = tail.causes.last_mut().unwrap();
+        }
+        let crossed = from_record(&record);
+        let cause_types = (1..=16).map(|n| format!("error{n}")).collect::<Vec<_>>();
+        assert_eq!(
+            crossed
+                .causes
+                .iter()
+                .map(|item| &item.kind)
+                .collect::<Vec<_>>(),
+            cause_types.iter().collect::<Vec<_>>()
+        );
+        assert!(crossed.causes.iter().all(|item| item.causes.is_empty()));
+        let mut oversized = crossed;
+        oversized.causes.push(one("discarded", String::new()));
+        let restored = to_record(&oversized);
+        assert_eq!(
+            restored
+                .causes
+                .into_iter()
+                .map(|item| item.error_type)
+                .collect::<Vec<_>>(),
+            cause_types
+        );
+    }
+
     /// RFC §10.6.8: an error crosses with its causes, in order.
     #[test]
     fn a_channel_s_error_crosses_with_its_causes() {
@@ -698,6 +791,28 @@ mod tests {
     }
 
     #[test]
+    fn a_delegated_provider_failure_keeps_its_declared_retry_policy() {
+        let provider = RoomKitError::ProviderDelivery {
+            result: roomkit_core::model::ProviderResult {
+                error: Some("unreachable".to_owned()),
+                metadata: Metadata::from_iter([
+                    ("code".to_owned(), Value::from("E42")),
+                    ("retryable".to_owned(), Value::Bool(true)),
+                ]),
+                ..roomkit_core::model::ProviderResult::new(false)
+            },
+        };
+        let wrapped = crate::TaskTurnFailedError::new(std::sync::Arc::new(provider), "error", None);
+        let record = ErrorRecord::from(&wrapped);
+        assert_eq!(record.causes.len(), 1);
+        let cause = &record.causes[0];
+        assert_eq!(cause.error_type, "ProviderDeliveryError");
+        assert_eq!(cause.attributes["code"], "E42");
+        assert_eq!(cause.attributes["retryable"], true);
+        assert_eq!(to_record(&channel_error(&wrapped)), record);
+    }
+
+    #[test]
     fn a_missing_recipient_keeps_its_class_and_json_attributes() {
         #[derive(Debug, thiserror::Error)]
         #[error("delivery callback failed")]
@@ -722,7 +837,10 @@ mod tests {
             "interrupted",
             None,
         );
-        assert_eq!(worker.cause_record(), record);
+        assert_eq!(
+            ErrorRecord::from(&worker).causes.as_slice(),
+            std::slice::from_ref(&record)
+        );
         assert_eq!(to_record(&channel_error(&worker).causes[0]), record);
 
         let wrapped = channel_error(&Wrapped(error));

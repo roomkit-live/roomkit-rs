@@ -58,6 +58,10 @@ pub struct ErrorRecord {
     /// stay small.
     #[serde(default, skip_serializing_if = "no_attributes")]
     pub attributes: Box<Metadata>,
+    /// The chain of causes, nearest first, as carried by the turn backend (RFC §10.6.8).
+    /// Records written before causes were exposed read with an empty chain.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub causes: Vec<ErrorRecord>,
 }
 
 /// Whether a record carries no attributes, which it then does not write.
@@ -81,6 +85,7 @@ impl ErrorRecord {
             error_type: error_type.into(),
             message: message.into(),
             attributes: Box::default(),
+            causes: Vec::new(),
         }
     }
 
@@ -105,6 +110,22 @@ impl ErrorRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn error_records_round_trip_legacy_and_chained_values() {
+        let legacy = serde_json::json!({"error_type":"RuntimeError", "message":"offline"});
+        let first: ErrorRecord = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(first.causes.is_empty());
+        assert_eq!(serde_json::to_value(&first).unwrap(), legacy);
+        let mut chained = ErrorRecord::new("WorkerError", "failed");
+        chained.causes.push(first);
+        let serialized = serde_json::to_value(&chained).unwrap();
+        assert_eq!(serialized["causes"][0], legacy);
+        assert_eq!(
+            serde_json::from_value::<ErrorRecord>(serialized).unwrap(),
+            chained
+        );
+    }
 
     #[test]
     fn an_empty_output_has_not_responded() {

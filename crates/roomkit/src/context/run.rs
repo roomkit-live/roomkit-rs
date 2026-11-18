@@ -50,7 +50,6 @@ enum Tenure {
 /// queue that hands it calls into its room.
 #[derive(Debug)]
 pub(crate) struct RunShared {
-    pub(crate) worker: Option<crate::text_errors::WorkerCause>,
     holdings: Mutex<Holdings>,
     adoptions: mpsc::UnboundedSender<Adoption>,
     tenures: AtomicU64,
@@ -138,15 +137,8 @@ pub(crate) struct Lease {
 impl RunShared {
     /// A run's shared side, with the queue its driver receives calls on.
     pub(crate) fn new() -> (Arc<Self>, mpsc::UnboundedReceiver<Adoption>) {
-        Self::for_worker(None)
-    }
-
-    pub(crate) fn for_worker(
-        worker: Option<crate::text_errors::WorkerCause>,
-    ) -> (Arc<Self>, mpsc::UnboundedReceiver<Adoption>) {
         let (adoptions, received) = mpsc::unbounded_channel();
         let shared = Arc::new(Self {
-            worker,
             holdings: Mutex::new(Holdings::default()),
             adoptions,
             tenures: AtomicU64::new(0),

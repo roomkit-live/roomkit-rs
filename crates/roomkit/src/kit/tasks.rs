@@ -743,21 +743,22 @@ impl<S: ConversationStore> RoomKit<S> {
         task: &DelegatedTask,
         context: Option<&Metadata>,
     ) -> TaskEnd {
-        let outcome = match Box::pin(self.delegated_outcome(task, task.description.clone())).await {
-            Ok(outcome) => outcome,
+        let answers = match Box::pin(self.delegated_answers(task, task.description.clone())).await {
+            Ok(answers) => answers,
             Err(failure) => return failed(failure, context),
         };
+        let outcome = task_outcome(&answers, &task.agent_id);
         TaskEnd::finished(outcome.response, outcome.failure, context, outcome.turns)
     }
 
     /// One turn of the task's child room on `text`, a system message only
     /// its intelligence channels read (RFC §23.3 steps 4 to 6): what each
     /// agent answered, or why the turn could not run.
-    pub(super) async fn delegated_outcome(
+    pub(super) async fn delegated_answers(
         &self,
         task: &DelegatedTask,
         text: String,
-    ) -> Result<TurnOutcome, ErrorRecord> {
+    ) -> Result<Vec<DelegatedAnswer>, ErrorRecord> {
         let environment = self.inner.environment();
         let source = EventSource::new(ChannelId::system(), ChannelType::SYSTEM);
         let mut message = RoomEvent::at(
@@ -772,10 +773,8 @@ impl<S: ConversationStore> RoomKit<S> {
         message.visibility = Visibility::Intelligence;
         let operation = DelegatedTurn::new(self.config(), task.child_room_id.clone(), message)
             .of_agent(task.agent_id.clone());
-        let cause = crate::text_errors::WorkerCause::new(task.agent_id.clone());
-        let purpose = driver::RunPurpose::Delegation(cause.clone());
-        match Box::pin(driver::run(&self.inner, purpose, operation)).await {
-            Ok(Ok(answers)) => Ok(task_outcome(&answers, &task.agent_id, cause.take())),
+        match Box::pin(driver::run(&self.inner, "delegate", operation)).await {
+            Ok(Ok(answers)) => Ok(answers),
             Ok(Err(error)) => Err(delegation_failure(&error)),
             Err(error) => Err(kit_failure(&error)),
         }
@@ -1150,12 +1149,8 @@ fn round_half_even(value: f64) -> i64 {
 /// The task's outcome from what the child room's agents answered (RFC
 /// §23.3 step 6): the delegated agent's answer, its failure, and each
 /// responder's turn entry.
-fn task_outcome(
-    answers: &[DelegatedAnswer],
-    agent_id: &ChannelId,
-    cause: Option<ErrorRecord>,
-) -> TurnOutcome {
-    let (response, failure, turns) = outcome_parts(answers, agent_id, cause);
+pub(super) fn task_outcome(answers: &[DelegatedAnswer], agent_id: &ChannelId) -> TurnOutcome {
+    let (response, failure, turns) = outcome_parts(answers, agent_id);
     TurnOutcome {
         response,
         failure,
@@ -1174,7 +1169,6 @@ pub(super) struct TurnOutcome {
 fn outcome_parts(
     answers: &[DelegatedAnswer],
     agent_id: &ChannelId,
-    cause: Option<ErrorRecord>,
 ) -> (Option<String>, Option<Failure>, Metadata) {
     let mut turns = Metadata::new();
     for answer in answers {
@@ -1193,7 +1187,7 @@ fn outcome_parts(
         (None, None)
     };
     if let Some(error) = &answer.error {
-        let failure = worker_failure(error, end, text, cause);
+        let failure = worker_failure(error, end, text);
         return (None, Some(failure), turns);
     }
     if let Some(reason) = end.filter(|end| end != "completed") {
@@ -1214,15 +1208,18 @@ fn outcome_parts(
 /// Project the same failure as Python's `_turn_failure` and `finished_task_fields`:
 /// a cut carries its own details. A wrapper supplied by the worker is unwrapped
 /// once when the turn record has no separate failure to wrap it in.
-fn worker_failure(
-    error: &ErrorRecord,
-    end: Option<String>,
-    text: Option<String>,
-    cause: Option<ErrorRecord>,
-) -> Failure {
+fn worker_failure(error: &ErrorRecord, end: Option<String>, text: Option<String>) -> Failure {
     let end = end.filter(|value| value != "completed");
-    let unwrap = error.error_type == "TaskTurnFailedError" && end.is_none();
-    let (reason, narration) = if unwrap || error.error_type == "TaskCutShortError" {
+    let failed_turn = matches!(
+        error.error_type.as_str(),
+        "TaskTurnFailedError" | "roomkit.core.exceptions:TaskTurnFailedError"
+    );
+    let cut = matches!(
+        error.error_type.as_str(),
+        "TaskCutShortError" | "roomkit.core.exceptions:TaskCutShortError"
+    );
+    let unwrap = failed_turn && end.is_none();
+    let (reason, narration) = if unwrap || cut {
         let attribute = |key: &str| {
             error
                 .attributes
@@ -1231,7 +1228,12 @@ fn worker_failure(
                 .map(str::to_owned)
         };
         (attribute("reason"), attribute("narration"))
-    } else if end.is_some() && error.error_type != "TurnCutShortError" {
+    } else if end.is_some()
+        && !matches!(
+            error.error_type.as_str(),
+            "TurnCutShortError" | "roomkit.core.exceptions:TurnCutShortError"
+        )
+    {
         // A bare turn cut stays the worker's error. Only a task cut or a
         // task failure carries narration and an end into the task result.
         (end, text)
@@ -1243,13 +1245,24 @@ fn worker_failure(
         reason,
         narration,
         exception: if unwrap {
-            cause.unwrap_or_else(|| error.clone())
+            original_failure(error)
         } else {
             error.clone()
         },
         // Reported in the child room by its reader or delivery set (RFC §23.3 step 6).
         reported: true,
     }
+}
+
+/// Re-root the flat exception chain at its immediate cause when `_as_raised`
+/// unwraps one layer of a failed worker turn.
+fn original_failure(error: &ErrorRecord) -> ErrorRecord {
+    let Some((first, remaining)) = error.causes.split_first() else {
+        return error.clone();
+    };
+    let mut cause = first.clone();
+    cause.causes.extend_from_slice(remaining);
+    cause
 }
 
 /// The text of the agent's last answer among its rows.

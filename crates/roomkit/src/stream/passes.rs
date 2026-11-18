@@ -94,7 +94,6 @@ async fn read_first<S: ConversationStore>(
     read: &StreamRead,
 ) -> Result<(ChannelOutput, FirstPass), Box<ChannelOutput>> {
     let first_read = StreamRead {
-        worker_cause: read.worker_cause.clone(),
         responder: read.responder.clone(),
         answers: read.answers.clone(),
         target: None,
@@ -171,10 +170,6 @@ async fn second_pass<S: ConversationStore>(
     let context = context.await;
     let kit: Arc<dyn TurnKit> = Arc::new(Arc::downgrade(inner));
     let read = StreamRead {
-        worker_cause: read
-            .worker_cause
-            .as_ref()
-            .and_then(|worker| worker.for_worker(&binding.channel_id)),
         responder: binding.clone(),
         ..read
     };
