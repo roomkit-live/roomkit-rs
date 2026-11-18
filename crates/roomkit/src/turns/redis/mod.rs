@@ -110,7 +110,10 @@ impl RedisTurnBackend {
                 "RedisTurnBackend(client=...) needs url= too: its beat connects with it".into(),
             ));
         }
-        let client = redis::Client::open(url.unwrap_or("redis://localhost:6379"))
+        let address = url
+            .filter(|value| !value.is_empty())
+            .unwrap_or("redis://localhost:6379");
+        let client = redis::Client::open(address)
             .map_err(|_| RoomKitError::Value("invalid Redis turn backend URL".into()))?;
         Ok(Self(Arc::new(Node {
             outbox: Mutex::default(),
@@ -190,4 +193,34 @@ impl RedisTurnBackend {
 
 fn redis_error(error: &redis::RedisError) -> RoomKitError {
     RoomKitError::Runtime(error.to_string())
+}
+
+#[cfg(test)]
+mod constructor_tests {
+    use super::*;
+
+    #[test]
+    fn only_an_absent_url_is_refused_with_an_injected_client() {
+        let default = redis::ConnectionAddr::Tcp("localhost".into(), 6379);
+        let custom = redis::Client::open("redis://example.test:6380").unwrap();
+        let injected = RedisTurnBackendOptions {
+            client: Some(custom.clone()),
+            ..Default::default()
+        };
+        let refused = RedisTurnBackend::new(None, injected.clone()).unwrap_err();
+        assert!(
+            matches!(refused, RoomKitError::Value(message) if message == "RedisTurnBackend(client=...) needs url= too: its beat connects with it")
+        );
+        for url in [None, Some("")] {
+            let backend = RedisTurnBackend::new(url, RedisTurnBackendOptions::default()).unwrap();
+            assert_eq!(backend.0.address.get_connection_info().addr(), &default);
+            assert_eq!(backend.0.client.get_connection_info().addr(), &default);
+        }
+        let backend = RedisTurnBackend::new(Some(""), injected).unwrap();
+        assert_eq!(backend.0.address.get_connection_info().addr(), &default);
+        assert_eq!(
+            backend.0.client.get_connection_info().addr(),
+            custom.get_connection_info().addr()
+        );
+    }
 }
