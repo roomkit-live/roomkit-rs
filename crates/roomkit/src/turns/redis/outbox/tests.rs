@@ -90,3 +90,39 @@ async fn a_failed_frame_returns_once_and_shutdown_bounds_retriable_work() {
         Err(RoomKitError::TurnLink {ref reason,..}) if reason=="backend_closed"));
     conn.del::<_, ()>(&key).await.unwrap();
 }
+
+#[tokio::test]
+#[ignore = "requires REDIS_URL"]
+async fn a_publication_precedes_the_next_question_from_the_same_host() {
+    let backend = backend();
+    let peer = "owner";
+    let port = backend.remember_owner(peer);
+    let publication = serde_json::from_value(serde_json::json!({
+        "type": "room_publication", "channel_id": "ai", "room_id": "room",
+        "turn_id": "turn", "executor_id": "worker",
+        "frame": {"type":"framework_event","event_type":"ai_response","data":{}}
+    }))
+    .unwrap();
+    port.publish(publication);
+    backend.post(peer, &envelope("owner")).await.unwrap();
+    let mut conn = backend.connection().await.unwrap();
+    let key = backend.key("inbox:owner");
+    let messages: StreamRangeReply = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let rows: StreamRangeReply = conn.xrange_all(&key).await.unwrap();
+            if rows.ids.len() == 2 {
+                break rows;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let kinds: Vec<String> = messages
+        .ids
+        .iter()
+        .map(|m| m.get("kind").unwrap())
+        .collect();
+    conn.del::<_, ()>(key).await.unwrap();
+    assert_eq!(kinds, ["work", "owner"]);
+}

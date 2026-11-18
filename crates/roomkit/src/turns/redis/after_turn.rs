@@ -1,9 +1,8 @@
 //! An executor's route to the owner that submitted a turn (RFC §10.6.3, §10.6.5).
 //! The last 10,000 received turns retain their routes, as in Python's Redis Routes.
 use serde_json::Value;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Weak};
 use std::time::Duration;
-use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use super::stream::Message;
@@ -17,7 +16,6 @@ use crate::turns::wire::{OwnerMessage, OwnerMessageEnvelope, RoomCall, RoomCallR
 pub(crate) struct PeerOwner {
     node: Weak<Node>,
     peer: Weak<str>,
-    work: Mutex<Option<mpsc::UnboundedSender<OwnerMessage>>>,
 }
 
 impl RedisTurnBackend {
@@ -26,7 +24,6 @@ impl RedisTurnBackend {
         let port = PeerOwner {
             node: Arc::downgrade(&self.0),
             peer: Arc::downgrade(&peer),
-            work: Mutex::default(),
         };
         let mut routes = lock(&self.0.routes);
         routes.turn_owners.push_back(peer);
@@ -48,7 +45,7 @@ impl PeerOwner {
             message: OwnerMessage::RoomCall(call),
         };
         let result = if let Some(peer) = self.peer.upgrade() {
-            let body = serde_json::to_string(&envelope).map_err(invalid)?;
+            let body = serde_json::to_string(&envelope).map_err(|error| invalid(&error))?;
             let exchange = backend.exchange(&peer, "owner", body, "");
             tokio::pin!(exchange);
             let interval = backend
@@ -70,7 +67,7 @@ impl PeerOwner {
                     });
                 }
             };
-            serde_json::from_str::<RoomCallResult>(&answer).map_err(invalid)?
+            serde_json::from_str::<RoomCallResult>(&answer).map_err(|error| invalid(&error))?
         } else {
             let owner = lock(&backend.0.owner).clone().ok_or_else(no_owner)?;
             owner(envelope).await.ok_or_else(no_owner)?
@@ -87,58 +84,37 @@ impl PeerOwner {
         }
     }
 
-    /// Queue fire-and-forget work in emission order. The sender lives only as
-    /// long as this captured turn host; the worker's backend is held weakly.
+    /// Enqueue immediately: a subsequent room call must follow this work
+    /// in the owner's Redis stream even if the caller never yields between them.
     pub(crate) fn publish(&self, message: OwnerMessage) {
-        let mut work = lock(&self.work);
-        let tx = work.get_or_insert_with(|| {
-            let (tx, rx) = mpsc::unbounded_channel();
-            tokio::spawn(publish(self.node.clone(), self.peer.clone(), rx));
-            tx
-        });
-        if tx.send(message).is_err() {
-            tracing::debug!(target: "roomkit::turns", "the backend closed before a publication");
-        }
-    }
-}
-
-async fn publish(
-    node: Weak<Node>,
-    peer: Weak<str>,
-    mut work: mpsc::UnboundedReceiver<OwnerMessage>,
-) {
-    while let Some(message) = work.recv().await {
-        let Some(node) = node.upgrade() else {
-            break;
+        let Some(node) = self.node.upgrade() else {
+            return;
         };
         let backend = RedisTurnBackend(node);
         if *backend.0.stop.borrow() {
-            break;
+            return;
         }
         let envelope = OwnerMessageEnvelope { message };
-        if let Some(peer) = peer.upgrade() {
+        if let Some(peer) = self.peer.upgrade() {
             let body = match serde_json::to_string(&envelope) {
                 Ok(body) => body,
                 Err(error) => {
                     tracing::debug!(%error, "failed to encode a room publication");
-                    continue;
+                    return;
                 }
             };
             let reference = Uuid::new_v4().simple().to_string();
             let message = Message::new("work", backend.node_id(), body, "", &reference);
-            if let Err(error) = backend.post(&peer, &message).await {
+            if let Err(error) = backend.post_work(&peer, &message) {
                 tracing::debug!(%error, "a publication after a turn did not reach its owner");
             }
-        } else if let Some(owner) = {
-            let local = lock(&backend.0.owner);
-            local.clone()
-        } {
-            drop(owner(envelope).await);
+        } else if let Some(owner) = lock(&backend.0.owner).clone() {
+            tokio::spawn(owner(envelope));
         }
     }
 }
 
-fn invalid(error: serde_json::Error) -> RoomKitError {
+fn invalid(error: &serde_json::Error) -> RoomKitError {
     RoomKitError::TurnLink {
         reason: "frame_invalid".into(),
         message: Some(error.to_string()),

@@ -87,6 +87,15 @@ impl RedisTurnBackend {
         Ok(result)
     }
 
+    /// Queue unacknowledged work on the same destination FIFO as requests.
+    pub(super) fn post_work(
+        &self,
+        destination: &str,
+        message: &Message,
+    ) -> Result<(), RoomKitError> {
+        self.enqueue(destination, message).map(drop)
+    }
+
     pub(super) async fn post(
         &self,
         destination: &str,
@@ -105,7 +114,11 @@ impl RedisTurnBackend {
     ) {
         loop {
             let result = self.write_pending(destination, &pending).await;
-            drop(pending.receipt.send(result));
+            if let Err(Err(error)) = pending.receipt.send(result)
+                && pending.message.kind == "work"
+            {
+                tracing::warn!(%error, %destination, "A publication after a turn did not reach its owner");
+            }
             // The sender holds this same lock while enqueueing. Observing an empty
             // queue and removing its writer is therefore one operation.
             let mut outbox = lock(&self.0.outbox);
