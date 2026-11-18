@@ -36,6 +36,8 @@ mod harness;
 mod host_verbs;
 mod identity;
 mod input_calls;
+mod junit;
+mod junit_tests;
 mod kit_executor;
 mod locks;
 mod matching;
@@ -78,6 +80,8 @@ use crate::scenarios::{scenarios, suite};
 pub(crate) type Kit = RoomKit<InMemoryStore>;
 /// The store of the kit the runner builds.
 pub(crate) type Store = InMemoryStore;
+/// The backend's name in the result file (`junit`).
+pub(crate) const BACKEND: &str = "memory";
 
 /// The memory runner needs no external service for its fixture checks.
 pub(crate) const fn backend_available() -> bool {
@@ -181,24 +185,11 @@ fn hex(bytes: &[u8]) -> String {
 /// known failures.
 #[test]
 fn every_scenario_gives_what_the_rfc_says() {
-    scenarios::every_scenario_gives_what_the_rfc_says(
-        "one thread",
-        scenarios::current_thread,
-        KNOWN_FAILURES,
-    );
-}
-
-/// Four workers, as a program on tokio's default multi-thread runtime runs.
-fn four_workers() -> tokio::runtime::Runtime {
-    tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(4)
-        .enable_all()
-        .build()
-        .unwrap()
+    scenarios::every_scenario_gives_what_the_rfc_says(&scenarios::ONE_THREAD, KNOWN_FAILURES);
 }
 
 /// Every scenario gives the same on four workers as on one thread.
 #[test]
 fn every_scenario_gives_the_same_on_several_workers() {
-    scenarios::every_scenario_gives_what_the_rfc_says("four workers", four_workers, KNOWN_FAILURES);
+    scenarios::every_scenario_gives_what_the_rfc_says(&scenarios::FOUR_WORKERS, KNOWN_FAILURES);
 }

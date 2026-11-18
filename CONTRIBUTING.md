@@ -71,6 +71,26 @@ API keeps the report free of findings no entry covers, and of dead entries.
 - Operations are tested by their trace: scripted outcomes in, expected effects
   and result out.
 
+## Conformance results
+
+`make test` runs the shared conformance scenarios (`conformance/`) on the
+in-memory store, on one thread and on four workers, and on SQLite on one
+thread; `make postgres-test` runs them on PostgreSQL. When
+`ROOMKIT_CONFORMANCE_JUNIT` names a directory, a relative one read from the
+repository's root, each pass also writes `<backend>-<runtime>.xml` there: a
+JUnit XML report with one case per scenario, named by its id, under the class
+`conformance.<backend>.<runtime>` (runtime `current_thread` or
+`multi_thread_4`), passed, failed or skipped. The scenarios no runner here
+runs are skipped with their reason. Without the variable nothing is written.
+
+```sh
+ROOMKIT_CONFORMANCE_JUNIT=target/conformance cargo test -p roomkit --test conformance
+ROOMKIT_CONFORMANCE_JUNIT=target/conformance cargo test -p roomkit-sqlite --test conformance
+```
+
+roomkit-specs records these files as execution receipts, from a clean commit
+(`conformance/TRACEABILITY.md`, "Execution receipts").
+
 ## Examples
 
 - An example is one file, `examples/<name>.rs`, declared in
