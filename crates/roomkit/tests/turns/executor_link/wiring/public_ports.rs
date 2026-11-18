@@ -85,3 +85,49 @@ async fn the_text_outlet_retains_destination_room_marks_and_subscription_failure
     assert!(outlet.unsubscribe(&id).await.unwrap());
     worker.close().await;
 }
+
+#[tokio::test]
+async fn both_public_outlets_recheck_the_audience_of_a_direct_prompt() {
+    use roomkit::model::Visibility;
+    use roomkit::turns::DirectPrompt;
+    let (link, _, _) = link(false);
+    let req = &link.request;
+    let room = &req.context.room;
+    let sink = Arc::new(Sink::default());
+    let worker = worker();
+    let mut env = Env::new(req.context.clone());
+    env.context.bindings = vec![req.binding.clone()];
+    env.realtime = Some(Arc::<Sink>::clone(&sink));
+    worker.use_wiring(Arc::new(env));
+    let outlet = worker.wiring().realtime();
+    let publish = || async {
+        let e = EphemeralEvent::new(room.id.clone(), EphemeralEventType::ToolCallStart, "actor");
+        outlet.publish("unrelated", e.clone()).await.unwrap();
+        outlet
+            .publish(&format!("room:{}", room.id), e.clone())
+            .await
+            .unwrap();
+        outlet.publish_to_room(&room.id, e).await.unwrap();
+    };
+    let mut trigger = req.event.clone();
+    trigger.response_visibility = Some(Visibility::None);
+    DirectPrompt::of(room, &trigger, &req.channel_id, &req.binding)
+        .run(publish())
+        .await;
+    assert!(sink.0.lock().unwrap().is_empty());
+    trigger.response_visibility = Some(Visibility::All);
+    DirectPrompt::of(room, &trigger, &req.channel_id, &req.binding)
+        .run(publish())
+        .await;
+    let sent = sink.0.lock().unwrap().clone();
+    assert_eq!(sent.len(), 2);
+    assert_eq!(sent[0].0, format!("room:{}", room.id));
+    assert_eq!(sent[1].0, format!("custom:{}", room.id));
+    assert!(
+        sent.iter()
+            .all(|(_, event)| event.room_created_at == Some(room.created_at))
+    );
+    publish().await;
+    assert_eq!(sink.0.lock().unwrap().len(), 5);
+    worker.close().await;
+}

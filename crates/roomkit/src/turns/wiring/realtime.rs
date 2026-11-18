@@ -1,5 +1,5 @@
 //! The realtime outlet of an executor's text channels (RFC §10.6.3).
-use super::{TurnWiring, WiringEnv};
+use super::{DirectPrompt, TurnWiring, WiringEnv};
 use crate::model::RoomId;
 use crate::realtime::{EphemeralCallback, EphemeralEvent, EphemeralEventType, RealtimeBackend};
 use crate::{ChannelError, RoomKitError};
@@ -21,11 +21,16 @@ impl TurnRealtime {
     ///
     /// # Errors
     /// Propagates the fallback's publication error.
-    pub async fn publish(&self, channel: &str, event: EphemeralEvent) -> Result<(), ChannelError> {
+    pub async fn publish(
+        &self,
+        channel: &str,
+        mut event: EphemeralEvent,
+    ) -> Result<(), ChannelError> {
         if let Some(host) = crate::turn::turn_in_scope() {
             host.publish_scoped(Some(channel), event);
-        } else if event.r#type != EphemeralEventType::TextDelta
-            && let Some(backend) = self.0.realtime()
+        } else if let Some(backend) = self
+            .fallback(channel, &mut event, DirectPrompt::current().as_ref())
+            .await
         {
             backend.publish(channel, event).await?;
         }
@@ -45,7 +50,8 @@ impl TurnRealtime {
             host.publish_scoped(Some(&format!("room:{room_id}")), event);
             Ok(())
         } else {
-            self.outside_room(room_id, event).await
+            self.outside_room(room_id, event, DirectPrompt::current().as_ref())
+                .await
         }
     }
 
@@ -53,9 +59,11 @@ impl TurnRealtime {
         &self,
         room: &RoomId,
         mut event: EphemeralEvent,
+        prompt: Option<&DirectPrompt>,
     ) -> Result<(), ChannelError> {
-        if event.r#type != EphemeralEventType::TextDelta
-            && let Some(backend) = self.0.realtime()
+        if let Some(backend) = self
+            .fallback(&format!("room:{room}"), &mut event, prompt)
+            .await
         {
             if event.room_created_at.is_none() {
                 event.room_created_at = self.0.room_mark(room).await;
@@ -63,6 +71,24 @@ impl TurnRealtime {
             backend.publish_to_room(room, event).await?;
         }
         Ok(())
+    }
+
+    async fn fallback(
+        &self,
+        topic: &str,
+        event: &mut EphemeralEvent,
+        prompt: Option<&DirectPrompt>,
+    ) -> Option<Arc<dyn RealtimeBackend>> {
+        if event.r#type == EphemeralEventType::TextDelta {
+            return None;
+        }
+        let backend = self.0.realtime()?;
+        if let Some(prompt) = prompt
+            && !prompt.authorize(self.0.as_ref(), topic, event).await
+        {
+            return None;
+        }
+        Some(backend)
     }
 
     fn backend(&self) -> Result<Arc<dyn RealtimeBackend>, RoomKitError> {

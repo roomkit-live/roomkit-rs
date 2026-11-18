@@ -1,7 +1,7 @@
 //! A direct prompt has a trigger, but no owner link to enforce its audience.
-use super::TurnWiring;
+use super::{TurnWiring, WiringEnv};
 use crate::model::{ChannelBinding, ChannelId, Room, RoomEvent, RoomId, Timestamp, Visibility};
-use crate::realtime::{EphemeralEvent, EphemeralEventType};
+use crate::realtime::EphemeralEvent;
 
 tokio::task_local! {
     static PROMPT: Option<DirectPrompt>;
@@ -52,10 +52,15 @@ impl DirectPrompt {
         PROMPT.scope(Self::current(), work)
     }
 
-    pub(crate) async fn publish(&self, wiring: &TurnWiring, mut event: EphemeralEvent) {
+    pub(super) async fn authorize(
+        &self,
+        env: &dyn WiringEnv,
+        topic: &str,
+        event: &mut EphemeralEvent,
+    ) -> bool {
         if !self.public
+            || topic.strip_prefix("room:") != Some(self.room.as_str())
             || event.room_id != self.room
-            || event.r#type == EphemeralEventType::TextDelta
             || event
                 .channel_id
                 .as_ref()
@@ -63,21 +68,22 @@ impl DirectPrompt {
             || event
                 .room_created_at
                 .is_some_and(|mark| mark != self.created_at)
+            || !env
+                .can_publish_direct(&self.room, &self.channel, self.created_at)
+                .await
         {
-            return;
-        }
-        let Some(backend) = wiring.env.realtime() else {
-            return;
-        };
-        if !wiring
-            .env
-            .can_publish_direct(&self.room, &self.channel, self.created_at)
-            .await
-        {
-            return;
+            return false;
         }
         event.room_created_at = Some(self.created_at);
-        if let Err(error) = backend.publish_to_room(&self.room, event).await {
+        true
+    }
+
+    pub(crate) async fn publish(&self, wiring: &TurnWiring, event: EphemeralEvent) {
+        if let Err(error) = wiring
+            .realtime()
+            .outside_room(&self.room, event, Some(self))
+            .await
+        {
             tracing::debug!(room = %self.room, %error, "could not publish a direct prompt notification");
         }
     }

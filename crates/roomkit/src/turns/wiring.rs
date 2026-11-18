@@ -182,7 +182,11 @@ impl TurnWiring {
 
     pub(crate) async fn publish_outside(&self, event: EphemeralEvent) {
         let room = event.room_id.clone();
-        if let Err(error) = self.realtime().outside_room(&room, event).await {
+        if let Err(error) = self
+            .realtime()
+            .outside_room(&room, event, DirectPrompt::current().as_ref())
+            .await
+        {
             tracing::debug!(%room, %error, "publishing a channel notification failed");
         }
     }
