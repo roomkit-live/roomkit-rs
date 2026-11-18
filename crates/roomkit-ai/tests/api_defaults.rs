@@ -802,3 +802,22 @@ fn speaking_turn_and_report_fields_default_as_python() {
     // roomkit.ThoughtEvent.__init__(duration_ms) = None
     assert!(thought.duration_ms.is_none());
 }
+
+#[test]
+fn default_chat_dialect_matches_the_standard_openai_dialect() {
+    let options = roomkit_ai::ChatDialectOptions::default();
+    // roomkit.providers.ai.ChatDialect.__init__(thinking_field) = None
+    assert!(options.thinking_field.is_none());
+    // roomkit.providers.ai.ChatDialect.__init__(names_tool_results) = False
+    assert!(!options.names_tool_results);
+    // roomkit.providers.ai.ChatDialect.__init__(flattens_text) = False
+    assert!(!options.flattens_text);
+    // roomkit.providers.ai.ChatDialect.__init__(round_thinking_required) = False
+    assert!(!options.round_thinking_required);
+    // roomkit.providers.ai.ChatDialect.__init__(round_thinking_placeholder) = ''
+    assert_eq!(options.round_thinking_placeholder, "");
+    assert_eq!(
+        roomkit_ai::ChatDialect::new(options).unwrap(),
+        roomkit_ai::OPENAI_CHAT
+    );
+}

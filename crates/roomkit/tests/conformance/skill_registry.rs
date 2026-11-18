@@ -145,7 +145,7 @@ fn failed(error: &SkillError) -> Value {
         SkillError::ServerDiscovery { .. }
         | SkillError::ServerUnavailable { .. }
         | SkillError::Discovery { .. } => "SkillDiscoveryError",
-        SkillError::Parse { .. } => "SkillParseError",
+        SkillError::Parse { .. } | SkillError::Frontmatter { .. } => "SkillParseError",
         SkillError::ManifestTooLarge { .. } => "SkillManifestTooLargeError",
         SkillError::Verification { .. } | SkillError::VerificationCaused { .. } => {
             "SkillVerificationError"
