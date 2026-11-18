@@ -20,6 +20,7 @@ enum Binding {
 #[derive(Debug)]
 struct Wired {
     wiring: TurnWiring,
+    prompt: Option<super::DirectPrompt>,
     room: RoomId,
     channel: ChannelId,
     kind: ChannelType,
@@ -48,6 +49,7 @@ impl TurnWiring {
         }
         ChannelTurnHooks(Binding::Wired(Arc::new(Wired {
             wiring: self.clone(),
+            prompt: super::DirectPrompt::current(),
             room: room.clone(),
             channel: channel.clone(),
             kind: kind.clone(),
@@ -86,6 +88,11 @@ impl ChannelTurnHooks {
     }
 
     pub(crate) fn spawn(&self, task: BoxFuture<'static, ()>) -> bool {
+        if let Binding::Wired(bound) = &self.0
+            && let Some(prompt) = bound.prompt.clone()
+        {
+            return bound.wiring.kit.spawn_observer(Box::pin(prompt.run(task)));
+        }
         self.parts().0.spawn_observer(task)
     }
 
@@ -98,8 +105,27 @@ impl ChannelTurnHooks {
     /// Queue a room notification in order through this channel's outlet.
     pub fn publish_ephemeral(&self, event: crate::realtime::EphemeralEvent) {
         match &self.0 {
-            Binding::Turn(host) => host.publish_ephemeral(event),
-            Binding::Wired(bound) => bound.publisher.enqueue_outside(&bound.wiring, event),
+            Binding::Turn(host) => host.publish_from_channel(event),
+            Binding::Wired(bound) => {
+                if let Some(prompt) = &bound.prompt {
+                    bound
+                        .publisher
+                        .enqueue_outside(&bound.wiring, prompt, event);
+                }
+            }
+        }
+    }
+
+    /// Publish a prompt's awaited protocol notification with the same audience
+    /// as its queued tool and thinking notifications.
+    pub async fn publish_now(&self, event: crate::realtime::EphemeralEvent) {
+        match &self.0 {
+            Binding::Turn(host) => host.publish_from_channel(event),
+            Binding::Wired(bound) => {
+                if let Some(prompt) = &bound.prompt {
+                    prompt.publish(&bound.wiring, event).await;
+                }
+            }
         }
     }
 

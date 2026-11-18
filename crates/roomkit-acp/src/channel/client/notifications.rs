@@ -139,7 +139,7 @@ impl ChannelClient {
         };
         let event = publication::event(&room, &self.publication.channel_id, kind, data);
         if let Some(sink) = self.turns.updates(session) {
-            sink.scope.publish(&self.publication.bridge, event).await;
+            sink.scope.publish(event).await;
         } else {
             // Python's _for_session uses an empty Context for an idle session.
             // A custom transport may call back from another turn's task.

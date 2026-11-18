@@ -399,6 +399,66 @@ impl<T: AcpTransport> fmt::Debug for AcpChannel<T> {
     }
 }
 
+impl<T: AcpTransport> AcpChannel<T> {
+    async fn prompt_event(
+        &self,
+        event: RoomEvent,
+        context: RoomContext,
+    ) -> Result<ChannelOutput, ChannelError> {
+        if event.source.channel_id == self.shared.channel_id || opens_no_turn(&event) {
+            return Ok(ChannelOutput::empty());
+        }
+        let mut text = acp_event_text(&event);
+        let blocks =
+            context::contributed_blocks(self.shared.context_contributor.as_ref(), &context, &event)
+                .await;
+        let notes = context::notes(&event);
+        if is_blank(&text) && blocks.is_empty() && notes.is_none() {
+            return Ok(ChannelOutput::empty());
+        }
+        if event.r#type == EventType::Instruction {
+            // The application's direction, never a participant's line (RFC
+            // §10.1.1 step 6).
+            text = mark_instruction(&text);
+        }
+        let standalone = is_standalone(&event);
+        let record = turn::response_metadata(standalone);
+        let host = current_turn_host();
+        let stream = TurnStream::new(
+            Arc::clone(&self.shared),
+            Ask {
+                standalone,
+                room_id: context.room.id.clone(),
+                event_id: event.id.to_string(),
+                input: context::Input {
+                    context,
+                    trigger: event.clone(),
+                    text,
+                    blocks,
+                    notes,
+                },
+                record: record.clone(),
+                host: host.clone(),
+                answers_room: updates::answers_room(&event),
+            },
+        );
+        // Capture the record when the stream runs, along with the delivery
+        // context its tool reports already carry. Never borrow a parent's.
+        let scope = TurnRecord::default();
+        scope.adopt(record.clone());
+        let stream = scope.scope_stream(stream);
+        match host {
+            // Within the kit, the turn is one stream, read as it is written.
+            Some(host) => Ok(ChannelOutput {
+                response_metadata: record,
+                ..host.respond_with_stream(Box::pin(stream))
+            }),
+            // Outside one, it is read whole, as an AI channel's is.
+            None => buffered(stream, &event, self.source(), record).await,
+        }
+    }
+}
+
 impl<T: AcpTransport> Channel for AcpChannel<T> {
     fn set_turn_wiring(&self, wiring: roomkit::turns::TurnWiring) {
         *self
@@ -514,60 +574,16 @@ impl<T: AcpTransport> Channel for AcpChannel<T> {
     async fn on_event(
         &self,
         event: RoomEvent,
-        _binding: ChannelBinding,
+        binding: ChannelBinding,
         context: RoomContext,
     ) -> Result<ChannelOutput, ChannelError> {
-        if event.source.channel_id == self.shared.channel_id || opens_no_turn(&event) {
-            return Ok(ChannelOutput::empty());
-        }
-        let mut text = acp_event_text(&event);
-        let blocks =
-            context::contributed_blocks(self.shared.context_contributor.as_ref(), &context, &event)
-                .await;
-        let notes = context::notes(&event);
-        if is_blank(&text) && blocks.is_empty() && notes.is_none() {
-            return Ok(ChannelOutput::empty());
-        }
-        if event.r#type == EventType::Instruction {
-            // The application's direction, never a participant's line (RFC
-            // §10.1.1 step 6).
-            text = mark_instruction(&text);
-        }
-        let standalone = is_standalone(&event);
-        let record = turn::response_metadata(standalone);
-        let host = current_turn_host();
-        let stream = TurnStream::new(
-            Arc::clone(&self.shared),
-            Ask {
-                standalone,
-                room_id: context.room.id.clone(),
-                event_id: event.id.to_string(),
-                input: context::Input {
-                    context,
-                    trigger: event.clone(),
-                    text,
-                    blocks,
-                    notes,
-                },
-                record: record.clone(),
-                host: host.clone(),
-                answers_room: updates::answers_room(&event),
-            },
+        let scope = roomkit::turns::DirectPrompt::of(
+            &context.room,
+            &event,
+            &self.shared.channel_id,
+            &binding,
         );
-        // Capture the record when the stream runs, along with the delivery
-        // context its tool reports already carry. Never borrow a parent's.
-        let scope = TurnRecord::default();
-        scope.adopt(record.clone());
-        let stream = scope.scope_stream(stream);
-        match host {
-            // Within the kit, the turn is one stream, read as it is written.
-            Some(host) => Ok(ChannelOutput {
-                response_metadata: record,
-                ..host.respond_with_stream(Box::pin(stream))
-            }),
-            // Outside one, it is read whole, as an AI channel's is.
-            None => buffered(stream, &event, self.source(), record).await,
-        }
+        scope.run(self.prompt_event(event, context)).await
     }
 
     fn deliver(

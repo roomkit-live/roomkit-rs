@@ -2118,7 +2118,9 @@ impl<P: AiProvider> Channel for AiChannel<P> {
         binding: ChannelBinding,
         context: RoomContext,
     ) -> Result<ChannelOutput, ChannelError> {
-        Box::pin(self.admitted(event, binding, context)).await
+        let scope =
+            roomkit::turns::DirectPrompt::of(&context.room, &event, &self.channel_id, &binding);
+        Box::pin(scope.run(self.admitted(event, binding, context))).await
     }
 
     /// Whether its turns in a room run one after the other

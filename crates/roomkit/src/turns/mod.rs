@@ -73,7 +73,7 @@ mod channel_calls;
 mod channel_routing;
 pub(crate) mod declared;
 pub(crate) mod wiring;
-pub use wiring::{ChannelTurnHooks, TurnWiring, WiringEnv};
+pub use wiring::{ChannelTurnHooks, DirectPrompt, TurnWiring, WiringEnv};
 mod detach_state;
 pub use declared::{DeclareHostVerbOptions, DeclaredVerb};
 pub(crate) use detach_state::{DetachTicket, PendingDetaches};

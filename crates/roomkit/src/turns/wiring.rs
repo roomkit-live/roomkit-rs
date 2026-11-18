@@ -1,4 +1,6 @@
 //! The room reads and outlets an executor gives the channels it wires (RFC §10.6.2).
+mod direct;
+pub use direct::DirectPrompt;
 mod hooks;
 mod kit;
 pub use hooks::ChannelTurnHooks;
@@ -43,6 +45,17 @@ pub trait WiringEnv: Send + Sync + 'static {
         room: &'a RoomId,
         index: u64,
     ) -> TurnFuture<'a, Result<Option<u64>, RoomKitError>>;
+    /// Whether an authoritative binding currently lets this channel write to
+    /// all in this incarnation of the room. A cached turn snapshot cannot
+    /// grant this permission. Hosts without a live reader suppress publication.
+    fn can_publish_direct<'a>(
+        &'a self,
+        _room: &'a RoomId,
+        _channel: &'a ChannelId,
+        _created_at: Timestamp,
+    ) -> TurnFuture<'a, bool> {
+        Box::pin(async { false })
+    }
     /// The backend for publications made outside a turn.
     fn realtime(&self) -> Option<Arc<dyn RealtimeBackend>> {
         None
@@ -156,6 +169,8 @@ impl TurnWiring {
     pub async fn publish_to_room(&self, event: EphemeralEvent) {
         if let Some(host) = crate::turn::turn_in_scope() {
             host.publish_from_channel(event);
+        } else if let Some(prompt) = DirectPrompt::current() {
+            prompt.publish(self, event).await;
         } else {
             self.publish_outside(event).await;
         }

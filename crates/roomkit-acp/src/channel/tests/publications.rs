@@ -56,7 +56,33 @@ impl RealtimeBackend for AwaitedRealtime {
 }
 
 async fn direct_turn(channel: &AcpChannel<fixture::Direct>) -> ChannelOutput {
-    let input = test_input("r1");
+    direct_in_room(channel, test_input("r1").context.room).await
+}
+
+async fn live_room(kit: &RoomKit, channel: &AcpChannel<fixture::Direct>) -> roomkit::model::Room {
+    let room = kit
+        .create_room(roomkit::CreateRoomOptions {
+            room_id: Some(RoomId::new("r1").unwrap()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    kit.attach_channel(
+        &room.id,
+        &channel.channel_id(),
+        roomkit::AttachChannelOptions::default(),
+    )
+    .await
+    .unwrap();
+    room
+}
+
+async fn direct_in_room(
+    channel: &AcpChannel<fixture::Direct>,
+    room: roomkit::model::Room,
+) -> ChannelOutput {
+    let mut input = test_input("r1");
+    input.context.room = room;
     let binding = ChannelBinding::new(
         channel.channel_id(),
         input.context.room.id.clone(),
@@ -107,8 +133,9 @@ async fn test_cancel_and_close_while_the_configured_publication_is_awaited() {
                 }),
             )
             .await;
+        let snapshot = live_room(&kit, &channel).await;
         let running = channel.clone();
-        let pending = tokio::spawn(async move { direct_turn(&running).await });
+        let pending = tokio::spawn(async move { direct_in_room(&running, snapshot).await });
         tokio::time::timeout(PATIENCE, reached.notified())
             .await
             .unwrap();

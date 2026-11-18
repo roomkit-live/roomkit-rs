@@ -1,9 +1,9 @@
 //! ACP callbacks select their session's scope, never the connection reader's.
 
-use roomkit::TurnHost;
 use roomkit::channel_publication::ChannelPublication;
 use roomkit::model::{ChannelId, RoomId};
 use roomkit::realtime::{EphemeralEvent, EphemeralEventType};
+use roomkit::turns::ChannelTurnHooks;
 use serde_json::{Value, json};
 
 use super::config;
@@ -34,22 +34,17 @@ impl Publisher {
 /// A suppressed turn must not fall back to the unscoped room publisher.
 #[derive(Clone)]
 pub(super) struct Scope {
-    host: Option<TurnHost>,
-    answers_room: bool,
+    outlet: Option<ChannelTurnHooks>,
 }
 
 impl Scope {
-    pub(super) fn new(host: Option<TurnHost>, answers_room: bool) -> Self {
-        Self { host, answers_room }
+    pub(super) fn new(outlet: Option<ChannelTurnHooks>) -> Self {
+        Self { outlet }
     }
 
-    pub(super) async fn publish(&self, publisher: &ChannelPublication, event: EphemeralEvent) {
-        if let Some(host) = &self.host {
-            if self.answers_room {
-                host.publish_from_channel(event);
-            }
-        } else {
-            publisher.publish_outside(event).await;
+    pub(super) async fn publish(&self, event: EphemeralEvent) {
+        if let Some(outlet) = &self.outlet {
+            outlet.publish_now(event).await;
         }
     }
 }

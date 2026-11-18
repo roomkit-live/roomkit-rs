@@ -1,22 +1,15 @@
 //! Registration wiring for an adapter's notifications outside a turn.
 
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::{Arc, Mutex, PoisonError};
-
-#[cfg(test)]
-use crate::RoomKit;
 use crate::realtime::EphemeralEvent;
+use crate::turns::TurnWiring;
 #[cfg(test)]
-use crate::store::ConversationStore;
-
-type Publish =
-    Arc<dyn Fn(EphemeralEvent) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+use crate::{RoomKit, store::ConversationStore};
+use std::sync::{Arc, Mutex, PoisonError};
 
 /// Internal cross-crate bridge; registration holds its kit weakly.
 #[derive(Clone, Default)]
 pub struct ChannelPublication {
-    publisher: Arc<Mutex<Option<Publish>>>,
+    publisher: Arc<Mutex<Option<TurnWiring>>>,
 }
 
 impl std::fmt::Debug for ChannelPublication {
@@ -30,25 +23,23 @@ impl ChannelPublication {
     pub async fn publish(&self, event: EphemeralEvent) {
         if let Some(host) = crate::turn::turn_in_scope() {
             host.publish_from_channel(event);
-        } else {
-            self.publish_outside(event).await;
+        } else if let Some(wiring) = self.wiring() {
+            wiring.publish_to_room(event).await;
         }
     }
 
     /// Publishes a known idle session's notification without borrowing a turn.
     pub async fn publish_outside(&self, event: EphemeralEvent) {
-        // Only a turn's trace owner may publish its answer's text.
-        if event.r#type == crate::realtime::EphemeralEventType::TextDelta {
-            return;
+        if let Some(wiring) = self.wiring() {
+            wiring.publish_outside(event).await;
         }
-        let publisher = self
-            .publisher
+    }
+
+    fn wiring(&self) -> Option<TurnWiring> {
+        self.publisher
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        if let Some(publish) = publisher {
-            publish(event).await;
-        }
+            .clone()
     }
 
     #[cfg(test)]
@@ -56,15 +47,11 @@ impl ChannelPublication {
         self.wire_to(kit.turn_executor().wiring());
     }
 
-    pub(crate) fn wire_to(&self, wiring: crate::turns::TurnWiring) {
-        let publish: Publish = Arc::new(move |event| {
-            let wiring = wiring.clone();
-            Box::pin(async move { wiring.publish_outside(event).await })
-        });
+    pub(crate) fn wire_to(&self, wiring: TurnWiring) {
         *self
             .publisher
             .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(publish);
+            .unwrap_or_else(PoisonError::into_inner) = Some(wiring);
     }
 }
 

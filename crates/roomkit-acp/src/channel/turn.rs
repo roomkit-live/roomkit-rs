@@ -112,11 +112,11 @@ impl<T: AcpTransport> TurnStream<T> {
             host.clone(),
             room_id.clone(),
             channel_id.clone(),
-            outlet,
+            outlet.clone(),
             shared.connector.publication.publishes_tool_text,
             shared.connector.handler.handler.clone(),
         ));
-        let scope = super::publication::Scope::new(host.clone(), ask.answers_room);
+        let scope = super::publication::Scope::new(outlet);
         let sender = Sink::new(
             sender,
             Arc::clone(&thinking_window),

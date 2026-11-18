@@ -104,6 +104,22 @@ impl Env {
 }
 
 impl WiringEnv for Env {
+    fn can_publish_direct<'a>(
+        &'a self,
+        room: &'a RoomId,
+        channel: &'a ChannelId,
+        created_at: roomkit::model::Timestamp,
+    ) -> TurnFuture<'a, bool> {
+        Box::pin(async move {
+            self.context.room.id == *room
+                && self.context.room.created_at == created_at
+                && self.context.bindings.iter().any(|b| {
+                    b.channel_id == *channel
+                        && b.can_write()
+                        && b.visibility == roomkit::model::Visibility::All
+                })
+        })
+    }
     fn realtime(&self) -> Option<Arc<dyn roomkit::realtime::RealtimeBackend>> {
         self.realtime.clone()
     }

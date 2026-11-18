@@ -21,6 +21,7 @@ async fn test_idle_session_publications_follow_configuration_and_thinking_opt_in
             ..Default::default()
         });
         kit.register_channel(channel.clone()).unwrap();
+        let snapshot = live_room(&kit, &channel).await;
         let events = Arc::new(Mutex::new(Vec::<EphemeralEvent>::new()));
         let recorded = Arc::clone(&events);
         let room = RoomId::new("r1").unwrap();
@@ -35,7 +36,7 @@ async fn test_idle_session_publications_follow_configuration_and_thinking_opt_in
                 }),
             )
             .await;
-        direct_turn(&channel).await;
+        direct_in_room(&channel, snapshot.clone()).await;
         let opening = events.lock().unwrap().clone();
         assert_eq!(opening.len(), 1);
         assert_eq!(opening[0].data["values"], json!({"model":"opus"}));
@@ -89,7 +90,7 @@ async fn test_idle_session_publications_follow_configuration_and_thinking_opt_in
         assert!(channel.close_session(&room).await);
         notify(&state, "session-1", plan.clone()).await;
         assert_eq!(events.lock().unwrap().len(), 4);
-        direct_turn(&channel).await;
+        direct_in_room(&channel, snapshot).await;
         kit.close().await.unwrap();
         let before = events.lock().unwrap().len();
         notify(&state, "session-2", plan).await;

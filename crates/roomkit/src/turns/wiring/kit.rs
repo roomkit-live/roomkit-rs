@@ -93,6 +93,30 @@ impl<S: ConversationStore> WiringEnv for KitWiringEnv<S> {
             }
         })
     }
+    fn can_publish_direct<'a>(
+        &'a self,
+        room: &'a RoomId,
+        channel: &'a ChannelId,
+        created_at: Timestamp,
+    ) -> TurnFuture<'a, bool> {
+        Box::pin(async move {
+            let Some(inner) = self.0.upgrade() else {
+                return false;
+            };
+            let Ok(Some(binding)) = inner.store.get_binding(room, channel).await else {
+                return false;
+            };
+            binding.can_write()
+                && binding.visibility == crate::model::Visibility::All
+                && inner
+                    .store
+                    .get_room(room)
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some_and(|current| current.created_at == created_at)
+        })
+    }
     fn room_mark<'a>(&'a self, room: &'a RoomId) -> TurnFuture<'a, Option<Timestamp>> {
         Box::pin(async move {
             let kit = self.0.upgrade()?;

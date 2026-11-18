@@ -89,13 +89,14 @@ async fn check_direct(publish_text: bool) {
         .unwrap();
     kit.register_channel(roomkit::DeclaredChannel::new(channel.declaration()).unwrap())
         .unwrap();
-    kit.attach_channel(
-        &room,
-        &channel.channel_id(),
-        roomkit::AttachChannelOptions::default(),
-    )
-    .await
-    .unwrap();
+    let binding = kit
+        .attach_channel(
+            &room,
+            &channel.channel_id(),
+            roomkit::AttachChannelOptions::default(),
+        )
+        .await
+        .unwrap();
     kit.turn_executor().wire(&channel).unwrap();
     let (seen, mut events) = tokio::sync::mpsc::unbounded_channel();
     realtime
@@ -108,7 +109,14 @@ async fn check_direct(publish_text: bool) {
         )
         .await;
     let active = channel.clone();
-    let pending = tokio::spawn(async move { direct_turn(&active).await });
+    let mut input = test_input("r1");
+    input.context.room = created.clone();
+    let pending = tokio::spawn(async move {
+        active
+            .on_event(input.trigger, binding, input.context)
+            .await
+            .unwrap()
+    });
     state.reached.notified().await;
     notify(
         &state,
@@ -154,4 +162,115 @@ async fn check_direct(publish_text: bool) {
     assert_eq!(observed, wanted);
     channel.close().await;
     kit.close().await.unwrap();
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Audience {
+    PrivateTrigger,
+    Revoked,
+    Missing,
+    OldRoom,
+}
+
+#[tokio::test]
+async fn the_direct_acp_outlet_checks_the_current_binding_for_each_publication() {
+    for audience in [
+        Audience::PrivateTrigger,
+        Audience::Revoked,
+        Audience::Missing,
+        Audience::OldRoom,
+    ] {
+        tokio::time::timeout(PATIENCE, check_audience(audience))
+            .await
+            .unwrap();
+    }
+}
+
+async fn check_audience(audience: Audience) {
+    let (channel, state) = fixture::channel(Stage::Prompt);
+    let room = RoomId::new("r1").unwrap();
+    let realtime = Arc::new(AwaitedRealtime::default());
+    let kit = RoomKit::new(RoomKitOptions {
+        realtime: Some(Arc::<AwaitedRealtime>::clone(&realtime)),
+        ..Default::default()
+    });
+    let created = kit
+        .create_room(roomkit::CreateRoomOptions {
+            room_id: Some(room.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    kit.register_channel(roomkit::DeclaredChannel::new(channel.declaration()).unwrap())
+        .unwrap();
+    let binding = kit
+        .attach_channel(
+            &room,
+            &channel.channel_id(),
+            roomkit::AttachChannelOptions::default(),
+        )
+        .await
+        .unwrap();
+    if audience == Audience::Missing {
+        kit.detach_channel(
+            &room,
+            &channel.channel_id(),
+            roomkit::DetachChannelOptions::default(),
+        )
+        .await
+        .unwrap();
+    }
+    kit.turn_executor().wire(&channel).unwrap();
+    let (seen, mut events) = tokio::sync::mpsc::unbounded_channel();
+    realtime
+        .subscribe_to_room(
+            &room,
+            Arc::new(move |event| {
+                seen.send(event).unwrap();
+                Box::pin(std::future::ready(()))
+            }),
+        )
+        .await;
+    let active = channel.clone();
+    let mut input = test_input("r1");
+    if audience != Audience::OldRoom {
+        input.context.room = created;
+    }
+    if audience == Audience::PrivateTrigger {
+        input.trigger.response_visibility = Some(roomkit::model::Visibility::Intelligence);
+    }
+    let pending = tokio::spawn(async move {
+        active
+            .on_event(input.trigger, binding, input.context)
+            .await
+            .unwrap()
+    });
+    state.reached.notified().await;
+    notify(
+        &state,
+        "session-2",
+        json!({"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"thinking"}}),
+    )
+    .await;
+    if audience == Audience::Revoked {
+        while events.recv().await.unwrap().r#type != EphemeralEventType::ThinkingDelta {}
+        kit.set_visibility(
+            &room,
+            &channel.channel_id(),
+            roomkit::model::Visibility::Intelligence,
+            roomkit::SetVisibilityOptions::default(),
+        )
+        .await
+        .unwrap();
+    }
+    notify(&state, "session-2", json!({"sessionUpdate":"tool_call","toolCallId":"t1","title":"lookup","status":"in_progress"})).await;
+    notify(&state, "session-2", json!({"sessionUpdate":"tool_call_update","toolCallId":"t1","status":"completed","rawOutput":"done"})).await;
+    state.resume.notify_one();
+    assert!(pending.await.unwrap().responded);
+    channel.close().await;
+    kit.close().await.unwrap();
+    assert!(
+        events.try_recv().is_err(),
+        "a private or no-longer-public prompt published room activity"
+    );
 }

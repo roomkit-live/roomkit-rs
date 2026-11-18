@@ -164,17 +164,19 @@ impl Publisher {
     pub(crate) fn enqueue_outside(
         self: &Arc<Self>,
         wiring: &crate::turns::TurnWiring,
+        prompt: &crate::turns::DirectPrompt,
         event: EphemeralEvent,
     ) {
         self.schedule(&wiring.kit, event, || {
             let wiring = wiring.clone();
+            let prompt = prompt.clone();
             let mut draining = Draining {
                 publisher: Arc::clone(self),
                 finished: false,
             };
             async move {
                 while let Some(event) = draining.next() {
-                    wiring.publish_outside(event).await;
+                    prompt.publish(&wiring, event).await;
                 }
             }
         });
