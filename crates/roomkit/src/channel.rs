@@ -210,6 +210,14 @@ pub trait Channel: Send + Sync + 'static {
     /// Python's `channel_id`, set by its constructor.
     fn channel_id(&self) -> ChannelId;
 
+    /// Give an application channel its worker's context readers and event outlets.
+    fn set_turn_wiring(&self, _wiring: crate::turns::TurnWiring) {}
+
+    /// The wiring retained by a channel whose hooks use an executor environment.
+    fn turn_wiring(&self) -> Option<crate::turns::TurnWiring> {
+        None
+    }
+
     /// The local display name, as Python's optional `name` attribute
     /// (RFC §19.7.5). By default, use the declared agent identity.
     /// A channel may expose a local name without declaring an agent identity.
@@ -781,6 +789,8 @@ pub(crate) type BoxFuture<'call, T> = Pin<Box<dyn Future<Output = T> + Send + 'c
 /// A [`Channel`] behind a trait object, so the kit holds channels of any
 /// type: its calls, and the synchronous members a router reads.
 pub(crate) trait DynChannel: Send + Sync {
+    fn set_turn_wiring(&self, wiring: crate::turns::TurnWiring);
+    fn turn_wiring(&self) -> Option<crate::turns::TurnWiring>;
     fn is_declaration_only(&self) -> bool;
 
     fn name(&self) -> Option<String>;
@@ -890,6 +900,12 @@ pub(crate) trait DynChannel: Send + Sync {
 }
 
 impl<C: Channel> DynChannel for C {
+    fn set_turn_wiring(&self, wiring: crate::turns::TurnWiring) {
+        Channel::set_turn_wiring(self, wiring);
+    }
+    fn turn_wiring(&self) -> Option<crate::turns::TurnWiring> {
+        Channel::turn_wiring(self)
+    }
     fn is_declaration_only(&self) -> bool {
         std::any::TypeId::of::<C>() == std::any::TypeId::of::<crate::DeclaredChannel>()
     }

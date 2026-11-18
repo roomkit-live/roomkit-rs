@@ -215,6 +215,7 @@ impl<S> Clone for RoomKit<S> {
 
 /// The kit's shared state; the driver reads it while it runs an operation.
 pub(crate) struct Inner<S> {
+    pub(crate) turn_wiring: RwLock<crate::turns::TurnWiring>,
     config: RwLock<Arc<KitConfig>>,
     channels: RwLock<HashMap<ChannelId, Arc<dyn DynChannel>>>,
     /// The ids of the channels registered, in their registration order.
@@ -435,6 +436,7 @@ impl<S: ConversationStore> RoomKit<S> {
         config.verification.clone_from(&verification_policy);
         config.persistence_policy = persistence_policy;
         let inner = Arc::new_cyclic(|kit: &Weak<Inner<S>>| Inner {
+            turn_wiring: RwLock::new(crate::turns::TurnWiring::for_kit(Weak::clone(kit))),
             config: RwLock::new(Arc::new(config)),
             channels: RwLock::new(HashMap::new()),
             channel_order: RwLock::new(Vec::new()),
@@ -674,6 +676,10 @@ fn default_router<S: ConversationStore>(
 }
 
 impl<S> Inner<S> {
+    pub(crate) fn wiring(&self) -> crate::turns::TurnWiring {
+        read(&self.turn_wiring).clone()
+    }
+
     /// The kit's configuration as it stands.
     pub(crate) fn config(&self) -> Arc<KitConfig> {
         Arc::clone(&read(&self.config))

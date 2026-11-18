@@ -72,7 +72,7 @@ fn publish_for_turn(
 }
 
 /// Publish a framework event during or after its turn within the owner's scope.
-pub(in crate::turns) fn publish_for_room(
+pub(crate) fn publish_for_room(
     kit: &dyn TurnKit,
     (room, channel, depth): (&RoomId, &ChannelId, u32),
     event_type: String,

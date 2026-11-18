@@ -27,6 +27,9 @@ pub(super) async fn tell<S: ConversationStore>(
             Ok(cleanup) => cleanup,
             Err(error) => return failed(error),
         };
+        if !inner.turns.carries_controls(channel.as_deref()) {
+            inner.wiring().env.room_left(room_id, channel_id);
+        }
         let notified = inner
             .turns
             .detached(channel_id, room_id, organization, channel)

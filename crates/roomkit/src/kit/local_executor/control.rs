@@ -67,6 +67,7 @@ impl<S: ConversationStore> TurnExecutor<S> {
                 room_id,
                 ..
             } => {
+                self.wiring().env.room_left(room_id, channel_id);
                 self.kit.inner.turns.forget_worker_room(channel_id, room_id);
                 self.notify_built(channel_id.clone(), message).await;
                 Ok(None)

@@ -657,7 +657,7 @@ async fn run_turn_hook<P: Send + 'static>(
 ) -> HookOutcome<P> {
     let context =
         if let Some(host) = crate::TurnHost::remote_hook_host(spec.trigger, &context.room.id) {
-            match Box::pin(host.remote_hook_room()).await {
+            match Box::pin(host.wired_hook_room(&context)).await {
                 Ok(fresh) => fresh,
                 Err(error) => return HookOutcome::Raised(raised(&error)),
             }

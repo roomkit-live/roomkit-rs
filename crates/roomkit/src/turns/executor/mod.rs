@@ -262,7 +262,7 @@ impl Executor {
                 turn,
                 sender,
                 changes,
-                host,
+                host.with_channel_wiring(built.channel.turn_wiring()),
                 flow,
                 request,
                 Arc::clone(&built.channel),
@@ -291,6 +291,9 @@ impl Executor {
         };
         if let Some(build) = build {
             return Some((request, Selected::Worker(build)));
+        }
+        if let Some(wiring) = self.kit.wiring() {
+            wiring.env.turn_started(&request);
         }
         if !self.kit.defines_room_hooks(&request.room_hooks) {
             drop(self.send(&Frame::Error {

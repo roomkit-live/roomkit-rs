@@ -146,6 +146,8 @@ impl TurnExecutor<InMemoryStore> {
             telemetry: options.telemetry.map(Into::into),
             ..RoomKitOptions::default()
         });
+        kit.turn_executor()
+            .use_wiring(Arc::new(crate::turns::wiring::WorkerWiringEnv::default()));
         kit.inner.turns.set_timeouts(options.timeouts.bounded());
         kit.inner.turns.set_error_classes(options.error_classes);
         let id = options

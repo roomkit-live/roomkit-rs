@@ -157,3 +157,5 @@ async fn a_blocked_frame_write_still_reads_a_cancel_from_the_application_backend
 
 pub(super) mod reach_owner;
 mod telemetry;
+
+mod wiring;

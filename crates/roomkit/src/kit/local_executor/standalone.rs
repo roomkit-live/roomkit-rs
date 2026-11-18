@@ -219,6 +219,9 @@ impl<S: ConversationStore> TurnExecutor<S> {
         request: crate::turns::TurnRequest,
         origin: executor::WorkerOrigin,
     ) -> Result<WorkerTurn, RoomKitError> {
+        let entered = self
+            .serves(request.context.room.organization_id.as_deref())
+            .then(|| self.wiring());
         let channel_id = request.channel_id.clone();
         let organization = request.context.room.organization_id.clone();
         let room = request.room_id.clone();
@@ -261,6 +264,7 @@ impl<S: ConversationStore> TurnExecutor<S> {
             request,
             build,
             origin,
+            entered,
         )
     }
 }

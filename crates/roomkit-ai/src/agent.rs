@@ -385,6 +385,14 @@ pub(crate) fn room_language(room: &Room) -> Option<&str> {
 }
 
 impl<P: AiProvider> Channel for Agent<P> {
+    fn set_turn_wiring(&self, wiring: roomkit::turns::TurnWiring) {
+        self.channel.set_turn_wiring(wiring);
+    }
+
+    fn turn_wiring(&self) -> Option<roomkit::turns::TurnWiring> {
+        self.channel.turn_wiring()
+    }
+
     fn external_tool_bridge(&self) -> Option<roomkit::external_tools::ExternalToolBridge> {
         self.channel.external_tool_bridge()
     }

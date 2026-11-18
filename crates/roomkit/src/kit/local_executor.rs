@@ -102,6 +102,23 @@ impl<S: ConversationStore> TurnExecutor<S> {
         )
     }
 
+    /// The readers and outlets selected for this executor's next channel.
+    pub fn wiring(&self) -> crate::turns::TurnWiring {
+        self.kit.inner.wiring()
+    }
+
+    /// Replace the environment used to wire subsequent channels.
+    pub fn use_wiring(&self, env: Arc<dyn crate::turns::WiringEnv>) {
+        let mut wiring = super::write(&self.kit.inner.turn_wiring);
+        wiring.env = env;
+        wiring.kit_defaults = false;
+    }
+
+    /// Wire a channel even before it is registered or built for a turn.
+    pub fn wire(&self, channel: &impl crate::Channel) {
+        self.wiring().wire(channel);
+    }
+
     /// The engine on which this executor's hooks are registered.
     pub fn hooks(&self) -> HookEngine<S> {
         self.kit.hooks_for(HookTrigger::BeforeToolUse)

@@ -14,9 +14,21 @@ impl TurnHost {
         if !trigger.is_turn_trigger() {
             return None;
         }
-        super::current_turn_host().filter(|host| {
-            host.room_id() == room && host.shared.link.uses_worker_link() && host.open()
+        super::turn_in_scope().filter(|host| {
+            host.room_id() == room
+                && (host.wiring.as_ref().is_some_and(|w| !w.kit_defaults)
+                    || (host.shared.link.uses_worker_link() && host.open()))
         })
+    }
+
+    pub(crate) async fn wired_hook_room(
+        &self,
+        carrying: &RoomContext,
+    ) -> Result<RoomContext, RoomKitError> {
+        if let Some(wiring) = self.wiring.as_ref().filter(|w| !w.kit_defaults) {
+            return wiring.env.context(self.room_id(), Some(carrying)).await;
+        }
+        self.remote_hook_room().await
     }
 
     /// Read the live room for a worker hook (RFC §10.6.6). A cut during

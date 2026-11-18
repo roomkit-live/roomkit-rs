@@ -4,8 +4,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
 
+#[cfg(test)]
 use crate::RoomKit;
 use crate::realtime::EphemeralEvent;
+#[cfg(test)]
 use crate::store::ConversationStore;
 
 type Publish =
@@ -49,35 +51,15 @@ impl ChannelPublication {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn wire<S: ConversationStore>(&self, kit: &RoomKit<S>) {
-        let kit = kit.downgrade();
-        let publish: Publish = Arc::new(move |mut event| {
-            let kit = kit.upgrade();
-            Box::pin(async move {
-                let Some(kit) = kit.filter(|kit| kit.inner.open().is_ok()) else {
-                    return;
-                };
-                let room = event.room_id.clone();
-                if event.room_created_at.is_none() {
-                    // Of the room this kit's last turn or channel call of the
-                    // id ran in, else of the room that holds the id now: a
-                    // subscription of another room of the id does not read
-                    // it (RFC §8.4, §17.2).
-                    event.room_created_at = match kit.inner.turns.room_mark(&room) {
-                        Some(mark) => Some(mark),
-                        None => kit
-                            .store()
-                            .get_room(&room)
-                            .await
-                            .ok()
-                            .flatten()
-                            .map(|held| held.created_at),
-                    };
-                }
-                if let Err(error) = kit.inner.realtime.publish_to_room(&room, event).await {
-                    tracing::debug!(target: "roomkit::turns", room_id = %room, %error, "publishing a channel notification failed");
-                }
-            })
+        self.wire_to(kit.turn_executor().wiring());
+    }
+
+    pub(crate) fn wire_to(&self, wiring: crate::turns::TurnWiring) {
+        let publish: Publish = Arc::new(move |event| {
+            let wiring = wiring.clone();
+            Box::pin(async move { wiring.publish_outside(event).await })
         });
         *self
             .publisher

@@ -469,6 +469,7 @@ impl fmt::Debug for AiChannelOptions {
 /// skills, its system prompt, its running loops and the author images its
 /// provider refused.
 pub struct AiChannel<P> {
+    wiring: Arc<RwLock<Option<roomkit::turns::TurnWiring>>>,
     channel_id: ChannelId,
     capabilities: ChannelCapabilities,
     /// Its provider; `None` for a channel a router serves, whose router
@@ -612,6 +613,7 @@ impl<P> Clone for AiChannel<P> {
             provider: self.provider.clone(),
             toolbox: Arc::clone(&self.toolbox),
             extra_tools: self.extra_tools.clone(),
+            wiring: Arc::clone(&self.wiring),
             tool_handler: Arc::clone(&self.tool_handler),
             policy: self.policy.clone(),
             speech: Arc::clone(&self.speech),
@@ -745,8 +747,7 @@ impl<P: AiProvider> AiChannel<P> {
     ) -> Result<Self, AiError> {
         // Python's ToolPolicy, RetryPolicy and AITool refuse as they are
         // built, before its constructor runs.
-        let policy = options.tool_policy.take().unwrap_or_default();
-        refuse_bracketed(&policy)?;
+        let policy = checked_policy(options.tool_policy.take().unwrap_or_default())?;
         let speech = speaking::Speech::new(&options)?;
         let (provider, router) = serving.split();
         let resilience = Resilience::checked(options.retry_policy, router)?;
@@ -786,6 +787,7 @@ impl<P: AiProvider> AiChannel<P> {
             provider,
             toolbox: Arc::new(surface.toolbox),
             extra_tools: surface.extra_tools,
+            wiring: Arc::default(),
             tool_handler: surface.tool_handler,
             policy,
             speech: Arc::new(speech),
@@ -1755,7 +1757,7 @@ fn tool_surface(
 /// Refuses a pattern of `policy` holding a bracket, which a pattern reads
 /// as itself (RFC §21.1): a rule written as a character class would cover
 /// none of the names it was written for.
-fn refuse_bracketed(policy: &ToolPolicy) -> Result<(), AiError> {
+fn checked_policy(policy: ToolPolicy) -> Result<ToolPolicy, AiError> {
     match policy
         .allow
         .iter()
@@ -1765,7 +1767,7 @@ fn refuse_bracketed(policy: &ToolPolicy) -> Result<(), AiError> {
         Some(pattern) => Err(AiError::ToolPattern {
             pattern: pattern.clone(),
         }),
-        None => Ok(()),
+        None => Ok(policy),
     }
 }
 
@@ -1993,6 +1995,16 @@ fn with_discussion_turn(event: &RoomEvent, memory: TurnMemory, notes: Vec<String
 }
 
 impl<P: AiProvider> Channel for AiChannel<P> {
+    fn set_turn_wiring(&self, wiring: roomkit::turns::TurnWiring) {
+        *self.wiring.write().unwrap_or_else(PoisonError::into_inner) = Some(wiring);
+    }
+    fn turn_wiring(&self) -> Option<roomkit::turns::TurnWiring> {
+        self.wiring
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     fn external_tool_bridge(&self) -> Option<roomkit::external_tools::ExternalToolBridge> {
         self.external_tool_handler
             .as_ref()

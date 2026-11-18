@@ -106,6 +106,7 @@ pub(crate) async fn without_turn_host<F: Future>(work: F) -> F::Output {
 /// that sends it.
 #[derive(Clone)]
 pub struct TurnHost {
+    wiring: Option<crate::turns::TurnWiring>,
     strategy_turn: bool,
     answer_unscoped: bool,
     shared: Arc<Shared>,
@@ -117,6 +118,12 @@ pub struct TurnHost {
 }
 
 impl TurnHost {
+    pub(crate) fn with_channel_wiring(mut self, wiring: Option<crate::turns::TurnWiring>) -> Self {
+        if wiring.is_some() {
+            self.wiring = wiring;
+        }
+        self
+    }
     pub(crate) fn with_strategy_turn(mut self, strategy_turn: bool) -> Self {
         self.strategy_turn = strategy_turn;
         self
@@ -239,6 +246,13 @@ impl TurnHost {
 
     pub(crate) fn room_hook_names(&self) -> &[String] {
         &self.room_hooks
+    }
+
+    pub(crate) fn initial_context(&self) -> &RoomContext {
+        &self.shared.context
+    }
+    pub(crate) fn channel(&self) -> &ChannelId {
+        &self.shared.channel_id
     }
 
     pub(crate) fn room_id(&self) -> &RoomId {
@@ -675,26 +689,41 @@ impl TurnHost {
     /// while each runs, whether the turn's work emits it during the turn or
     /// after it (RFC §8.3).
     fn emit(&self, event_type: &str, data: Metadata) {
+        let mut event = FrameworkEvent::new(event_type);
+        event.room_id = Some(self.shared.room_id.clone());
+        event.channel_id = Some(self.shared.channel_id.clone());
+        event.data = data;
+        self.emit_framework_event(event);
+    }
+
+    pub(crate) fn emit_framework_event(&self, event: FrameworkEvent) {
         if self.shared.link.uses_worker_link() {
             self.shared
                 .link
                 .publish_remote(crate::turns::wire::Frame::FrameworkEvent {
-                    event_type: event_type.to_owned(),
-                    room_id: Some(self.shared.room_id.to_string()),
-                    channel_id: Some(self.shared.channel_id.to_string()),
-                    event_id: None,
-                    data,
+                    event_type: event.r#type,
+                    room_id: event.room_id.map(|id| id.to_string()),
+                    channel_id: event.channel_id.map(|id| id.to_string()),
+                    event_id: event.event_id.map(|id| id.to_string()),
+                    data: event.data,
                 });
-            return;
+        } else {
+            crate::turns::owner::publish_for_room(
+                &*self.shared.kit,
+                (
+                    &self.shared.room_id,
+                    &self.shared.channel_id,
+                    self.shared.response_depth,
+                ),
+                event.r#type,
+                (
+                    event.room_id.as_ref().map(RoomId::as_str),
+                    event.channel_id.as_ref().map(ChannelId::as_str),
+                    event.event_id.map(|id| id.to_string()),
+                ),
+                event.data,
+            );
         }
-        let ids = (
-            Some(self.shared.room_id.clone()),
-            Some(self.shared.channel_id.clone()),
-            None,
-        );
-        ExecutionContext::current()
-            .at_least(self.shared.response_depth)
-            .sync_scope(|| self.shared.kit.emit(event_type.to_owned(), ids, data));
     }
 
     /// Emits the `hook_timeout` framework event of the tool hook `spec` when
@@ -1348,6 +1377,7 @@ pub(crate) trait TurnKit: Send + Sync {
         crate::turns::ErrorClasses::default()
     }
 
+    fn wiring(&self) -> Option<crate::turns::TurnWiring>;
     fn declared_verb(&self, name: &str) -> Option<crate::turns::declared::Declaration>;
     fn external_tool_context(&self, room_id: RoomId) -> BoxFuture<'static, Option<RoomContext>>;
     fn room_context(
@@ -1543,6 +1573,9 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
             .unwrap_or_default()
     }
 
+    fn wiring(&self) -> Option<crate::turns::TurnWiring> {
+        Some(self.upgrade()?.wiring())
+    }
     fn declared_verb(&self, name: &str) -> Option<crate::turns::declared::Declaration> {
         self.upgrade()?.declared_verbs.get(name)
     }
@@ -1940,6 +1973,7 @@ pub(crate) fn host(
     response_depth: u32,
 ) -> TurnHost {
     TurnHost {
+        wiring: kit.wiring(),
         strategy_turn: false,
         answer_unscoped: true,
         tool_report_context: None,

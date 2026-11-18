@@ -206,6 +206,7 @@ pub struct AcpChannel<T: AcpTransport = StdioAcpTransport> {
 
 /// What the channel's turns share.
 struct Shared<T: AcpTransport> {
+    wiring: Mutex<Option<roomkit::turns::TurnWiring>>,
     channel_id: ChannelId,
     cwd: PathBuf,
     publish_thinking_text: bool,
@@ -333,6 +334,7 @@ impl<T: AcpTransport> AcpChannel<T> {
             absolute_paths(additional_directories, "additional_directories")?;
         Ok(Self {
             shared: Arc::new(Shared {
+                wiring: Mutex::default(),
                 connector: Arc::new(Connector::new(
                     transport,
                     authentication_method,
@@ -398,6 +400,21 @@ impl<T: AcpTransport> fmt::Debug for AcpChannel<T> {
 }
 
 impl<T: AcpTransport> Channel for AcpChannel<T> {
+    fn set_turn_wiring(&self, wiring: roomkit::turns::TurnWiring) {
+        *self
+            .shared
+            .wiring
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(wiring);
+    }
+    fn turn_wiring(&self) -> Option<roomkit::turns::TurnWiring> {
+        self.shared
+            .wiring
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     fn name(&self) -> Option<String> {
         self.shared.name.clone()
     }

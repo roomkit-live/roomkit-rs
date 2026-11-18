@@ -22,7 +22,7 @@
 pub(crate) mod distributed;
 pub(crate) mod window;
 
-use roomkit_core::model::{ChannelBinding, EventType, RoomContext, RoomEvent, RoomId};
+use roomkit_core::model::{ChannelBinding, ChannelId, EventType, RoomContext, RoomEvent, RoomId};
 use roomkit_core::rules::transcript::TOOL_MEMORY_ONLY;
 use roomkit_core::rules::visible_events;
 use serde_json::Value;
@@ -193,7 +193,7 @@ async fn private_rows<S: ConversationStore>(
     };
     let latest_rows = ListEventsOptions {
         limit: TOOL_ROWS,
-        event_filter: Some(tool_rows(binding)),
+        event_filter: Some(tool_rows(&binding.channel_id)),
         newest_first: true,
         ..ListEventsOptions::default()
     };
@@ -238,10 +238,10 @@ async fn read_messages<S: ConversationStore>(
 }
 
 /// `binding`'s channel's own tool-call rows.
-fn tool_rows(binding: &ChannelBinding) -> EventFilter {
+pub(crate) fn tool_rows(channel: &ChannelId) -> EventFilter {
     EventFilter {
         event_types: Some(vec![EventType::ToolCallStart, EventType::ToolCallEnd]),
-        source_channel_id: Some(binding.channel_id.clone()),
+        source_channel_id: Some(channel.clone()),
         ..EventFilter::default()
     }
 }
@@ -249,14 +249,14 @@ fn tool_rows(binding: &ChannelBinding) -> EventFilter {
 /// `binding`'s channel's own rows its history replays: its tool calls and
 /// the instructions its turns read (RFC §6.4, §10.1.1). Python's
 /// `read_history_rows`.
-fn history_rows(binding: &ChannelBinding) -> EventFilter {
+pub(crate) fn history_rows(channel: &ChannelId) -> EventFilter {
     EventFilter {
         event_types: Some(vec![
             EventType::ToolCallStart,
             EventType::ToolCallEnd,
             EventType::InstructionRead,
         ]),
-        source_channel_id: Some(binding.channel_id.clone()),
+        source_channel_id: Some(channel.clone()),
         ..EventFilter::default()
     }
 }
@@ -292,7 +292,7 @@ async fn replayed_rows<S: ConversationStore>(
     loop {
         let page = ListEventsOptions {
             limit: HISTORY_ROWS_PAGE,
-            event_filter: Some(history_rows(binding)),
+            event_filter: Some(history_rows(&binding.channel_id)),
             after_index: after,
             ..ListEventsOptions::default()
         };
@@ -311,7 +311,7 @@ async fn replayed_rows<S: ConversationStore>(
 
 /// The index of the room's last message before `index`, a blocked one
 /// included; none when there is none. Python's `read_message_before`.
-async fn message_before<S: ConversationStore>(
+pub(crate) async fn message_before<S: ConversationStore>(
     store: &S,
     room_id: &RoomId,
     index: u64,

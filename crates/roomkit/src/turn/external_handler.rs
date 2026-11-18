@@ -17,16 +17,19 @@ impl<S: ConversationStore> Inner<S> {
         self: &Arc<Self>,
         channel: &ChannelId,
         bridge: &ExternalToolBridge,
+        wiring: crate::turns::TurnWiring,
     ) {
         let kit: Arc<dyn TurnKit> = Arc::new(Arc::downgrade(self));
         let before_kit = Arc::clone(&kit);
         let before_telemetry = self.telemetry.clone();
         let report_telemetry = self.telemetry.clone();
+        let before_wiring = wiring.clone();
         let registered = channel.clone();
         let report_channel = channel.clone();
         bridge.wire(
             channel.to_string(),
             Arc::new(move |call, room| {
+                let wiring = before_wiring.clone();
                 let kit = Arc::clone(&before_kit);
                 let channel = registered.clone();
                 Box::pin(crate::telemetry::within_kit(
@@ -36,7 +39,7 @@ impl<S: ConversationStore> Inner<S> {
                         let Some(room) = room else {
                             return ExternalToolDecision::default();
                         };
-                        Notification::new(kit, room, channel, HookTrigger::BeforeToolUse)
+                        Notification::new(kit, wiring, room, channel, HookTrigger::BeforeToolUse)
                             .await
                             .before(call)
                             .await
@@ -44,6 +47,7 @@ impl<S: ConversationStore> Inner<S> {
                 ))
             }),
             Arc::new(move |report, room| {
+                let wiring = wiring.clone();
                 let kit = Arc::clone(&kit);
                 let channel = report_channel.clone();
                 Box::pin(crate::telemetry::within_kit(
@@ -53,7 +57,7 @@ impl<S: ConversationStore> Inner<S> {
                         let Some(room) = room else {
                             return;
                         };
-                        Notification::new(kit, room, channel, HookTrigger::OnToolCall)
+                        Notification::new(kit, wiring, room, channel, HookTrigger::OnToolCall)
                             .await
                             .report(report)
                             .await;
@@ -65,6 +69,7 @@ impl<S: ConversationStore> Inner<S> {
 }
 
 struct Notification {
+    wiring: crate::turns::TurnWiring,
     kit: Arc<dyn TurnKit>,
     room: RoomId,
     channel: ChannelId,
@@ -75,6 +80,7 @@ struct Notification {
 impl Notification {
     async fn new(
         kit: Arc<dyn TurnKit>,
+        wiring: crate::turns::TurnWiring,
         room: RoomId,
         channel: ChannelId,
         trigger: HookTrigger,
@@ -83,9 +89,10 @@ impl Notification {
         let context = if hooks.is_empty() {
             None
         } else {
-            kit.external_tool_context(room.clone()).await
+            wiring.hook_context(&room, trigger, None).await
         };
         Self {
+            wiring,
             kit,
             room,
             channel,
@@ -116,7 +123,7 @@ impl Notification {
             ("allowed".to_owned(), Value::Bool(allowed)),
             ("reason".to_owned(), reason.map_or(Value::Null, Value::from)),
         ]);
-        self.emit("before_tool_use", data);
+        self.emit("before_tool_use", data).await;
         external_decision(chain, &event.arguments)
     }
 
@@ -187,7 +194,7 @@ impl Notification {
                 data.insert(key.to_owned(), Value::Bool(true));
             }
         }
-        self.emit("tool_call", data);
+        self.emit("tool_call", data).await;
     }
 
     async fn report_chain(&self, event: &ToolCallEvent) {
@@ -255,12 +262,12 @@ impl Notification {
         report.event(&self.channel, &ChannelType::AI, &self.room, self.kit.now())
     }
 
-    fn emit(&self, kind: &str, data: Metadata) {
-        self.kit.emit(
-            kind.to_owned(),
-            (Some(self.room.clone()), Some(self.channel.clone()), None),
-            data,
-        );
+    async fn emit(&self, kind: &str, data: Metadata) {
+        let mut event = crate::FrameworkEvent::new(kind);
+        event.room_id = Some(self.room.clone());
+        event.channel_id = Some(self.channel.clone());
+        event.data = data;
+        self.wiring.emit(event).await;
     }
 
     fn timeout(&self, spec: &HookSpec, ran: &HookOutcome<ToolCallEvent>) {

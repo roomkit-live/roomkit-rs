@@ -38,6 +38,7 @@ impl WorkerTurn {
         request: TurnRequest,
         build: Build,
         origin: WorkerOrigin,
+        wiring: Option<crate::turns::TurnWiring>,
     ) -> Result<Self, RoomKitError> {
         let id: Arc<str> = Arc::from(request.turn_id.as_str());
         let running = turns
@@ -47,6 +48,9 @@ impl WorkerTurn {
                 reason: "no_executor".to_owned(),
                 message: Some("the executor is closed or this turn is already running".to_owned()),
             })?;
+        if let Some(wiring) = wiring {
+            wiring.env.turn_started(&request);
+        }
         let observers = turns.observers();
         let (frames, received) = pipe(Arc::clone(&id), Carried::Frame, observers.clone());
         let (controls, incoming) = pipe(Arc::clone(&id), Carried::Control, observers);

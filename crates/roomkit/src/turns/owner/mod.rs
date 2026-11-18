@@ -33,7 +33,8 @@ use roomkit_core::model::{
 use tokio::sync::{mpsc, watch};
 
 use self::pump::Pump;
-pub(super) use self::pump::{emitted_by_its_turn, publish_for_room};
+pub(super) use self::pump::emitted_by_its_turn;
+pub(crate) use self::pump::publish_for_room;
 pub(crate) use self::reader::{OwnerTurn, RemoteItem};
 pub(crate) use self::steering::Steerable;
 use self::steering::Steers;

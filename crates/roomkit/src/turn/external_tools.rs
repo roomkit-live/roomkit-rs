@@ -107,13 +107,9 @@ pub(super) fn current_context<S: ConversationStore>(
 ) -> BoxFuture<'static, Option<RoomContext>> {
     Box::pin(async move {
         let inner = kit.upgrade()?;
-        let recent = inner.config().recent_events().read_by_the_caller();
-        match crate::driver::load_context(&*inner.store, &room_id, recent).await {
-            Ok(context) => context,
-            Err(error) => {
-                tracing::warn!(target: "roomkit::hooks", %room_id, %error, "no context for an external tool report");
-                None
-            }
-        }
+        inner
+            .wiring()
+            .hook_context(&room_id, HookTrigger::OnToolCall, None)
+            .await
     })
 }
