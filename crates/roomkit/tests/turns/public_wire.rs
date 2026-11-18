@@ -4,6 +4,61 @@ use roomkit::turns::{ChannelControl, ChannelResult, TurnRequest};
 use serde_json::{Value, json};
 
 #[test]
+fn wire_records_construct_and_serialize_with_the_python_defaults() {
+    use roomkit::turns::wire::{CallContext, HostResult, InputRequest};
+
+    let context = CallContext::new("call", "room", "ai");
+    assert_eq!(
+        serde_json::to_value(context).unwrap(),
+        json!({
+            "tool_call_id":"call","room_id":"room","channel_id":"ai","chain_depth":0,
+            "actor_id":null,"allowed_names":null,"requester":null,"response_metadata":null,
+        })
+    );
+    let reply = HostResult::new("call");
+    assert_eq!(
+        serde_json::to_value(reply).unwrap(),
+        json!({
+            "type":"host_result","call_id":"call","result":null,"error":null,"record_changes":null,
+        })
+    );
+    let request = InputRequest::new(
+        "pending",
+        "ask",
+        [("q".into(), json!("when?"))].into_iter().collect(),
+    );
+    assert_eq!(
+        serde_json::to_value(request).unwrap(),
+        json!({
+            "type":"input_request","request_id":"pending","tool_name":"ask","arguments":{"q":"when?"},
+            "room_id":null,"channel_id":null,"tool_call_id":null,"actor_id":null,"created_at":null,
+        })
+    );
+}
+
+#[test]
+fn wire_input_requests_require_the_tool_arguments_even_in_an_envelope() {
+    use roomkit::turns::wire::InputRequest;
+
+    let mut body = json!({"type":"input_request","request_id":"pending","tool_name":"ask"});
+    assert!(serde_json::from_value::<InputRequest>(body.clone()).is_err());
+    let envelope = |message| json!({"turn_id":"turn","seq":1,"message":message});
+    assert!(serde_json::from_value::<FrameEnvelope>(envelope(body.clone())).is_err());
+
+    body["arguments"] = json!({});
+    let request: InputRequest = serde_json::from_value(body.clone()).unwrap();
+    assert!(request.arguments.is_empty());
+    assert!(request.room_id.is_none());
+    let numbered: FrameEnvelope = serde_json::from_value(envelope(body)).unwrap();
+    assert_eq!(
+        numbered.message,
+        Frame::InputRequest {
+            request: Box::new(request)
+        }
+    );
+}
+
+#[test]
 fn a_transport_round_trips_the_public_request_and_both_numbered_directions() {
     let fixture = include_str!("../fixtures/turns/python-case1.jsonl");
     let row: Value = serde_json::from_str(fixture.lines().next().unwrap()).unwrap();

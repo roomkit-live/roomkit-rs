@@ -27,6 +27,22 @@ pub struct CallContext {
     pub response_metadata: Option<Metadata>,
 }
 
+impl CallContext {
+    /// Locate a tool call in its room and channel.
+    pub fn new(
+        tool_call_id: impl Into<String>,
+        room_id: impl Into<String>,
+        channel_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            tool_call_id: tool_call_id.into(),
+            room_id: room_id.into(),
+            channel_id: channel_id.into(),
+            ..Self::default()
+        }
+    }
+}
+
 /// A worker's call to a tool served by the room owner (RFC §10.6.5).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename = "tool_call")]

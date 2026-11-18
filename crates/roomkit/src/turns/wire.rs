@@ -283,6 +283,18 @@ pub struct HostResult {
     pub record_changes: Option<RecordChanges>,
 }
 
+impl HostResult {
+    /// Answer a host call with a null result and no recorded error or changes.
+    pub fn new(call_id: impl Into<String>) -> Self {
+        Self {
+            call_id: call_id.into(),
+            result: Value::Null,
+            error: None,
+            record_changes: None,
+        }
+    }
+}
+
 pub(crate) use HostResult as RoomCallResult;
 
 /// The arguments of `send_event`, `TurnHost`'s one verb (RFC §10.5,

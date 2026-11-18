@@ -12,7 +12,6 @@ pub struct InputRequest {
     /// Name of the tool being called.
     pub tool_name: String,
     /// Arguments supplied to the call.
-    #[serde(default)]
     pub arguments: Metadata,
     /// Room in which the work takes place.
     #[serde(default)]
@@ -29,6 +28,26 @@ pub struct InputRequest {
     /// Time at which the human-input request was created.
     #[serde(default)]
     pub created_at: Option<Timestamp>,
+}
+
+impl InputRequest {
+    /// Create a pending request before its room, channel and actor are known.
+    pub fn new(
+        request_id: impl Into<String>,
+        tool_name: impl Into<String>,
+        arguments: Metadata,
+    ) -> Self {
+        Self {
+            request_id: request_id.into(),
+            tool_name: tool_name.into(),
+            arguments,
+            room_id: None,
+            channel_id: None,
+            tool_call_id: None,
+            actor_id: None,
+            created_at: None,
+        }
+    }
 }
 
 impl From<&crate::human_input::PendingInput> for InputRequest {
