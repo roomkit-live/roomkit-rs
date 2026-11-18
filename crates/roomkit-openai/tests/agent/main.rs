@@ -508,6 +508,10 @@ async fn a_provider_error_fails_the_turn_and_fires_on_error() {
         result.error,
         Some(ErrorRecord {
             attributes: Box::new(attributes.as_object().unwrap().clone()),
+            causes: vec![ErrorRecord::new(
+                "Error",
+                "the provider answered HTTP 401 (invalid_request_error): Incorrect API key provided.",
+            )],
             ..ErrorRecord::new("ProviderError", message)
         })
     );
