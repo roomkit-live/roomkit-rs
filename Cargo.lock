@@ -2089,7 +2089,7 @@ dependencies = [
 
 [[package]]
 name = "roomkit"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "agent-client-protocol-schema",
  "axum",
@@ -2118,7 +2118,7 @@ dependencies = [
 
 [[package]]
 name = "roomkit-acp"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "agent-client-protocol-schema",
  "futures-core",
@@ -2136,7 +2136,7 @@ dependencies = [
 
 [[package]]
 name = "roomkit-ai"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.23.1",
  "fancy-regex",
@@ -2157,7 +2157,7 @@ dependencies = [
 
 [[package]]
 name = "roomkit-anthropic"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "futures-core",
  "jiff",
@@ -2173,7 +2173,7 @@ dependencies = [
 
 [[package]]
 name = "roomkit-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "jiff",
  "pretty_assertions",
@@ -2188,7 +2188,7 @@ dependencies = [
 
 [[package]]
 name = "roomkit-examples"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "futures-util",
@@ -2207,7 +2207,7 @@ dependencies = [
 
 [[package]]
 name = "roomkit-mcp"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "futures-util",
@@ -2235,7 +2235,7 @@ dependencies = [
 
 [[package]]
 name = "roomkit-openai"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "futures-core",
  "jiff",
@@ -2256,7 +2256,7 @@ dependencies = [
 
 [[package]]
 name = "roomkit-postgres"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "agent-client-protocol-schema",
  "axum",
@@ -2289,7 +2289,7 @@ dependencies = [
 
 [[package]]
 name = "roomkit-provider-http"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pretty_assertions",
  "reqwest",
@@ -2300,7 +2300,7 @@ dependencies = [
 
 [[package]]
 name = "roomkit-sqlite"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "agent-client-protocol-schema",
  "axum",

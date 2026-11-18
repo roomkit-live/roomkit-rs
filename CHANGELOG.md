@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-11-18
+
 - Add `ConversationStore::connection(work)` for sequential store calls, with PostgreSQL retaining one connection through nested scopes and acknowledged cancellation. Supplied standard pools must provide `PostgresStoreOptions::cancel_query`; PostgreSQL applications must [pin the cancellation fix in their root manifest](README.md#postgresql-driver) until it ships upstream. A five-second release timeout discards a connection whose cleanup stalls after its owning scope exits. Reopening a store with rotated TLS trust keeps each checkout and its cancellation connector on the same pool.
 
 - PostgreSQL store initialization reads index uniqueness in its own schema, so concurrent DDL in another schema can proceed independently. Index repair also handles quoted names and predicates containing `UNIQUE`.
@@ -1664,5 +1666,6 @@ repository at the tag `v0.1.0`, as git dependencies, with Rust 1.92 or later
 implementation, each with its card (RMK-1070 to RMK-1077, and the review's
 RMK-1082 to RMK-1106 under RMK-1081), to close after this release.
 
-[Unreleased]: https://github.com/roomkit-live/roomkit-rs/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/roomkit-live/roomkit-rs/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/roomkit-live/roomkit-rs/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/roomkit-live/roomkit-rs/releases/tag/v0.1.0
