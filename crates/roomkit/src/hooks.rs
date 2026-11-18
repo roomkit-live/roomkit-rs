@@ -647,6 +647,27 @@ fn raised(error: &(dyn Error + Send + Sync + 'static)) -> ErrorRecord {
     ErrorRecord::new(class, error.to_string())
 }
 
+/// Resolve a turn hook's context before applying its handler timeout.
+async fn run_turn_hook<P: Send + 'static>(
+    spec: &HookSpec,
+    handler: Arc<dyn HookHandler<P>>,
+    payload: P,
+    context: RoomContext,
+    check: impl FnOnce(&mut HookResult<P>) -> Option<String>,
+) -> HookOutcome<P> {
+    #[cfg(feature = "redis")]
+    let context =
+        if let Some(host) = crate::TurnHost::remote_hook_host(spec.trigger, &context.room.id) {
+            match Box::pin(host.remote_hook_room()).await {
+                Ok(fresh) => fresh,
+                Err(error) => return HookOutcome::Raised(raised(&error)),
+            }
+        } else {
+            context
+        };
+    run(handler, payload, context, spec.timeout, check).await
+}
+
 /// A sync hook's [`run`] under its span, Python's `hook.sync.<name>`, for a
 /// hook a turn's host runs without the driver, in the kit's call.
 pub(crate) async fn run_traced<P: Send + 'static>(
@@ -660,7 +681,7 @@ pub(crate) async fn run_traced<P: Send + 'static>(
     let span = current_kit_telemetry().and_then(|telemetry| {
         telemetry.hook_span(SpanKind::HookSync, &spec.name, spec.trigger, &room_id)
     });
-    let mut ran = run(handler, payload, context, spec.timeout, check).await;
+    let mut ran = run_turn_hook(spec, handler, payload, context, check).await;
     retain_injections(&mut ran, spec);
     end_hook_span(span, &ran);
     ran
@@ -697,7 +718,7 @@ pub(crate) async fn observe_traced<P: Send + 'static>(
     let span = current_kit_telemetry().and_then(|telemetry| {
         telemetry.hook_span(SpanKind::HookAsync, &spec.name, spec.trigger, &room_id)
     });
-    let ran = run(handler, payload, context, spec.timeout, |_| None).await;
+    let ran = run_turn_hook(&spec, handler, payload, context, |_| None).await;
     end_observer_span(span, &ran);
     ran
 }

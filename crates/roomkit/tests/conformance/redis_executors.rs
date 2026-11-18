@@ -22,6 +22,7 @@ const SUPPORTED: &[&str] = &[
     "executors/a-declared-agent-s-turn-runs-on-the-executor-hosting-it",
     "executors/a-delegation-to-a-declared-worker-runs-on-its-executor",
     "executors/a-detach-forgets-what-the-room-kept-for-a-channel",
+    "executors/a-hook-on-an-executor-reads-the-room-when-it-fires",
     "executors/a-later-turn-on-another-executor-replays-the-instruction-it-read",
     "executors/a-live-agent-s-turn-stays-on-the-kit-s-executor",
     "executors/a-provider-the-factory-hands-every-build-outlives-a-build-let-go",
