@@ -116,6 +116,7 @@ pub(crate) struct CarriedRequest {
     pub(crate) rest: String,
     pub(crate) event: RoomEvent,
     pub(crate) history: Vec<RoomEvent>,
+    pub(crate) channel_rows: Vec<RoomEvent>,
 }
 
 /// A turn's request, as the owner submits it.

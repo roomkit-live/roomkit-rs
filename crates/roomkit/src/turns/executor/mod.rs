@@ -44,9 +44,9 @@ use self::record::RecordChanges;
 use self::steering::Steering;
 use self::work::{Flow, work};
 use super::error::{TurnError, one};
-use super::pipe::{LinkFailure, MAX_MESSAGE_BYTES, PipeReceiver, Uncarried};
+use super::pipe::{LinkFailure, PipeReceiver, Uncarried};
 use super::timeouts::Beat;
-use super::wire::{ContextRest, Control, Frame, RequestRest, TurnRequest};
+use super::wire::{ContextRest, Control, Frame, TurnRequest, validate_rest};
 use super::{CarriedRequest, MemoryTurn, Turns, lock};
 use crate::channel::DynChannel;
 use crate::telemetry::within_turn_trace;
@@ -570,14 +570,7 @@ fn lost(failure: &LinkFailure) -> TurnError {
 
 /// The request `carried` brings, its rest parsed anew around its events.
 fn parse(carried: CarriedRequest) -> Result<TurnRequest, String> {
-    if carried.rest.len() > MAX_MESSAGE_BYTES {
-        return Err(format!(
-            "{} bytes, past the bound of {MAX_MESSAGE_BYTES}",
-            carried.rest.len()
-        ));
-    }
-    let rest: RequestRest =
-        serde_json::from_str(&carried.rest).map_err(|error| error.to_string())?;
+    let rest = validate_rest(&carried.rest)?;
     let ContextRest {
         room,
         bindings,
@@ -605,6 +598,7 @@ fn parse(carried: CarriedRequest) -> Result<TurnRequest, String> {
         room_hooks: rest.room_hooks,
         previous_turn: rest.previous_turn,
         trace: rest.trace,
+        channel_rows: carried.channel_rows,
     })
 }
 
@@ -644,9 +638,10 @@ mod tests {
             )
         };
         let carried = CarriedRequest {
-            rest: " ".repeat(MAX_MESSAGE_BYTES + 1),
+            rest: " ".repeat(crate::turns::pipe::MAX_MESSAGE_BYTES + 1),
             event,
             history: Vec::new(),
+            channel_rows: Vec::new(),
         };
         let refused = parse(carried).unwrap_err();
         assert!(refused.contains("past the bound"), "{refused}");

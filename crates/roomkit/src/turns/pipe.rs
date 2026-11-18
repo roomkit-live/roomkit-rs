@@ -21,6 +21,7 @@ use serde::de::DeserializeOwned;
 use tokio::sync::mpsc;
 
 use super::observe::{Carried, Observers};
+use super::wire::Envelope;
 
 /// The largest message a link carries, checked as it is written and before
 /// it is parsed: a request without its events, a frame, a control message.
@@ -114,23 +115,6 @@ pub(crate) struct PipeReceiver<M> {
     message: PhantomData<fn() -> M>,
 }
 
-/// An envelope as it is written.
-#[derive(Serialize)]
-struct Outgoing<'a, M> {
-    turn_id: &'a str,
-    seq: u64,
-    message: &'a M,
-}
-
-/// An envelope as it is read.
-#[derive(serde::Deserialize)]
-#[serde(bound = "M: DeserializeOwned")]
-struct Incoming<M> {
-    turn_id: String,
-    seq: u64,
-    message: M,
-}
-
 /// A new pipe of `turn_id`'s link, carrying `carried` messages.
 pub(crate) fn pipe<M>(
     turn_id: Arc<str>,
@@ -165,8 +149,8 @@ impl<M: Serialize> Pipe<M> {
             return Ok(*sent);
         }
         let seq = sent.saturating_add(1);
-        let raw = serde_json::to_string(&Outgoing {
-            turn_id: &self.turn_id,
+        let raw = serde_json::to_string(&Envelope {
+            turn_id: self.turn_id.as_ref(),
             seq,
             message,
         })
@@ -235,7 +219,7 @@ impl<M: DeserializeOwned> PipeReceiver<M> {
                 raw.len()
             )));
         }
-        let envelope: Incoming<M> =
+        let envelope: Envelope<M> =
             serde_json::from_str(raw).map_err(|error| LinkFailure::Invalid(error.to_string()))?;
         if *envelope.turn_id != *self.turn_id {
             return Err(LinkFailure::Invalid(format!(

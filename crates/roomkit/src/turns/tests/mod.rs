@@ -8,6 +8,7 @@ mod liveness;
 mod never_started;
 mod owner_tools;
 mod records;
+mod rpc_wire;
 mod support;
 mod trace;
 mod verb_depth;

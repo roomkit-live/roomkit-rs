@@ -24,9 +24,7 @@ use crate::turn::{OwnerToolAnswer, TurnKit};
 use crate::turns::codec::{encode_end, encode_end_item, encode_start};
 use crate::turns::error::TurnError;
 use crate::turns::pipe::Uncarried;
-use crate::turns::wire::{
-    Frame, Item, OwnerMessage, OwnerTool, RecordChanges, ToolOutcome, WireError,
-};
+use crate::turns::wire::{Frame, Item, OwnerTool, RecordChanges, RoomCall, ToolOutcome, WireError};
 use crate::turns::{MemoryTurn, Turns, lock};
 
 /// The frames of one turn, sent in order, its text deltas by burst: the
@@ -506,7 +504,7 @@ impl HostLink {
         let Some(turns) = self.turns.upgrade() else {
             return Err(RoomKitError::KitClosed);
         };
-        let message = OwnerMessage::RoomCall {
+        let message = RoomCall {
             call_id: Uuid::new_v4().simple().to_string(),
             channel_id: self.facts.channel.clone(),
             room_id: self.facts.room.clone(),

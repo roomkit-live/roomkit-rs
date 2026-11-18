@@ -31,10 +31,11 @@ pub(crate) struct ChannelCall {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename = "channel_result")]
 pub(crate) struct ChannelResult {
+    #[serde(default)]
     pub(crate) result: Value,
     pub(crate) error: Option<WireError>,
     pub(crate) room_state: Option<Metadata>,
-    pub(crate) executor_id: String,
+    pub(crate) executor_id: Option<String>,
 }
 
 impl Turns {
@@ -98,12 +99,9 @@ impl Turns {
         let raw = serde_json::to_string(&answer).map_err(|e| invalid(&e))?;
         self.observers().tell(Carried::ChannelResult, &raw);
         let answer: ChannelResult = serde_json::from_str(&raw).map_err(|e| invalid(&e))?;
-        self.took(
-            &call.channel_id,
-            &call.room_id,
-            &call.call_id,
-            &answer.executor_id,
-        );
+        if let Some(executor) = &answer.executor_id {
+            self.took(&call.channel_id, &call.room_id, &call.call_id, executor);
+        }
         Ok(answer)
     }
 
@@ -146,7 +144,7 @@ impl Turns {
             result,
             error,
             room_state,
-            executor_id: self.executor_id.clone(),
+            executor_id: Some(self.executor_id.clone()),
         }
     }
 }

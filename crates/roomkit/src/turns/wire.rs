@@ -6,11 +6,11 @@
 //! messages (owner to executor), the calls with their results, and the
 //! channel control outside any turn; and `room_call`, a host verb made
 //! after its turn. A frame and a control message travel in an envelope that
-//! numbers them per direction ([`super::pipe`]). The messages of features
-//! 0.1 lacks are not modelled (`channel_released`,
-//! `room_publication`), but `ephemeral`, which a Python executor sends, is
-//! read so that it can be dropped.
+//! numbers them per direction ([`super::pipe`]). Channel control and
+//! messages to the owner after a turn carry no turn-link sequence number.
 
+mod carried_request;
+pub(crate) use carried_request::validate_rest;
 mod input_request;
 pub(crate) use input_request::InputRequest;
 
@@ -69,6 +69,8 @@ pub(crate) struct TurnRequest {
     pub(crate) previous_turn: Option<PreviousTurn>,
     #[serde(default)]
     pub(crate) trace: Option<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) channel_rows: Vec<RoomEvent>,
 }
 
 /// A request without its events, the event it answers and the room's
@@ -485,45 +487,49 @@ fn one() -> u32 {
     1
 }
 
-/// A frame in its envelope: the turn it belongs to and its number, as the
-/// cross-read reads it; the pipe writes its own.
-#[cfg(test)]
+/// A message of one direction of a turn link. The sender borrows its ID and
+/// message while encoding; the receiver owns the deserialized fields.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(crate) struct FrameEnvelope {
-    pub(crate) turn_id: String,
+pub(crate) struct Envelope<M, Id = String> {
+    pub(crate) turn_id: Id,
     pub(crate) seq: u64,
-    pub(crate) message: Frame,
+    pub(crate) message: M,
 }
 
-/// A control message in its envelope.
 #[cfg(test)]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(crate) struct ControlEnvelope {
-    pub(crate) turn_id: String,
-    pub(crate) seq: u64,
-    pub(crate) message: Control,
-}
+pub(crate) type FrameEnvelope = Envelope<Frame>;
+#[cfg(test)]
+pub(crate) type ControlEnvelope = Envelope<Control>;
 
 /// A message about a channel's per-room state, outside any turn (RFC
 /// §10.6.3 channel control).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum ChannelControl {
+    ChannelReleased {
+        channel_id: ChannelId,
+    },
     ChannelCall(Box<super::channel_calls::ChannelCall>),
     RoomAttached {
         channel_id: ChannelId,
         room_id: RoomId,
+        #[serde(default)]
+        organization_id: Option<String>,
         binding: Box<ChannelBinding>,
     },
     RoomDetached {
         channel_id: ChannelId,
         room_id: RoomId,
+        #[serde(default)]
+        organization_id: Option<String>,
     },
     /// An event committed in the room that the channel's memory is handed
     /// (a discussion's, RFC §19.7.5 rule 3), answered by nothing.
     CommittedEvent {
         channel_id: ChannelId,
         room_id: RoomId,
+        #[serde(default)]
+        organization_id: Option<String>,
         event: Box<RoomEvent>,
         /// The room's hooks on executor triggers, as a turn's request names
         /// them.
@@ -542,19 +548,51 @@ pub(crate) struct ChannelControlEnvelope {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum OwnerMessage {
-    /// A host verb made after its turn ended, answered by a `host_result`.
-    RoomCall {
-        call_id: String,
+    RoomCall(RoomCall),
+    RoomPublication {
         channel_id: ChannelId,
         room_id: RoomId,
         executor_id: String,
         turn_id: String,
-        #[serde(default)]
-        chain_depth: u32,
-        verb: String,
-        #[serde(default)]
-        arguments: Metadata,
+        frame: Box<PublicationFrame>,
     },
+}
+
+/// A host verb made after its turn ended, answered by a `host_result`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct RoomCall {
+    pub(crate) call_id: String,
+    pub(crate) channel_id: ChannelId,
+    pub(crate) room_id: RoomId,
+    pub(crate) executor_id: String,
+    pub(crate) turn_id: String,
+    #[serde(default)]
+    pub(crate) chain_depth: u32,
+    pub(crate) verb: String,
+    #[serde(default)]
+    pub(crate) arguments: Metadata,
+}
+
+/// Only the two publication frames are valid outside a turn.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "Frame")]
+pub(crate) struct PublicationFrame(Frame);
+
+impl TryFrom<Frame> for PublicationFrame {
+    type Error = &'static str;
+
+    fn try_from(frame: Frame) -> Result<Self, Self::Error> {
+        match frame {
+            Frame::Ephemeral { .. } | Frame::FrameworkEvent { .. } => Ok(Self(frame)),
+            _ => Err("a room publication must carry an ephemeral or a framework event"),
+        }
+    }
+}
+
+impl From<PublicationFrame> for Frame {
+    fn from(frame: PublicationFrame) -> Self {
+        frame.0
+    }
 }
 
 /// A message outside a turn in its envelope.
@@ -565,19 +603,15 @@ pub(crate) struct OwnerMessageEnvelope {
 
 /// The answer to a `room_call`: a `host_result` outside any turn's link.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename = "host_result")]
 pub(crate) struct RoomCallResult {
-    #[serde(rename = "type", default = "host_result_kind")]
-    pub(crate) kind: String,
     pub(crate) call_id: String,
     #[serde(default)]
     pub(crate) result: Value,
     #[serde(default)]
     pub(crate) error: Option<WireError>,
-}
-
-/// The type a `host_result` is tagged with.
-pub(crate) fn host_result_kind() -> String {
-    "host_result".to_owned()
+    #[serde(default)]
+    pub(crate) record_changes: Option<RecordChanges>,
 }
 
 /// The arguments of `send_event`, `TurnHost`'s one verb (RFC §10.5,
@@ -793,6 +827,7 @@ mod tests {
             message: ChannelControl::CommittedEvent {
                 channel_id: ChannelId::new("a").unwrap(),
                 room_id,
+                organization_id: None,
                 event: Box::new(event.clone()),
                 room_hooks: Vec::new(),
             },
@@ -808,7 +843,7 @@ mod tests {
         assert_eq!(
             written,
             json!({"message": {
-                "type": "committed_event", "channel_id": "a", "room_id": "r1", "room_hooks": []
+                "type": "committed_event", "channel_id": "a", "room_id": "r1", "organization_id": null, "room_hooks": []
             }})
         );
         assert_eq!(sent, serde_json::to_value(&event).unwrap());

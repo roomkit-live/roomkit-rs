@@ -30,9 +30,9 @@ use crate::turns::codec::decode_send_event;
 use crate::turns::error::{from_record, kit_error, one};
 use crate::turns::records::RoomRecords;
 use crate::turns::wire::{
-    ADD_OBSERVATION, AddObservation, BETWEEN_TURNS, CallContext, DELEGATE, Delegate, OwnerMessage,
-    POST_STATUS, PostStatus, ROOM_CONTEXT, ROOM_TASKS, ReadRoomContext, RoomCallResult, SEND_EVENT,
-    UPDATE_ROOM_METADATA, UpdateRoomMetadata, WAIT_TASK, WaitTask, WireError, host_result_kind,
+    ADD_OBSERVATION, AddObservation, BETWEEN_TURNS, CallContext, DELEGATE, Delegate, POST_STATUS,
+    PostStatus, ROOM_CONTEXT, ROOM_TASKS, ReadRoomContext, RoomCall, RoomCallResult, SEND_EVENT,
+    UPDATE_ROOM_METADATA, UpdateRoomMetadata, WAIT_TASK, WaitTask, WireError,
 };
 
 /// The refusal of a verb the host may not ask.
@@ -307,9 +307,9 @@ async fn send(
 pub(crate) async fn answer_room_call(
     kit: &Arc<dyn TurnKit>,
     records: impl FnOnce() -> Option<LastTurn>,
-    message: OwnerMessage,
+    message: RoomCall,
 ) -> RoomCallResult {
-    let OwnerMessage::RoomCall {
+    let RoomCall {
         call_id,
         channel_id,
         room_id,
@@ -380,7 +380,7 @@ pub(crate) async fn answer_room_call(
         }
     };
     RoomCallResult {
-        kind: host_result_kind(),
+        record_changes: None,
         call_id,
         result,
         error,

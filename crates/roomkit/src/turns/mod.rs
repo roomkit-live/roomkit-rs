@@ -102,7 +102,7 @@ pub use self::timeouts::TurnTimeouts;
 pub(crate) use self::wire::SEND_EVENT;
 use self::wire::{
     ChannelControl, ChannelControlEnvelope, OwnerMessage, OwnerMessageEnvelope, PreviousTurn,
-    RoomCallResult,
+    RoomCall, RoomCallResult,
 };
 use crate::channel::DynChannel;
 use crate::error::RoomKitError;
@@ -404,6 +404,7 @@ impl Turns {
             rest,
             event,
             history,
+            channel_rows: Vec::new(),
         };
         // Register the delivery's cut before the executor can run its first
         // step on another worker. An earlier cut is already in its pipe.
@@ -479,22 +480,22 @@ impl Turns {
     pub(crate) async fn room_call(
         self: &Arc<Self>,
         kit: Arc<dyn TurnKit>,
-        message: OwnerMessage,
+        message: RoomCall,
     ) -> Result<serde_json::Value, RoomKitError> {
         let observers = self.observers();
         let parsed: OwnerMessageEnvelope = cross(
             &observers,
             Carried::RoomCall,
-            &OwnerMessageEnvelope { message },
+            &OwnerMessageEnvelope {
+                message: OwnerMessage::RoomCall(message),
+            },
         )?;
-        let OwnerMessage::RoomCall {
-            channel_id,
-            room_id,
-            ..
-        } = &parsed.message;
-        let (channel_id, room_id) = (channel_id.clone(), room_id.clone());
+        let OwnerMessage::RoomCall(call) = parsed.message else {
+            return Err(RoomKitError::Value("expected a room call".into()));
+        };
+        let (channel_id, room_id) = (call.channel_id.clone(), call.room_id.clone());
         let last = || owner::last_turn(&self.records(), &channel_id, &room_id);
-        let answering = owner::answer_room_call(&kit, last, parsed.message);
+        let answering = owner::answer_room_call(&kit, last, call);
         let answered = context::TurnContext::default().scope(answering).await;
         let answered: RoomCallResult = cross(&observers, Carried::RoomCallResult, &answered)?;
         match answered.error {
@@ -518,6 +519,7 @@ impl Turns {
         let message = ChannelControl::RoomAttached {
             channel_id: binding.channel_id.clone(),
             room_id: binding.room_id.clone(),
+            organization_id: None,
             binding: Box::new(binding.clone()),
         };
         if let Some(message) = self.control(&message) {
@@ -541,6 +543,7 @@ impl Turns {
         let message = ChannelControl::RoomDetached {
             channel_id: channel_id.clone(),
             room_id: room_id.clone(),
+            organization_id: None,
         };
         if let Some(message) = self.control(&message) {
             apply(channel, message).await;
@@ -561,6 +564,7 @@ impl Turns {
         let message = ChannelControl::CommittedEvent {
             channel_id: channel_id.clone(),
             room_id: room_id.clone(),
+            organization_id: None,
             event: Box::new(event.clone()),
             room_hooks: Vec::new(),
         };
@@ -599,11 +603,15 @@ async fn apply(channel: Option<Arc<dyn DynChannel>>, message: ChannelControl) {
         return;
     };
     let (kind, channel_id, room_id, applied) = match message {
+        // A local kit holds its live channel through registration. Its release
+        // applies only to builds owned by independently hosted executors.
+        ChannelControl::ChannelReleased { .. } => return,
         ChannelControl::ChannelCall(_) => unreachable!("channel calls require an answer"),
         ChannelControl::RoomAttached {
             channel_id,
             room_id,
             binding,
+            ..
         } => {
             let applied = channel.on_room_attached(room_id.clone(), *binding).await;
             ("room_attached", channel_id, room_id, applied)
@@ -611,6 +619,7 @@ async fn apply(channel: Option<Arc<dyn DynChannel>>, message: ChannelControl) {
         ChannelControl::RoomDetached {
             channel_id,
             room_id,
+            ..
         } => {
             let applied = channel.on_room_detached(room_id.clone()).await;
             ("room_detached", channel_id, room_id, applied)
