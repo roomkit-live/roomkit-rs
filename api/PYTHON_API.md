@@ -560,18 +560,21 @@ start with a fresh handover marker.
 
 With the `redis` feature, the owner accepts a `RedisTurnBackend` in
 `RoomKitOptions::turn_backend`. The Redis backend exposes `serve`,
-`executors`, `claim_presence` and `close`. Each standalone factory returns a future yielding `Result<Option<C>, RoomKitError>` for one concrete `C: Channel`. `TurnExecutorOptions` supplies the executor
-ID, host declarations, organization scope, timeouts, channel ownership and
-cache bound. `new_with_host_predicate` accepts a local host predicate.
-Remote placement uses the advertised channel IDs and trailing-wildcard
-prefixes.
+`executors`, `claim_presence` and `close`. Each standalone factory returns a
+future yielding `Result<Option<C>, RoomKitError>` for one concrete
+`C: Channel`. `TurnExecutorOptions` supplies the executor ID, host
+declarations, organization scope, timeouts, channel ownership and cache
+bound. On the serving node, placement can consult a host predicate supplied
+by `new_with_host_predicate` or a worker with an omitted host list. That
+node lists its own active workers in registration order. Other nodes place
+work on advertised channel IDs and trailing-wildcard prefixes.
 
 The following application contracts remain open for text API parity.
 
 | Python contract | Current Rust behavior |
 | --- | --- |
 | `TurnBackend`, `InMemoryTurnBackend`, `TurnClient` | The kit has built-in local routing and accepts the concrete Redis backend. An application still needs a public backend interface and a way to supply it to the owner. Redis submits requests, routes channel controls and attends the owner internally. |
-| `serve(executor)` | `TurnExecutor<S>` keeps the store type of its hooks. Redis currently takes `TurnExecutor<InMemoryStore>`. A worker with a host predicate or omitted host list can accept direct work, but Redis placement and its catalogue use finite declarations. |
+| `serve(executor)` | `TurnExecutor<S>` keeps the store type of its hooks. Redis currently takes `TurnExecutor<InMemoryStore>`. Serving the executor of a kit with a different store type through this public operation remains open. |
 | `TurnExecutor.organizations` | The standalone constructor accepts `None` for rooms without an organization and rejects an explicitly empty collection. Its public getter returns an empty set in the former case. The Redis declaration preserves null. The kit's executor serves `"*"`. |
 | `TurnExecutor.reach_owner`, `RoomOwner` | Redis routes host calls and publications after a turn. Installing the destination for that work from an application-supplied transport remains open. |
 | `TurnExecutor.wire`, `use_wiring`, `wiring` | The SDK wires the channels it registers. Inspection and replacement of that environment by the application remain open. |
