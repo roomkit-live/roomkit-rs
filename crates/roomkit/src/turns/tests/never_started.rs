@@ -214,3 +214,78 @@ async fn a_local_executor_closed_before_its_first_poll_builds_no_turn_work() {
     kit.close().await.unwrap();
     assert_eq!(kit.inner.tasks.running(), 0);
 }
+
+/// Python's owner._unleave: a placement that reached no worker cannot displace
+/// the room's previous turn or the permissions of the work it started (§10.6.2).
+#[cfg(feature = "redis")]
+#[tokio::test]
+#[ignore = "requires REDIS_URL"]
+async fn a_turn_no_redis_worker_can_take_leaves_the_previous_turn_in_place() {
+    use crate::turns::wire::PreviousTurn;
+    use crate::{
+        AttachChannelOptions, ChannelDeclaration, CreateRoomOptions, RedisTurnBackend,
+        RedisTurnBackendOptions, RoomKit, RoomKitOptions,
+    };
+
+    let url = std::env::var("REDIS_URL").unwrap();
+    let backend = RedisTurnBackend::new(
+        Some(&url),
+        RedisTurnBackendOptions {
+            key_prefix: format!("roomkit:test:unplaced:{}", uuid::Uuid::new_v4()),
+            ..RedisTurnBackendOptions::default()
+        },
+    )
+    .unwrap();
+    let kit = RoomKit::new(RoomKitOptions {
+        turn_backend: Some(backend),
+        ..RoomKitOptions::default()
+    });
+    let agent = channel("ai");
+    let room = room_id();
+    kit.register_channel(ChannelDeclaration::new(agent.clone()))
+        .unwrap();
+    let created = kit
+        .create_room(CreateRoomOptions {
+            room_id: Some(room.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let binding = kit
+        .attach_channel(&room, &agent, AttachChannelOptions::default())
+        .await
+        .unwrap();
+    let previous = PreviousTurn::after("previous", None, None);
+    kit.inner
+        .turns
+        .records()
+        .put(&agent, &room, previous.clone());
+    kit.inner
+        .turns
+        .records()
+        .mark_room(&room, created.created_at);
+    let event = RoomEvent::new(
+        room.clone(),
+        EventSource::new(channel("sms"), ChannelType::SMS),
+        TextContent::new("hello"),
+    );
+    let turn_kit: Arc<dyn TurnKit> = Arc::new(Arc::downgrade(&kit.inner));
+    let answer = kit
+        .inner
+        .turns
+        .run(
+            &turn_kit,
+            &binding,
+            event,
+            RoomContext::new(created),
+            false,
+            |_| (),
+        )
+        .await;
+    assert!(answer.is_err());
+    assert_eq!(
+        kit.inner.turns.records().get(&agent, &room),
+        Some(&previous)
+    );
+    kit.close().await.unwrap();
+}

@@ -94,6 +94,27 @@ impl RoomRecords {
         }
     }
 
+    /// Undo only the current entry. A later turn can already own this room.
+    pub(crate) fn undo_submission(
+        &mut self,
+        channel: &ChannelId,
+        room: &RoomId,
+        turn: &str,
+        previous: Option<PreviousTurn>,
+    ) {
+        if self
+            .get(channel, room)
+            .is_some_and(|entry| entry.turn_id == turn)
+        {
+            match previous {
+                Some(record) => {
+                    self.put(channel, room, record);
+                }
+                None => self.pop(channel, room),
+            }
+        }
+    }
+
     pub(crate) fn get(&self, channel_id: &ChannelId, room_id: &RoomId) -> Option<&PreviousTurn> {
         self.records
             .get(&(channel_id.clone(), room_id.clone()))

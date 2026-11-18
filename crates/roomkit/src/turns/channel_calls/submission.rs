@@ -48,19 +48,12 @@ impl Drop for SubmittedRemoteCall<'_> {
         if self.answered || self.handover.handed() {
             return;
         }
-        let mut records = self.turns.records();
-        if records
-            .get(&self.channel, &self.room)
-            .is_none_or(|now| now.turn_id != self.id)
-        {
-            return;
-        }
-        match self.previous.take() {
-            Some(previous) => {
-                records.put(&self.channel, &self.room, previous);
-            }
-            None => records.pop(&self.channel, &self.room),
-        }
+        self.turns.records().undo_submission(
+            &self.channel,
+            &self.room,
+            &self.id,
+            self.previous.take(),
+        );
     }
 }
 

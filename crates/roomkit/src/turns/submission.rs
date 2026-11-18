@@ -1,7 +1,7 @@
 //! Admit a turn, record its request, and connect its owner to the chosen executor.
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
-use roomkit_core::model::{ChannelBinding, ErrorRecord, RoomContext, RoomEvent};
+use roomkit_core::model::{ChannelBinding, ChannelId, ErrorRecord, RoomContext, RoomEvent, RoomId};
 use uuid::Uuid;
 
 use super::error::TurnError;
@@ -22,6 +22,37 @@ pub(super) struct Input {
     pub(super) context: RoomContext,
     pub(super) strategy_turn: bool,
     pub(super) channel_rows: Vec<RoomEvent>,
+}
+
+/// A placement can fail or be cancelled before the executor receives it.
+pub(super) struct Handover {
+    owner: Weak<Turns>,
+    room: RoomId,
+    channel: ChannelId,
+    turn: Arc<str>,
+    previous: Option<PreviousTurn>,
+    pub(super) handed: bool,
+}
+
+impl Drop for Handover {
+    fn drop(&mut self) {
+        if !self.handed
+            && let Some(owner) = self.owner.upgrade()
+        {
+            owner.records().undo_submission(
+                &self.channel,
+                &self.room,
+                &self.turn,
+                self.previous.take(),
+            );
+        }
+    }
+}
+
+struct Prepared {
+    carried: CarriedRequest,
+    stale: bool,
+    handover: Handover,
 }
 
 enum Destination {
@@ -60,14 +91,14 @@ impl Turns {
     }
 
     fn prepare_request(
-        &self,
+        self: &Arc<Self>,
         kit: &dyn TurnKit,
         binding: &ChannelBinding,
         input: Input,
-        turn_id: &str,
+        turn_id: &Arc<str>,
         local: bool,
         observers: &Observers,
-    ) -> Result<(CarriedRequest, bool), ErrorRecord> {
+    ) -> Result<Prepared, ErrorRecord> {
         let Input {
             event,
             mut context,
@@ -114,15 +145,24 @@ impl Turns {
                     previous.as_ref(),
                 )
             });
-        Ok((
-            CarriedRequest {
+        let handover = Handover {
+            owner: Arc::downgrade(self),
+            room: event.room_id.clone(),
+            channel: binding.channel_id.clone(),
+            turn: Arc::clone(turn_id),
+            previous,
+            handed: false,
+        };
+        Ok(Prepared {
+            carried: CarriedRequest {
                 rest,
                 event,
                 history,
                 channel_rows,
             },
             stale,
-        ))
+            handover,
+        })
     }
 
     pub(super) fn start_turn<G>(
@@ -139,7 +179,11 @@ impl Turns {
         let destination = self.destination(&turn_id, &**kit, binding)?;
         let observers = self.observers();
         let facts = owner::Facts::of(binding, &input.event, &input.context.room);
-        let (carried, stale) = self.prepare_request(
+        let Prepared {
+            carried,
+            stale,
+            mut handover,
+        } = self.prepare_request(
             &**kit,
             binding,
             input,
@@ -162,20 +206,25 @@ impl Turns {
         let following = submitted(turn.canceller());
         let taken = kit.spawn(pump)
             && match destination {
-                Destination::Local(running) => executor::take(
-                    self,
-                    running,
-                    Arc::clone(&memory),
-                    controls_read,
-                    carried,
-                    stale,
-                    kit,
-                ),
+                Destination::Local(running) => {
+                    handover.handed = executor::take(
+                        self,
+                        running,
+                        Arc::clone(&memory),
+                        controls_read,
+                        carried,
+                        stale,
+                        kit,
+                    );
+                    handover.handed
+                }
                 #[cfg(feature = "redis")]
                 Destination::Remote(backend) => {
                     let link = Arc::clone(&memory);
                     kit.spawn(Box::pin(async move {
-                        backend.submit_remote(carried, link, controls_read).await;
+                        backend
+                            .submit_remote(carried, link, controls_read, handover)
+                            .await;
                     }))
                 }
             };

@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::RoomKitError;
 use crate::turns::pipe::{LinkFailure, PipeReceiver};
+use crate::turns::submission::Handover;
 use crate::turns::wire::{Control, Frame, RequestRest};
 use crate::turns::{CarriedRequest, MemoryTurn};
 
@@ -17,8 +18,10 @@ impl RedisTurnBackend {
         carried: CarriedRequest,
         memory: Arc<MemoryTurn>,
         controls: PipeReceiver<Control>,
+        mut handover: Handover,
     ) {
-        let result = self.hand_over(carried, &memory).await;
+        let result = self.hand_over(carried, &memory, &mut handover).await;
+        drop(handover);
         match result {
             Ok((peer, route)) => self.forward_owner(peer, memory, controls, route).await,
             Err(error) => {
@@ -34,6 +37,7 @@ impl RedisTurnBackend {
         &self,
         carried: CarriedRequest,
         memory: &Arc<MemoryTurn>,
+        handover: &mut Handover,
     ) -> Result<(String, TurnRoute), RoomKitError> {
         self.attend().await?;
         let rest: RequestRest =
@@ -60,6 +64,7 @@ impl RedisTurnBackend {
                         invalid("turn already submitted".into())
                     }
                 })?;
+            handover.handed = true;
             let answer = self
                 .ask(
                     &target.node,
@@ -75,6 +80,7 @@ impl RedisTurnBackend {
                     return Ok((target.node, route));
                 }
                 Ok("refused") => {
+                    handover.handed = false;
                     refused.insert(target.member());
                 }
                 _ => {
