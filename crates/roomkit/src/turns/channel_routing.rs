@@ -19,7 +19,8 @@ impl Turns {
     ) -> Option<&super::redis::RedisTurnBackend> {
         self.remote.as_ref().filter(|backend| {
             channel.is_some_and(|channel| {
-                channel.is_declaration_only()
+                backend.loops_back()
+                    || channel.is_declaration_only()
                     || self.executor_lifecycle.is_closed()
                     || !backend.owns_lifecycle(&Arc::downgrade(&self.executor_lifecycle))
             })

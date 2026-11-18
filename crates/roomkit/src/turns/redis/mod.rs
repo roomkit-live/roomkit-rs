@@ -39,6 +39,12 @@ pub struct RedisTurnBackendOptions {
     /// Reuse the application’s data connection manager, including its configured timeouts.
     /// The inbox and heartbeat open independent connections at the supplied URL.
     pub client: Option<ConnectionManager>,
+    /// Test option matching Python: route this node's local turns through its Redis inbox.
+    #[expect(
+        clippy::pub_underscore_fields,
+        reason = "the private Python test option has this exact name"
+    )]
+    pub _loop_back: bool,
     /// Namespace shared by the room owners and their workers.
     pub key_prefix: String,
     /// The time bounds of this backend's turns.
@@ -49,6 +55,7 @@ impl Default for RedisTurnBackendOptions {
     fn default() -> Self {
         Self {
             client: None,
+            _loop_back: false,
             key_prefix: "roomkit:turns".into(),
             timeouts: TurnTimeouts::default(),
         }
@@ -85,6 +92,7 @@ struct Node {
     closing: tokio::sync::Mutex<bool>,
     timeouts: TurnTimeouts,
     choice: Mutex<usize>,
+    loop_back: bool,
     address: redis::Client,
     data: OnceCell<ConnectionManager>,
 }
@@ -115,6 +123,10 @@ impl RedisTurnBackend {
             .unwrap_or("redis://localhost:6379");
         let client = redis::Client::open(address)
             .map_err(|_| RoomKitError::Value("invalid Redis turn backend URL".into()))?;
+        let RedisTurnBackendOptions {
+            _loop_back: loop_back,
+            ..
+        } = options;
         Ok(Self(Arc::new(Node {
             outbox: Mutex::default(),
             id: Uuid::new_v4()
@@ -137,9 +149,14 @@ impl RedisTurnBackend {
             closing: tokio::sync::Mutex::new(false),
             timeouts: options.timeouts,
             choice: Mutex::new(0),
+            loop_back,
             address: client,
             data: OnceCell::new_with(options.client),
         })))
+    }
+
+    pub(in crate::turns) fn loops_back(&self) -> bool {
+        self.0.loop_back
     }
 
     /// This process's node identifier.

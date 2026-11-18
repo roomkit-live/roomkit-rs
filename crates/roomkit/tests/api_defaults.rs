@@ -1862,6 +1862,8 @@ fn redis_turn_transport_option_defaults() {
     assert!(options.client.is_none());
     // roomkit.RedisTurnBackend.__init__(key_prefix) = 'roomkit:turns'
     assert_eq!(options.key_prefix, "roomkit:turns");
+    // roomkit.RedisTurnBackend.__init__(_loop_back) = False
+    assert!(!options._loop_back);
     // roomkit.RedisTurnBackend.__init__(timeouts) = None, resolving to TurnTimeouts()
     assert_eq!(options.timeouts, roomkit::TurnTimeouts::default());
 }

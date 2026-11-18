@@ -12,7 +12,7 @@ use crate::turns::{TakesOptions, lock, no_executor};
 
 pub(super) struct Reserved {
     lifecycle: std::sync::Weak<crate::turns::executor::Lifecycle>,
-    look_up: super::WorkerLookup,
+    pub(super) look_up: super::WorkerLookup,
 }
 
 pub(super) enum Placed {
@@ -41,6 +41,14 @@ impl Candidates {
         backend: &RedisTurnBackend,
         spread: bool,
     ) -> Option<Placed> {
+        if backend.0.loop_back && !self.here.is_empty() {
+            let index = self
+                .here
+                .iter()
+                .position(|(member, _)| Some(member.as_str()) == held)
+                .unwrap_or(0);
+            return Some(backend.local_target(self.here.swap_remove(index).1));
+        }
         if let Some(held) = held {
             if let Some(index) = self.here.iter().position(|(member, _)| member == held) {
                 return Some(Placed::Here(self.here.swap_remove(index).1));
@@ -92,6 +100,17 @@ impl RedisTurnBackend {
             .is_some_and(|own| own.lifecycle.ptr_eq(worker))
     }
 
+    fn local_target(&self, worker: Worker) -> Placed {
+        if self.0.loop_back {
+            Placed::Elsewhere(Target {
+                node: self.node_id().to_owned(),
+                executor_id: worker.executor_id().to_owned(),
+            })
+        } else {
+            Placed::Here(worker)
+        }
+    }
+
     pub(super) fn owning(&self, channel: &ChannelId) -> Option<Worker> {
         let reserved = self.0.owner_worker.get()?;
         (reserved.look_up)().filter(|worker| worker.hosts_channel(channel))
@@ -120,7 +139,7 @@ impl RedisTurnBackend {
             if refused.contains(&member) || !own.takes(channel, options) {
                 return Err(no_executor(channel.as_str(), hooks, organization));
             }
-            Placed::Here(own)
+            self.local_target(own)
         } else {
             let candidates = self.candidates(channel, &options, refused).await?;
             let mut conn = self.connection().await?;

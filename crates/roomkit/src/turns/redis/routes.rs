@@ -19,7 +19,8 @@ pub(super) struct Routes {
     pub(super) closing: bool,
     pub(super) jobs: super::jobs::Jobs,
     answers: HashMap<String, (String, oneshot::Sender<String>)>,
-    turns: HashMap<String, TurnEndpoint>,
+    owner_turns: HashMap<String, TurnEndpoint>,
+    worker_turns: HashMap<String, TurnEndpoint>,
     observing: bool,
     history: history::Histories,
 }
@@ -27,20 +28,20 @@ pub(super) struct Routes {
 struct TurnEndpoint {
     peer: String,
     tx: mpsc::UnboundedSender<Message>,
-    worker: bool,
     watch: Option<(String, Weak<MemoryTurn>)>,
 }
 
 pub(super) struct TurnRoute {
     pub(super) inbox: mpsc::UnboundedReceiver<Message>,
     node: Weak<Node>,
+    worker: bool,
     id: String,
 }
 
 impl Drop for TurnRoute {
     fn drop(&mut self) {
         if let Some(node) = self.node.upgrade() {
-            lock(&node.routes).turns.remove(&self.id);
+            lock(&node.routes).turns_mut(self.worker).remove(&self.id);
         }
     }
 }
@@ -53,17 +54,21 @@ impl Drop for Question<'_> {
 }
 
 impl Routes {
+    fn turns_mut(&mut self, worker: bool) -> &mut HashMap<String, TurnEndpoint> {
+        if worker {
+            &mut self.worker_turns
+        } else {
+            &mut self.owner_turns
+        }
+    }
+
     pub(super) fn running(&self) -> Vec<String> {
-        self.turns
-            .iter()
-            .filter(|(_, e)| e.worker)
-            .map(|(id, _)| id.clone())
-            .collect()
+        self.worker_turns.keys().cloned().collect()
     }
 
     /// Subscribe this accepted handover. Only the first subscription starts a reader.
     pub(super) fn watch(&mut self, turn: &Arc<MemoryTurn>, member: String) -> bool {
-        let Some(route) = self.turns.get_mut(&*turn.turn_id) else {
+        let Some(route) = self.owner_turns.get_mut(&*turn.turn_id) else {
             return false;
         };
         route.watch = Some((member, Arc::downgrade(turn)));
@@ -72,7 +77,7 @@ impl Routes {
 
     pub(super) fn observed(&mut self) -> Observed {
         let mut nodes = BTreeMap::<_, Vec<_>>::new();
-        for route in self.turns.values() {
+        for route in self.owner_turns.values() {
             if let Some((member, weak)) = &route.watch
                 && let Some(turn) = weak.upgrade()
             {
@@ -94,7 +99,7 @@ impl Routes {
     pub(super) fn begin_close(&mut self) {
         self.closing = true;
         self.answers.clear();
-        self.turns.retain(|_, route| route.worker);
+        self.owner_turns.clear();
     }
 }
 
@@ -105,19 +110,24 @@ impl RedisTurnBackend {
         if routes.closing {
             return None;
         }
-        let Entry::Vacant(slot) = routes.turns.entry(id.into()) else {
+        if let Some(other) = routes.turns_mut(!worker).get(id)
+            && !(self.0.loop_back && peer == self.node_id() && other.peer == peer)
+        {
+            return None;
+        }
+        let Entry::Vacant(slot) = routes.turns_mut(worker).entry(id.into()) else {
             return None;
         };
         let (tx, inbox) = mpsc::unbounded_channel();
         slot.insert(TurnEndpoint {
             peer: peer.into(),
             tx,
-            worker,
             watch: None,
         });
         Some(TurnRoute {
             inbox,
             node: Arc::downgrade(&self.0),
+            worker,
             id: id.into(),
         })
     }
@@ -221,9 +231,13 @@ impl RedisTurnBackend {
             }
             "frame" | "control" | "released" => {
                 let routes = lock(&self.0.routes);
-                if let Some(route) = routes.turns.get(&msg.target)
+                let targets = if msg.kind == "frame" {
+                    &routes.owner_turns
+                } else {
+                    &routes.worker_turns
+                };
+                if let Some(route) = targets.get(&msg.target)
                     && route.peer == msg.sender
-                    && route.worker == (msg.kind != "frame")
                 {
                     drop(route.tx.send(msg));
                 }

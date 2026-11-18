@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use super::{RedisTurnBackend, RedisTurnBackendOptions};
 use crate::model::{
-    ChannelCategory, ChannelType, EventContent, EventType, InboundMessage, TextContent,
+    ChannelCategory, ChannelId, ChannelType, EventContent, EventType, InboundMessage, RoomId,
+    TextContent,
 };
 use crate::store::ListEventsOptions;
 use crate::testing::{EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions};
@@ -15,8 +16,13 @@ use crate::{
 };
 
 fn nodes() -> Option<(RedisTurnBackend, RedisTurnBackend)> {
+    nodes_with_loop_back(false)
+}
+
+fn nodes_with_loop_back(loop_back: bool) -> Option<(RedisTurnBackend, RedisTurnBackend)> {
     let url = std::env::var("REDIS_URL").ok()?;
     let options = RedisTurnBackendOptions {
+        _loop_back: loop_back,
         key_prefix: format!("roomkit:placement:{}", uuid::Uuid::new_v4()),
         timeouts: TurnTimeouts {
             heartbeat_interval: Duration::from_millis(50),
@@ -88,38 +94,87 @@ async fn the_holder_precedes_the_first_local_worker_in_registration_order() {
 
 #[tokio::test]
 async fn a_room_turn_reaches_the_worker_served_on_its_owners_backend() {
-    let Some((node, _)) = nodes() else { return };
-    node.serve(worker("in-process")).await.unwrap();
+    room_turn_on_local_node(false, false).await;
+}
+
+#[tokio::test]
+async fn loop_back_carries_a_locally_served_turn_through_the_nodes_inbox() {
+    room_turn_on_local_node(true, false).await;
+}
+
+#[tokio::test]
+async fn loop_back_carries_the_kits_own_turn_without_advertising_its_channel() {
+    room_turn_on_local_node(true, true).await;
+}
+
+async fn room_turn_on_local_node(loop_back: bool, own_channel: bool) {
+    let Some((node, peer)) = nodes_with_loop_back(loop_back) else {
+        return;
+    };
+    if !own_channel {
+        node.serve(worker("in-process")).await.unwrap();
+    }
     let kit = RoomKit::new(RoomKitOptions {
         turn_backend: Some(std::sync::Arc::new(node.clone())),
         ..Default::default()
     });
-    let room: crate::model::RoomId = "r".parse().unwrap();
-    let agent: crate::model::ChannelId = "agent".parse().unwrap();
-    let tx: crate::model::ChannelId = "text".parse().unwrap();
+    let room: RoomId = "r".parse().unwrap();
+    let agent: ChannelId = "agent".parse().unwrap();
+    let text: ChannelId = "text".parse().unwrap();
+    register_channels(&kit, &text, &agent, own_channel);
+    attach_agents_room(&kit, &room, &text, &agent).await;
+    assert_room_reply(&kit, &room, &text, &agent).await;
+    // A consumed XADD leaves the inbox key behind.
+    let mut connection = node.connection().await.unwrap();
+    let inbox: bool = redis::cmd("EXISTS")
+        .arg(node.key(&format!("inbox:{}", node.node_id())))
+        .query_async(&mut connection)
+        .await
+        .unwrap();
+    assert_eq!(inbox, loop_back, "only the looped-back turn uses the inbox");
+    if own_channel {
+        assert!(peer.executors().await.unwrap().is_empty());
+    }
+    peer.close().await.unwrap();
+    kit.close().await.unwrap();
+}
+
+fn register_channels(kit: &RoomKit, tx: &ChannelId, agent: &ChannelId, own_channel: bool) {
     kit.register_channel(RecordingTransport::new(
         tx.clone(),
         ChannelType::SMS,
         RecordingTransportOptions::default(),
     ))
     .unwrap();
-    kit.register_channel(ChannelDeclaration {
-        identity: Some(AgentIdentity::default()),
-        ..ChannelDeclaration::new(agent.clone())
-    })
-    .unwrap();
+    if own_channel {
+        kit.register_channel(EchoAgent::new(
+            agent.clone(),
+            "in-process",
+            EchoAgentOptions::default(),
+        ))
+        .unwrap();
+    } else {
+        kit.register_channel(ChannelDeclaration {
+            identity: Some(AgentIdentity::default()),
+            ..ChannelDeclaration::new(agent.clone())
+        })
+        .unwrap();
+    }
+}
+
+async fn attach_agents_room(kit: &RoomKit, room: &RoomId, tx: &ChannelId, agent: &ChannelId) {
     kit.create_room(CreateRoomOptions {
         room_id: Some(room.clone()),
         ..Default::default()
     })
     .await
     .unwrap();
-    kit.attach_channel(&room, &tx, AttachChannelOptions::default())
+    kit.attach_channel(room, tx, AttachChannelOptions::default())
         .await
         .unwrap();
     kit.attach_channel(
-        &room,
-        &agent,
+        room,
+        agent,
         AttachChannelOptions {
             category: Some(ChannelCategory::Intelligence),
             ..Default::default()
@@ -127,9 +182,12 @@ async fn a_room_turn_reaches_the_worker_served_on_its_owners_backend() {
     )
     .await
     .unwrap();
+}
+
+async fn assert_room_reply(kit: &RoomKit, room: &RoomId, tx: &ChannelId, agent: &ChannelId) {
     let result = kit
         .process_inbound(
-            InboundMessage::new(tx, "person", TextContent::new("Hi")),
+            InboundMessage::new(tx.clone(), "person", TextContent::new("Hi")),
             ProcessInboundOptions {
                 room_id: Some(room.clone()),
                 ..Default::default()
@@ -140,28 +198,15 @@ async fn a_room_turn_reaches_the_worker_served_on_its_owners_backend() {
     assert_eq!(result.error, None);
     let rows = kit
         .store()
-        .list_events(&room, ListEventsOptions::default())
+        .list_events(room, ListEventsOptions::default())
         .await
         .unwrap();
     let replies: Vec<_> = rows
         .iter()
-        .filter(|row| row.source.channel_id == agent && row.r#type == EventType::Message)
+        .filter(|row| &row.source.channel_id == agent && row.r#type == EventType::Message)
         .collect();
     assert_eq!(replies.len(), 1);
     assert!(matches!(&replies[0].content, EventContent::Text(text) if text.body == "in-process"));
-    // Even a consumed XADD leaves its stream key behind. Both the controls and
-    // the turn stayed in this process; Redis kept the room holder and registry.
-    let mut connection = node.connection().await.unwrap();
-    let inbox: bool = redis::cmd("EXISTS")
-        .arg(node.key(&format!("inbox:{}", node.node_id())))
-        .query_async(&mut connection)
-        .await
-        .unwrap();
-    assert!(
-        !inbox,
-        "local turns and channel controls must stay off the transport"
-    );
-    kit.close().await.unwrap();
 }
 
 mod owner;
@@ -210,7 +255,7 @@ async fn a_local_only_replacement_withdraws_its_own_advertisement_and_preserves_
                     && row.covers("local-agent", &[], None).unwrap())
         );
         assert!(
-            host.shared_worker("same").is_none(),
+            host.receiving_worker("same", peer.node_id()).is_none(),
             "a handover already addressed to the old advertisement must be refused"
         );
 

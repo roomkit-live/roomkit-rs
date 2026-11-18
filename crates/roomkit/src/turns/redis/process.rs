@@ -20,11 +20,18 @@ pub(super) struct Serving {
 }
 
 impl RedisTurnBackend {
-    pub(super) fn shared_worker(&self, id: &str) -> Option<Worker> {
+    pub(super) fn receiving_worker(&self, id: &str, sender: &str) -> Option<Worker> {
+        let loop_back = self.0.loop_back && sender == self.node_id();
+        if loop_back
+            && let Some(own) = self.0.owner_worker.get().and_then(|own| (own.look_up)())
+            && own.executor_id() == id
+        {
+            return Some(own);
+        }
         lock(&self.0.serving)
             .workers
             .iter()
-            .find(|worker| worker.executor_id() == id && worker.hosted().is_some())
+            .find(|worker| worker.executor_id() == id && (loop_back || worker.hosted().is_some()))
             .cloned()
     }
 
@@ -55,13 +62,14 @@ impl RedisTurnBackend {
             let Serving {
                 workers, retiring, ..
             } = &mut *serving;
-            if shared {
+            let tracked = shared || self.0.loop_back;
+            if tracked {
                 retiring.remove(id);
             }
             workers.retain(|previous| {
                 let replaced = previous.executor_id() == id;
                 if replaced || previous.closed() {
-                    if previous.hosted().is_some() && !(replaced && shared) {
+                    if (self.0.loop_back || previous.hosted().is_some()) && !(replaced && tracked) {
                         retiring.insert(previous.executor_id().to_owned());
                     }
                     return false;
@@ -241,7 +249,18 @@ impl RedisTurnBackend {
                 if let Ok(raw) = serde_json::to_string(&decl) {
                     beat.declared.insert(member, raw);
                 }
+            } else if self.0.loop_back {
+                beat.undeclared.push(member);
             }
+        }
+        if self.0.loop_back
+            && let Some(own) = self.0.owner_worker.get().and_then(|own| (own.look_up)())
+            && !own.closed()
+            && own.hosted().is_none()
+        {
+            // The weakly held owner's executor also reports liveness without declaring channels.
+            beat.undeclared
+                .push(format!("{node}:{}", own.executor_id()));
         }
         beat.gone
             .extend(scope.retiring.iter().map(|id| format!("{node}:{id}")));

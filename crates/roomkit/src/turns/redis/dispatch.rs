@@ -11,7 +11,7 @@ impl RedisTurnBackend {
         if *self.0.draining.borrow() {
             return self.refuse_closing(msg);
         }
-        let executor = self.shared_worker(&msg.target);
+        let executor = self.receiving_worker(&msg.target, &msg.sender);
         match (msg.kind.as_str(), executor) {
             ("request", Some(worker)) if !worker.closed() => self.accept_request(msg, worker),
             ("channel", Some(worker)) if !worker.closed() => self.accept_channel(msg, worker),
