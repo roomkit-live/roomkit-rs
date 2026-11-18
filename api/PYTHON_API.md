@@ -63,6 +63,7 @@ the mapping and its tests. The check does not generate or update this document.
 | `roomkit::turns::wire::Frame`, `Control`, `OwnerMessage`, `PublicationFrame` | `turns.wire.Frame`, `Control`, `OwnerMessage`, `RoomPublication.frame` | JSON uses the source union’s discriminator. A publication accepts the two frame types allowed outside a turn. |
 | `roomkit::turns::wire::InputOutcome`, `ToolOutcome` | `turns.wire.InputAnswer.outcome`, `ToolResult.outcome` | Variants serialize to the literals declared on the corresponding Python field. |
 | `roomkit::turns::wire::Item`, `ToolEnd`, `WireLoopEnd`, `WireResult` | `turns._codec` stream items, tool ends, loop ends and results | The item discriminator carries the marker kind. Tool results preserve the choice of a JSON value or typed content parts. |
+| `roomkit::turns::ToolHooks::decide_before_tool_use`, `roomkit::turns::ToolHooks::judge_tool_call`, `roomkit::turns::ToolHooks::observe_failed_tool_call`, `roomkit::turns::ToolHooks::report_tool_call`, `roomkit::turns::ToolHooks::run_tool_call_chain` | `executor.wiring.tools` methods of the same names | Rust accepts explicit `None` for the omitted `carrying` context and `claim` callback. |
 | `roomkit::RedisTurnBackend::new`, `roomkit::turns::RedisTurnBackend::new`, `roomkit::RedisTurnBackendOptions` | `roomkit.RedisTurnBackend(url=None)` | With the `redis` feature, pass `None` for an omitted URL. Both omission and an empty string select `redis://localhost:6379`. Pass the application's `redis::aio::ConnectionManager` as `client` to retain its data connection and timeouts. Supplying a client requires a URL for the independent heartbeat and inbox connections. Clones share the same backend identity. |
 | `roomkit::TurnExecutor::new`, `roomkit::TurnExecutorOptions` | `roomkit.TurnExecutor.__init__` | The factory asynchronously returns an optional channel. The listed hosts, organizations and executor ID are supplied through options. A worker starts serving when its backend's `serve` completes. |
 | `roomkit::turns::TurnFuture` | An awaitable returned by a link or a backend | A boxed future allows a trait object to call asynchronous application code. |
@@ -624,6 +625,14 @@ its active turns and handle human input.
 `TurnExecutor::wiring()` returns a handle to the environment used to wire channels. Supply an `Arc<dyn WiringEnv>` to `use_wiring` to change
 the environment used for subsequent channels. Call `wire(&channel)?` to bind
 a channel before registration.
+
+An application using the AI crate imports `roomkit_ai::TurnWiringExt` to
+obtain the executor's AI event callbacks. The event types live in that crate.
+The calls keep their Python names, for example
+`executor.wiring().build_before_generation_hook(&channel)`. On
+`executor.wiring().tools()`, pass `None` for Python's omitted `carrying`
+or `claim`. A supplied context can reuse room history. A supplied claim
+decides whether to announce an outcome already judged.
 
 The signature snapshot lists methods and properties. The parity check also
 reads turn attributes such as `link.request` and `RedisTurnBackend.node_id`,

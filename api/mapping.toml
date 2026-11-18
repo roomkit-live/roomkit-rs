@@ -1781,3 +1781,33 @@ rust = "roomkit::turns::SyncPipelineResult"
 python = "roomkit.core.hooks.SyncPipelineResult"
 py_spec = "sha256:29e4cf87a7a5fe640cc52e5af706a6ad8dd761a18e3a365153e1002361d8ddca"
 reason = "The synchronous result returned by the text callbacks carries the fields and defaults of the pinned Python dataclass."
+
+[[exception]]
+rust = "roomkit::turns::ToolHooks::decide_before_tool_use"
+params = ["carrying"]
+approved = "2026-11-18"
+reason = "None requests a fresh room context. The tool_methods integration tests cover explicit None and supplied values."
+
+[[exception]]
+rust = "roomkit::turns::ToolHooks::judge_tool_call"
+params = ["carrying", "claim"]
+approved = "2026-11-18"
+reason = "None requests a fresh room context and None reports the outcome without asking a claim callback. The tool_methods integration tests cover explicit None and supplied values."
+
+[[exception]]
+rust = "roomkit::turns::ToolHooks::observe_failed_tool_call"
+params = ["claim"]
+approved = "2026-11-18"
+reason = "None reports the outcome without asking a claim callback. The tool_methods integration tests cover explicit None and supplied values."
+
+[[exception]]
+rust = "roomkit::turns::ToolHooks::report_tool_call"
+params = ["claim"]
+approved = "2026-11-18"
+reason = "None reports the outcome without asking a claim callback. The tool_methods integration tests cover explicit None and supplied values."
+
+[[exception]]
+rust = "roomkit::turns::ToolHooks::run_tool_call_chain"
+params = ["carrying"]
+approved = "2026-11-18"
+reason = "None requests a fresh room context. The tool_methods integration tests cover explicit None and supplied values."
