@@ -141,6 +141,10 @@ Call `backend.serve(executor.clone()).await?` before accepting work. The owner
 stores the resulting conversation events. Either process can run the Python
 SDK or the Rust SDK.
 
+To try organization-based placement locally, run
+`cargo run --example turns_executor_organizations`. Two workers serve three
+rooms. The room in an unserved organization sees the agent offline.
+
 The [two-process example used by the interoperability tests](crates/roomkit/tests/redis_interop/main.rs)
 contains both roles. To run the checks against a dedicated Redis, set
 `REDIS_URL` and set `ROOMKIT_PYTHON` to the interpreter of a reference RoomKit
