@@ -459,12 +459,17 @@ impl NamedRoom {
 
     /// The room created is read: its hooks are awaited on that context, then
     /// `room_created` is emitted, before the channel is attached (RFC §10.1
-    /// step 2, gap G-050). A read that fails, or finds the room gone, hands
-    /// them the room as it was written.
+    /// step 2, gap G-050). A room gone already runs no hook, its creation
+    /// announced all the same, as Python's lifecycle hook skips a room it
+    /// cannot read; a read that fails hands them the room as it was written.
     fn on_loaded(&mut self, cx: &mut Cx<'_>, room: Room, outcome: Outcome) -> Progress<Named> {
         let context = match outcome.into_context() {
             Ok(Some(context)) => context,
-            Ok(None) | Err(_) => Box::new(RoomContext::new(room)),
+            Ok(None) => {
+                report::announce(cx, Reported::RoomCreated, &self.room_id);
+                return self.attach_sender(cx);
+            }
+            Err(_) => Box::new(RoomContext::new(room)),
         };
         match report::report_awaited(cx, Reported::RoomCreated, &context) {
             Some(effect) => {

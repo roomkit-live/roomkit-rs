@@ -4,18 +4,19 @@
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
 use std::future::{Future, ready};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelId, ChannelOutput, ChannelType, InboundMessage,
-    RoomContext, RoomEvent, RoomId, RoomStatus, RoomTimers, Timestamp,
+    RoomContext, RoomEvent, RoomId, RoomStatus, RoomTimers, TextContent, Timestamp,
 };
 use roomkit::orchestration::{StrategyAgent, StrategyFuture};
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     ArchiveRoomOptions, Channel, ChannelError, CheckRoomTimersOptions, CloseRoomOptions,
-    CreateRoomOptions, ListBindingsOptions, Orchestration, ReopenRoomOptions, RoomKit,
-    RoomKitOptions, RoomStrategyOptions, SetRoomTimersOptions, UninstallStrategyOptions,
-    default_inbound_event,
+    CreateRoomOptions, HookOptions, ListBindingsOptions, Orchestration, ProcessInboundOptions,
+    ReopenRoomOptions, RoomKit, RoomKitOptions, RoomStrategyOptions, SetRoomTimersOptions,
+    UninstallStrategyOptions, default_inbound_event,
 };
 
 /// An intelligence channel that answers nothing.
@@ -865,12 +866,6 @@ async fn a_strategy_installed_right_after_a_close_stays() {
     assert!(held.is_some_and(|held| Arc::ptr_eq(&held, &second)));
     kit.close().await.unwrap();
 }
-
-use std::sync::Mutex;
-
-use roomkit::model::TextContent;
-use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
-use roomkit::{HookOptions, ProcessInboundOptions};
 
 /// A kit whose default strategy is `strategy`, with an SMS transport.
 fn kit_taking(strategy: Arc<dyn Orchestration>) -> (RoomKit, RecordingTransport) {

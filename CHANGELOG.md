@@ -14,7 +14,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A first post made from the room's work past its cascade's reentry budget (from a delivery, a turn or an ASYNC hook's body, under the room lock, or in an off-lock hook's body) is stored `BLOCKED` with `reentry_loop_cap` and binds nothing: its pass is drawn before the host channel's attach, as in Python (RFC §10.5). A replay of its key binds nothing either.
 - A post into a closed room the host channel was detached from raises `ChannelNotFound`, the revocation read before the room's status, as in Python.
 - A post into a closed room that never bound the host channel emits `room_refused_event`, as the refusal of a later post does (RFC §5.1, §10.5).
-- A room a first message opens takes the kit's default strategy before its `ON_ROOM_CREATED` hooks, whose context holds the agents it attached; a set-up that fails fails the message, as in Python (RFC §9.2, §10.1 step 2, §19.7).
+- A room a first message opens takes the kit's default strategy before its `ON_ROOM_CREATED` hooks, whose context holds the agents it attached, as in Python (RFC §9.2, §10.1 step 2, §19.7). A set-up that fails fails the message, with a store error where Python raises the set-up's own (RMK-1811).
 
 ## [0.2.0] — 2026-11-18
 
