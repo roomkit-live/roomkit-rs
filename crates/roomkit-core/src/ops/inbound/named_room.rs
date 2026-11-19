@@ -5,8 +5,11 @@
 //! The room is read for the organization the caller acts for: a room of
 //! another organization fails the message with nothing written (gap G-051),
 //! whoever named it, the caller or a router. A missing room is created with
-//! the id, in the caller's organization: the `ON_ROOM_CREATED` hooks run,
-//! awaited (gap G-050), then `room_created` is emitted; the channel is then
+//! the id, in the caller's organization, which the driver sets up as the
+//! kit sets up any room it creates, its strategy installed, within the
+//! creation (RFC §19.7); the room is read again, and the `ON_ROOM_CREATED`
+//! hooks run on what the creation made, awaited (RFC §9.2, gap G-050),
+//! then `room_created` is emitted; the channel is then
 //! attached with a binding naming the message's address, the sender's or on
 //! a chat channel the chat (RFC §5.7, gap G-057), as its correspondent and,
 //! on a transport, as its recipient; for a channel other than `VOICE` and
@@ -63,6 +66,10 @@ use crate::rules::addresses::SYSTEM_SENDER;
 use crate::rules::chain_depth::Draw;
 use crate::rules::routing::{self, Recording, Sender};
 use crate::rules::{attachment, organizations};
+
+/// The error type a store's refusal of a room whose id is taken is recorded
+/// under (Python's `RoomAlreadyExistsError`).
+const ID_TAKEN: &str = "RoomAlreadyExists";
 
 /// Who named the room step 2 works on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -136,6 +143,11 @@ enum State {
     Rereading {
         effect: EffectId,
         error: ErrorRecord,
+    },
+    /// The room is created: it is read with what its creation made.
+    Loading {
+        effect: EffectId,
+        room: Box<Room>,
     },
     /// The `ON_ROOM_CREATED` hooks run.
     Observing(EffectId),
@@ -236,6 +248,9 @@ impl NamedRoom {
             | State::Rereading {
                 effect: awaited, ..
             }
+            | State::Loading {
+                effect: awaited, ..
+            }
             | State::Starting {
                 effect: awaited, ..
             } => *awaited == effect,
@@ -291,6 +306,10 @@ impl NamedRoom {
                 effect: expected,
                 error,
             } if expected == effect => self.on_reread(cx, error, outcome),
+            State::Loading {
+                effect: expected,
+                room,
+            } if expected == effect => self.on_loaded(cx, *room, outcome),
             State::Observing(expected) if expected == effect => self.on_observed(cx, outcome),
             State::Changing {
                 mut section,
@@ -320,6 +339,7 @@ impl NamedRoom {
             | State::Reading(_)
             | State::Creating { .. }
             | State::Rereading { .. }
+            | State::Loading { .. }
             | State::Observing(_)
             | State::Changing { .. }
             | State::Starting { .. }
@@ -409,15 +429,16 @@ impl NamedRoom {
         Progress::Waiting
     }
 
-    /// The room is created: its hooks are awaited, then `room_created` is
-    /// emitted, before the channel is attached (RFC §10.1 step 2, gap
-    /// G-050). A failed creation
-    /// reads the room again, in case another call created it meanwhile; a
-    /// fresh room's is never read again, since a room holding its id is
-    /// someone else's.
+    /// The room is created: it is read with what its creation made, the
+    /// agents its strategy attached among them, for its hooks' context (RFC
+    /// §9.2). A creation refused for an id another call took meanwhile
+    /// reads the room again; a fresh room's is never read again, since a
+    /// room holding its id is someone else's. Any other failure, the
+    /// store's or the set-up's, fails the message, as Python's step 2
+    /// takes only `RoomAlreadyExistsError` for a room created meanwhile.
     fn on_created(&mut self, cx: &mut Cx<'_>, room: Room, outcome: Outcome) -> Progress<Named> {
         if let Err(error) = outcome.into_stored() {
-            if self.mode == Mode::Fresh {
+            if self.mode == Mode::Fresh || error.error_type != ID_TAKEN {
                 return Progress::Done(Named::Failed(InboundError::Store(error)));
             }
             let effect = self.read(cx);
@@ -425,7 +446,26 @@ impl NamedRoom {
             return Progress::Waiting;
         }
         self.created = true;
-        let context = Box::new(RoomContext::new(room));
+        let effect = cx.io.issue(StoreRequest::LoadContext {
+            room_id: self.room_id.clone(),
+            recent_events: cx.config.recent_events(),
+        });
+        self.state = State::Loading {
+            effect,
+            room: Box::new(room),
+        };
+        Progress::Waiting
+    }
+
+    /// The room created is read: its hooks are awaited on that context, then
+    /// `room_created` is emitted, before the channel is attached (RFC §10.1
+    /// step 2, gap G-050). A read that fails, or finds the room gone, hands
+    /// them the room as it was written.
+    fn on_loaded(&mut self, cx: &mut Cx<'_>, room: Room, outcome: Outcome) -> Progress<Named> {
+        let context = match outcome.into_context() {
+            Ok(Some(context)) => context,
+            Ok(None) | Err(_) => Box::new(RoomContext::new(room)),
+        };
         match report::report_awaited(cx, Reported::RoomCreated, &context) {
             Some(effect) => {
                 self.state = State::Observing(effect);

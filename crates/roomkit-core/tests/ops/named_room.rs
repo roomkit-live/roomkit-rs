@@ -64,6 +64,7 @@ mod a_missing_room {
             [
                 "load_context room_1",
                 "store room room_1 Active",
+                "load_context room_1",
                 "await on_room_created welcome",
                 "emit room_created",
                 "lock room_1",
@@ -317,6 +318,9 @@ mod a_missing_room {
         );
     }
 
+    /// Only a taken id reads the room again (Python's step 2 takes only
+    /// `RoomAlreadyExistsError` for a room created meanwhile): a store that
+    /// fails, or a set-up of the room that fails, fails the message.
     #[test]
     fn whose_creation_fails_fails_the_message_with_nothing_attached() {
         let mut sim = no_room_yet();
@@ -329,13 +333,9 @@ mod a_missing_room {
                     "StoreUnavailable",
                     "the store is down"
                 ))),
-                [
-                    "load_context room_1",
-                    "store room room_1 failed",
-                    "load_context room_1",
-                ]
-                .map(str::to_owned)
-                .to_vec()
+                ["load_context room_1", "store room room_1 failed"]
+                    .map(str::to_owned)
+                    .to_vec()
             )
         );
     }

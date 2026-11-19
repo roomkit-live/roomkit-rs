@@ -2311,6 +2311,7 @@ mod a_call_no_operation_adopts {
                     "hook relay calls process_inbound room_2 \"Relayed\"",
                     "load_context room_2",
                     "store room room_2 Active",
+                    "load_context room_2",
                     "lock room_2",
                     "load_context room_2",
                     "store binding sms",

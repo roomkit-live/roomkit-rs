@@ -865,3 +865,161 @@ async fn a_strategy_installed_right_after_a_close_stays() {
     assert!(held.is_some_and(|held| Arc::ptr_eq(&held, &second)));
     kit.close().await.unwrap();
 }
+
+use std::sync::Mutex;
+
+use roomkit::model::TextContent;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
+use roomkit::{HookOptions, ProcessInboundOptions};
+
+/// A kit whose default strategy is `strategy`, with an SMS transport.
+fn kit_taking(strategy: Arc<dyn Orchestration>) -> (RoomKit, RecordingTransport) {
+    let kit = RoomKit::new(RoomKitOptions {
+        orchestration: Some(strategy),
+        ..RoomKitOptions::default()
+    });
+    let sms = RecordingTransport::new(
+        ChannelId::new("sms").unwrap(),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(sms.clone()).unwrap();
+    (kit, sms)
+}
+
+/// A first message from `sms`, into the room `named` names or, naming
+/// none, the room a router finds.
+async fn first_message(
+    kit: &RoomKit,
+    sms: &RecordingTransport,
+    named: Option<&str>,
+) -> Result<roomkit::InboundResult, RoomKitError> {
+    let message = InboundMessage::new(
+        sms.channel_id().clone(),
+        "+15551234567",
+        TextContent::new("hi"),
+    );
+    let options = ProcessInboundOptions {
+        room_id: named.map(|room| RoomId::new(room).unwrap()),
+        ..ProcessInboundOptions::default()
+    };
+    kit.process_inbound(message, options).await
+}
+
+// Python: core/mixins/inbound.py `_open_room`, which creates the room a first
+// message opens through `create_room`: the kit's strategy is installed
+// before the room's ON_ROOM_CREATED hooks, whose context holds the agents it
+// attached; the message's channel is attached after them (RFC §9.2, §10.1
+// step 2, §19.7). The shared scenario orchestration/a-room-a-first-message-
+// opens-is-announced-with-its-strategy-s-agents-and-not-the-sender-s-channel
+// reads the room's bindings while the hook runs, not the hook's context.
+#[tokio::test]
+async fn a_room_a_first_message_opens_hands_its_hooks_the_strategy_s_agents() {
+    for named in [Some("room_1"), None] {
+        let (kit, sms) = kit_taking(Arc::new(Team(vec![Quiet("agent")])));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seeing = Arc::clone(&seen);
+        kit.hook(
+            roomkit::HookTrigger::OnRoomCreated,
+            move |_: RoomEvent, context: RoomContext| {
+                let bound: Vec<String> = context
+                    .bindings
+                    .iter()
+                    .map(|binding| binding.channel_id.as_str().to_owned())
+                    .collect();
+                seeing.lock().unwrap().push(bound);
+                ready(())
+            },
+            HookOptions {
+                execution: roomkit::HookExecution::Async,
+                name: "announced".to_owned(),
+                ..HookOptions::default()
+            },
+        )
+        .unwrap();
+
+        let sent = first_message(&kit, &sms, named).await.unwrap();
+        let room = sent.event.unwrap().room_id;
+
+        let announced = seen.lock().unwrap().clone();
+        assert_eq!(
+            (announced, bound(&kit, room.as_str()).await),
+            (
+                vec![vec!["agent".to_owned()]],
+                vec!["agent".to_owned(), "sms".to_owned()]
+            ),
+            "named: {named:?}"
+        );
+        kit.close().await.unwrap();
+    }
+}
+
+/// A strategy whose install refuses every room.
+struct Refuses;
+
+impl Orchestration for Refuses {
+    fn agents(&self) -> Vec<StrategyAgent> {
+        Vec::new()
+    }
+
+    fn install<'call>(
+        &'call self,
+        _kit: &'call RoomKit,
+        _room_id: &'call RoomId,
+    ) -> StrategyFuture<'call> {
+        Box::pin(async { Err(RoomKitError::Value("refused".to_owned())) })
+    }
+}
+
+// Python: core/mixins/inbound.py `_open_room`: `create_room` raises what the
+// install raised, so the message fails with it: no hook announces the room,
+// the message's channel is not attached and nothing is stored in it.
+#[tokio::test]
+async fn a_first_message_whose_room_s_set_up_fails_fails() {
+    use roomkit::ConversationStore as _;
+
+    for named in [Some("room_1"), None] {
+        let (kit, sms) = kit_taking(Arc::new(Refuses));
+        let announced = Arc::new(Mutex::new(0_usize));
+        let announcing = Arc::clone(&announced);
+        kit.hook(
+            roomkit::HookTrigger::OnRoomCreated,
+            move |_: RoomEvent, _: RoomContext| {
+                *announcing.lock().unwrap() += 1;
+                ready(())
+            },
+            HookOptions {
+                execution: roomkit::HookExecution::Async,
+                name: "announced".to_owned(),
+                ..HookOptions::default()
+            },
+        )
+        .unwrap();
+
+        let sent = first_message(&kit, &sms, named).await;
+
+        let rooms = kit
+            .store()
+            .list_rooms(roomkit::store::ListRoomsOptions::default())
+            .await
+            .unwrap();
+        let mut stored = Vec::new();
+        for room in &rooms {
+            stored.push((
+                bound(&kit, room.id.as_str()).await,
+                kit.store()
+                    .list_events(&room.id, roomkit::store::ListEventsOptions::default())
+                    .await
+                    .unwrap()
+                    .len(),
+            ));
+        }
+        assert!(sent.is_err(), "named: {named:?}: {sent:?}");
+        assert_eq!(
+            (*announced.lock().unwrap(), stored),
+            (0, vec![(Vec::<String>::new(), 0)]),
+            "named: {named:?}"
+        );
+        kit.close().await.unwrap();
+    }
+}
