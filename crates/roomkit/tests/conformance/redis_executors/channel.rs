@@ -8,7 +8,7 @@ use roomkit::model::{
     InboundMessage, Metadata, RoomContext, RoomEvent, RoomId, SteeringDirective,
 };
 use roomkit::{Channel, ChannelDeclaration, ChannelError};
-use roomkit_ai::AiChannel;
+use roomkit_ai::{Agent, AiChannel};
 use serde_json::{Value, json};
 
 use crate::agents::{self, Paced, Scripted};
@@ -17,6 +17,7 @@ use crate::scripted::ScriptedChannel;
 
 enum Built {
     Model(Box<AiChannel<Paced>>),
+    Agent(Box<Agent<Paced>>),
     Script(Box<ScriptedChannel>),
 }
 
@@ -28,11 +29,15 @@ impl Built {
                 .map(Self::Script);
         }
         let (agent, models) = agents::scripted_agent_of(spec, run, true)?;
-        let Scripted::Channel(agent) = agent else {
-            return Err("this executor scenario requires an unsupported scripted agent".into());
+        let built = match agent {
+            Scripted::Channel(channel) => Self::Model(channel),
+            Scripted::Agent(agent) => Self::Agent(agent),
+            Scripted::RoutedChannel(_) | Scripted::RoutedAgent(_) => {
+                return Err("this executor scenario requires an unsupported scripted agent".into());
+            }
         };
         lock(&run.models).extend(models);
-        Ok(Self::Model(agent))
+        Ok(built)
     }
 }
 
@@ -50,6 +55,7 @@ macro_rules! forward {
     ($this:expr, $method:ident($($arg:expr),*) $(.$wait:ident)?) => {
         match &$this.inner {
             Built::Model(channel) => Channel::$method(&**channel $(,$arg)*)$(.$wait)?,
+            Built::Agent(channel) => Channel::$method(&**channel $(,$arg)*)$(.$wait)?,
             Built::Script(channel) => Channel::$method(&**channel $(,$arg)*)$(.$wait)?,
         }
     };
