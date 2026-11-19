@@ -205,8 +205,9 @@ enum Advanced {
     Waiting,
     /// The message arrived, with what step 5 decided of its sender.
     Arrived(Box<RoomEvent>, Identified),
-    /// A post's room took it: it is injected.
-    Posted,
+    /// A post's room took it, binding its host channel or not yet: it is
+    /// injected.
+    Posted(Posted),
     /// A direct injection's room and key were read: the room took it, as
     /// a replay or not.
     WorkRead(Read),
@@ -407,8 +408,7 @@ impl AdoptedRun {
             },
             RunState::Posting(post) => match post.accept(cx, effect, outcome) {
                 Progress::Waiting => Advanced::Waiting,
-                // An adopted post attaches its host channel at once.
-                Progress::Done(Ok(Posted::Bound | Posted::Unbound)) => Advanced::Posted,
+                Progress::Done(Ok(posted)) => Advanced::Posted(posted),
                 Progress::Done(Err(Stopped::Failed(error))) => {
                     Advanced::Stopped(Box::new(Err(error)))
                 }
@@ -742,8 +742,10 @@ impl Machine {
             Err(error) => return self.settle_entry(cx, &adopted, Err(error)),
         };
         let call = DirectCall::for_caller(organization_id);
+        // An adopted post is the room's own work: a first one draws its
+        // pass before its attach (RFC §10.5, §9.5.1).
         let post = within(cx, &adopted, |cx| {
-            HostPost::start(cx, event, call, binding, adopted.bound)
+            HostPost::start(cx, event, call, binding, adopted.bound).drawing_first()
         });
         self.adopted.running.push(AdoptedRun {
             entry: adopted,
@@ -751,13 +753,28 @@ impl Machine {
         });
     }
 
-    /// The post's room took it: its key is read, then it goes to its pass.
-    fn on_entry_posted(&mut self, cx: &mut Cx<'_>, adopted: Adopted, run: AdoptedRun) {
+    /// The post's room took it: its key is read, then it goes to its pass;
+    /// a first post attaches its host channel once that pass is drawn, then
+    /// goes to it (RFC §10.5).
+    fn on_entry_posted(
+        &mut self,
+        cx: &mut Cx<'_>,
+        adopted: Adopted,
+        run: AdoptedRun,
+        posted: Posted,
+    ) {
         let RunState::Posting(post) = run.state else {
             debug_assert!(false, "a post answered an entry that posts nothing");
             return;
         };
-        let (event, call) = post.into_parts();
+        if post.drawn() {
+            let (event, call) = post.into_parts();
+            return self.start_pass(cx, adopted, event, Some(call), None);
+        }
+        let (event, call) = match posted {
+            Posted::Bound => post.into_parts(),
+            Posted::Unbound => post.into_unbound(),
+        };
         self.read_key(cx, adopted, event, call);
     }
 
@@ -840,30 +857,60 @@ impl Machine {
         participation: Option<Participation>,
     ) {
         let charged = direct.is_none();
-        let state = if charged || self.cascade.budget.take_pass() {
-            if !charged {
-                let entry = Some(adopted.id);
-                cx.io.notify(Notice::Span(SpanNote::Injecting { entry }));
-            }
-            let pass = CommitPass::new(PassOrigin::Adopted(adopted.id), event)
-                .bounded(adopted.bound)
-                .checking(direct)
-                .participating(participation);
-            let mut pass = Box::new(pass);
-            within(cx, &adopted, |cx| pass.start(cx));
-            RunState::Passing(pass)
-        } else {
+        if !charged && !self.cascade.budget.take_pass() {
             event.blocked_by = Some(chain_depth::REENTRY_LOOP_CAP.to_owned());
             let record = RecordPass::refusing(event, RefusedOperation::Inbound)
                 .checking(direct)
                 .waiting_within(adopted.bound);
             let mut record = Box::new(record);
             within(cx, &adopted, |cx| record.start(cx));
-            RunState::Recording(record)
-        };
+            self.adopted.running.push(AdoptedRun {
+                entry: adopted,
+                state: RunState::Recording(record),
+            });
+            return;
+        }
+        if let Some(mut call) = direct {
+            if let Some(binding) = call.take_pending_host() {
+                // Its pass drawn, a first post attaches its host channel,
+                // then goes to that pass (RFC §10.5).
+                let post = within(cx, &adopted, |cx| {
+                    HostPost::attaching(cx, event, call, binding, adopted.bound)
+                });
+                self.adopted.running.push(AdoptedRun {
+                    entry: adopted,
+                    state: RunState::Posting(Box::new(post)),
+                });
+                return;
+            }
+            return self.start_pass(cx, adopted, event, Some(call), participation);
+        }
+        self.start_pass(cx, adopted, event, None, participation);
+    }
+
+    /// The entry's event goes through its pass, its budget drawn already;
+    /// an injection's pass is announced as one.
+    fn start_pass(
+        &mut self,
+        cx: &mut Cx<'_>,
+        adopted: Adopted,
+        event: RoomEvent,
+        direct: Option<DirectCall>,
+        participation: Option<Participation>,
+    ) {
+        if direct.is_some() {
+            let entry = Some(adopted.id);
+            cx.io.notify(Notice::Span(SpanNote::Injecting { entry }));
+        }
+        let pass = CommitPass::new(PassOrigin::Adopted(adopted.id), event)
+            .bounded(adopted.bound)
+            .checking(direct)
+            .participating(participation);
+        let mut pass = Box::new(pass);
+        within(cx, &adopted, |cx| pass.start(cx));
         self.adopted.running.push(AdoptedRun {
             entry: adopted,
-            state,
+            state: RunState::Passing(pass),
         });
     }
 
@@ -896,7 +943,7 @@ impl Machine {
             Advanced::Arrived(event, Identified::Held(held)) => {
                 self.hold_entry(cx, &adopted, held, &event);
             }
-            Advanced::Posted => self.on_entry_posted(cx, adopted, run),
+            Advanced::Posted(posted) => self.on_entry_posted(cx, adopted, run, posted),
             Advanced::WorkRead(read) => self.on_entry_key(cx, adopted, run, read),
             Advanced::Stopped(stopped) => self.settle_entry(cx, &adopted, *stopped),
             Advanced::Cut(cut) => self.settle_cut(cx, adopted, *cut, None),

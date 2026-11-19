@@ -125,7 +125,7 @@ use super::protocol::{
     Decided, EffectId, Entry, EntryId, Notice, Operation, Outcome, ProtocolError, Step,
 };
 use super::{Cx, Environment, KitConfig};
-use crate::model::{ChannelBinding, ChannelId, DirectEvent, EventId, InboundMessage, Post, RoomId};
+use crate::model::{ChannelId, DirectEvent, EventId, InboundMessage, Post, RoomId};
 use crate::ops::io::Bound;
 pub use crate::ops::protocol::{InboundError, InboundResult};
 use crate::rules::chain_depth::{Draw, ReentryBudget};
@@ -721,9 +721,6 @@ struct CallFacts {
     under_lock: Option<RoomId>,
     /// Who receives the failure of the call's own stream.
     failures: FailureReader,
-    /// A first post's host channel binding, made from the room's work,
-    /// attached once the post's pass is drawn (RFC §10.5).
-    host_binding: Option<Box<ChannelBinding>>,
 }
 
 impl CallFacts {
@@ -739,7 +736,6 @@ impl CallFacts {
             participation: None,
             under_lock: None,
             failures,
-            host_binding: None,
         }
     }
 }

@@ -277,10 +277,11 @@ impl HostPost {
         (self.event, self.call)
     }
 
-    /// The post's event, what it is checked for, and the host channel's
-    /// binding its attach waits to make, once its pass is drawn.
-    pub(super) fn into_unbound(self) -> (RoomEvent, DirectCall, ChannelBinding) {
-        (self.event, self.call, *self.binding)
+    /// The post's event and what it is checked for, the host channel's
+    /// binding its attach waits to make once its pass is drawn.
+    pub(super) fn into_unbound(self) -> (RoomEvent, DirectCall) {
+        let call = self.call.attaching_after_its_pass(*self.binding);
+        (self.event, call)
     }
 
     /// The room is read: a room the caller does not find fails the post, so
@@ -304,15 +305,18 @@ impl HostPost {
         if context.get_binding(&self.event.source.channel_id).is_some() {
             return Progress::Done(Ok(Posted::Bound));
         }
+        // A room the host channel was detached from refuses the post before
+        // any section, its status unread, as Python's post reads it first
+        // (RFC §7.5 rule 7, §10.5); the section decides again.
+        if attachment::revoked(&context.room, &self.event.source.channel_id) {
+            return failed(InboundError::Refused {
+                reason: WriteRefusal::Unbound.blocked_by().to_owned(),
+            });
+        }
         if self.draws_first {
             // Made from the room's work, the post draws its pass before the
             // attach, after the room's scoped read and the check of a
-            // revocation (RFC §10.5): the section decides again once drawn.
-            if attachment::revoked(&context.room, &self.event.source.channel_id) {
-                return failed(InboundError::Refused {
-                    reason: WriteRefusal::Unbound.blocked_by().to_owned(),
-                });
-            }
+            // revocation (RFC §10.5).
             return Progress::Done(Ok(Posted::Unbound));
         }
         self.attach(cx);

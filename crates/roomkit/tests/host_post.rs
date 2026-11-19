@@ -711,6 +711,7 @@ async fn the_host_s_words_are_a_person_s_message_to_the_room_s_routing() {
 enum Setup {
     Nothing,
     DetachAfterAPost,
+    DetachAfterAPostThenClose,
     Close,
     CloseAfterAPost,
     TakeTheHostId,
@@ -736,16 +737,24 @@ async fn set_up(kit: &RoomKit, setup: Setup) {
         };
         kit.close_room(&room_id(), options).await.unwrap();
     };
+    let detach = || async {
+        let options = DetachChannelOptions {
+            organization_id: acme(),
+        };
+        kit.detach_channel(&room_id(), &channel("host"), options)
+            .await
+            .unwrap();
+    };
     match setup {
         Setup::Nothing => {}
         Setup::DetachAfterAPost => {
             notice().await;
-            let options = DetachChannelOptions {
-                organization_id: acme(),
-            };
-            kit.detach_channel(&room_id(), &channel("host"), options)
-                .await
-                .unwrap();
+            detach().await;
+        }
+        Setup::DetachAfterAPostThenClose => {
+            notice().await;
+            detach().await;
+            close().await;
         }
         Setup::Close => close().await,
         Setup::CloseAfterAPost => {
@@ -825,6 +834,14 @@ fn refusals() -> Vec<(&'static str, Setup, Arguments, RoomKitError)> {
         (
             "a detached host channel",
             Setup::DetachAfterAPost,
+            |_| {},
+            unbound(),
+        ),
+        // The revocation is read before the room's status, as Python's
+        // post reads it first.
+        (
+            "a detached host channel in a closed room",
+            Setup::DetachAfterAPostThenClose,
             |_| {},
             unbound(),
         ),

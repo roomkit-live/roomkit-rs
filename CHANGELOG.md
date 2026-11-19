@@ -11,7 +11,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A file outside a channel's `supported_media_types`, or over its
   `max_media_size_bytes`, reaches it as its text form, alone, in a composite
   or as a native edit's new content, as in Python (RFC §5.8).
-- A first post made from the room's work past its cascade's reentry budget is stored `BLOCKED` with `reentry_loop_cap` and binds nothing: its pass is drawn before the host channel's attach, as in Python (RFC §10.5).
+- A first post made from the room's work past its cascade's reentry budget (from a delivery, a turn or an ASYNC hook's body, under the room lock, or in an off-lock hook's body) is stored `BLOCKED` with `reentry_loop_cap` and binds nothing: its pass is drawn before the host channel's attach, as in Python (RFC §10.5). A replay of its key binds nothing either.
+- A post into a closed room the host channel was detached from raises `ChannelNotFound`, the revocation read before the room's status, as in Python.
 - A post into a closed room that never bound the host channel emits `room_refused_event`, as the refusal of a later post does (RFC §5.1, §10.5).
 
 ## [0.2.0] — 2026-11-18

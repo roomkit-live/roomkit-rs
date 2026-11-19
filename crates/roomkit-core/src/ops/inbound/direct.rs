@@ -40,16 +40,16 @@ use crate::rules::{host, idempotency, organizations};
 
 /// What a direct injection is checked for on the room, before its hooks
 /// (RFC §10.5, §17.2, gap G-069).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(super) struct DirectCall {
     /// The organization its caller acts for; `None` reads the room
     /// unscoped.
     pub(super) organization_id: Option<String>,
-    /// A first post made from the room's work, which attaches its host
-    /// channel only once its pass is drawn (RFC §10.5): until then no
+    /// The host channel's binding that a first post made from the room's
+    /// work attaches once its pass is drawn (RFC §10.5): until then no
     /// binding holds its channel, and its record past the budget is stored
-    /// all the same.
-    pub(super) unbound_until_its_pass: bool,
+    /// all the same, binding nothing.
+    pending_host: Option<Box<ChannelBinding>>,
 }
 
 impl DirectCall {
@@ -58,8 +58,21 @@ impl DirectCall {
     pub(super) fn for_caller(organization_id: Option<String>) -> Self {
         Self {
             organization_id,
-            unbound_until_its_pass: false,
+            pending_host: None,
         }
+    }
+
+    /// The same call for a first post made from the room's work, whose
+    /// attach of `binding` waits for its pass.
+    pub(super) fn attaching_after_its_pass(mut self, binding: ChannelBinding) -> Self {
+        self.pending_host = Some(Box::new(binding));
+        self
+    }
+
+    /// The host channel's binding a first post attaches now that its pass
+    /// is drawn, if the call is one.
+    pub(super) fn take_pending_host(&mut self) -> Option<ChannelBinding> {
+        self.pending_host.take().map(|binding| *binding)
     }
 
     /// Why the room as `context` holds it refuses `event`, if it does: it
@@ -85,7 +98,7 @@ impl DirectCall {
     /// first post's, attached once its pass is drawn.
     pub(super) fn unbound(&self, event: &RoomEvent, context: &RoomContext) -> Option<InboundError> {
         let bound =
-            self.unbound_until_its_pass || context.get_binding(&event.source.channel_id).is_some();
+            self.pending_host.is_some() || context.get_binding(&event.source.channel_id).is_some();
         (!bound).then(|| InboundError::Refused {
             reason: WriteRefusal::Unbound.blocked_by().to_owned(),
         })
@@ -308,9 +321,7 @@ impl Machine {
                 }
             }
             Progress::Done(Ok(Posted::Unbound)) => {
-                let (event, mut call, binding) = post.into_unbound();
-                call.unbound_until_its_pass = true;
-                self.call.host_binding = Some(Box::new(binding));
+                let (event, call) = post.into_unbound();
                 self.inject_admitted(cx, event, call);
             }
             Progress::Done(Err(stopped)) => self.stop(cx, stopped),
@@ -389,12 +400,10 @@ impl Machine {
         context: Box<RoomContext>,
     ) {
         if self.cascade.drawn_on().is_some_and(|budget| !budget.take()) {
-            self.call.host_binding = None;
             return self.start_capped_trigger(event, call);
         }
-        if let Some(binding) = self.call.host_binding.take() {
-            call.unbound_until_its_pass = false;
-            let post = HostPost::attaching(cx, event, call, *binding, self.call.bound);
+        if let Some(binding) = call.take_pending_host() {
+            let post = HostPost::attaching(cx, event, call, binding, self.call.bound);
             return self.stage.enter(Stage::Posting(Box::new(post)));
         }
         cx.io
