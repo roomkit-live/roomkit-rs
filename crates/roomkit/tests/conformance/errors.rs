@@ -166,6 +166,12 @@ pub(crate) fn error_of(error: &RoomKitError) -> Option<Value> {
         {
             named("already_set_up")
         }
+        // A verb of the turn's host refused once the turn is over (RFC
+        // §10.6.5), its error naming the verb first.
+        RoomKitError::Runtime(message) if message.contains(" needs a turn: ") => {
+            let verb = message.split(" needs a turn: ").next().unwrap_or_default();
+            json!({ "name": "needs_turn", "reason": verb })
+        }
         RoomKitError::VerificationRefused { reason } => {
             json!({ "name": "verification_refused", "reason": reason })
         }
