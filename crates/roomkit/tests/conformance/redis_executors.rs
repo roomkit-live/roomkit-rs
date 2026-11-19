@@ -101,6 +101,9 @@ struct Workers {
     slot: RunSlot,
     active: Mutex<BTreeMap<String, site::Site>>,
     mortal: BTreeSet<String>,
+    /// Killed, then started again under their id by a later step: the
+    /// restart follows the kill at once, as a supervisor's would.
+    restarted: BTreeSet<String>,
 }
 
 impl Workers {
@@ -227,7 +230,10 @@ impl crate::run::WorkerControl for Workers {
                 "executor.pause" => self.advertise(id, true).await,
                 "executor.resume" => self.advertise(id, false).await,
                 "executor.close" => self.remove(id).await?.close(&self.topology).await,
-                "executor.kill" => self.remove(id).await?.kill(&self.topology).await,
+                "executor.kill" => {
+                    let observe = !self.restarted.contains(id);
+                    self.remove(id).await?.kill(&self.topology, observe).await
+                }
                 other => Err(RoomKitError::Value(format!(
                     "unsupported executor operation: {other}"
                 ))),
@@ -258,6 +264,7 @@ async fn exercise(url: &str, scenario: &Value) -> Result<Vec<String>, RoomKitErr
             .filter(|step| step["call"] == "executor.kill")
             .filter_map(|step| step["executor"].as_str().map(str::to_owned))
             .collect(),
+        restarted: restarted(scenario),
     });
     let owner = workers.topology.owner().clone();
     let backend = roomkit::turns::TurnBackendHandle::new(Arc::new(owner.clone()));
@@ -277,6 +284,24 @@ async fn exercise(url: &str, scenario: &Value) -> Result<Vec<String>, RoomKitErr
     }
     owner.close().await?;
     Ok(problems)
+}
+
+/// The executors a step kills and a later step starts again under the same id.
+fn restarted(scenario: &Value) -> BTreeSet<String> {
+    let steps: Vec<&Value> = scenario["steps"].as_array().into_iter().flatten().collect();
+    steps
+        .iter()
+        .enumerate()
+        .filter(|(_, step)| step["call"] == "executor.kill")
+        .filter_map(|(at, step)| {
+            let id = step["executor"].as_str()?;
+            steps
+                .get(at + 1..)?
+                .iter()
+                .any(|later| later["call"] == "executor.start" && later["executor"] == id)
+                .then(|| id.to_owned())
+        })
+        .collect()
 }
 
 #[test]

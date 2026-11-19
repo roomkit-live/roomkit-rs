@@ -83,7 +83,10 @@ impl Site {
         result
     }
 
-    pub(super) async fn kill(self, topology: &Topology) -> Result<(), RoomKitError> {
+    /// Stops the worker as a killed process stops. With `observe`, waits until
+    /// the registry reads it offline; without, returns at once, for a restart
+    /// under its id that a supervisor makes as soon as the process is gone.
+    pub(super) async fn kill(self, topology: &Topology, observe: bool) -> Result<(), RoomKitError> {
         let id = self.executor.executor_id().to_owned();
         drop(self.executor);
         drop(self.hosting);
@@ -93,6 +96,9 @@ impl Site {
             )));
         };
         runtime.stop().await?;
+        if !observe {
+            return Ok(());
+        }
         // A new turn may follow the kill in the next step. Let the public registry
         // discover this loss as it would after the process disappeared.
         let observe = async {
