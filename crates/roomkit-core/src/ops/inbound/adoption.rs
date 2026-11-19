@@ -65,7 +65,7 @@ use super::cascade::{self, entry_result, replay_result};
 use super::deadline::{self, PROCESS_TIMEOUT, Stopped};
 use super::direct::{self, DirectCall};
 use super::greeting;
-use super::host_post::HostPost;
+use super::host_post::{HostPost, Posted};
 use super::identity::{Held, Identified, Participation};
 use super::pass::{CommitPass, PassOrigin, PassReport, PassResult};
 use super::queues::Lineage;
@@ -407,7 +407,8 @@ impl AdoptedRun {
             },
             RunState::Posting(post) => match post.accept(cx, effect, outcome) {
                 Progress::Waiting => Advanced::Waiting,
-                Progress::Done(Ok(())) => Advanced::Posted,
+                // An adopted post attaches its host channel at once.
+                Progress::Done(Ok(Posted::Bound | Posted::Unbound)) => Advanced::Posted,
                 Progress::Done(Err(Stopped::Failed(error))) => {
                     Advanced::Stopped(Box::new(Err(error)))
                 }
@@ -662,7 +663,7 @@ impl Machine {
                 event,
             } => match direct::admit(cx, room_id, *event) {
                 Ok(direct::Admitted::Event(event)) => {
-                    let call = DirectCall { organization_id };
+                    let call = DirectCall::for_caller(organization_id);
                     self.read_key(cx, adopted, *event, call);
                 }
                 Ok(direct::Admitted::Refused(refused)) => {
@@ -740,7 +741,7 @@ impl Machine {
             }
             Err(error) => return self.settle_entry(cx, &adopted, Err(error)),
         };
-        let call = DirectCall { organization_id };
+        let call = DirectCall::for_caller(organization_id);
         let post = within(cx, &adopted, |cx| {
             HostPost::start(cx, event, call, binding, adopted.bound)
         });

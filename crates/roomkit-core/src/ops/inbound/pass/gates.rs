@@ -7,7 +7,6 @@ use std::collections::VecDeque;
 
 use super::{CommitPass, PassOrigin, PassResult, State};
 use crate::model::{EventType, RoomContext};
-use crate::ops::inbound::direct::DirectCall;
 use crate::ops::inbound::{greeting, identity};
 use crate::ops::lifecycle::gate::{self, Gate};
 use crate::ops::lifecycle::record;
@@ -87,7 +86,7 @@ impl CommitPass {
         let refusal = self
             .direct
             .as_ref()
-            .and_then(|_| DirectCall::unbound(&self.event, &context));
+            .and_then(|direct| direct.unbound(&self.event, &context));
         if let Some(refusal) = refusal {
             return self.release(cx, Err(Abort::Refused(refusal)));
         }

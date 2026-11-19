@@ -345,7 +345,7 @@ impl SectionWork for RecordWork {
         let refusal = self
             .direct
             .as_ref()
-            .and_then(|_| DirectCall::unbound(&self.record, &context));
+            .and_then(|direct| direct.unbound(&self.record, &context));
         if let Some(refusal) = refusal {
             return Progress::Done(Err(Abort::Refused(refusal)));
         }

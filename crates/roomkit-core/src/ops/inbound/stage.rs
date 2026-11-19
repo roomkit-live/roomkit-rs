@@ -6,7 +6,8 @@
 //!   has its room read and its host channel attached first (`Posting`); a
 //!   direct injection from the room's work has its room and its key read
 //!   before it draws on the budget (`ReadingWork`), its off-lock check run
-//!   on the room as read; any other has its room read for its off-lock
+//!   on the room as read, a first post's attach (`Posting`) once its pass
+//!   is drawn; any other has its room read for its off-lock
 //!   check (`Reading`), or its pass queued at once (`Cascade`);
 //! - arrived, the trigger's off-lock check runs (`Checking`, step 5a) when an
 //!   off-lock hook fires for it, then its pass is queued (`Cascade`);
@@ -124,8 +125,11 @@ fn follows(from: StageName, to: StageName) -> bool {
             Posting | ReadingWork | Reading | Cascade | Ending | Done
         ),
         // Read before the budget: the off-lock check on the room as read,
-        // or the pass.
-        ReadingWork => matches!(to, ReadingWork | Checking | Cascade | Ending | Done),
+        // or the pass; a first post's attach once its pass is drawn.
+        ReadingWork => matches!(
+            to,
+            ReadingWork | Posting | Checking | Cascade | Ending | Done
+        ),
         // Arrived: the off-lock check when an off-lock hook fires for the
         // trigger, else its pass. Each stays while it waits for more
         // answers.

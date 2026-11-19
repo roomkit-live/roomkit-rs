@@ -25,7 +25,7 @@
 use super::arrival::Arrived;
 use super::cascade::replay_result;
 use super::deadline::Stopped;
-use super::host_post::HostPost;
+use super::host_post::{HostPost, Posted};
 use super::instructions::{self, Admission};
 use super::work_read::{Read, WorkRead};
 use super::{InboundError, InboundResult, Machine, Stage, stamp};
@@ -45,15 +45,29 @@ pub(super) struct DirectCall {
     /// The organization its caller acts for; `None` reads the room
     /// unscoped.
     pub(super) organization_id: Option<String>,
+    /// A first post made from the room's work, which attaches its host
+    /// channel only once its pass is drawn (RFC §10.5): until then no
+    /// binding holds its channel, and its record past the budget is stored
+    /// all the same.
+    pub(super) unbound_until_its_pass: bool,
 }
 
 impl DirectCall {
+    /// What an injection for a caller acting for `organization_id` is
+    /// checked for.
+    pub(super) fn for_caller(organization_id: Option<String>) -> Self {
+        Self {
+            organization_id,
+            unbound_until_its_pass: false,
+        }
+    }
+
     /// Why the room as `context` holds it refuses `event`, if it does: it
     /// is another organization's than the caller's, or binds no channel the
     /// event names. Nothing is written for either.
     pub(super) fn refusal(&self, event: &RoomEvent, context: &RoomContext) -> Option<InboundError> {
         self.foreign(&context.room)
-            .or_else(|| Self::unbound(event, context))
+            .or_else(|| self.unbound(event, context))
     }
 
     /// Why `room` is not the caller's, if it is not: another organization's,
@@ -67,9 +81,11 @@ impl DirectCall {
     }
 
     /// Why the room as `context` holds it refuses `event` as the caller's
-    /// room: it binds no channel the event names.
-    pub(super) fn unbound(event: &RoomEvent, context: &RoomContext) -> Option<InboundError> {
-        let bound = context.get_binding(&event.source.channel_id).is_some();
+    /// room: it binds no channel the event names, unless that channel is a
+    /// first post's, attached once its pass is drawn.
+    pub(super) fn unbound(&self, event: &RoomEvent, context: &RoomContext) -> Option<InboundError> {
+        let bound =
+            self.unbound_until_its_pass || context.get_binding(&event.source.channel_id).is_some();
         (!bound).then(|| InboundError::Refused {
             reason: WriteRefusal::Unbound.blocked_by().to_owned(),
         })
@@ -255,7 +271,7 @@ impl Machine {
     ) {
         self.call.channel_id.clone_from(&post.channel_id);
         self.call.room_id = Some(room_id.clone());
-        let call = DirectCall { organization_id };
+        let call = DirectCall::for_caller(organization_id);
         self.call.direct = Some(call.clone());
         let (event, binding) = match admit_post(cx, room_id, post) {
             Ok((Admitted::Event(event), binding)) => (*event, binding),
@@ -263,12 +279,16 @@ impl Machine {
             Err(error) => return self.end(cx, Err(error)),
         };
         self.call.channel_id = Some(event.source.channel_id.clone());
-        let post = HostPost::start(cx, event, call, binding, self.call.bound);
+        let mut post = HostPost::start(cx, event, call, binding, self.call.bound);
+        if self.cascade.drawn_on().is_some() {
+            post = post.drawing_first();
+        }
         self.stage.enter(Stage::Posting(Box::new(post)));
     }
 
     /// Takes an answer of the post's way: once its room took it, it is
-    /// injected.
+    /// injected; a first post made from the room's work draws its pass
+    /// first, and attaches its host channel only once drawn (RFC §10.5).
     pub(super) fn on_post(
         &mut self,
         cx: &mut Cx<'_>,
@@ -278,8 +298,19 @@ impl Machine {
     ) {
         match post.accept(cx, effect, outcome) {
             Progress::Waiting => self.stage.enter(Stage::Posting(post)),
-            Progress::Done(Ok(())) => {
+            Progress::Done(Ok(Posted::Bound)) => {
+                let drawn = post.drawn();
                 let (event, call) = post.into_parts();
+                if drawn {
+                    self.go_in(cx, event, call);
+                } else {
+                    self.inject_admitted(cx, event, call);
+                }
+            }
+            Progress::Done(Ok(Posted::Unbound)) => {
+                let (event, mut call, binding) = post.into_unbound();
+                call.unbound_until_its_pass = true;
+                self.call.host_binding = Some(Box::new(binding));
                 self.inject_admitted(cx, event, call);
             }
             Progress::Done(Err(stopped)) => self.stop(cx, stopped),
@@ -299,7 +330,7 @@ impl Machine {
     ) {
         self.call.channel_id = Some(event.channel_id.clone());
         self.call.room_id = Some(room_id.clone());
-        let call = DirectCall { organization_id };
+        let call = DirectCall::for_caller(organization_id);
         self.call.direct = Some(call.clone());
         let event = match admit(cx, room_id, event) {
             Ok(Admitted::Event(event)) => *event,
@@ -347,16 +378,24 @@ impl Machine {
     /// An event a delivery's code injects, its room read, is charged on the
     /// cascade that delivers, as an adopted one is: past it, it is stored
     /// capped, and no hook runs for it (gap G-070); within it, its
-    /// off-lock check runs on the room as read, or its pass starts.
+    /// off-lock check runs on the room as read, or its pass starts. A first
+    /// post attaches its host channel once drawn, never past the budget
+    /// (RFC §10.5).
     fn draw_and_go_in(
         &mut self,
         cx: &mut Cx<'_>,
         event: RoomEvent,
-        call: DirectCall,
+        mut call: DirectCall,
         context: Box<RoomContext>,
     ) {
         if self.cascade.drawn_on().is_some_and(|budget| !budget.take()) {
+            self.call.host_binding = None;
             return self.start_capped_trigger(event, call);
+        }
+        if let Some(binding) = self.call.host_binding.take() {
+            call.unbound_until_its_pass = false;
+            let post = HostPost::attaching(cx, event, call, *binding, self.call.bound);
+            return self.stage.enter(Stage::Posting(Box::new(post)));
         }
         cx.io
             .notify(Notice::Span(SpanNote::Injecting { entry: None }));

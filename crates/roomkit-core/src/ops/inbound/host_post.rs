@@ -14,21 +14,25 @@
 //! injection would be refused (`room_closed`, `source_unbound`), nothing
 //! written either way. The read and the wait for the lock are bounded by
 //! the call's deadline (RFC §13.6); once the lock is held, the attach runs
-//! to its end. Then the post is injected as `send_event` injects.
+//! to its end. Then the post is injected as `send_event` injects. A first
+//! post made from the room's work draws its pass before the attach, after
+//! the room's read and the check of a revocation: past the budget it is
+//! stored `BLOCKED` and binds nothing (RFC §10.5).
 
 use std::collections::VecDeque;
 
 use super::InboundError;
 use super::deadline::Stopped;
 use super::direct::DirectCall;
-use crate::model::{ChannelBinding, RoomContext, RoomEvent, RoomId};
+use super::report;
+use crate::model::{ChannelBinding, RoomContext, RoomEvent, RoomId, RoomStatus};
 use crate::ops::RecentEvents;
 use crate::ops::io::Bound;
 use crate::ops::lifecycle::change::{self, Attached, Decision, SectionChange};
 use crate::ops::lifecycle::locked::{LockedSection, SectionError, SectionResult};
 use crate::ops::lifecycle::report::Reported;
 use crate::ops::protocol::{EffectId, Outcome, StoreRequest};
-use crate::ops::{Cx, Progress};
+use crate::ops::{Cx, Progress, RefusedOperation};
 use crate::rules::attachment;
 use crate::rules::host::{self, Speaker};
 use crate::rules::permissions::WriteRefusal;
@@ -41,8 +45,8 @@ pub(super) struct HostAttach(Box<ChannelBinding>);
 /// Why the room refuses the host channel's first attach, nothing written.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum HostRefusal {
-    /// The room's status refuses new events (RFC §5.1).
-    Closed,
+    /// The room's status, this one, refuses new events (RFC §5.1).
+    Closed(RoomStatus),
     /// The host channel was detached from the room: only an explicit attach
     /// grants it again (RFC §7.5 rule 7).
     Detached,
@@ -68,7 +72,7 @@ impl SectionChange for HostAttach {
         let now = cx.env.now();
         let channel_id = &self.0.channel_id;
         if !context.room.status.accepts_events() {
-            return Err(HostRefusal::Closed);
+            return Err(HostRefusal::Closed(context.room.status));
         }
         if context.get_binding(channel_id).is_some() {
             return Ok(Decision::unwritten(HostAttached::Kept));
@@ -112,6 +116,18 @@ impl SectionChange for HostAttach {
     }
 }
 
+/// Where a post's way leaves it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Posted {
+    /// The room binds the host channel, as read or by the post's attach:
+    /// the post goes in.
+    Bound,
+    /// The room never bound it, and the post, made from the room's work,
+    /// draws its pass before it attaches it (RFC §10.5): the attach waits
+    /// for that draw, and a post past the budget binds nothing.
+    Unbound,
+}
+
 /// A post's read of its room, its speaker's check and its first attach.
 #[derive(Debug)]
 pub(super) struct HostPost {
@@ -123,6 +139,12 @@ pub(super) struct HostPost {
     /// post.
     binding: Box<ChannelBinding>,
     bound: Bound,
+    /// Made from the room's work: a first post stops before its attach,
+    /// which waits for its pass to be drawn (RFC §10.5).
+    draws_first: bool,
+    /// Its pass drawn already: the post attaches, then goes in drawing
+    /// nothing more.
+    drawn: bool,
     state: State,
 }
 
@@ -154,8 +176,46 @@ impl HostPost {
             call,
             binding: Box::new(binding),
             bound,
+            draws_first: false,
+            drawn: false,
             state: State::Reading(effect),
         }
+    }
+
+    /// The same post, made from the room's work: a first post stops once
+    /// its room is read, its speaker and the host channel's revocation
+    /// checked, so that it draws its pass before the attach (RFC §10.5).
+    pub(super) fn drawing_first(mut self) -> Self {
+        self.draws_first = true;
+        self
+    }
+
+    /// Attaches the host channel for a first post made from the room's
+    /// work, its room read and its pass drawn already (RFC §10.5): the post
+    /// then goes in, drawing nothing more.
+    pub(super) fn attaching(
+        cx: &mut Cx<'_>,
+        event: RoomEvent,
+        call: DirectCall,
+        binding: ChannelBinding,
+        bound: Bound,
+    ) -> Self {
+        let mut post = Self {
+            event,
+            call,
+            binding: Box::new(binding),
+            bound,
+            draws_first: false,
+            drawn: true,
+            state: State::Done,
+        };
+        post.attach(cx);
+        post
+    }
+
+    /// Whether the post's pass was drawn before its attach.
+    pub(super) fn drawn(&self) -> bool {
+        self.drawn
     }
 
     /// Whether the post waits for `effect`.
@@ -175,7 +235,7 @@ impl HostPost {
         cx: &mut Cx<'_>,
         effect: EffectId,
         outcome: Outcome,
-    ) -> Progress<Result<(), Stopped>> {
+    ) -> Progress<Result<Posted, Stopped>> {
         if !self.awaits(effect) {
             debug_assert!(false, "a post received {effect:?}");
             return Progress::Waiting;
@@ -193,7 +253,20 @@ impl HostPost {
                     self.state = State::Attaching(section);
                     Progress::Waiting
                 }
-                Progress::Done(ended) => Progress::Done(Self::attached(ended.result)),
+                Progress::Done(ended) => {
+                    if let Err(SectionError::Refused(HostRefusal::Closed(status))) = &ended.result {
+                        // Refused as its gate refuses a post, and reported so
+                        // (RFC §5.1): a subscriber reads a first post's
+                        // refusal as a later one's.
+                        report::room_refused_as(
+                            cx,
+                            &self.event,
+                            RefusedOperation::Inbound,
+                            *status,
+                        );
+                    }
+                    Progress::Done(Self::attached(ended.result))
+                }
             },
             State::Done => Progress::Waiting,
         }
@@ -204,11 +277,18 @@ impl HostPost {
         (self.event, self.call)
     }
 
+    /// The post's event, what it is checked for, and the host channel's
+    /// binding its attach waits to make, once its pass is drawn.
+    pub(super) fn into_unbound(self) -> (RoomEvent, DirectCall, ChannelBinding) {
+        (self.event, self.call, *self.binding)
+    }
+
     /// The room is read: a room the caller does not find fails the post, so
     /// does a speaker the host channel does not reach; a room that binds
     /// the channel takes the post at once, one that does not has it
-    /// attached first.
-    fn on_read(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Progress<Result<(), Stopped>> {
+    /// attached first, once the post's pass is drawn when it is made from
+    /// the room's work.
+    fn on_read(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Progress<Result<Posted, Stopped>> {
         let failed = |error| Progress::Done(Err(Stopped::Failed(error)));
         let context = match outcome.into_context() {
             Ok(Some(context)) => context,
@@ -222,8 +302,26 @@ impl HostPost {
             return failed(refusal);
         }
         if context.get_binding(&self.event.source.channel_id).is_some() {
-            return Progress::Done(Ok(()));
+            return Progress::Done(Ok(Posted::Bound));
         }
+        if self.draws_first {
+            // Made from the room's work, the post draws its pass before the
+            // attach, after the room's scoped read and the check of a
+            // revocation (RFC §10.5): the section decides again once drawn.
+            if attachment::revoked(&context.room, &self.event.source.channel_id) {
+                return failed(InboundError::Refused {
+                    reason: WriteRefusal::Unbound.blocked_by().to_owned(),
+                });
+            }
+            return Progress::Done(Ok(Posted::Unbound));
+        }
+        self.attach(cx);
+        Progress::Waiting
+    }
+
+    /// Starts the attach of the host channel, in one section under the
+    /// room's lock, whose wait is bounded by the call's.
+    fn attach(&mut self, cx: &mut Cx<'_>) {
         let change = HostAttach(self.binding.clone());
         let organization_id = self.call.organization_id.clone();
         let mut section = Box::new(
@@ -232,7 +330,6 @@ impl HostPost {
         );
         section.start(cx);
         self.state = State::Attaching(section);
-        Progress::Waiting
     }
 
     /// Why the post's speaker is refused, if it is: the id names no
@@ -256,15 +353,15 @@ impl HostPost {
 
     /// The first attach is over: the post goes on, or fails as an injection
     /// the room refuses would, nothing written.
-    fn attached(result: SectionResult<HostAttach>) -> Result<(), Stopped> {
+    fn attached(result: SectionResult<HostAttach>) -> Result<Posted, Stopped> {
         let refused = |reason: &str| {
             Err(Stopped::Failed(InboundError::Refused {
                 reason: reason.to_owned(),
             }))
         };
         match result {
-            Ok(_) => Ok(()),
-            Err(SectionError::Refused(HostRefusal::Closed)) => refused("room_closed"),
+            Ok(_) => Ok(Posted::Bound),
+            Err(SectionError::Refused(HostRefusal::Closed(_))) => refused("room_closed"),
             Err(SectionError::Refused(HostRefusal::Detached)) => {
                 refused(WriteRefusal::Unbound.blocked_by())
             }
