@@ -177,8 +177,6 @@ impl Segments {
         row.status = EventStatus::Delivered;
         row.chain_depth = response_depth(&self.answers);
         row.responds_to = Some(self.answers.id.clone());
-        row.parent_event_id
-            .clone_from(&self.answers.parent_event_id);
         // The trigger's answer scope rides it, as it rides every row of the
         // turn (RFC §5.12).
         row.response_visibility
@@ -410,7 +408,9 @@ impl Segments {
 
     /// A row of `event_type` saying `content`, as the response wrote it,
     /// with the response's id: the pipeline gives it its id, its depth and
-    /// its instant, and makes it answer the event the response answers.
+    /// its instant, and makes it answer the event the response answers. It
+    /// takes the thread parent of the event the response answers, which its
+    /// commit roots (RFC §10.1 step 8), as Python's `SegmentWriter._build`.
     fn draft(&self, event_type: EventType, content: EventContent) -> RoomEvent {
         let mut row = RoomEvent::at(
             self.answers.id.clone(),
@@ -421,6 +421,8 @@ impl Segments {
             self.answers.created_at,
         );
         row.correlation_id = Some(self.correlation_id.clone());
+        row.parent_event_id
+            .clone_from(&self.answers.parent_event_id);
         row
     }
 }

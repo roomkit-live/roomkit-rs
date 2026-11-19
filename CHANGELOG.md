@@ -15,6 +15,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A post into a closed room the host channel was detached from raises `ChannelNotFound`, the revocation read before the room's status, as in Python.
 - A post into a closed room that never bound the host channel emits `room_refused_event`, as the refusal of a later post does (RFC §5.1, §10.5).
 - A room a first message opens takes the kit's default strategy before its `ON_ROOM_CREATED` hooks, whose context holds the agents it attached, as in Python (RFC §9.2, §10.1 step 2, §19.7). A set-up that fails fails the message, with a store error where Python raises the set-up's own (RMK-1811).
+- The rows of a streamed answer take the thread parent of the message they answer, rooted as each row commits, as in Python: they were posted at the top level (RFC §10.1 step 8).
 
 ## [0.2.0] — 2026-11-18
 
