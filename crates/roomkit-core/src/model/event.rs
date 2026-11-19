@@ -87,7 +87,9 @@ pub enum EventStatus {
     /// Stored and broadcast; an allowed instruction, never stored, reads
     /// so too (RFC §10.1.1).
     Delivered,
-    /// Read by its recipient.
+    /// Never set by the framework: a read moves the reading channel's
+    /// marker, and a read receipt travels as an ephemeral event (RFC §5.2,
+    /// §14.1, §8.4).
     Read,
     /// Delivery failed after every retry.
     Failed,
