@@ -6,6 +6,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- A file outside a channel's `supported_media_types`, or over its
+  `max_media_size_bytes`, reaches it as its text form, alone, in a composite
+  or as a native edit's new content, as in Python (RFC §5.8).
+
 ## [0.2.0] — 2026-11-18
 
 The second release of roomkit-rs brings most of the Python implementation's

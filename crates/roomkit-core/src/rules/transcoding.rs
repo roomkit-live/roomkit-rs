@@ -2,8 +2,8 @@
 //! (RFC §6.6).
 
 use crate::model::{
-    ChannelCapabilities, ChannelMediaType, CompositeContent, EventContent, LocationContent,
-    TextContent,
+    ChannelCapabilities, ChannelMediaType, CompositeContent, EditContent, EventContent,
+    LocationContent, MediaContent, TextContent,
 };
 
 /// The content a channel with `capabilities` receives for `content`
@@ -11,9 +11,12 @@ use crate::model::{
 ///
 /// - A content the channel carries is delivered unchanged; one it does not
 ///   is replaced by its text form ([`text_of`]), the fallback every channel
-///   takes (gap G-019).
+///   takes (gap G-019). A file is carried only when the channel takes it
+///   ([`takes_file`], RFC §5.8).
 /// - An edit or a delete is delivered unchanged to a channel that supports
-///   the operation natively, as its text form otherwise.
+///   the operation natively, as its text form otherwise; a native edit whose
+///   new content holds a file the channel does not take is delivered with
+///   that new content transcoded (RFC §5.8).
 /// - A composite is transcoded part by part; when every part ends up as
 ///   text, it becomes one text, its text form: the parts joined by a
 ///   newline, an empty one skipped (gaps G-007, G-072).
@@ -125,7 +128,10 @@ fn transcode_content(content: &EventContent, capabilities: &ChannelCapabilities)
             content.clone()
         }
         EventContent::Rich(_) => carried_or_text(content, ChannelMediaType::Rich, capabilities),
-        EventContent::Media(_) => carried_or_text(content, ChannelMediaType::Media, capabilities),
+        EventContent::Media(media) => native_or_text(
+            content,
+            capabilities.carries(ChannelMediaType::Media) && takes_file(capabilities, media),
+        ),
         EventContent::Location(_) => {
             carried_or_text(content, ChannelMediaType::Location, capabilities)
         }
@@ -134,7 +140,7 @@ fn transcode_content(content: &EventContent, capabilities: &ChannelCapabilities)
         EventContent::Template(_) => {
             carried_or_text(content, ChannelMediaType::Template, capabilities)
         }
-        EventContent::Edit(_) => native_or_text(content, capabilities.supports_edit),
+        EventContent::Edit(edit) => transcode_edit(content, edit, capabilities),
         EventContent::Delete(_) => native_or_text(content, capabilities.supports_delete),
         EventContent::Composite(composite) => transcode_composite(composite, capabilities),
     }
@@ -146,6 +152,80 @@ fn carried_or_text(
     capabilities: &ChannelCapabilities,
 ) -> EventContent {
     native_or_text(content, capabilities.carries(media_type))
+}
+
+/// Whether a channel of `capabilities` takes the file `media` (RFC §5.8):
+/// its type is listed by a non-empty `supported_media_types`, compared
+/// without parameters and whatever the case, and its known size is within
+/// `max_media_size_bytes`. An empty list takes every type; no limit, or a
+/// file of unknown size, any size. Python's `takes_file`.
+fn takes_file(capabilities: &ChannelCapabilities, media: &MediaContent) -> bool {
+    if !capabilities.supported_media_types.is_empty() {
+        let wanted = bare_type(&media.mime_type);
+        if !capabilities
+            .supported_media_types
+            .iter()
+            .any(|listed| bare_type(listed) == wanted)
+        {
+            return false;
+        }
+    }
+    match (capabilities.max_media_size_bytes, media.size_bytes) {
+        (Some(limit), Some(size)) => size <= limit,
+        _ => true,
+    }
+}
+
+/// Whether a channel of `capabilities` takes every file `content` holds
+/// (RFC §5.8): a file itself, a composite's parts, an edit's new content.
+/// Python's `takes_files_of`.
+fn takes_files_of(capabilities: &ChannelCapabilities, content: &EventContent) -> bool {
+    match content {
+        EventContent::Media(media) => takes_file(capabilities, media),
+        EventContent::Composite(composite) => composite
+            .parts()
+            .iter()
+            .all(|part| takes_files_of(capabilities, part)),
+        EventContent::Edit(edit) => takes_files_of(capabilities, &edit.new_content),
+        EventContent::Text(_)
+        | EventContent::Rich(_)
+        | EventContent::Location(_)
+        | EventContent::Audio(_)
+        | EventContent::Video(_)
+        | EventContent::System(_)
+        | EventContent::Template(_)
+        | EventContent::Delete(_)
+        | EventContent::ToolCall(_) => true,
+    }
+}
+
+/// `mime_type` without its parameters, lower-case (`image/jpeg`).
+fn bare_type(mime_type: &str) -> String {
+    mime_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_lowercase()
+}
+
+/// An edit for a channel of `capabilities`: its text form where the channel
+/// does not edit natively; unchanged where it does and takes every file of
+/// its new content; delivered natively all the same otherwise, its new
+/// content transcoded, so that a file the channel does not take is never
+/// sent for the provider to refuse (RFC §5.8, §6.6).
+fn transcode_edit(
+    content: &EventContent,
+    edit: &EditContent,
+    capabilities: &ChannelCapabilities,
+) -> EventContent {
+    if !capabilities.supports_edit || takes_files_of(capabilities, &edit.new_content) {
+        return native_or_text(content, capabilities.supports_edit);
+    }
+    EventContent::Edit(EditContent {
+        new_content: Box::new(transcode_content(&edit.new_content, capabilities)),
+        ..edit.clone()
+    })
 }
 
 fn native_or_text(content: &EventContent, native: bool) -> EventContent {
@@ -662,5 +742,70 @@ mod tests {
             transcode(&content, &capabilities),
             composite(vec![TextContent::new("Rece...").into(), photo])
         );
+    }
+
+    fn file(mime_type: &str, size_bytes: Option<u64>) -> EventContent {
+        EventContent::Media(MediaContent {
+            url: "https://example.com/f".to_owned(),
+            mime_type: mime_type.to_owned(),
+            filename: None,
+            caption: Some("A file".to_owned()),
+            size_bytes,
+        })
+    }
+
+    fn taking_jpeg_up_to(limit: u64) -> ChannelCapabilities {
+        ChannelCapabilities {
+            supported_media_types: vec!["image/jpeg".to_owned()],
+            max_media_size_bytes: Some(limit),
+            supports_edit: true,
+            ..carrying(&[ChannelMediaType::Text, ChannelMediaType::Media])
+        }
+    }
+
+    #[test]
+    fn a_file_the_channel_does_not_take_reaches_it_as_its_text() {
+        let capabilities = taking_jpeg_up_to(1000);
+        for refused in [file("image/png", Some(10)), file("image/jpeg", Some(1001))] {
+            assert_eq!(
+                transcoded_text_for(&refused, &capabilities),
+                "[Media: A file]"
+            );
+        }
+        for taken in [
+            file("image/jpeg", Some(1000)),
+            file("Image/JPEG; quality=high", Some(10)),
+            file("image/jpeg", None),
+        ] {
+            assert_eq!(transcode(&taken, &capabilities), taken);
+        }
+    }
+
+    #[test]
+    fn a_channel_with_no_type_list_and_no_limit_takes_every_file() {
+        let capabilities = carrying(&[ChannelMediaType::Text, ChannelMediaType::Media]);
+        let content = file("application/pdf", Some(u64::MAX));
+        assert_eq!(transcode(&content, &capabilities), content);
+    }
+
+    #[test]
+    fn a_native_edit_s_file_the_channel_does_not_take_reaches_it_as_its_text() {
+        let capabilities = taking_jpeg_up_to(1000);
+        let edit_to = |new_content: EventContent| {
+            EventContent::Edit(EditContent::new(
+                EventId::new("evt_1").unwrap(),
+                new_content,
+            ))
+        };
+        assert_eq!(
+            transcode(&edit_to(file("image/png", Some(10))), &capabilities),
+            edit_to(TextContent::new("[Media: A file]").into())
+        );
+        let taken = edit_to(file("image/jpeg", Some(10)));
+        assert_eq!(transcode(&taken, &capabilities), taken);
+    }
+
+    fn transcoded_text_for(content: &EventContent, capabilities: &ChannelCapabilities) -> String {
+        body_of(&transcode(content, capabilities)).to_owned()
     }
 }
