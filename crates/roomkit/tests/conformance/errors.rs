@@ -3,7 +3,9 @@
 //! after the table of `docs/rfc-gaps.md` G-085.
 
 use roomkit::RoomKitError;
-use roomkit::model::{MediaContent, ModelError, Visibility};
+use roomkit::model::{
+    CompositeContent, EditContent, EventContent, MediaContent, ModelError, Visibility,
+};
 use serde_json::{Value, json};
 
 pub(crate) fn named(name: &str) -> Value {
@@ -55,6 +57,55 @@ fn refuses_media_url(content: &Value) -> bool {
             .is_some_and(|parts| parts.iter().any(refuses_media_url)),
         Some("edit") => refuses_media_url(&content["new_content"]),
         _ => false,
+    }
+}
+
+/// Content holding a sixth composite level (RFC §5.3), in the content of a
+/// `process_inbound`, a `send_event`, a `post`, a `commit_event` or an
+/// `update_event`, through an edit's new content, is the suite's
+/// `invalid_argument`, as Python's validator refusing it is; roomkit-rs's
+/// `CompositeContent::new` refuses it as the content deserializes, which the
+/// runner would read as a scenario it cannot read.
+pub(crate) fn composite_depth_input_error(spec: &Value) -> Option<Value> {
+    let content = match spec["call"].as_str() {
+        Some("process_inbound") => &spec["message"]["content"],
+        Some("send_event" | "post" | "update_event") => &spec["content"],
+        Some("commit_event") => &spec["event"]["content"],
+        _ => return None,
+    };
+    matches!(
+        built_content(content),
+        Err(Some(ModelError::CompositeTooDeep { .. }))
+    )
+    .then(|| named("invalid_argument"))
+}
+
+/// `content` built part by part through roomkit-rs's content model: a
+/// composite by `CompositeContent::new`, an edit around its new content so
+/// built, any other content as it deserializes. `Err(None)`: content the
+/// model refuses otherwise, left to the call's own read.
+fn built_content(content: &Value) -> Result<EventContent, Option<ModelError>> {
+    match content["type"].as_str() {
+        Some("composite") => {
+            let parts = content["parts"]
+                .as_array()
+                .ok_or(None)?
+                .iter()
+                .map(built_content)
+                .collect::<Result<Vec<_>, _>>()?;
+            CompositeContent::new(parts)
+                .map(EventContent::Composite)
+                .map_err(Some)
+        }
+        Some("edit") => {
+            let new_content = built_content(&content["new_content"])?;
+            let mut shell = content.clone();
+            shell["new_content"] = json!({ "type": "text", "body": "" });
+            let mut edit: EditContent = serde_json::from_value(shell).map_err(|_| None)?;
+            edit.new_content = Box::new(new_content);
+            Ok(EventContent::Edit(edit))
+        }
+        _ => serde_json::from_value(content.clone()).map_err(|_| None),
     }
 }
 
@@ -124,8 +175,45 @@ pub(crate) fn error_of(error: &RoomKitError) -> Option<Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::{media_url_input_error, visibility_input_error};
-    use serde_json::json;
+    use super::{composite_depth_input_error, media_url_input_error, visibility_input_error};
+    use serde_json::{Value, json};
+
+    fn levels(depth: usize) -> Value {
+        let mut content = json!({ "type": "text", "body": "leaf" });
+        for _ in 0..depth {
+            content = json!({ "type": "composite", "parts": [content] });
+        }
+        content
+    }
+
+    #[test]
+    fn a_sixth_composite_level_is_a_named_public_input_error() {
+        let six = levels(6);
+        let edit_in_a_composite = json!({
+            "type": "composite",
+            "parts": [{ "type": "edit", "target_event_id": "evt-1", "new_content": levels(5) }],
+        });
+        for spec in [
+            json!({ "call": "process_inbound", "message": { "content": six } }),
+            json!({ "call": "send_event", "content": six }),
+            json!({ "call": "post", "content": six }),
+            json!({ "call": "update_event", "content": six }),
+            json!({ "call": "commit_event", "event": { "content": six } }),
+            json!({ "call": "send_event", "content": edit_in_a_composite }),
+        ] {
+            assert_eq!(
+                composite_depth_input_error(&spec),
+                Some(json!({ "name": "invalid_argument" }))
+            );
+        }
+        let edit_alone =
+            json!({ "type": "edit", "target_event_id": "evt-1", "new_content": levels(5) });
+        let unreadable = json!({ "type": "composite", "parts": [{ "type": "nope" }] });
+        for content in [levels(5), edit_alone, unreadable] {
+            let spec = json!({ "call": "send_event", "content": content });
+            assert_eq!(composite_depth_input_error(&spec), None);
+        }
+    }
 
     #[test]
     fn a_refused_media_url_is_a_named_public_input_error() {

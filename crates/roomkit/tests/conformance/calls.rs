@@ -33,7 +33,9 @@ use serde_json::{Value, json};
 
 use crate::agents;
 use crate::ai_hooks::turn_hook_handler;
-use crate::errors::{error_of, media_url_input_error, named, visibility_input_error};
+use crate::errors::{
+    composite_depth_input_error, error_of, media_url_input_error, named, visibility_input_error,
+};
 use crate::run::Run;
 use crate::scripted::{ScriptedChannel, hook_handler, session_hook_handler, status_hook_handler};
 use crate::task_calls::payload_hook_handler;
@@ -124,7 +126,10 @@ pub(crate) async fn checked_call(
     if spec.get("kit").is_some() {
         run.kit_of(spec)?;
     }
-    if let Some(error) = visibility_input_error(spec).or_else(|| media_url_input_error(spec)) {
+    if let Some(error) = visibility_input_error(spec)
+        .or_else(|| media_url_input_error(spec))
+        .or_else(|| composite_depth_input_error(spec))
+    {
         return Ok((Err(error), None));
     }
     call(run, spec).await
