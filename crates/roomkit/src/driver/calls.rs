@@ -1200,9 +1200,15 @@ pub(super) type WentOn = oneshot::Sender<Infallible>;
 /// inbound run's commit takes its place in the room's lane before its task
 /// ends. Returns the run's call, which answers the write's outcome, where
 /// anyone else reads it, and the run's hold.
+///
+/// `opened` is the room the write creates for an inbound message (RFC
+/// §10.1 step 2): once written, the kit sets it up as a room it creates
+/// ([`RoomKit::set_up_opened_room`]) before the write answers, and a set-up
+/// that fails is the write's failure.
 pub(super) fn write<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
     request: StoreRequest,
+    opened: Option<Room>,
 ) -> (
     impl Future<Output = Outcome> + Send + 'static,
     Written,
@@ -1212,7 +1218,7 @@ pub(super) fn write<S: ConversationStore>(
     let (went_on, run_going_on) = oneshot::channel();
     let writer = Arc::clone(inner);
     let writing = async move {
-        let outcome = unwinding(store(&*writer.store, request))
+        let outcome = unwinding(write_and_set_up(&writer, request, opened))
             .await
             .unwrap_or_else(|_panic| Outcome::Failed(panicked()));
         if let Outcome::Failed(error) = &outcome
@@ -1235,6 +1241,26 @@ pub(super) fn write<S: ConversationStore>(
         outcome_of(&mut read).await
     };
     (call, written, went_on)
+}
+
+/// `request` carried out on the store, then, once it wrote `opened`, that
+/// room set up as the kit sets up a room it creates (RFC §19.7).
+async fn write_and_set_up<S: ConversationStore>(
+    inner: &Arc<Inner<S>>,
+    request: StoreRequest,
+    opened: Option<Room>,
+) -> Outcome {
+    let outcome = store(&*inner.store, request).await;
+    let (Some(room), Outcome::Store(StoreOutcome::Stored)) = (opened, &outcome) else {
+        return outcome;
+    };
+    let kit = RoomKit {
+        inner: Arc::clone(inner),
+    };
+    match kit.set_up_opened_room(&room).await {
+        Ok(()) => outcome,
+        Err(error) => Outcome::Failed(ErrorRecord::new(error.class_name(), error.to_string())),
+    }
 }
 
 /// Logs `error`, a write's that failed once its caller was gone, as

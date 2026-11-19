@@ -60,11 +60,10 @@ impl<S: ConversationStore> RoomKit<S> {
             .orchestration
             .clone()
             .unwrap_or_else(|| self.inner.default_orchestration.clone());
-        let forgets = options.room_id.as_ref().is_some_and(|room_id| {
-            self.holds_strategy_record(room_id)
-                || self.has_room_hooks_to_settle(room_id)
-                || self.inner.room_subscriptions.holds(room_id)
-        });
+        let forgets = options
+            .room_id
+            .as_ref()
+            .is_some_and(|room_id| self.earlier_room_left(room_id));
         if orchestration.is_none() && !forgets {
             let room = self.create_room_record(options, true).await?;
             // A registration that began once the id was checked counts the
@@ -89,6 +88,52 @@ impl<S: ConversationStore> RoomKit<S> {
         orchestration: Option<Arc<dyn Orchestration<S>>>,
     ) -> Result<Room, RoomKitError> {
         let room = self.create_room_record(options, false).await?;
+        self.set_up_created_room(&room, orchestration).await?;
+        let announce = AnnounceRoomCreated::new(self.config(), room.id.clone());
+        let environment = self.inner.environment();
+        driver::run_on(&self.inner, environment, "create_room", announce)
+            .await?
+            .map_err(RoomKitError::from)?;
+        Ok(room)
+    }
+
+    /// Sets up `room`, which an inbound run created for a message no room
+    /// held (RFC §10.1 step 2), before the run announces it, as
+    /// [`create_room`](Self::create_room) sets up a room it creates, as
+    /// Python's step 2 creates its room through `create_room`: the kit's
+    /// strategy installed, so that its `ON_ROOM_CREATED` hooks see the
+    /// agents the strategy attached (RFC §9.2, §19.7), and what an earlier
+    /// room of the id left taken back. A room needing neither is left as
+    /// written.
+    ///
+    /// # Errors
+    ///
+    /// What [`install_strategy`](Self::install_strategy) returns for an
+    /// install that fails.
+    pub(crate) async fn set_up_opened_room(&self, room: &Room) -> Result<(), RoomKitError> {
+        let orchestration = self.inner.default_orchestration.clone();
+        if orchestration.is_none() && !self.earlier_room_left(&room.id) {
+            return Ok(());
+        }
+        self.set_up_created_room(room, orchestration).await
+    }
+
+    /// Whether an earlier room of `room_id` left room hooks, a strategy
+    /// record or ephemeral subscriptions, which a room created with the id
+    /// takes back.
+    fn earlier_room_left(&self, room_id: &RoomId) -> bool {
+        self.holds_strategy_record(room_id)
+            || self.has_room_hooks_to_settle(room_id)
+            || self.inner.room_subscriptions.holds(room_id)
+    }
+
+    /// `room`, written and not yet announced, set up: what an earlier room
+    /// of its id left taken back, then `orchestration` installed.
+    async fn set_up_created_room(
+        &self,
+        room: &Room,
+        orchestration: Option<Arc<dyn Orchestration<S>>>,
+    ) -> Result<(), RoomKitError> {
         // The room hooks registered while an earlier room held the id
         // belonged to that room, and so did the strategy recorded for it.
         self.forget_room_hooks(&room.id, room.created_at);
@@ -101,12 +146,7 @@ impl<S: ConversationStore> RoomKit<S> {
             // The path install_strategy() takes: claimed, recorded (RFC §19.7).
             Box::pin(self.install_on(&room.id, strategy, room.organization_id.clone())).await?;
         }
-        let announce = AnnounceRoomCreated::new(self.config(), room.id.clone());
-        let environment = self.inner.environment();
-        driver::run_on(&self.inner, environment, "create_room", announce)
-            .await?
-            .map_err(RoomKitError::from)?;
-        Ok(room)
+        Ok(())
     }
 
     /// The room `options` describes, written, its creation announced when

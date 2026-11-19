@@ -1218,7 +1218,14 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                         )),
                     ));
                 }
-                let (writing, written, went_on) = calls::write(&inner, request);
+                // A room an inbound run creates is the one its message opens
+                // (RFC §10.1 step 2): the kit sets it up as any room it
+                // creates, before the run announces it (RFC §9.2, §19.7).
+                let opened = match (&self.caller, &request) {
+                    (Some(_), StoreRequest::CreateRoom { room }) => Some(room.clone()),
+                    _ => None,
+                };
+                let (writing, written, went_on) = calls::write(&inner, request, opened);
                 if let Some((event, answer)) = commit {
                     self.note_the_commit(&event, decides, answer, &written);
                 }
