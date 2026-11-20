@@ -9,45 +9,83 @@ use roomkit::model::Metadata;
 use serde_json::Value;
 
 /// Why `arguments` do not fit `parameters`, a JSON Schema object, if they
-/// do not: the first required argument missing, then the first argument
-/// a closed schema does not declare, named with the ones it does, so that
-/// the model can correct its call, or of another type than its property
-/// declares.
+/// do not: every reason at once, joined by `; `, so that a model which
+/// renamed an argument reads the name it lacks beside its own. The required
+/// arguments missing come first, in the schema's order; then the arguments
+/// a closed schema does not declare, named with the ones it does; then each
+/// argument of another type than its property declares, in the call's
+/// order. Several missing arguments share one reason, as several undeclared.
 pub(crate) fn mismatch(parameters: &Value, arguments: &Metadata) -> Option<String> {
-    let required = parameters
+    let missing: Vec<&str> = parameters
         .get("required")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter_map(Value::as_str);
-    for name in required {
-        if !arguments.contains_key(name) {
-            return Some(format!("missing required argument '{name}'"));
-        }
+        .filter_map(Value::as_str)
+        .filter(|name| !arguments.contains_key(*name))
+        .collect();
+    let mut reasons = Vec::new();
+    if !missing.is_empty() {
+        reasons.push(named("missing required argument", &missing));
     }
-    let properties = parameters.get("properties").and_then(Value::as_object)?;
-    let closed = parameters.get("additionalProperties") == Some(&Value::Bool(false));
-    arguments.iter().find_map(|(name, value)| {
-        let Some(property) = properties.get(name).filter(|property| property.is_object()) else {
-            return closed.then(|| undeclared(name, properties));
-        };
-        let declared = property.get("type")?.as_str()?;
-        (!has_type(value, declared))
-            .then(|| format!("argument '{name}' must be of type {declared}"))
-    })
+    if let Some(properties) = parameters.get("properties").and_then(Value::as_object) {
+        let closed = parameters.get("additionalProperties") == Some(&Value::Bool(false));
+        reasons.extend(unfit(properties, closed, arguments));
+    }
+    (!reasons.is_empty()).then(|| reasons.join("; "))
 }
 
-/// What the model reads of the argument `name` its closed schema, of
-/// `properties`, does not declare: the names it accepts, in order.
-fn undeclared(name: &str, properties: &serde_json::Map<String, Value>) -> String {
+/// The reasons the `arguments` given do not fit `properties`: the ones a
+/// `closed` schema does not declare, as one reason, then one per argument of
+/// another type than its property declares.
+fn unfit(
+    properties: &serde_json::Map<String, Value>,
+    closed: bool,
+    arguments: &Metadata,
+) -> Vec<String> {
+    let mut undeclared = Vec::new();
+    let mut mistyped = Vec::new();
+    for (name, value) in arguments {
+        let Some(property) = properties.get(name).filter(|property| property.is_object()) else {
+            if closed {
+                undeclared.push(name.as_str());
+            }
+            continue;
+        };
+        let declared = property.get("type").and_then(Value::as_str);
+        if let Some(declared) = declared.filter(|declared| !has_type(value, declared)) {
+            mistyped.push(format!("argument '{name}' must be of type {declared}"));
+        }
+    }
+    let mut reasons = Vec::new();
+    if !undeclared.is_empty() {
+        let unknown = named("unknown argument", &undeclared);
+        reasons.push(format!(
+            "{unknown} (this tool accepts: {})",
+            accepted(properties)
+        ));
+    }
+    reasons.extend(mistyped);
+    reasons
+}
+
+/// `what` said of the quoted `names`: `what 'a'`, or `whats 'a', 'b'`.
+fn named(what: &str, names: &[&str]) -> String {
+    let plural = if names.len() > 1 { "s" } else { "" };
+    let quoted: Vec<String> = names.iter().map(|name| format!("'{name}'")).collect();
+    format!("{what}{plural} {}", quoted.join(", "))
+}
+
+/// The names a closed schema of `properties` accepts, as the model reads
+/// them: in order, or `none`.
+fn accepted(properties: &serde_json::Map<String, Value>) -> String {
     let mut accepted: Vec<&str> = properties.keys().map(String::as_str).collect();
     accepted.sort_unstable();
-    let accepted = if accepted.is_empty() {
+    if accepted.is_empty() {
         "none".to_owned()
     } else {
         accepted.join(", ")
-    };
-    format!("unknown argument '{name}' (this tool accepts: {accepted})")
+    }
 }
 
 /// Whether `value` is of the JSON Schema primitive type `declared`; a type
@@ -162,7 +200,58 @@ mod tests {
                 None,
                 None,
                 Some("unknown argument 'extra' (this tool accepts: command, cwd)".to_owned()),
-                Some("unknown argument 'command' (this tool accepts: none)".to_owned()),
+                Some("unknown arguments 'command', 'extra' (this tool accepts: none)".to_owned()),
+            ]
+        );
+    }
+
+    // Python: tests/test_tool_arg_validation.py::test_every_violation_is_named_in_one_answer
+    #[test]
+    fn every_reason_is_named_in_one_answer() {
+        let parameters = json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "title": { "type": "string" },
+                "steps": { "type": "array" },
+                "count": { "type": "integer" },
+                "draft": { "type": "boolean" }
+            },
+            "required": ["title", "steps"]
+        });
+        let call = json!({ "name": "Ship", "draft": "maybe", "goal": "Ship it", "count": "many" });
+        assert_eq!(
+            mismatch(&parameters, &arguments(&call)).as_deref(),
+            Some(
+                "missing required arguments 'title', 'steps'; \
+                 unknown arguments 'name', 'goal' (this tool accepts: count, draft, steps, title); \
+                 argument 'draft' must be of type boolean; \
+                 argument 'count' must be of type integer"
+            )
+        );
+    }
+
+    // Python: tests/test_tool_arg_validation.py::test_closed_schema_reports_missing_required_before_unknown
+    // and ::test_an_open_schema_names_what_it_checks_and_passes_the_rest
+    #[test]
+    fn a_missing_argument_comes_before_the_ones_given() {
+        let properties = json!({ "query": { "type": "string" }, "days": { "type": "integer" } });
+        let closed = json!({ "properties": properties, "required": ["query"], "additionalProperties": false });
+        let open = json!({ "properties": properties, "required": ["query"] });
+        let call = arguments(&json!({ "days": "three", "depth": "2" }));
+        assert_eq!(
+            [mismatch(&closed, &call), mismatch(&open, &call)],
+            [
+                Some(
+                    "missing required argument 'query'; \
+                     unknown argument 'depth' (this tool accepts: days, query); \
+                     argument 'days' must be of type integer"
+                        .to_owned()
+                ),
+                Some(
+                    "missing required argument 'query'; argument 'days' must be of type integer"
+                        .to_owned()
+                ),
             ]
         );
     }

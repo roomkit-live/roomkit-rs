@@ -452,12 +452,15 @@ mod tests {
     fn params_supplied_as_a_non_object_is_left_to_the_type_check() {
         let call = json!({ "action": "x", "params": "a=1", "b": 2 });
         assert_eq!(folded(&hub(), call), Fold::Untouched);
-        // The check reads the arguments in name order, a map's here: the
-        // root key after `params` leaves its type the first violation.
+        // The check names the root key the schema does not declare, then
+        // the type `params` is not of.
         let call = json!({ "action": "x", "params": "a=1", "z": 2 });
         assert_eq!(
-            mismatch(&hub(), &arguments(call)),
-            Some("argument 'params' must be of type object".to_owned())
+            mismatch(&hub(), &arguments(call)).as_deref(),
+            Some(
+                "unknown argument 'z' (this tool accepts: action, params); \
+                 argument 'params' must be of type object"
+            )
         );
     }
 
