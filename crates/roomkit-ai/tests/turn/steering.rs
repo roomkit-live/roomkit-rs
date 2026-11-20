@@ -113,7 +113,14 @@ struct Paused {
     release: watch::Sender<bool>,
     /// What runs as the call starts, before it waits.
     on_start: OnStart,
+    /// Who each call was asked by, as its handler reads them: the turn's
+    /// actor and its requester.
+    asked: Arc<Mutex<Vec<Asked>>>,
 }
+
+/// A tool call's actor and its requester (`current_tool_actor_id`,
+/// `current_tool_requester`).
+type Asked = (Option<String>, Option<String>);
 
 impl Paused {
     fn new() -> Self {
@@ -121,6 +128,7 @@ impl Paused {
             started: watch::Sender::new(false),
             release: watch::Sender::new(true),
             on_start: Arc::default(),
+            asked: Arc::default(),
         }
     }
 
@@ -146,6 +154,10 @@ impl Paused {
             let paused = paused.clone();
             async move {
                 paused.started.send_replace(true);
+                paused.asked.lock().unwrap().push((
+                    roomkit_ai::current_tool_actor_id(),
+                    roomkit_ai::current_tool_requester(),
+                ));
                 if let Some(run) = paused.on_start.lock().unwrap().take() {
                     run();
                 }
@@ -839,15 +851,30 @@ async fn off_a_message_during_a_turn_starts_its_own() {
     room.kit.close().await.unwrap();
 }
 
-/// The model's requests once `second` (a sender and its name, if any)
-/// wrote [`STEERED`] by SMS while the turn on `first`'s "go" ran a tool,
-/// in a group room where both write through one channel.
+/// What happened in a group room where everyone writes through one
+/// channel, once `second` wrote [`STEERED`] while the turn on `first`'s "go"
+/// ran a tool.
+struct Group {
+    /// The model's requests.
+    requests: Vec<AiContext>,
+    /// Who each tool call was asked by, in order.
+    asked: Vec<Asked>,
+    /// Whether `second`'s message was handed to the running turn: its call
+    /// returned while the tool was held, no turn of its own to wait.
+    handed: bool,
+}
+
+/// [`Group`] for a model answering `rounds`: `earlier`, when given (a sender
+/// and its name, if any), wrote first and was answered; then `first` and
+/// `second`.
 async fn steered_in_a_group(
+    rounds: Vec<ScriptedRound>,
+    earlier: Option<(&str, Option<&str>)>,
     first: (&str, Option<&str>),
     second: (&str, Option<&str>),
-) -> Vec<AiContext> {
-    let model = Gated::new([call(), ScriptedRound::answering("ok")], usize::MAX);
-    let tool = Paused::new().holding();
+) -> Group {
+    let model = Gated::new(rounds, usize::MAX);
+    let tool = Paused::new();
     let options = AiChannelOptions {
         tools: tool.tools().into(),
         steer_room_turns: true,
@@ -901,22 +928,34 @@ async fn steered_in_a_group(
         };
         (message, options)
     };
-    let (first, options) = said(first, "go");
-    let turn = {
+    let sent = |(message, options)| {
         let kit = kit.clone();
         tokio::spawn(async move {
-            kit.process_inbound(first, options).await.unwrap();
+            kit.process_inbound(message, options).await.unwrap();
         })
     };
+    if let Some(earlier) = earlier {
+        sent(said(earlier, "hi all")).await.unwrap();
+    }
+    let tool = tool.holding();
+    let turn = sent(said(first, "go"));
     tool.started().await;
 
-    let (steered, options) = said(second, STEERED);
-    kit.process_inbound(steered, options).await.unwrap();
+    let mut steered = sent(said(second, STEERED));
+    let returned = tokio::time::timeout(std::time::Duration::from_millis(50), &mut steered).await;
+    let handed = returned.is_ok();
     tool.release();
     turn.await.unwrap();
+    if !handed {
+        steered.await.unwrap();
+    }
 
     kit.close().await.unwrap();
-    model.requests()
+    Group {
+        requests: model.requests(),
+        asked: tool.asked.lock().unwrap().clone(),
+        handed,
+    }
 }
 
 /// The texts of `request`'s messages, for an assertion's message.
@@ -931,16 +970,56 @@ fn texts(request: &AiContext) -> Vec<String> {
 // Python: tests/test_steering_during_turn.py::test_a_steered_message_carries_its_speaker_when_the_room_has_several
 #[tokio::test]
 async fn a_steered_message_carries_its_speaker_when_the_room_has_several() {
-    let requests =
-        steered_in_a_group(("+15550001", Some("Alice")), ("+15550002", Some("Bob"))).await;
-    let line = format!("Bob: \"{STEERED}\"");
-    assert!(read(&requests[1], &line), "{:?}", texts(&requests[1]));
+    let rounds = vec![
+        ScriptedRound::answering("hello"),
+        call(),
+        ScriptedRound::answering("ok"),
+    ];
+    let alice = ("+15550001", Some("Alice"));
+    let group = steered_in_a_group(rounds, Some(("+15550002", Some("Bob"))), alice, alice).await;
+    assert!(group.handed);
+    assert_eq!(group.requests.len(), 3);
+    let line = format!("Alice: \"{STEERED}\"");
+    assert!(
+        read(&group.requests[2], &line),
+        "{:?}",
+        texts(&group.requests[2])
+    );
 }
 
-// Python: tests/test_people_taking_part.py::TestEveryReaderCountsSources::test_two_senders_with_no_name_on_one_channel_are_labelled[steered message]
+// Python: tests/test_steering_during_turn.py::test_another_person_s_message_waits_a_turn_of_its_own
 #[tokio::test]
-async fn a_steered_message_from_a_second_nameless_sender_carries_its_rank() {
-    let requests = steered_in_a_group(("+15550001", None), ("+15550002", None)).await;
-    let line = format!("@sms (2): \"{STEERED}\"");
-    assert!(read(&requests[1], &line), "{:?}", texts(&requests[1]));
+async fn another_person_s_message_waits_a_turn_of_its_own() {
+    // Another sender; one sender id under another name (a bridge, a shared
+    // microphone), for which the room, counting its speakers by source,
+    // labels no one; another sender who signs the author's own name.
+    for (sender, name, requester) in [
+        ("+15550002", "Bob", Some("Bob")),
+        ("+15550001", "Bob", None),
+        ("+15550002", "Alice", Some("Alice (2, not Alice)")),
+    ] {
+        let again =
+            ScriptedRound::calling("Again.", [("c2", "lookup_order", r#"{"order": "42"}"#)]);
+        let rounds = vec![
+            call(),
+            ScriptedRound::answering("a.py"),
+            again,
+            ScriptedRound::answering("b.txt"),
+        ];
+        let alice = ("+15550001", Some("Alice"));
+        let group = steered_in_a_group(rounds, None, alice, (sender, Some(name))).await;
+        assert!(!group.handed, "{sender} {name}");
+        assert_eq!(group.requests.len(), 4, "{sender} {name}");
+        assert!(!read(&group.requests[1], STEERED), "{sender} {name}");
+        assert!(read(&group.requests[2], STEERED), "{sender} {name}");
+        // Each turn's tool reads its own author as who asked.
+        assert_eq!(
+            group.asked,
+            [
+                (Some("+15550001".to_owned()), None),
+                (Some(sender.to_owned()), requester.map(str::to_owned)),
+            ],
+            "{sender} {name}"
+        );
+    }
 }
