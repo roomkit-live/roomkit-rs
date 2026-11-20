@@ -235,7 +235,7 @@ fn reached(record: &Participant, channel: &str) -> bool {
 
 /// `event`'s author: the sender's name it carries, else the name of the
 /// room's participant behind it, each kept to a name's characters.
-fn author_name(event: &RoomEvent, people: &People<'_>) -> Option<String> {
+pub(crate) fn author_name(event: &RoomEvent, people: &People<'_>) -> Option<String> {
     if let Some(Value::String(name)) = event.metadata.get(SENDER_NAME) {
         let kept = person_name(name);
         if !kept.is_empty() {

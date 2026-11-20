@@ -128,6 +128,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 use roomkit_core::model::{
     ChannelBinding, ChannelId, ChannelOutput, ErrorRecord, RoomContext, RoomEvent, RoomId,
 };
+use roomkit_core::rules::transcript::TurnAuthor;
 use serde::Serialize;
 use tokio::sync::{Notify, watch};
 use uuid::Uuid;
@@ -478,6 +479,17 @@ impl Turns {
     }
 
     /// Steers the running turns `address` names (RFC §21.3, §10.6.8): a
+    /// The turns of `channel_id` this owner runs in `room_id`, oldest
+    /// first: each one's id and who wrote the message it answers (RFC §6.4
+    /// "A message for the running turn").
+    pub(crate) fn running_in(
+        &self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
+    ) -> Vec<(String, TurnAuthor)> {
+        lock(&self.started).running_in(room_id, channel_id)
+    }
+
     /// `Cancel` reaches every turn of a room, any other directive its most
     /// recent; each turn's executor applies it through the channel. How
     /// many loops it reached, summed.

@@ -25,7 +25,7 @@ use roomkit_core::model::{
     ChannelBinding, ChannelId, ChannelOutput, ErrorRecord, RoomContext, RoomEvent, RoomId,
 };
 use roomkit_core::ops::{ChannelOutcome, Outcome};
-use roomkit_core::rules::transcript::steered_text;
+use roomkit_core::rules::transcript::{steered_text, turn_author};
 use tokio::sync::watch;
 
 use crate::history;
@@ -307,6 +307,15 @@ fn nothing() -> Outcome {
 /// (not reachable yet, or reading its queue no more), waits a turn of its
 /// own; so does an event that opens no turn (a notice, a change: RFC
 /// §6.4), never handed to the running one.
+///
+/// Only the author of the message the turn answers writes to it. A turn
+/// runs in its author's name: its tools read them as its actor (RFC
+/// §21.4), and its channel's tool policy is resolved for their role (RFC
+/// §21.1). Someone else's message read inside it would have its request
+/// served under that name and that role, so it waits a turn of its own
+/// (RMK-1840). The author is read on the one turn the channel runs in the
+/// room, which is steered by its id; with no turn or several there, nothing
+/// is handed. Python's `RoomTurns._steered`.
 pub(crate) async fn steered<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
     binding: &ChannelBinding,
@@ -320,11 +329,19 @@ pub(crate) async fn steered<S: ConversationStore>(
     let Some(text) = steered_text(event, context, channel_id) else {
         return false;
     };
+    let running = inner.turns.running_in(room_id, channel_id);
+    let [(turn_id, author)] = running.as_slice() else {
+        return false;
+    };
+    if *author != turn_author(event, context) {
+        return false;
+    }
     let directive = SteeringDirective::from(InjectMessage::new(text));
+    // That turn and no other: the one whose author was just read.
     let address = SteerAddress {
         channel: channel_id,
         room: room_id,
-        turn: None,
+        turn: Some(turn_id),
         organization: None,
     };
     inner.turns.steer(&directive, address).await > 0

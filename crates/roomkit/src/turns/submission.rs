@@ -2,6 +2,7 @@
 use std::sync::{Arc, Weak};
 
 use roomkit_core::model::{ChannelBinding, ChannelId, ErrorRecord, RoomContext, RoomEvent, RoomId};
+use roomkit_core::rules::transcript::{TurnAuthor, turn_author};
 use uuid::Uuid;
 
 use super::error::TurnError;
@@ -201,6 +202,7 @@ impl Turns {
         let destination = self.destination(&turn_id, &**kit, binding)?;
         let observers = self.observers();
         let facts = owner::Facts::of(binding, &input.event, &input.context.room);
+        let author = turn_author(&input.event, &input.context);
         let Prepared {
             carried,
             stale,
@@ -245,7 +247,7 @@ impl Turns {
             memory.shut();
             return Err(closed());
         }
-        self.track_owner(&turn, &memory, binding, &facts);
+        self.track_owner(&turn, &memory, binding, &facts, author);
         Ok((turn, following))
     }
 
@@ -255,11 +257,13 @@ impl Turns {
         memory: &MemoryTurn,
         binding: &ChannelBinding,
         facts: &owner::Facts,
+        author: TurnAuthor,
     ) {
         lock(&self.started).start(
             (&memory.turn_id, &facts.room_id, &binding.channel_id),
             facts.organization_id.as_deref(),
             turn.steerable(),
+            author,
         );
     }
 
@@ -300,6 +304,7 @@ impl Turns {
             return Err(closed().into());
         }
         let mut facts = owner::Facts::of(binding, &input.event, &input.context.room);
+        let author = turn_author(&input.event, &input.context);
         let turn_id: Arc<str> = Arc::from(format!("turn-{}", Uuid::new_v4().simple()));
         let observers = self.observers();
         let Prepared {
@@ -350,7 +355,7 @@ impl Turns {
             memory.shut();
             return Err(closed().into());
         }
-        self.track_owner(&turn, &memory, binding, &facts);
+        self.track_owner(&turn, &memory, binding, &facts, author);
         Ok((turn, following))
     }
 

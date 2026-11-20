@@ -50,24 +50,6 @@ pub(crate) const STORE_FAULT_FAILURES: &[(&str, &str)] = &[
 const TURN_HOOK_CONTEXT: &str = "RMK-1837: a turn's ON_TOOL_CALL hooks read the context the turn \
                                  started with, never the room when they fire (§9.3, §10.6.6)";
 
-/// The scenarios of a Python change this implementation has not ported
-/// yet (RMK-1860), on every store: a running turn reads its own author's
-/// messages only. Their outcome depends on whether the turn still runs when
-/// the other person's message arrives, so the entries may pass.
-pub(crate) const STEERING_FAILURES: &[(&str, &str)] = &[
-    (
-        "steering/another-person-s-message-is-served-under-its-own-role-s-tools",
-        AUTHOR_ONLY_STEERING,
-    ),
-    (
-        "steering/another-person-s-message-waits-a-turn-of-its-own",
-        AUTHOR_ONLY_STEERING,
-    ),
-];
-
-const AUTHOR_ONLY_STEERING: &str = "timing: RMK-1860: another person's message that arrives while \
-                                    a turn runs is steered into that turn (§6.4, RK-6.4-036)";
-
 /// The repository's copy of the suite.
 pub(crate) fn suite() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance")
@@ -300,12 +282,7 @@ pub(crate) fn every_scenario_gives_what_the_rfc_says(pass: &Pass, known: &[(&str
     let executors = executor_pass();
     let backend = result_backend(crate::BACKEND, executors);
     let output = junit::claim(&backend, pass.runtime);
-    let known: Vec<(&str, &str)> = known
-        .iter()
-        .chain(STORE_FAULT_FAILURES)
-        .chain(STEERING_FAILURES)
-        .copied()
-        .collect();
+    let known: Vec<(&str, &str)> = known.iter().chain(STORE_FAULT_FAILURES).copied().collect();
     let run = run(
         &suite().join("scenarios"),
         filter.as_deref(),

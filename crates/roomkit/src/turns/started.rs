@@ -2,6 +2,7 @@
 //! §21.3): Python's `TurnClient._started` and `TurnClient.steer`.
 
 use roomkit_core::model::{ChannelId, RoomId};
+use roomkit_core::rules::transcript::TurnAuthor;
 
 use super::owner::Steerable;
 use crate::steering::SteeringDirective;
@@ -14,6 +15,8 @@ struct Started {
     channel_id: ChannelId,
     organization_id: Option<String>,
     steerable: Steerable,
+    /// Who wrote the message the turn answers.
+    author: TurnAuthor,
 }
 
 /// The turns the owner started and that are not over, in the order it
@@ -42,12 +45,14 @@ impl StartedTurns {
     }
 
     /// Records the turn `turn_id` of `channel_id` in `room_id`, started
-    /// now; the turns that are over are forgotten.
+    /// now to answer a message of `author`; the turns that are over are
+    /// forgotten.
     pub(crate) fn start(
         &mut self,
         (turn_id, room_id, channel_id): (&str, &RoomId, &ChannelId),
         organization_id: Option<&str>,
         steerable: Steerable,
+        author: TurnAuthor,
     ) {
         self.turns.retain(|turn| !turn.steerable.over());
         self.turns.push(Started {
@@ -56,7 +61,26 @@ impl StartedTurns {
             channel_id: channel_id.clone(),
             organization_id: organization_id.map(str::to_owned),
             steerable,
+            author,
         });
+    }
+
+    /// The turns of `channel_id` still running in `room_id`, oldest first:
+    /// each one's id and who wrote the message it answers. What a directive
+    /// steered there without a turn id may reach. Python's
+    /// `TurnClient._running_in`.
+    pub(crate) fn running_in(
+        &self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
+    ) -> Vec<(String, TurnAuthor)> {
+        self.turns
+            .iter()
+            .filter(|turn| {
+                !turn.steerable.over() && &turn.channel_id == channel_id && &turn.room_id == room_id
+            })
+            .map(|turn| (turn.turn_id.clone(), turn.author.clone()))
+            .collect()
     }
 
     /// The turns `directive` reaches at `address` (RFC §10.6.8): the

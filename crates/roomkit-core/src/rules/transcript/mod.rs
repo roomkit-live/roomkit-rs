@@ -102,7 +102,7 @@ pub use self::quote::quoted;
 use self::rounds::{ToolRound, tool_rounds};
 pub use self::speakers::{LABEL_LIMIT, people_note, people_taking_part};
 use self::speakers::{Speaker, labelled_lines, labels_turns, people_as_read, speaker, tell_apart};
-use super::authors::{Authors, recorded_author};
+use super::authors::{Authors, People, author_name, recorded_author, source_of};
 use super::edits::{is_deleted, opens_no_turn};
 use super::instructions::is_standalone;
 use super::lookalike::person_name;
@@ -1057,6 +1057,29 @@ pub fn turn_sources<'a>(
         .into_iter()
         .map(|event| speaker(event, &mut authors).map(|said| said.source))
         .collect()
+}
+
+/// Who wrote an event, for the turn that answers it (RFC §6.4 "A message
+/// for the running turn"): the room source it comes from (a participant, a
+/// sender on its channel, or a channel: RFC §10.1 step 12) under the name
+/// it is signed with. One sender id that carries several people (a bridge,
+/// a shared microphone whose voices are named) is not one author, and
+/// neither are two senders who sign one name. What Python's
+/// `core/_room_turns.py` `_author` answers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TurnAuthor {
+    source: Vec<String>,
+    name: Option<String>,
+}
+
+/// Who wrote `event` in the room of `context` ([`TurnAuthor`]).
+#[must_use]
+pub fn turn_author(event: &RoomEvent, context: &RoomContext) -> TurnAuthor {
+    let people = People::new(&context.participants);
+    TurnAuthor {
+        source: source_of(event, &people),
+        name: author_name(event, &people),
+    }
 }
 
 /// The text `event` reads as for the running turn of `channel_id` it is

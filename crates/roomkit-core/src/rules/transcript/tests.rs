@@ -600,6 +600,24 @@ fn a_ranked_label_keeps_the_name_it_disclaims_within_24_characters() {
     }
 }
 
+// Python: tests/test_steering_during_turn.py::test_another_person_s_message_waits_a_turn_of_its_own
+#[test]
+fn an_author_is_a_source_under_the_name_it_signs() {
+    let mut room = Timeline::new();
+    let asked = room.says("sms", "+15550001", Some("Alice"), "List the files.");
+    let again = room.says("sms", "+15550001", Some("Alice"), "Only the .py files.");
+    // Another sender, one sender id under another name (a bridge), and
+    // another sender who signs the author's own name.
+    let another = room.says("sms", "+15550002", Some("Bob"), "Only the .py files.");
+    let bridged = room.says("sms", "+15550001", Some("Bob"), "Only the .py files.");
+    let namesake = room.says("sms", "+15550002", Some("Alice"), "Only the .py files.");
+    let author = super::turn_author(&asked, &room.context);
+    assert_eq!(super::turn_author(&again, &room.context), author);
+    for other in [&another, &bridged, &namesake] {
+        assert_ne!(super::turn_author(other, &room.context), author);
+    }
+}
+
 // Python: tests/test_people_taking_part.py::TestWhoTakesPart::test_a_nameless_person_reads_as_their_channel_and_a_look_alike_carries_a_rank
 #[test]
 fn a_nameless_person_reads_as_their_channel_and_a_look_alike_carries_a_rank() {
