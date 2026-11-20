@@ -94,6 +94,8 @@ pub(crate) type Kit = RoomKit<Store>;
 /// fail or hold (`store_faults`).
 pub(crate) type Store = FaultingStore<InMemoryStore>;
 /// The backend's name in the result file (`junit`).
+pub(crate) type StoreLocation = ();
+
 pub(crate) const BACKEND: &str = "memory";
 
 /// The memory runner needs no external service for its fixture checks.
@@ -140,8 +142,11 @@ pub(crate) async fn process_kit(
     store: &std::sync::Arc<Store>,
     _kept: &(),
     lock_manager: std::sync::Arc<dyn roomkit::RoomLockManager>,
+    connection: Option<run::OwnerConnection>,
 ) -> Kit {
     RoomKit::new(RoomKitOptions {
+        turn_backend: connection.as_ref().map(|node| node.turns.clone()),
+        realtime: connection.and_then(|node| node.realtime),
         store: std::sync::Arc::clone(store),
         lock_manager: Some(lock_manager),
         ..empty_options()

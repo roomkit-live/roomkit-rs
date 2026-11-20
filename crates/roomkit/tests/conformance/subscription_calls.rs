@@ -19,10 +19,19 @@ pub(crate) async fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Cal
         "subscribe_room" => {
             let subscriber = field::<String>(spec, "subscriber")?;
             run.record_subscriber(&subscriber, None);
+            let kinds = optional::<Vec<roomkit::realtime::EphemeralEventType>>(spec, "types")?;
+            let gate = optional::<String>(spec, "gate")?;
             let recorder = Arc::downgrade(run);
             let record = move |event: EphemeralEvent| {
                 let (recorder, subscriber) = (Weak::clone(&recorder), subscriber.clone());
+                let accepted = kinds
+                    .as_ref()
+                    .is_none_or(|kinds| kinds.contains(&event.r#type));
+                let gate = gate.clone();
                 async move {
+                    if !accepted {
+                        return;
+                    }
                     if let Some(run) = recorder.upgrade() {
                         let read = json!({
                             "type": event.r#type,
@@ -30,6 +39,9 @@ pub(crate) async fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Cal
                             "user_id": event.user_id,
                         });
                         run.record_subscriber(&subscriber, Some(read));
+                        if let Some(gate) = gate {
+                            run.gates.reach(&gate);
+                        }
                     }
                 }
             };

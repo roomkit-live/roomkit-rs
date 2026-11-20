@@ -137,6 +137,8 @@ pub(crate) type Kit = RoomKit<Store>;
 /// fail or hold (`store_faults`).
 pub(crate) type Store = FaultingStore<SqliteStore>;
 /// The backend's name in the result file (`junit`).
+pub(crate) type StoreLocation = TempFile;
+
 pub(crate) const BACKEND: &str = "sqlite";
 
 /// The SQLite runner creates its own files for fixture checks.
@@ -190,11 +192,14 @@ pub(crate) async fn process_kit(
     _store: &std::sync::Arc<Store>,
     file: &TempFile,
     lock_manager: std::sync::Arc<dyn roomkit::RoomLockManager>,
+    connection: Option<run::OwnerConnection>,
 ) -> Kit {
     let store = SqliteStore::new(SqliteStoreOptions {
         path: file.path().into(),
     });
     RoomKit::new(RoomKitOptions {
+        turn_backend: connection.as_ref().map(|node| node.turns.clone()),
+        realtime: connection.and_then(|node| node.realtime),
         lock_manager: Some(lock_manager),
         ..RoomKitOptions::with_store(FaultingStore::new(store))
     })

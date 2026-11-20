@@ -140,6 +140,8 @@ pub(crate) type Kit = RoomKit<Store>;
 /// fail or hold (`store_faults`).
 pub(crate) type Store = FaultingStore<PostgresStore>;
 /// The backend's name in the result file (`junit`).
+pub(crate) type StoreLocation = TempSchema;
+
 pub(crate) const BACKEND: &str = "postgres";
 
 /// Shared fixture checks have the same service requirement as scenarios.
@@ -189,6 +191,7 @@ pub(crate) async fn process_kit(
     _store: &Arc<Store>,
     schema: &TempSchema,
     _lock_manager: Arc<dyn roomkit::RoomLockManager>,
+    connection: Option<run::OwnerConnection>,
 ) -> Kit {
     let store = schema.initialized_store().await;
     let locks = PostgresAdvisoryLockManager::new(PostgresAdvisoryLockManagerOptions {
@@ -198,6 +201,8 @@ pub(crate) async fn process_kit(
     });
     locks.init().await.unwrap();
     RoomKit::new(RoomKitOptions {
+        turn_backend: connection.as_ref().map(|node| node.turns.clone()),
+        realtime: connection.and_then(|node| node.realtime),
         lock_manager: Some(Arc::new(locks)),
         ..RoomKitOptions::with_store(FaultingStore::new(store))
     })

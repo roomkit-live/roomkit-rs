@@ -22,8 +22,9 @@ impl Site {
         topology: &Topology,
         executor: TurnExecutor,
         isolated: bool,
+        kit: Option<&str>,
     ) -> Result<Self, RoomKitError> {
-        let hosting = topology.worker()?;
+        let hosting = topology.worker(kit)?;
         let mode = if isolated {
             Mode::Isolated(Runtime::start(hosting.clone(), executor.clone()).await?)
         } else {
@@ -43,7 +44,7 @@ impl Site {
         worker: &super::Worker,
         run: std::sync::Arc<crate::run::Run>,
     ) -> Result<Self, RoomKitError> {
-        let hosting = topology.worker()?;
+        let hosting = topology.worker(worker.kit.as_deref())?;
         let silent = super::silent::Silent::start(
             &topology.url,
             &topology.options.key_prefix,

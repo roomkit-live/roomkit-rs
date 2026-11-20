@@ -58,6 +58,9 @@ const KIT: &[&str] = &[
     "inbound_rate_limit",
     "persistence_policy",
     "store_faults",
+    "shared_realtime",
+    "turn_backend_faults",
+    "executor_catalogue",
 ];
 const RATE_LIMIT: &[&str] = &["max_per_second", "max_per_minute", "max_per_hour"];
 const PERSISTENCE_POLICY: &[&str] = &["persist_types", "exclude_types"];
@@ -471,6 +474,7 @@ const STEPS: &[(&str, &[&str])] = &[
     ("wait_for_lock", &["wait_for_lock", "waiters"]),
     ("lock_releases", &["lock_releases"]),
     ("acp_disconnect", &["acp_disconnect"]),
+    ("restart_process", &["restart_process"]),
     ("under_lock", &["under_lock", "do"]),
     ("store_fault", &["store_fault", "fail", "gate", "room_id"]),
 ];
@@ -534,7 +538,9 @@ fn base_arguments(call: &str) -> Option<&'static [&'static str]> {
         "delete_event" => &["room_id", "event_id", "cascade_replies"],
         "create_room" => &["room", "orchestration"],
         "pause_room" | "resume_room" | "reopen_room" | "close_room" | "archive_room"
-        | "check_timers" | "regenerate_target" | "agent_presence" => &["room_id"],
+        | "check_timers" | "regenerate_target" | "agent_presence" => {
+            &["room_id", "wait_for_online"]
+        }
         "set_room_timers" => &["room_id", "timers"],
         "set_agent_response_policy" => &["room_id", "policy"],
         "send_greeting" => &["room_id", "channel_id", "agent_id", "greeting"],
@@ -546,7 +552,8 @@ fn base_arguments(call: &str) -> Option<&'static [&'static str]> {
         "add_room_hook" | "hook_engine.add_room_hook" | "kit_executor.add_owner_room_hook" => {
             &["room_id", "hook"]
         }
-        "subscribe_room" => &["room_id", "subscriber"],
+        "turn_backend.fault" => &["operation", "enabled", "gate"],
+        "subscribe_room" => &["room_id", "subscriber", "types", "gate"],
         "channel.publish" => &["executor", "channel_id", "room_id", "kind", "data", "gate"],
         "publish_typing" => &["room_id", "user_id", "is_typing"],
         "process_delivery_status" => &["status"],
@@ -620,6 +627,8 @@ fn executor_setup(setup: &Value, found: &mut Vec<String>) {
             &[
                 "id",
                 "hosts",
+                "host_predicate",
+                "kit",
                 "organizations",
                 "telemetry",
                 "error_classes",

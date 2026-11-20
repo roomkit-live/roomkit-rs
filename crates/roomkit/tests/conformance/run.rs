@@ -103,11 +103,31 @@ pub(crate) struct Check {
 }
 
 /// Lifecycle operations offered by the distributed executor fixture of this pass.
+pub(crate) struct OwnerConnection {
+    pub(crate) turns: roomkit::turns::TurnBackendHandle,
+    pub(crate) realtime: Option<Arc<dyn roomkit::realtime::RealtimeBackend>>,
+}
+
 pub(crate) trait WorkerControl: Send + Sync {
     fn publication_taken<'a>(
         &'a self,
         worker: &'a str,
     ) -> BoxFuture<'a, Result<(), roomkit::RoomKitError>>;
+    fn close_process_workers<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<(), roomkit::RoomKitError>>;
+    fn connection(
+        &self,
+        name: &str,
+        restart: bool,
+    ) -> Result<OwnerConnection, roomkit::RoomKitError>;
+    fn fault(
+        &self,
+        operation: &str,
+        enabled: bool,
+        gate: Option<String>,
+    ) -> Result<(), roomkit::RoomKitError>;
     fn start_all(&self) -> BoxFuture<'_, Result<(), roomkit::RoomKitError>>;
     fn change<'a>(
         &'a self,
@@ -340,7 +360,13 @@ impl Run {
 
     /// `kit`, another process serving the rooms, known as `id` from now on.
     pub(crate) fn add_process(&self, id: String, kit: crate::Kit) {
-        lock(&self.processes).push((id, kit));
+        lock(&self.closed).remove(&id);
+        let mut processes = lock(&self.processes);
+        if let Some((_, previous)) = processes.iter_mut().find(|(name, _)| *name == id) {
+            *previous = kit;
+        } else {
+            processes.push((id, kit));
+        }
     }
 
     /// The kit a call's `kit` names: a process of the setup, the run's own
@@ -359,6 +385,10 @@ impl Run {
             .find(|(id, _)| id == name)
             .map(|(_, kit)| kit.clone())
             .ok_or_else(|| format!("no process {name:?} in setup.processes"))
+    }
+
+    pub(crate) fn process_is_closed(&self, name: &str) -> bool {
+        lock(&self.closed).contains(name)
     }
 
     /// The kit a call's `kit` names was closed: no wait, no close of it
@@ -1099,6 +1129,8 @@ const KIT_CALLS: &[&str] = &[
     "add_room_hook",
     "subscribe_room",
     "publish_typing",
+    "steer",
+    "agent_presence",
     "regenerate_response",
     "install_strategy",
     "uninstall_strategy",

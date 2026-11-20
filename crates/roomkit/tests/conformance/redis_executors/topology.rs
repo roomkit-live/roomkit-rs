@@ -2,6 +2,9 @@
 //! follow Python's fixture: the same Redis backend serves the room owner's
 //! workers and reports their start and close before the next scenario step.
 
+use std::collections::BTreeMap;
+use std::sync::Mutex;
+
 use roomkit::{RedisTurnBackend, RedisTurnBackendOptions, RoomKitError, TurnExecutor};
 use serde_json::Value;
 use uuid::Uuid;
@@ -19,6 +22,7 @@ pub(super) struct Topology {
     owner: RedisTurnBackend,
     pub(super) url: String,
     pub(super) options: RedisTurnBackendOptions,
+    nodes: Mutex<BTreeMap<String, RedisTurnBackend>>,
     shared: bool,
 }
 
@@ -29,8 +33,28 @@ impl Topology {
             key_prefix: format!("roomkit:test:scenario:{}", Uuid::new_v4()),
             ..RedisTurnBackendOptions::default()
         };
+        let mut nodes = BTreeMap::new();
+        for process in scenario["setup"]["processes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+        {
+            let name = process["id"]
+                .as_str()
+                .ok_or_else(|| RoomKitError::Value("process id is missing".into()))?;
+            if name == "main" {
+                return Err(RoomKitError::Value(
+                    "main names the run's own process".into(),
+                ));
+            }
+            nodes.insert(
+                name.to_owned(),
+                RedisTurnBackend::new(Some(url), options.clone())?,
+            );
+        }
         Ok(Self {
             owner: RedisTurnBackend::new(Some(url), options.clone())?,
+            nodes: Mutex::new(nodes),
             url: url.to_owned(),
             options,
             shared: scenario["id"].as_str().is_some_and(is_presence),
@@ -41,7 +65,24 @@ impl Topology {
         &self.owner
     }
 
-    pub(super) fn worker(&self) -> Result<RedisTurnBackend, RoomKitError> {
+    pub(super) fn node(&self, name: &str, restart: bool) -> Result<RedisTurnBackend, RoomKitError> {
+        if name == "main" {
+            return Ok(self.owner.clone());
+        }
+        let mut nodes = crate::run::lock(&self.nodes);
+        let node = nodes
+            .get_mut(name)
+            .ok_or_else(|| RoomKitError::Value(format!("unknown executor process {name}")))?;
+        if restart {
+            *node = RedisTurnBackend::new(Some(&self.url), self.options.clone())?;
+        }
+        Ok(node.clone())
+    }
+
+    pub(super) fn worker(&self, name: Option<&str>) -> Result<RedisTurnBackend, RoomKitError> {
+        if let Some(name) = name {
+            return self.node(name, false);
+        }
         if self.shared {
             Ok(self.owner.clone())
         } else {
@@ -55,11 +96,11 @@ impl Topology {
         executor: &TurnExecutor,
     ) -> Result<(), RoomKitError> {
         executor.close().await;
-        if self.shared {
-            Ok(())
-        } else {
-            hosting.close().await
-        }
+        let owned = hosting.node_id() == self.owner.node_id()
+            || crate::run::lock(&self.nodes)
+                .values()
+                .any(|node| node.node_id() == hosting.node_id());
+        if owned { Ok(()) } else { hosting.close().await }
     }
 }
 

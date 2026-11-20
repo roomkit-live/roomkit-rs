@@ -237,22 +237,13 @@ pub(crate) async fn run_with(
         return vec![format!("setup: {problem}")];
     }
     for process in setup["processes"].as_array().into_iter().flatten() {
-        let id = process["id"].as_str().unwrap_or_default().to_owned();
-        let kit = crate::process_kit(&run.store(), &store_file, run.kit().lock_manager()).await;
-        for channel in setup["channels"].as_array().into_iter().flatten() {
-            if let Err(problem) = calls::register_process_channel(&run, &kit, channel) {
-                return vec![format!("setup: process {id}: {problem}")];
-            }
+        let id = process["id"].as_str().unwrap_or_default();
+        if let Err(problem) = open_process(&run, &setup, &store_file, id, false).await {
+            return vec![format!("setup: process {id}: {problem}")];
         }
-        run.add_process(id, kit);
     }
-    if records_ephemerals(scenario) {
-        for room in setup["rooms"].as_array().into_iter().flatten() {
-            let room = room["id"].as_str().unwrap_or_default();
-            if let Err(problem) = subscribe_thinking(&run, room).await {
-                return vec![format!("setup: {problem}")];
-            }
-        }
+    if let Err(problem) = subscribe_rooms(&run, scenario, &setup).await {
+        return vec![format!("setup: {problem}")];
     }
     run.recording.store(true, Ordering::SeqCst);
     let mut step_outcomes = Vec::new();
@@ -262,6 +253,12 @@ pub(crate) async fn run_with(
         .flatten()
         .enumerate()
     {
+        if let Some(name) = step["restart_process"].as_str() {
+            if let Err(problem) = open_process(&run, &setup, &store_file, name, true).await {
+                run.problem(problem);
+            }
+            continue;
+        }
         step_outcomes.extend(run_step(&run, step, &format!("steps[{position}]")).await);
     }
     run.idle().await;
@@ -282,6 +279,55 @@ pub(crate) async fn run_with(
     let mut found = lock(&run.problems).clone();
     found.extend(compare(&run, scenario, &observed));
     found
+}
+
+async fn subscribe_rooms(run: &Arc<Run>, scenario: &Value, setup: &Value) -> Result<(), String> {
+    if records_ephemerals(scenario) {
+        for room in setup["rooms"].as_array().into_iter().flatten() {
+            subscribe_thinking(run, room["id"].as_str().unwrap_or_default()).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Open a new configured connection to the same store and turn network.
+async fn open_process(
+    run: &Arc<Run>,
+    setup: &Value,
+    store_file: &crate::StoreLocation,
+    id: &str,
+    restart: bool,
+) -> Result<(), String> {
+    if restart {
+        if let Some(workers) = &run.workers {
+            workers
+                .close_process_workers(id)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        let previous = run.kit_of(&json!({"call":"close", "kit":id}))?;
+        if !run.process_is_closed(id) {
+            previous.close().await.map_err(|error| error.to_string())?;
+        }
+    }
+    let connection = run
+        .workers
+        .as_ref()
+        .map(|workers| workers.connection(id, restart))
+        .transpose()
+        .map_err(|error| error.to_string())?;
+    let kit = crate::process_kit(
+        &run.store(),
+        store_file,
+        run.kit().lock_manager(),
+        connection,
+    )
+    .await;
+    for channel in setup["channels"].as_array().into_iter().flatten() {
+        calls::register_process_channel(run, &kit, channel)?;
+    }
+    run.add_process(id.to_owned(), kit);
+    Ok(())
 }
 
 async fn set_up(run: &Arc<Run>, setup: &Value) -> Result<(), String> {

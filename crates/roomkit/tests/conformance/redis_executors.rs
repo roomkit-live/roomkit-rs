@@ -2,6 +2,8 @@
 //! with independent Redis nodes and compares the complete scenario expectations.
 #[path = "redis_executors/channel.rs"]
 mod channel;
+#[path = "redis_executors/presence.rs"]
+mod presence;
 #[path = "redis_executors/silent.rs"]
 mod silent;
 #[path = "redis_executors/site.rs"]
@@ -46,7 +48,9 @@ pub(super) fn run(
 #[serde(deny_unknown_fields)]
 struct Worker {
     id: String,
-    hosts: BTreeSet<String>,
+    hosts: Option<BTreeSet<String>>,
+    host_predicate: Option<BTreeSet<String>>,
+    kit: Option<String>,
     organizations: Option<BTreeSet<String>>,
     started: Option<bool>,
     answers: Option<bool>,
@@ -100,6 +104,7 @@ impl Worker {
 
 struct Workers {
     topology: topology::Topology,
+    presence: presence::Presence,
     declarations: Vec<Worker>,
     channels: Arc<Vec<Value>>,
     slot: RunSlot,
@@ -130,25 +135,32 @@ impl Workers {
         } else {
             None
         };
-        TurnExecutor::new(
-            move |channel| {
-                std::future::ready(serving.channel(channel.as_str(), &declarations, &observed))
-            },
-            TurnExecutorOptions {
-                executor_id: Some(worker.id.clone()),
-                hosts: Some(worker.hosts.clone()),
-                organizations: worker.organizations.clone(),
-                timeouts: self.topology.owner().timeouts(),
-                max_channels: worker.max_channels,
-                telemetry,
-                error_classes: worker
-                    .error_classes
-                    .as_deref()
-                    .map(crate::channel_verbs::turn_errors::classes)
-                    .unwrap_or_default(),
-                ..TurnExecutorOptions::default()
-            },
-        )
+        let build = move |channel: roomkit::model::ChannelId| {
+            std::future::ready(serving.channel(channel.as_str(), &declarations, &observed))
+        };
+        let options = TurnExecutorOptions {
+            executor_id: Some(worker.id.clone()),
+            hosts: worker.hosts.clone(),
+            organizations: worker.organizations.clone(),
+            timeouts: self.topology.owner().timeouts(),
+            max_channels: worker.max_channels,
+            telemetry,
+            error_classes: worker
+                .error_classes
+                .as_deref()
+                .map(crate::channel_verbs::turn_errors::classes)
+                .unwrap_or_default(),
+            ..TurnExecutorOptions::default()
+        };
+        if let Some(accepted) = worker.host_predicate.clone() {
+            TurnExecutor::new_with_host_predicate(
+                build,
+                move |id| accepted.contains(id.as_str()),
+                options,
+            )
+        } else {
+            TurnExecutor::new(build, options)
+        }
     }
     async fn start(&self, id: &str) -> Result<(), RoomKitError> {
         let worker = self
@@ -179,7 +191,13 @@ impl Workers {
         let site = if worker.answers == Some(false) {
             site::Site::silent(&self.topology, executor, worker, run).await?
         } else {
-            site::Site::start(&self.topology, executor, self.mortal.contains(id)).await?
+            site::Site::start(
+                &self.topology,
+                executor,
+                self.mortal.contains(id),
+                worker.kit.as_deref(),
+            )
+            .await?
         };
         active.insert(id.to_owned(), site);
         Ok(())
@@ -233,6 +251,37 @@ impl crate::run::WorkerControl for Workers {
         })
     }
 
+    fn close_process_workers<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<(), RoomKitError>> {
+        Box::pin(async move {
+            for worker in &self.declarations {
+                if worker.kit.as_deref() == Some(name) {
+                    let site = self.active.lock().await.remove(&worker.id);
+                    if let Some(site) = site {
+                        site.close(&self.topology).await?;
+                    }
+                }
+            }
+            Ok(())
+        })
+    }
+    fn connection(
+        &self,
+        name: &str,
+        restart: bool,
+    ) -> Result<crate::run::OwnerConnection, RoomKitError> {
+        Ok(self.presence.connection(self.topology.node(name, restart)?))
+    }
+    fn fault(
+        &self,
+        operation: &str,
+        enabled: bool,
+        gate: Option<String>,
+    ) -> Result<(), RoomKitError> {
+        self.presence.fault(operation, enabled, gate)
+    }
     fn start_all(&self) -> BoxFuture<'_, Result<(), RoomKitError>> {
         Box::pin(async move {
             for worker in &self.declarations {
@@ -276,11 +325,13 @@ async fn exercise(url: &str, scenario: &Value) -> Result<Vec<String>, RoomKitErr
     }
     let setup: Setup = serde_json::from_value(scenario["setup"].clone())
         .map_err(|error| RoomKitError::Value(error.to_string()))?;
+    let slot = RunSlot::default();
     let workers = Arc::new(Workers {
+        presence: presence::Presence::new(&scenario["setup"]["kit"], slot.clone()),
         topology: topology::Topology::new(url, scenario)?,
         declarations: setup.executors,
         channels: Arc::new(setup.channels),
-        slot: RunSlot::default(),
+        slot,
         active: Mutex::default(),
         mortal: scenario["steps"]
             .as_array()
@@ -292,13 +343,16 @@ async fn exercise(url: &str, scenario: &Value) -> Result<Vec<String>, RoomKitErr
         restarted: restarted(scenario),
     });
     let owner = workers.topology.owner().clone();
-    let backend = roomkit::turns::TurnBackendHandle::new(Arc::new(owner.clone()));
+    let main = workers.presence.connection(owner.clone());
     let problems = crate::harness::run_with(
         scenario,
         workers.slot.clone(),
         Some(Arc::<Workers>::clone(&workers)),
         |mut options| {
-            options.turn_backend = Some(backend.clone());
+            options.turn_backend = Some(main.turns);
+            if main.realtime.is_some() {
+                options.realtime = main.realtime;
+            }
             options
         },
     )
@@ -308,6 +362,8 @@ async fn exercise(url: &str, scenario: &Value) -> Result<Vec<String>, RoomKitErr
         workers.remove(&id).await?.close(&workers.topology).await?;
     }
     owner.close().await?;
+    let mut problems = problems;
+    problems.extend(workers.presence.untaken());
     Ok(problems)
 }
 
