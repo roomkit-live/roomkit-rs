@@ -98,6 +98,8 @@ mod skills;
 mod speaking;
 #[path = "../../../roomkit/tests/conformance/store_calls.rs"]
 mod store_calls;
+#[path = "../../../roomkit/tests/conformance/store_faults.rs"]
+mod store_faults;
 #[path = "../../../roomkit/tests/conformance/strategy_calls.rs"]
 mod strategy_calls;
 #[path = "../../../roomkit/tests/conformance/subscription_calls.rs"]
@@ -116,6 +118,7 @@ use std::time::Duration;
 use roomkit::{RoomKit, RoomKitOptions};
 use roomkit_sqlite::{SqliteStore, SqliteStoreOptions};
 
+use crate::store_faults::FaultingStore;
 use crate::support::TempFile;
 
 /// Scenario id → the rule this implementation breaks on this store: the
@@ -127,9 +130,10 @@ pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = scenarios::HOST_LOCK_FAILURES
 pub(crate) const SCENARIO_BOUND: Duration = Duration::from_secs(60);
 
 /// The kit the scenarios run on, over the SQLite store.
-pub(crate) type Kit = RoomKit<SqliteStore>;
-/// The store of the kit the runner builds.
-pub(crate) type Store = SqliteStore;
+pub(crate) type Kit = RoomKit<Store>;
+/// The store of the kit the runner builds, which a `store_fault` step makes
+/// fail or hold (`store_faults`).
+pub(crate) type Store = FaultingStore<SqliteStore>;
 /// The backend's name in the result file (`junit`).
 pub(crate) const BACKEND: &str = "sqlite";
 
@@ -145,14 +149,16 @@ pub(crate) const fn backend_available() -> bool {
     reason = "the shared scenarios await their kit, which another store may open at once"
 )]
 pub(crate) async fn new_kit(
-    configure: impl FnOnce(RoomKitOptions<SqliteStore>) -> RoomKitOptions<SqliteStore>,
+    configure: impl FnOnce(RoomKitOptions<Store>) -> RoomKitOptions<Store>,
 ) -> (Kit, TempFile) {
     let file = TempFile::new("conformance");
     let store = SqliteStore::new(SqliteStoreOptions {
         path: file.path().into(),
     });
     (
-        RoomKit::new(configure(RoomKitOptions::with_store(store))),
+        RoomKit::new(configure(RoomKitOptions::with_store(FaultingStore::new(
+            store,
+        )))),
         file,
     )
 }
@@ -166,9 +172,9 @@ pub(crate) async fn observer_store(
     _store: &std::sync::Arc<Store>,
     file: &TempFile,
 ) -> std::sync::Arc<Store> {
-    std::sync::Arc::new(SqliteStore::new(SqliteStoreOptions {
+    std::sync::Arc::new(FaultingStore::new(SqliteStore::new(SqliteStoreOptions {
         path: file.path().into(),
-    }))
+    })))
 }
 
 /// Another process serving the rooms (README, `processes`): a kit over a
@@ -179,7 +185,7 @@ pub(crate) async fn observer_store(
     reason = "every store's process is made the same way, some awaiting their store"
 )]
 pub(crate) async fn process_kit(
-    _store: &std::sync::Arc<SqliteStore>,
+    _store: &std::sync::Arc<Store>,
     file: &TempFile,
     lock_manager: std::sync::Arc<dyn roomkit::RoomLockManager>,
 ) -> Kit {
@@ -188,7 +194,7 @@ pub(crate) async fn process_kit(
     });
     RoomKit::new(RoomKitOptions {
         lock_manager: Some(lock_manager),
-        ..RoomKitOptions::with_store(store)
+        ..RoomKitOptions::with_store(FaultingStore::new(store))
     })
 }
 

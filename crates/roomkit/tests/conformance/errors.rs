@@ -178,6 +178,7 @@ pub(crate) fn error_of(error: &RoomKitError) -> Option<Value> {
             let verb = message.split(" needs a turn: ").next().unwrap_or_default();
             json!({ "name": "needs_turn", "reason": verb })
         }
+        RoomKitError::Store(_) => named("store_failed"),
         RoomKitError::VerificationRefused { reason } => {
             json!({ "name": "verification_refused", "reason": reason })
         }

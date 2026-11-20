@@ -98,6 +98,8 @@ mod skills;
 mod speaking;
 #[path = "../../../roomkit/tests/conformance/store_calls.rs"]
 mod store_calls;
+#[path = "../../../roomkit/tests/conformance/store_faults.rs"]
+mod store_faults;
 #[path = "../../../roomkit/tests/conformance/strategy_calls.rs"]
 mod strategy_calls;
 #[path = "../../../roomkit/tests/conformance/subscription_calls.rs"]
@@ -120,6 +122,7 @@ use roomkit_postgres::{
     PostgresAdvisoryLockManager, PostgresAdvisoryLockManagerOptions, PostgresStore,
 };
 
+use crate::store_faults::FaultingStore;
 use crate::support::TempSchema;
 
 /// Shared text failures, with no store-specific exceptions.
@@ -130,9 +133,10 @@ pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = scenarios::HOST_LOCK_FAILURES
 pub(crate) const SCENARIO_BOUND: Duration = Duration::from_secs(60);
 
 /// The kit the scenarios run on, over the Postgres store.
-pub(crate) type Kit = RoomKit<PostgresStore>;
-/// The store of the kit the runner builds.
-pub(crate) type Store = PostgresStore;
+pub(crate) type Kit = RoomKit<Store>;
+/// The store of the kit the runner builds, which a `store_fault` step makes
+/// fail or hold (`store_faults`).
+pub(crate) type Store = FaultingStore<PostgresStore>;
 /// The backend's name in the result file (`junit`).
 pub(crate) const BACKEND: &str = "postgres";
 
@@ -154,11 +158,11 @@ pub(crate) fn backend_available() -> bool {
 /// `configure` makes of the defaults, and the schema, dropped once the run is
 /// over.
 pub(crate) async fn new_kit(
-    configure: impl FnOnce(RoomKitOptions<PostgresStore>) -> RoomKitOptions<PostgresStore>,
+    configure: impl FnOnce(RoomKitOptions<Store>) -> RoomKitOptions<Store>,
 ) -> (Kit, TempSchema) {
     let schema = TempSchema::new().await;
     let store = schema.initialized_store().await;
-    let mut options = configure(RoomKitOptions::with_store(store));
+    let mut options = configure(RoomKitOptions::with_store(FaultingStore::new(store)));
     if options.lock_manager.is_none() {
         let locks = PostgresAdvisoryLockManager::new(PostgresAdvisoryLockManagerOptions {
             dsn: Some(schema.dsn()),
@@ -173,14 +177,14 @@ pub(crate) async fn new_kit(
 
 /// Observe the same schema through a pool no scenario call can close.
 pub(crate) async fn observer_store(_store: &Arc<Store>, schema: &TempSchema) -> Arc<Store> {
-    Arc::new(schema.initialized_store().await)
+    Arc::new(FaultingStore::new(schema.initialized_store().await))
 }
 
 /// Another process serving the rooms (README, `processes`): a kit over a
 /// store of its own on the run's schema and an advisory lock manager of its
 /// own, as another process opens them.
 pub(crate) async fn process_kit(
-    _store: &Arc<PostgresStore>,
+    _store: &Arc<Store>,
     schema: &TempSchema,
     _lock_manager: Arc<dyn roomkit::RoomLockManager>,
 ) -> Kit {
@@ -193,7 +197,7 @@ pub(crate) async fn process_kit(
     locks.init().await.unwrap();
     RoomKit::new(RoomKitOptions {
         lock_manager: Some(Arc::new(locks)),
-        ..RoomKitOptions::with_store(store)
+        ..RoomKitOptions::with_store(FaultingStore::new(store))
     })
 }
 

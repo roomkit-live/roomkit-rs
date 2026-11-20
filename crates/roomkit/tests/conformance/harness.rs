@@ -210,6 +210,9 @@ pub(crate) async fn run_with(
     let Some(store) = shared_store else {
         return vec!["setup: the kit took no store".to_owned()];
     };
+    if setup["kit"]["store_faults"] == Value::Bool(true) {
+        store.faults().declare();
+    }
     let snapshot_store = crate::observer_store(&store, &store_file).await;
     let mut run = Run::new(kit, store, snapshot_store, scenario);
     run.workers = workers;
@@ -250,6 +253,10 @@ pub(crate) async fn run_with(
         step_outcomes.extend(run_step(&run, step, &format!("steps[{position}]")).await);
     }
     run.idle().await;
+    // A fault no call took tested nothing (README, "Steps").
+    for problem in run.store().faults().untaken() {
+        run.problem(problem);
+    }
     if records_ephemerals(scenario) || scenario["expect"].get("subscribers").is_some() {
         settle_ephemerals(&run).await;
     }
@@ -404,6 +411,8 @@ async fn run_step(run: &Arc<Run>, step: &Value, path: &str) -> Vec<Value> {
                 "{path}: a lock_releases step needs setup.kit.lock_manager"
             ));
         }
+    } else if step.get("store_fault").is_some() {
+        arm_store_fault(run, step, path).await;
     } else if let Some(gate) = step["open"].as_str() {
         run.gates.open(gate);
     } else if let Some(channel) = step["acp_disconnect"].as_str() {
@@ -427,6 +436,31 @@ async fn run_step(run: &Arc<Run>, step: &Value, path: &str) -> Vec<Value> {
         }
     }
     outcomes
+}
+
+/// Arms a fault on the kit's store for the next call it matches (README,
+/// "Steps", `store_fault`), held at the run's gates.
+async fn arm_store_fault(run: &Arc<Run>, step: &Value, path: &str) {
+    let room_id = match step.get("room_id") {
+        Some(room) => run
+            .resolve(room.clone(), &Scope::default())
+            .await
+            .as_str()
+            .map(str::to_owned),
+        None => None,
+    };
+    let weak = Arc::downgrade(run);
+    let holds_at_gate: crate::store_faults::Hold = Arc::new(move |gate: String| {
+        let weak = Weak::clone(&weak);
+        Box::pin(async move {
+            if let Some(run) = weak.upgrade() {
+                run.gates.hold(&gate).await;
+            }
+        })
+    });
+    if let Err(problem) = run.store().faults().arm(step, path, room_id, holds_at_gate) {
+        run.problem(problem);
+    }
 }
 
 /// Makes an `under_lock` step's calls under the room lock the host takes

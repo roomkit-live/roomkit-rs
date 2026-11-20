@@ -71,6 +71,7 @@ mod skill_registry;
 mod skills;
 mod speaking;
 mod store_calls;
+mod store_faults;
 mod strategy_calls;
 mod subscription_calls;
 mod task_calls;
@@ -83,12 +84,14 @@ use roomkit::{InMemoryStore, RoomKit, RoomKitOptions};
 use sha2::{Digest, Sha256};
 
 use crate::scenarios::{scenarios, suite};
+use crate::store_faults::FaultingStore;
 
 /// The kit the scenarios run on, over the in-memory store; roomkit-sqlite
 /// runs them on its store too (crates/roomkit-sqlite/tests/conformance).
-pub(crate) type Kit = RoomKit<InMemoryStore>;
-/// The store of the kit the runner builds.
-pub(crate) type Store = InMemoryStore;
+pub(crate) type Kit = RoomKit<Store>;
+/// The store of the kit the runner builds, which a `store_fault` step makes
+/// fail or hold (`store_faults`).
+pub(crate) type Store = FaultingStore<InMemoryStore>;
 /// The backend's name in the result file (`junit`).
 pub(crate) const BACKEND: &str = "memory";
 
@@ -103,8 +106,15 @@ pub(crate) const fn backend_available() -> bool {
     clippy::unused_async,
     reason = "every store's kit is made the same way, some awaiting their store"
 )]
-pub(crate) async fn new_kit(configure: impl FnOnce(RoomKitOptions) -> RoomKitOptions) -> (Kit, ()) {
-    (RoomKit::new(configure(RoomKitOptions::default())), ())
+pub(crate) async fn new_kit(
+    configure: impl FnOnce(RoomKitOptions<Store>) -> RoomKitOptions<Store>,
+) -> (Kit, ()) {
+    (RoomKit::new(configure(empty_options())), ())
+}
+
+/// The defaults over an empty in-memory store, wrapped.
+fn empty_options() -> RoomKitOptions<Store> {
+    RoomKitOptions::with_store(FaultingStore::new(InMemoryStore::default()))
 }
 
 /// Memory stays readable after close: its shared store is also the observer.
@@ -133,7 +143,7 @@ pub(crate) async fn process_kit(
     RoomKit::new(RoomKitOptions {
         store: std::sync::Arc::clone(store),
         lock_manager: Some(lock_manager),
-        ..RoomKitOptions::default()
+        ..empty_options()
     })
 }
 

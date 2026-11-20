@@ -55,6 +55,7 @@ const KIT: &[&str] = &[
     "lock_manager",
     "inbound_rate_limit",
     "persistence_policy",
+    "store_faults",
 ];
 const RATE_LIMIT: &[&str] = &["max_per_second", "max_per_minute", "max_per_hour"];
 const PERSISTENCE_POLICY: &[&str] = &["persist_types", "exclude_types"];
@@ -467,6 +468,7 @@ const STEPS: &[(&str, &[&str])] = &[
     ("lock_releases", &["lock_releases"]),
     ("acp_disconnect", &["acp_disconnect"]),
     ("under_lock", &["under_lock", "do"]),
+    ("store_fault", &["store_fault", "fail", "gate", "room_id"]),
 ];
 
 /// Each call's arguments, beside `call` and `organization_id`.
