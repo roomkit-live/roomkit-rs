@@ -115,6 +115,9 @@ fn kit_options<S>(
     if let Some(timeout) = kit["process_timeout_ms"].as_u64() {
         options.process_timeout = Duration::from_millis(timeout);
     }
+    if let Some(grace) = kit["close_grace_ms"].as_u64() {
+        options.close_grace = Duration::from_millis(grace);
+    }
     if let Some(limit) = kit.get("inbound_rate_limit") {
         // A limit the model refuses is a broken fixture, as Python's runner
         // raises on it.

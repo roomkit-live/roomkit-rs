@@ -43,6 +43,7 @@ const KIT: &[&str] = &[
     "telemetry",
     "max_chain_depth",
     "process_timeout_ms",
+    "close_grace_ms",
     "turn_timeouts",
     "router",
     "identity_resolver",
