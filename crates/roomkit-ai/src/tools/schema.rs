@@ -14,16 +14,16 @@ use serde_json::Value;
 /// arguments missing come first, in the schema's order; then the arguments
 /// a closed schema does not declare, named with the ones it does; then each
 /// argument of another type than its property declares, in the call's
-/// order. Several missing arguments share one reason, as several undeclared.
+/// order. Several missing arguments share one reason, as several undeclared;
+/// a name `required` lists twice is named once.
 pub(crate) fn mismatch(parameters: &Value, arguments: &Metadata) -> Option<String> {
-    let missing: Vec<&str> = parameters
-        .get("required")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .filter(|name| !arguments.contains_key(*name))
-        .collect();
+    let required = parameters.get("required").and_then(Value::as_array);
+    let mut missing: Vec<&str> = Vec::new();
+    for name in required.into_iter().flatten().filter_map(Value::as_str) {
+        if !arguments.contains_key(name) && !missing.contains(&name) {
+            missing.push(name);
+        }
+    }
     let mut reasons = Vec::new();
     if !missing.is_empty() {
         reasons.push(named("missing required argument", &missing));
@@ -228,6 +228,16 @@ mod tests {
                  argument 'draft' must be of type boolean; \
                  argument 'count' must be of type integer"
             )
+        );
+    }
+
+    // Python: tests/test_tool_arg_validation.py::test_a_required_name_listed_twice_is_named_once
+    #[test]
+    fn a_required_name_listed_twice_is_named_once() {
+        let parameters = json!({ "type": "object", "required": ["city", "city"] });
+        assert_eq!(
+            mismatch(&parameters, &arguments(&json!({}))).as_deref(),
+            Some("missing required argument 'city'")
         );
     }
 
