@@ -50,6 +50,7 @@ impl std::error::Error for ScriptedFailure {}
 #[derive(Debug, Default)]
 pub(crate) struct Gates {
     gates: Mutex<HashMap<String, Gate>>,
+    order: Mutex<HashMap<String, usize>>,
 }
 
 #[derive(Clone, Debug)]
@@ -73,7 +74,7 @@ impl Gates {
 
     pub(crate) async fn hold(&self, name: &str) {
         let gate = self.gate(name);
-        gate.reached.send_replace(true);
+        self.reach(name);
         let mut opened = gate.opened.subscribe();
         while !*opened.borrow_and_update() {
             // The sender lives in the map for the whole run.
@@ -92,7 +93,18 @@ impl Gates {
     }
 
     pub(crate) fn reach(&self, name: &str) {
+        let mut order = self.order.lock().unwrap_or_else(PoisonError::into_inner);
+        let position = order.len();
+        order.entry(name.to_owned()).or_insert(position);
         self.gate(name).reached.send_replace(true);
+    }
+
+    pub(crate) fn reached_after(&self, name: &str, earlier: &str) -> bool {
+        let order = self.order.lock().unwrap_or_else(PoisonError::into_inner);
+        order
+            .get(earlier)
+            .zip(order.get(name))
+            .is_some_and(|(a, b)| a < b)
     }
 
     pub(crate) fn open(&self, name: &str) {
@@ -779,6 +791,24 @@ impl Channel for ScriptedChannel {
                 Ok(StreamItem::Row(row)) => {
                     let row = serde_json::to_value(&*row).unwrap_or_default();
                     run.record_streamed(&room_id, channel_id, json!({ "row": row }));
+                    if row["type"] == "tool_call_start"
+                        && let Some(abandon) = reaction.get("close_while_reading")
+                    {
+                        let running = abandon["running"].as_str().unwrap_or_default();
+                        tokio::select! {
+                            biased;
+                            _ = stream.next() => run.problem(format!("tool read finished before {running} opened")),
+                            reached = run.gates.wait_for(running) => {
+                                if !reached {
+                                    run.problem(format!("no tool reached {running}"));
+                                }
+                            }
+                        }
+                        drop(stream);
+                        run.gates
+                            .reach(abandon["closed"].as_str().unwrap_or_default());
+                        break;
+                    }
                     if let Some(left) = rows_left.as_mut() {
                         *left = left.saturating_sub(1);
                         if *left == 0 {

@@ -397,6 +397,59 @@ async fn first_polled<T>(
     .await
 }
 
+/// Starts the caller and lets it run to its first wait before the next step.
+async fn start_background(run: &Arc<Run>, call: Value, label: &str) {
+    let (started, starting) = tokio::sync::oneshot::channel();
+    let handle = tokio::spawn(first_polled(run.invoke(call, Scope::default()), started));
+    lock(&run.background).insert(label.to_owned(), handle);
+    let _ = starting.await;
+}
+
+fn pending(run: &Run, label: &str) -> bool {
+    lock(&run.background)
+        .get(label)
+        .is_some_and(|caller| !caller.is_finished())
+}
+
+async fn control_pending(run: &Arc<Run>, step: &Value, label: &str, path: &str) {
+    if !pending(run, label) {
+        run.problem(format!("{path}: no pending background call {label}"));
+        return;
+    }
+    if step.get("cancel").is_some() {
+        let caller = lock(&run.background).remove(label);
+        if let Some(caller) = caller {
+            caller.abort();
+            // The caller's future must drop before a later step opens any gate.
+            drop(caller.await);
+        }
+    } else {
+        start_background(
+            run,
+            json!({"call": "close"}),
+            step["as"].as_str().unwrap_or_default(),
+        )
+        .await;
+    }
+}
+
+async fn wait_at_gate(run: &Run, step: &Value, gate: &str, path: &str) {
+    if !run.gates.wait_for(gate).await {
+        run.problem(format!("{path}: no call reached the gate {gate}"));
+        return;
+    }
+    if let Some(earlier) = step["after"].as_str()
+        && !run.gates.reached_after(gate, earlier)
+    {
+        run.problem(format!("{path}: {gate} did not follow {earlier}"));
+    }
+    if let Some(label) = step["pending"].as_str()
+        && !pending(run, label)
+    {
+        run.problem(format!("{path}: no pending background call {label}"));
+    }
+}
+
 /// Runs one step; returns the outcomes of the calls it made, in order.
 async fn run_step(run: &Arc<Run>, step: &Value, path: &str) -> Vec<Value> {
     let mut outcomes = Vec::new();
@@ -408,19 +461,16 @@ async fn run_step(run: &Arc<Run>, step: &Value, path: &str) -> Vec<Value> {
             outcome,
         });
     };
+    if let Some(label) = step["cancel"]
+        .as_str()
+        .or(step["close_while_pending"].as_str())
+    {
+        control_pending(run, step, label, path).await;
+        return outcomes;
+    }
     if step.get("call").is_some() {
         if step.get("background") == Some(&Value::Bool(true)) {
-            let label = step["as"].as_str().unwrap_or_default().to_owned();
-            let (started, starting) = tokio::sync::oneshot::channel();
-            let handle = tokio::spawn(first_polled(
-                run.invoke(step.clone(), Scope::default()),
-                started,
-            ));
-            lock(&run.background).insert(label, handle);
-            // The call runs to its first wait before the next step (README,
-            // "Steps"), as a task Python's loop started runs its first step
-            // before what the next step wakes.
-            let _ = starting.await;
+            start_background(run, step.clone(), step["as"].as_str().unwrap_or_default()).await;
             return outcomes;
         }
         let outcome = run.invoke(step.clone(), Scope::default()).await;
@@ -450,9 +500,7 @@ async fn run_step(run: &Arc<Run>, step: &Value, path: &str) -> Vec<Value> {
             );
         }
     } else if let Some(gate) = step["wait_for"].as_str() {
-        if !run.gates.wait_for(gate).await {
-            run.problem(format!("{path}: no call reached the gate {gate}"));
-        }
+        wait_at_gate(run, step, gate, path).await;
     } else if step["wait_for_lock"].is_string() {
         let room = run
             .resolve(step["wait_for_lock"].clone(), &Scope::default())

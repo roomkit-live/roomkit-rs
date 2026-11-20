@@ -377,6 +377,7 @@ const REACTION: &[&str] = &[
     "invalid_result",
     "stop_after",
     "stop_after_rows",
+    "close_while_reading",
     "hold_after",
     "hold_gate",
     "writes_record",
@@ -468,8 +469,10 @@ const EXPECT: &[&str] = &[
 const NEW_ROOM: &[&str] = &["id", "organization_id", "metadata", "timers"];
 const STEPS: &[(&str, &[&str])] = &[
     ("await", &["await", "expect"]),
+    ("cancel", &["cancel"]),
+    ("close_while_pending", &["close_while_pending", "as"]),
     ("concurrent", &["concurrent"]),
-    ("wait_for", &["wait_for"]),
+    ("wait_for", &["wait_for", "after", "pending"]),
     ("open", &["open"]),
     ("idle", &["idle"]),
     ("wait_for_lock", &["wait_for_lock", "waiters"]),
@@ -1297,6 +1300,15 @@ fn reaction(reaction: &Value, path: &str, found: &mut Vec<String>) {
 }
 
 fn reaction_with_return(reaction: &Value, path: &str, found: &mut Vec<String>, kinds: &[&str]) {
+    if let Some(abandon) = reaction.get("close_while_reading") {
+        let at = format!("{path}.close_while_reading");
+        members(abandon, &["running", "closed"], &at, found);
+        for key in ["running", "closed"] {
+            if !abandon[key].is_string() {
+                found.push(format!("{at}.{key}: expected a gate name"));
+            }
+        }
+    }
     if let Some(invalid) = reaction.get("invalid_result") {
         invalid_return(reaction, invalid, path, found, kinds);
     }
