@@ -15,6 +15,7 @@ const TOP: &[&str] = &[
     "title",
     "rules",
     "requirements",
+    "requires_features",
     "reentrancy",
     "notes",
     "setup",

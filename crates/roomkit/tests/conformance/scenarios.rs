@@ -90,6 +90,9 @@ fn four_workers() -> tokio::runtime::Runtime {
         .unwrap()
 }
 
+/// Optional features supported by the shared Rust runner on every backend.
+const PROVIDED_FEATURES: &[&str] = &[];
+
 const NO_EXECUTOR: &str = "§10.6.7: this pass has no Redis turn executor";
 
 pub(crate) type ExecutorPass = fn(&Value, fn() -> tokio::runtime::Runtime) -> Option<Vec<String>>;
@@ -169,7 +172,22 @@ pub(crate) fn run(
             continue;
         }
         let scenario = load(path, &id);
-        let case = if scenario["setup"].get("executors").is_some() {
+        let missing: Vec<_> = scenario["requires_features"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter(|name| !PROVIDED_FEATURES.contains(name))
+            .collect();
+        let case = if !missing.is_empty() {
+            Case {
+                id,
+                outcome: Outcome::Skipped(format!(
+                    "missing scenario features: {}",
+                    missing.join(", ")
+                )),
+            }
+        } else if scenario["setup"].get("executors").is_some() {
             match executors.and_then(|check| check(&scenario, pass.build)) {
                 Some(problems) => judge(id, &problems, known, &mut run),
                 None => Case {

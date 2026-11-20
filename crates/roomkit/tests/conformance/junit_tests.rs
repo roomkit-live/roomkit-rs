@@ -57,6 +57,8 @@ fn each_scenario_is_written_with_its_outcome(pass: &Pass) {
     }
     let root = suite_of(&[
         reads_room("reads-its-room", "r1"),
+        json!({"id": "unavailable-feature", "requires_features": ["voice", "protocol_trace"],
+               "steps": [{"call": "unsupported_media_step"}]}),
         reads_room("reads-another-room", "r2"),
         reads_room("listed-as-failing", "r2"),
         json!({"id": "another-area/runs-apart", "setup": {"executors": []}}),
@@ -83,7 +85,7 @@ fn each_scenario_is_written_with_its_outcome(pass: &Pass) {
 
     let class = format!("conformance.{}.{}", crate::BACKEND, pass.runtime);
     let case = |name: &str| format!(r#"<testcase classname="{class}" name="{name}""#);
-    assert_eq!(cases.len(), 4, "{report}");
+    assert_eq!(cases.len(), 5, "{report}");
     assert_eq!(
         cases[0],
         format!(
@@ -100,9 +102,16 @@ fn each_scenario_is_written_with_its_outcome(pass: &Pass) {
     assert!(cases[2].starts_with(&forced), "{}", cases[2]);
     assert!(cases[2].ends_with(r#""/></testcase>"#), "{}", cases[2]);
     assert_eq!(cases[3], format!("{}/>", case("reads-its-room")));
+    assert_eq!(
+        cases[4],
+        format!(
+            r#"{}><skipped message="missing scenario features: voice, protocol_trace"/></testcase>"#,
+            case("unavailable-feature")
+        )
+    );
     assert!(
         report.contains(&format!(
-            r#"<testsuite name="{class}" tests="4" failures="2" errors="0" skipped="1">"#
+            r#"<testsuite name="{class}" tests="5" failures="2" errors="0" skipped="2">"#
         )),
         "{report}"
     );
