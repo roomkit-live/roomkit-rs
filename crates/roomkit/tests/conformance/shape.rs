@@ -616,9 +616,15 @@ fn executor_setup(setup: &Value, found: &mut Vec<String>) {
             &path,
             found,
         );
+        // An executor defines its hooks by name (RFC §10.6.6).
+        let named: Vec<&str> = HOOK
+            .iter()
+            .copied()
+            .filter(|field| *field != "as")
+            .collect();
         for name in ["hooks", "room_hooks"] {
             for (index, spec) in items(&executor[name]) {
-                hook(spec, &format!("{path}.{name}[{index}]"), found);
+                hook_of(spec, &named, &format!("{path}.{name}[{index}]"), found);
             }
         }
     }
@@ -1873,6 +1879,20 @@ mod tests {
                 unknown_members(&json!({"steps": [step]})),
                 problems,
                 "{call}"
+            );
+        }
+    }
+
+    // Python: test_scenario_shape.py::test_an_executor_defines_its_hooks_by_name
+    #[test]
+    fn an_executor_defines_its_hooks_by_name() {
+        for member in ["hooks", "room_hooks"] {
+            let scenario = json!({"setup": {"executors": [
+                {"id": "w1", member: [{"as": "audit", "trigger": "on_tool_call"}]}
+            ]}});
+            assert_eq!(
+                unknown_members(&scenario),
+                vec![format!("setup.executors[0].{member}[0]: as")]
             );
         }
     }
