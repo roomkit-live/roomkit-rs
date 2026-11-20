@@ -125,3 +125,23 @@ pub(crate) fn inspect(error: &RoomKitError) -> Value {
         "message":error.to_string(),"bases":record.bases.iter().map(|s| short(s)).collect::<Vec<_>>(),
         "attributes":record.attributes})
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_declared_class_is_observed_only_when_the_native_downcast_succeeds() {
+        let registry = classes(&[FixtureClass::DetailError]);
+        let original = DetailError(Some(LocalDetail("the worker's detail")));
+        let record = registry.record(&original);
+        let declared = inspect(&registry.rebuild(&record));
+        let undeclared = inspect(&ErrorClasses::default().rebuild(&record));
+        assert_eq!(declared["message"], "the worker's detail");
+        assert_eq!(declared["generic"], true);
+        assert_eq!(declared["reads_as"], "DetailError");
+        assert_eq!(undeclared["kind"], declared["kind"]);
+        assert_eq!(undeclared["message"], declared["message"]);
+        assert_eq!(undeclared["reads_as"], Value::Null);
+    }
+}
