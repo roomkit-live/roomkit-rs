@@ -23,10 +23,11 @@ pub(crate) const HOST_LOCK_FAILURES: &[(&str, &str)] = &[
     ),
 ];
 
-/// The scenarios this implementation fails on every store because a turn's
-/// `ON_TOOL_CALL` hooks on the kit's own executor read the context the turn
-/// started with, never the room when they fire, so a room read that fails
-/// cannot keep them from running (RMK-1837).
+/// The scenarios this implementation fails on every store, beside each
+/// runner's own known failures: a turn's `ON_TOOL_CALL` hooks on the kit's
+/// own executor read the context the turn started with, never the room
+/// when they fire, so a room read that fails cannot keep them from running
+/// (RMK-1837).
 pub(crate) const STORE_FAULT_FAILURES: &[(&str, &str)] = &[
     (
         "tools/a-call-whose-hooks-context-fails-keeps-its-handler-s-result-non-streaming",
@@ -226,7 +227,7 @@ pub(crate) fn run(
         };
         run.cases.push(case);
     }
-    for (listed, _) in known.iter().chain(STORE_FAULT_FAILURES) {
+    for (listed, _) in known {
         if !paths.iter().any(|path| scenario_id(root, path) == *listed) {
             run.report
                 .push(format!("known failure {listed} names no scenario"));
@@ -242,10 +243,7 @@ pub(crate) fn run(
     reason = "the suite prints its known failures, as a test does"
 )]
 fn judge(id: String, problems: &[String], known: &[(&str, &str)], run: &mut Run) -> Case {
-    let listed = known
-        .iter()
-        .chain(STORE_FAULT_FAILURES)
-        .find(|(listed, _)| *listed == id);
+    let listed = known.iter().find(|(listed, _)| *listed == id);
     if !problems.is_empty() {
         run.failing.push(id.clone());
     }
@@ -284,11 +282,12 @@ pub(crate) fn every_scenario_gives_what_the_rfc_says(pass: &Pass, known: &[(&str
     let executors = executor_pass();
     let backend = result_backend(crate::BACKEND, executors);
     let output = junit::claim(&backend, pass.runtime);
+    let known: Vec<(&str, &str)> = known.iter().chain(STORE_FAULT_FAILURES).copied().collect();
     let run = run(
         &suite().join("scenarios"),
         filter.as_deref(),
         pass,
-        known,
+        &known,
         executors,
     );
     if let Some(output) = &output {
