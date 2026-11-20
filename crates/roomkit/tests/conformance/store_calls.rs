@@ -195,6 +195,7 @@ fn stored<T: serde::Serialize>(run: &Run, call: &str, outcome: Result<T, StoreEr
     match outcome {
         Err(StoreError::TaskNotFound(_)) => Err(named("task_not_found")),
         Err(StoreError::ParticipantExists { .. }) => Err(named("participant_exists")),
+        Err(StoreError::ParticipantNotFound { .. }) => Err(named("participant_not_found")),
         outcome => finish(run, call, outcome.map_err(RoomKitError::from), dump),
     }
 }
