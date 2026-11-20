@@ -134,6 +134,7 @@ pub(crate) fn error_of(error: &RoomKitError) -> Option<Value> {
         RoomKitError::ChannelNotFound { .. } => named("channel_not_bound"),
         RoomKitError::ParticipantNotFound { .. } => named("participant_not_found"),
         RoomKitError::IdentityNotFound(_) => named("identity_not_found"),
+        RoomKitError::AddressLinked { .. } => named("address_linked"),
         RoomKitError::RoomClosed { .. } => named("room_closed"),
         RoomKitError::KitClosed => named("kit_closed"),
         RoomKitError::ProcessTimeout { .. } => named("process_timeout"),

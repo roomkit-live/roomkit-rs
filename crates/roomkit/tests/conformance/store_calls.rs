@@ -10,13 +10,14 @@
 use std::sync::Arc;
 
 use roomkit::model::{
-    ChannelBinding, ChannelId, ChannelType, EventId, EventType, IdentityId, Metadata, Participant,
-    ParticipantId, Room, RoomEvent, RoomId, RoomStatus, Task, TaskId, TaskStatus, Timestamp,
-    Verification, VerificationRequest, Visibility,
+    ChannelBinding, ChannelId, ChannelType, EventId, EventType, Identity, IdentityId, Metadata,
+    Participant, ParticipantId, Room, RoomEvent, RoomId, RoomStatus, Task, TaskId, TaskStatus,
+    Timestamp, Verification, VerificationRequest, Visibility,
 };
 use roomkit::store::{
     CommitEventOptions, DeleteEventOptions, FindLatestRoomOptions, FindRoomIdByChannelOptions,
-    GetTimelineOptions, GetVerificationOptions, ListTasksOptions, PatchRoomMetadataOptions,
+    GetTimelineOptions, GetVerificationOptions, LinkAddressOptions, ListTasksOptions,
+    PatchRoomMetadataOptions, ResolveIdentityOptions, UnlinkAddressOptions,
 };
 use roomkit::{
     ConversationStore, EventFilter, ListReadMarkersOptions, MarkAllReadOptions, MarkReadOptions,
@@ -40,7 +41,12 @@ pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
         | "store.get_room" => &["room_id"],
         "store.add_binding" | "store.update_binding" => &["binding"],
         "store.remove_binding" | "store.binding_exists" => &["room_id", "channel_id"],
-        "store.add_participant" => &["participant"],
+        "store.add_participant" | "store.update_participant" => &["participant"],
+        "store.create_identity" => &["identity"],
+        "store.resolve_identity" => &["channel_type", "address"],
+        "store.link_address" | "store.unlink_address" => {
+            &["identity_id", "channel_type", "address"]
+        }
         "store.commit_event" => &["room_id", "event", "target", "activity"],
         "store.find_latest_room" => &["participant_id", "channel_type", "status"],
         "store.find_room_id_by_channel" => &["channel_id", "status"],
@@ -71,7 +77,7 @@ pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
             &["room_id", "channel_id"]
         }
         "store.put_verification" => &["verification"],
-        "store.get_verification" => &["identity_id"],
+        "store.get_identity" | "store.get_verification" => &["identity_id"],
         "store.list_verifications_in_force" => &[],
         "store.create_verification_request" | "store.update_verification_request" => &["request"],
         "store.get_verification_request" => &["request_id"],
@@ -184,12 +190,21 @@ fn event_filter(spec: &Value) -> Result<Option<EventFilter>, Unreadable> {
 }
 
 /// A store call's outcome, its error named as a kit call's is, but a
-/// task's, which no kit call meets.
+/// task's and a participant's, which no kit call meets.
 fn stored<T: serde::Serialize>(run: &Run, call: &str, outcome: Result<T, StoreError>) -> Called {
     match outcome {
         Err(StoreError::TaskNotFound(_)) => Err(named("task_not_found")),
+        Err(StoreError::ParticipantExists { .. }) => Err(named("participant_exists")),
         outcome => finish(run, call, outcome.map_err(RoomKitError::from), dump),
     }
+}
+
+/// A participant from the template `spec["participant"]`, in its own room.
+fn participant(spec: &Value) -> Result<Participant, Unreadable> {
+    let template = &spec["participant"];
+    let room = template["room_id"].as_str().unwrap_or_default();
+    serde_json::from_value(complete_participant(template, room))
+        .map_err(|error| format!("participant: {error}"))
 }
 
 /// A task from the template `spec["task"]`, in its own room.
@@ -305,12 +320,11 @@ async fn read_or_write(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Calle
             stored(run, name, outcome)
         }
         "store.add_participant" => {
-            let template = &spec["participant"];
-            let room = template["room_id"].as_str().unwrap_or_default();
-            let participant: Participant =
-                serde_json::from_value(complete_participant(template, room))
-                    .map_err(|error| format!("participant: {error}"))?;
-            stored(run, name, store.add_participant(participant).await)
+            stored(run, name, store.add_participant(participant(spec)?).await)
+        }
+        "store.update_participant" => {
+            let outcome = store.update_participant(participant(spec)?).await;
+            stored(run, name, outcome)
         }
         "store.room_exists" => stored(run, name, store.room_exists(&room_id()?).await),
         "store.binding_exists" => {
@@ -510,6 +524,48 @@ async fn verifications(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Calle
             name,
             store.update_verification_request(request()?).await,
         ),
+        _ => identities(run, name, spec).await?,
+    })
+}
+
+/// The store's identities and their addresses (RFC §5.6, §14.1): an
+/// identity taken as written, with its model's defaults, an address
+/// resolved, linked or unlinked within the organization the call names,
+/// none when it names none.
+async fn identities(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Called, Unreadable> {
+    let reader = run.reader();
+    let store = reader.store();
+    let organization_id = field::<Option<String>>(spec, "organization_id")?;
+    let address = || field::<String>(spec, "address");
+    let channel_type = || field::<ChannelType>(spec, "channel_type");
+    let identity_id = || field::<IdentityId>(spec, "identity_id");
+    Ok(match name {
+        "store.create_identity" => {
+            let identity: Identity = field(spec, "identity")?;
+            stored(run, name, store.create_identity(identity).await)
+        }
+        "store.get_identity" => stored(run, name, store.get_identity(&identity_id()?).await),
+        "store.resolve_identity" => {
+            let options = ResolveIdentityOptions { organization_id };
+            let outcome = store
+                .resolve_identity(&channel_type()?, &address()?, options)
+                .await;
+            stored(run, name, outcome)
+        }
+        "store.link_address" => {
+            let options = LinkAddressOptions { organization_id };
+            let outcome = store
+                .link_address(&identity_id()?, &channel_type()?, &address()?, options)
+                .await;
+            stored(run, name, outcome)
+        }
+        "store.unlink_address" => {
+            let options = UnlinkAddressOptions { organization_id };
+            let outcome = store
+                .unlink_address(&identity_id()?, &channel_type()?, &address()?, options)
+                .await;
+            stored(run, name, outcome)
+        }
         other => return Err(format!("no call {other}")),
     })
 }
