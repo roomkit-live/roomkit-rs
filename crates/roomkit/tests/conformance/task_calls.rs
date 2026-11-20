@@ -441,7 +441,7 @@ pub(crate) fn payload_hook_handler<P: Serialize + Send + 'static>(
     member: &'static str,
 ) -> impl Fn(P, RoomContext) -> PayloadHookFuture<P> + Send + Sync + 'static {
     let reactions = Arc::new(crate::scripted::Reactions::new(spec.get("reactions")));
-    let name = spec["name"].as_str().unwrap_or_default().to_owned();
+    let name = crate::scripted::recorded_name(spec);
     let trigger = spec["trigger"].as_str().unwrap_or_default().to_owned();
     let run = Arc::downgrade(run);
     move |payload: P, context: RoomContext| {

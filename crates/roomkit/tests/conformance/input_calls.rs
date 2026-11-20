@@ -110,7 +110,7 @@ pub(crate) fn input_hook_handler(
     run: &Arc<Run>,
 ) -> impl Fn(PendingInputEvent, RoomContext) -> InputHookFuture + Send + Sync + 'static {
     let reactions = Arc::new(Reactions::new(spec.get("reactions")));
-    let name = spec["name"].as_str().unwrap_or_default().to_owned();
+    let name = crate::scripted::recorded_name(spec);
     let trigger = spec["trigger"].as_str().unwrap_or_default().to_owned();
     let run = Arc::downgrade(run);
     move |event: PendingInputEvent, context: RoomContext| {

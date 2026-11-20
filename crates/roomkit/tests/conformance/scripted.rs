@@ -165,12 +165,16 @@ fn message_subject(message: &InboundMessage, room_id: &str) -> Value {
     })
 }
 
-/// Holds at the reaction's gate, waits its delay, runs its actions, then fails.
+/// Starts the reaction's task, holds at its gate, waits its delay, runs its
+/// actions, then fails.
 pub(crate) async fn perform(
     run: &Arc<Run>,
     reaction: &Value,
     scope: &Scope,
 ) -> Result<(), ScriptedFailure> {
+    if let Some(spawn) = reaction.get("spawn") {
+        run.spawn(spawn.clone(), scope.clone());
+    }
     if let Some(gate) = reaction.get("gate").and_then(Value::as_str) {
         run.gates.hold(gate).await;
     }
@@ -817,6 +821,16 @@ impl Channel for ScriptedChannel {
     }
 }
 
+/// The name a scripted hook records its calls under: its `as` label for
+/// one registered with no name (README, Setup), else its name.
+pub(crate) fn recorded_name(spec: &Value) -> String {
+    spec.get("as")
+        .or_else(|| spec.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
+}
+
 /// The handler of a scripted hook: it records its call, then reacts.
 /// What a scripted session hook gives.
 type SessionHookFuture = std::pin::Pin<
@@ -830,7 +844,7 @@ pub(crate) fn session_hook_handler(
     run: &Arc<Run>,
 ) -> impl Fn(SessionStartedEvent, RoomContext) -> SessionHookFuture + Send + Sync + 'static {
     let reactions = Arc::new(Reactions::new(spec.get("reactions")));
-    let name = spec["name"].as_str().unwrap_or_default().to_owned();
+    let name = recorded_name(spec);
     let trigger = spec["trigger"].as_str().unwrap_or_default().to_owned();
     let run = Arc::downgrade(run);
     move |_payload: SessionStartedEvent, context: RoomContext| {
@@ -862,7 +876,7 @@ pub(crate) fn status_hook_handler(
     run: &Arc<Run>,
 ) -> impl Fn(DeliveryStatus, RoomContext) -> StatusHookFuture + Send + Sync + 'static {
     let reactions = Arc::new(Reactions::new(spec.get("reactions")));
-    let name = spec["name"].as_str().unwrap_or_default().to_owned();
+    let name = recorded_name(spec);
     let trigger = spec["trigger"].as_str().unwrap_or_default().to_owned();
     let run = Arc::downgrade(run);
     move |payload: DeliveryStatus, context: RoomContext| {
@@ -926,7 +940,7 @@ pub(crate) fn hook_handler(
         }
     }
     let reactions = Arc::new(Reactions::new(spec.get("reactions")));
-    let name = spec["name"].as_str().unwrap_or_default().to_owned();
+    let name = recorded_name(spec);
     let trigger = spec["trigger"].as_str().unwrap_or_default().to_owned();
     let run = Arc::downgrade(run);
     move |payload: RoomEvent, context: RoomContext| {

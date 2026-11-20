@@ -6,7 +6,7 @@
 //! serialized form (messages, contents, templates, capabilities) are the
 //! implementation's to read, and open here.
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 // `rules` and `requirements` cite the RFC for the checker; the runner ignores them.
 const TOP: &[&str] = &[
@@ -340,6 +340,8 @@ const BINDING: &[&str] = &[
 ];
 const HOOK: &[&str] = &[
     "name",
+    // In place of a name: a hook registered with none, recorded under it.
+    "as",
     "trigger",
     "execution",
     "priority",
@@ -372,7 +374,10 @@ const REACTION: &[&str] = &[
     "parsed",
     "refuse",
     "after_turn",
+    "spawn",
 ];
+/// A task the call starts and does not wait for (README, Reactions).
+const SPAWN: &[&str] = &["gate", "delay_ms", "do", "after_do_gate"];
 const REFUSE: &[&str] = &["error", "code", "retryable", "provider_message_id"];
 const WHEN: &[&str] = &[
     "room_id",
@@ -523,7 +528,9 @@ fn base_arguments(call: &str) -> Option<&'static [&'static str]> {
         "register_hook" | "kit_executor.hook" | "kit_executor.room_hook" => &["hook"],
         "kit_executor.remove_room_hook" => &["name"],
         "enable_room_hook" | "disable_room_hook" | "remove_room_hook" => &["room_id", "name"],
-        "add_room_hook" => &["room_id", "hook"],
+        "add_room_hook" | "hook_engine.add_room_hook" | "kit_executor.add_owner_room_hook" => {
+            &["room_id", "hook"]
+        }
         "subscribe_room" => &["room_id", "subscriber"],
         "channel.publish" => &["executor", "channel_id", "room_id", "kind", "data", "gate"],
         "publish_typing" => &["room_id", "user_id", "is_typing"],
@@ -1202,14 +1209,11 @@ fn hook_of(hook: &Value, known: &[&str], path: &str, found: &mut Vec<String>) {
     crate::speaking::hook(hook, path, found);
     members(hook, known, path, found);
     for (index, reaction) in items(&hook["reactions"]) {
-        let permitted = hook["trigger"] == "before_broadcast"
-            && hook.get("execution").is_none_or(|mode| mode == "sync")
-            && hook.get("router").is_none();
         reaction_with_return(
             reaction,
             &format!("{path}.reactions[{index}]"),
             found,
-            permitted,
+            invalid_return_kinds(hook),
         );
     }
     if let Some(router) = hook.get("router") {
@@ -1233,13 +1237,39 @@ fn router(router: &Value, path: &str, found: &mut Vec<String>) {
     }
 }
 
-fn reaction(reaction: &Value, path: &str, found: &mut Vec<String>) {
-    reaction_with_return(reaction, path, found, false);
+/// The unusable returns a hook's reaction may script: both on a SYNC
+/// `BEFORE_BROADCAST` hook, a MODIFY with no payload alone on a SYNC
+/// `ON_TOOL_CALL` one, whose typed callback returns no other (README,
+/// Reactions).
+fn invalid_return_kinds(hook: &Value) -> &'static [&'static str] {
+    if hook.get("execution").is_some_and(|mode| mode != "sync") || hook.get("router").is_some() {
+        return &[];
+    }
+    match hook["trigger"].as_str() {
+        Some("before_broadcast") => &["no_result", "missing_payload"],
+        Some("on_tool_call") => &["missing_payload"],
+        _ => &[],
+    }
 }
 
-fn reaction_with_return(reaction: &Value, path: &str, found: &mut Vec<String>, permitted: bool) {
+fn reaction(reaction: &Value, path: &str, found: &mut Vec<String>) {
+    reaction_with_return(reaction, path, found, &[]);
+}
+
+fn reaction_with_return(reaction: &Value, path: &str, found: &mut Vec<String>, kinds: &[&str]) {
     if let Some(invalid) = reaction.get("invalid_result") {
-        invalid_return(reaction, invalid, path, found, permitted);
+        invalid_return(reaction, invalid, path, found, kinds);
+    }
+    if let Some(spawn) = reaction.get("spawn") {
+        members(spawn, SPAWN, &format!("{path}.spawn"), found);
+        for (index, action) in items(&spawn["do"]) {
+            call(
+                action,
+                &["as", "expect"],
+                &format!("{path}.spawn.do[{index}]"),
+                found,
+            );
+        }
     }
     members(reaction, REACTION, path, found);
     if let Some(gate) = reaction.get("after_do_gate")
@@ -1372,14 +1402,16 @@ fn call(call: &Value, extra: &[&str], path: &str, found: &mut Vec<String>) {
                 .iter()
                 .copied()
                 .filter(|field| {
-                    !["router", "needs_lock"].contains(field)
+                    !["as", "router", "needs_lock"].contains(field)
                         && (name != "kit_executor.room_hook"
                             || !["channel_ids", "channel_types", "directions"].contains(field))
                 })
                 .collect();
             hook_of(&call["hook"], &known, &format!("{path}.hook"), found);
         }
-        "add_room_hook" => room_hook(&call["hook"], &format!("{path}.hook"), found),
+        "add_room_hook" | "hook_engine.add_room_hook" | "kit_executor.add_owner_room_hook" => {
+            room_hook(&call["hook"], &format!("{path}.hook"), found);
+        }
         "save_conversation_state" => {
             for (index, transition) in items(&call["transitions"]) {
                 let path = format!("{path}.transitions[{index}]");
@@ -1465,7 +1497,7 @@ fn invalid_return(
     value: &Value,
     path: &str,
     found: &mut Vec<String>,
-    permitted: bool,
+    kinds: &[&str],
 ) {
     let at = format!("{path}.invalid_result");
     members(
@@ -1474,9 +1506,13 @@ fn invalid_return(
         &at,
         found,
     );
-    if !permitted || reaction.get("result").is_some() || reaction.get("fail").is_some() {
+    if kinds.is_empty() || reaction.get("result").is_some() || reaction.get("fail").is_some() {
         found.push(format!(
-            "{at}: requires a SYNC BEFORE_BROADCAST hook without result or fail"
+            "{at}: requires a SYNC BEFORE_BROADCAST or ON_TOOL_CALL hook without result or fail"
+        ));
+    } else if kinds == ["missing_payload"] && *value != json!({"kind": "missing_payload"}) {
+        found.push(format!(
+            "{at}: an ON_TOOL_CALL hook returns a bare missing_payload alone"
         ));
     }
     if !matches!(
@@ -1762,6 +1798,82 @@ mod tests {
             json!({"setup": {"channels": [{"id": "sms", "type": "sms", "deliver": [reaction]}]}});
         for invalid in [after, observer, channel] {
             assert_ne!(unknown_members(&invalid), Vec::<String>::new());
+        }
+    }
+
+    // Python: test_hook_returns.py::test_an_on_tool_call_hook_returns_a_bare_missing_payload_alone
+    #[test]
+    fn an_on_tool_call_hook_returns_a_bare_missing_payload_alone() {
+        for (invalid, execution, refused) in [
+            (json!({"kind": "missing_payload"}), "sync", false),
+            (json!({"kind": "no_result"}), "sync", true),
+            (
+                json!({"kind": "missing_payload", "tasks": []}),
+                "sync",
+                true,
+            ),
+            (json!({"kind": "missing_payload"}), "async", true),
+        ] {
+            let scenario = json!({"setup": {"hooks": [{
+                "name": "check",
+                "trigger": "on_tool_call",
+                "execution": execution,
+                "reactions": [{"invalid_result": invalid}],
+            }]}});
+            assert_eq!(
+                !unknown_members(&scenario).is_empty(),
+                refused,
+                "{invalid} on {execution}"
+            );
+        }
+    }
+
+    // Python: test_scenario_shape.py::test_a_spawned_task_takes_a_gate_a_delay_actions_and_an_after_gate
+    #[test]
+    fn a_spawned_task_takes_a_gate_a_delay_actions_and_an_after_gate() {
+        for (spawn, problems) in [
+            (
+                json!({"gate": "go", "delay_ms": 5, "do": [], "after_do_gate": "done"}),
+                vec![],
+            ),
+            (
+                json!({"fail": "boom"}),
+                vec!["setup.hooks[0].reactions[0].spawn: fail"],
+            ),
+            (
+                json!({"do": [{"call": "send_event", "room_id": "$room", "typo": 1}]}),
+                vec!["setup.hooks[0].reactions[0].spawn.do[0]: typo"],
+            ),
+        ] {
+            let scenario = json!({"setup": {"hooks": [{
+                "name": "h",
+                "trigger": "before_broadcast",
+                "reactions": [{"spawn": spawn}],
+            }]}});
+            assert_eq!(unknown_members(&scenario), problems);
+        }
+    }
+
+    // Python: test_scenario_shape.py::test_a_hook_left_unnamed_is_labelled_where_it_is_registered_for_the_kit_or_a_room
+    #[test]
+    fn a_hook_left_unnamed_is_labelled_where_it_is_registered_for_the_kit_or_a_room() {
+        for (call, problems) in [
+            ("register_hook", vec![]),
+            ("add_room_hook", vec![]),
+            ("hook_engine.add_room_hook", vec![]),
+            ("kit_executor.add_owner_room_hook", vec![]),
+            ("kit_executor.hook", vec!["steps[0].hook: as"]),
+        ] {
+            let mut step =
+                json!({"call": call, "hook": {"as": "first", "trigger": "after_broadcast"}});
+            if call != "register_hook" && call != "kit_executor.hook" {
+                step["room_id"] = json!("room-1");
+            }
+            assert_eq!(
+                unknown_members(&json!({"steps": [step]})),
+                problems,
+                "{call}"
+            );
         }
     }
 

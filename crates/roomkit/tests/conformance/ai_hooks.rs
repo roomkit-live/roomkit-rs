@@ -321,7 +321,7 @@ pub(crate) fn turn_hook_handler<P: Scripted>(
     run: &Arc<Run>,
 ) -> impl Fn(P, RoomContext) -> HookFuture<P> + Send + Sync + 'static {
     let reactions = Arc::new(Reactions::new(spec.get("reactions")));
-    let name = spec["name"].as_str().unwrap_or_default().to_owned();
+    let name = crate::scripted::recorded_name(spec);
     let trigger = spec["trigger"].as_str().unwrap_or_default().to_owned();
     let run = Arc::downgrade(run);
     move |payload: P, context: RoomContext| {

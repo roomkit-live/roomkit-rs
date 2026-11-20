@@ -1743,7 +1743,7 @@ struct ToolHook {
 impl ToolHook {
     fn new(spec: &Value, run: &Arc<Run>) -> Self {
         Self {
-            name: spec["name"].as_str().unwrap_or_default().to_owned(),
+            name: crate::scripted::recorded_name(spec),
             trigger: spec["trigger"].as_str().unwrap_or_default().to_owned(),
             reactions: Arc::new(Reactions::new(spec.get("reactions"))),
             run: Arc::downgrade(run),
@@ -1770,6 +1770,11 @@ impl ToolHook {
         };
         write_record(&reaction);
         perform(&run, &reaction, &Scope::in_room(&room_id)).await?;
+        if reaction.get("invalid_result").is_some() {
+            // The shape lets a bare missing_payload alone through: a MODIFY
+            // with no tool-call event (README, Reactions).
+            return Ok(HookResult::new(HookAction::Modify));
+        }
         match reaction.get("result") {
             Some(result) => Ok(tool_hook_result(result, event)?),
             None => Ok(allow()),

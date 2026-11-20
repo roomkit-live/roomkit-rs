@@ -22,6 +22,7 @@ mod agent_model_tests;
 mod agents;
 mod ai_hooks;
 mod audits;
+mod below_kit;
 mod calls;
 mod channel_verbs;
 mod chat_wire;

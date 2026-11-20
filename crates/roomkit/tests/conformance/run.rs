@@ -153,6 +153,8 @@ pub(crate) struct Run {
     pub(crate) handles: Mutex<HashMap<String, roomkit::DeliveryHandle>>,
     /// The work scripted turns left for after them (`after_turn`).
     after_turn: Mutex<Vec<JoinHandle<()>>>,
+    /// The tasks reactions started and did not wait for (`spawn`).
+    spawned: Mutex<Vec<JoinHandle<()>>>,
     /// The scripted agents' models, by channel.
     pub(crate) models: Mutex<BTreeMap<String, ScriptedProvider>>,
     pub(crate) direct_channels:
@@ -250,6 +252,7 @@ impl Run {
             tasks: Mutex::default(),
             handles: Mutex::default(),
             after_turn: Mutex::default(),
+            spawned: Mutex::default(),
             models: Mutex::default(),
             direct_channels: Mutex::default(),
             host_tool_readers: Mutex::default(),
@@ -744,6 +747,19 @@ impl Run {
         }
     }
 
+    /// Starts the task a reaction's `spawn` describes, in the caller's
+    /// context, as a hook's body or a parse starts one it does not wait
+    /// for: `keep_context`, the Rust form of Python's `create_task` (RFC
+    /// §9.5.1 Reentrance).
+    pub(crate) fn spawn(self: &Arc<Self>, spec: Value, scope: Scope) {
+        let run = Arc::clone(self);
+        let work = tokio::spawn(roomkit::keep_context(async move {
+            // The shape refuses `fail` on a spawn: nothing to raise.
+            drop(Box::pin(crate::scripted::perform(&run, &spec, &scope)).await);
+        }));
+        lock(&self.spawned).push(work);
+    }
+
     /// Starts the work a turn leaves for after it: a task holding the
     /// turn's context, which makes `actions` in order once the turn ended.
     pub(crate) fn leave_after_turn(self: &Arc<Self>, actions: Vec<Value>, scope: Scope) {
@@ -980,6 +996,7 @@ impl Run {
                 .any(|handle| !handle.is_finished())
                 || lock(&self.after_turn)
                     .iter()
+                    .chain(lock(&self.spawned).iter())
                     .any(|work| !work.is_finished());
             if !running && !self.backend_busy().await {
                 break;

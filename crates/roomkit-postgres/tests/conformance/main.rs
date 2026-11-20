@@ -17,6 +17,8 @@ mod agents;
 mod ai_hooks;
 #[path = "../../../roomkit/tests/conformance/audits.rs"]
 mod audits;
+#[path = "../../../roomkit/tests/conformance/below_kit.rs"]
+mod below_kit;
 #[path = "../../../roomkit/tests/conformance/calls.rs"]
 mod calls;
 #[path = "../../../roomkit/tests/conformance/channel_verbs.rs"]
