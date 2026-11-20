@@ -6,6 +6,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING — a sender whose name reads like an earlier sender's is labelled `Alice (2, not Alice)`**, where the label was `Alice (2)`, as in Python (RFC §6.4, RMK-1835): under the rank alone a model took the later sender for the first more than one time in two. The name after `not` is the label's own, cut within 24 characters. The second nameless sender of a channel keeps `@sms1 (2)`, and the speaker note is unchanged.
+- **BREAKING — with `steer_room_turns`, a running turn reads only its own author's next messages**, where it read anyone's, as in Python (RFC §6.4, RMK-1840): someone else's message, read inside a turn that runs in its author's name and role, had its request served under them. It now waits a turn of its own. Someone else is another sender, or the same sender id under another name.
+
 ### Fixed
 
 - A phone channel writes a number dialled with `00` and the trunk prefix
