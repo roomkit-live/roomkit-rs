@@ -164,8 +164,9 @@ pub fn current_tool_call() -> Option<ToolCallContext> {
 /// `None` outside a scope, and when the waking event names no participant:
 /// one the host commits with `send_event` or `post` without naming one,
 /// another agent's message. `None` too for a participant's id on a channel
-/// that does not reach them (RFC §5.5). So `None` is not the host: a sender
-/// can produce it, and a gate compares the value with the id it expects.
+/// that does not reach them (RFC §5.5). So `None` does not single out the
+/// host: a sender can produce it too, and a gate compares the value with the
+/// id it expects.
 ///
 /// This names the turn; it does not authenticate it: a handler accessing a
 /// person's data must require the participant's identification.
