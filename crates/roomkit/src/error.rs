@@ -531,12 +531,30 @@ pub(crate) fn stored_record<'a>(
 }
 
 /// A store failure the core recorded: a store's `ValueError` as itself, as
-/// Python propagates it, any other as the store's failure.
+/// Python propagates it, a change's target the store no longer holds as
+/// Python's `EventNotFoundError` (RFC §10.3, §14.3: a commit whose target is
+/// gone fails whole), any other as the store's failure.
 fn store_failure(record: ErrorRecord) -> RoomKitError {
     if record.error_type == STORE_VALUE {
         return RoomKitError::Value(record.message);
     }
+    if let Some(event_id) = missing_event(&record) {
+        return RoomKitError::EventNotFound(event_id);
+    }
     RoomKitError::Store(StoreFailure::new(Recorded(record)))
+}
+
+/// The event a store's [`StoreError::EventNotFound`] the core recorded
+/// names, read back from its message.
+fn missing_event(record: &ErrorRecord) -> Option<EventId> {
+    if record.error_type != STORE_EVENT_NOT_FOUND {
+        return None;
+    }
+    let id = record
+        .message
+        .strip_prefix("event ")?
+        .strip_suffix(" does not exist")?;
+    EventId::new(id).ok()
 }
 
 /// A lock failure the core recorded: a lock's `ValueError` as itself, as
@@ -555,6 +573,9 @@ const LOCK_VALUE: &str = "ValueError";
 
 /// The record name of a store's `ValueError` ([`StoreError::Value`]).
 const STORE_VALUE: &str = "Value";
+
+/// The record name of a store's missing event ([`StoreError::EventNotFound`]).
+const STORE_EVENT_NOT_FOUND: &str = "EventNotFound";
 
 impl RoomKitError {
     /// No channel is registered under `channel_id`, in the words of most of
@@ -941,6 +962,20 @@ mod tests {
                 (None, None),
                 (None, None),
             ]
+        );
+    }
+
+    /// A change's target the store no longer holds at its commit reaches
+    /// the caller as the missing event, as Python's `EventNotFoundError`
+    /// (RFC §10.3, §14.3), not as a failure of the store.
+    #[test]
+    fn a_commit_whose_target_is_gone_fails_with_the_missing_event() {
+        let event_id = EventId::new("evt_1").unwrap();
+        let recorded = StoreError::EventNotFound(event_id.clone()).to_record();
+        let error = RoomKitError::from(InboundError::Store(recorded));
+        assert!(
+            matches!(&error, RoomKitError::EventNotFound(missing) if *missing == event_id),
+            "{error:?}"
         );
     }
 
