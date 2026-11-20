@@ -429,20 +429,30 @@ impl Run {
         lock(&self.problems).push(problem);
     }
 
-    /// The context a scripted channel's `deliver` or `on_event` (`call`)
-    /// was handed: the ids of its events, lifecycle records left out.
+    /// The context a scripted channel's `parse`, `deliver` or `on_event`
+    /// (`call`) was handed (README, `contexts`): its events, the ids alone
+    /// and whole, lifecycle records left out, its room, its bindings and
+    /// its participants.
     pub(crate) fn record_context(&self, call: &str, context: &RoomContext, channel_id: &ChannelId) {
         if !self.recording.load(Ordering::SeqCst) {
             return;
         }
-        let recent = recent_ids(context);
+        let events = context_events(context);
+        let recent: Vec<Value> = events.iter().map(|event| event["id"].clone()).collect();
         lock(&self.observed)
             .contexts
             .entry(context.room.id.to_string())
             .or_default()
             .entry(channel_id.to_string())
             .or_default()
-            .push(json!({ "call": call, "recent_events": recent }));
+            .push(json!({
+                "call": call,
+                "recent_events": recent,
+                "events": events,
+                "room": context.room,
+                "bindings": context.bindings,
+                "participants": context.participants,
+            }));
     }
 
     pub(crate) fn record(&self, kind: &str, event: &RoomEvent, channel_id: &ChannelId) {
@@ -635,6 +645,9 @@ impl Run {
             "event": event,
             "context_room": context.room,
             "recent_events": recent_ids(context),
+            "context_events": context_events(context),
+            "context_bindings": context.bindings,
+            "context_participants": context.participants,
         });
         let mut observed = lock(&self.observed);
         observed
@@ -1125,14 +1138,21 @@ fn saw_request(observed: &mut Observed, pending_id: &str) {
     }
 }
 
-/// The ids of `context`'s events, lifecycle records left out: what a
+/// `context`'s events, lifecycle records left out: what a parse, a
 /// delivery and a hook read of the room (README, `contexts`, `hooks`).
-fn recent_ids(context: &RoomContext) -> Vec<Value> {
+fn context_events(context: &RoomContext) -> Vec<Value> {
     context
         .recent_events
         .iter()
         .map(|event| serde_json::to_value(event).unwrap_or_default())
         .filter(|event| !is_lifecycle_record(event))
+        .collect()
+}
+
+/// The ids of `context`'s events, lifecycle records left out.
+fn recent_ids(context: &RoomContext) -> Vec<Value> {
+    context_events(context)
+        .into_iter()
         .map(|event| event["id"].clone())
         .collect()
 }

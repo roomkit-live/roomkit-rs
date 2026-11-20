@@ -597,6 +597,9 @@ impl Channel for ScriptedChannel {
         context: RoomContext,
     ) -> Result<RoomEvent, ChannelError> {
         let room_id = context.room.id.to_string();
+        if let Some(run) = self.run.upgrade() {
+            run.record_context("parse", &context, &self.declaration.channel_id);
+        }
         let event = default_inbound_event(self, &message, &context);
         let (Some(run), Some(reaction)) = (
             self.run.upgrade(),
