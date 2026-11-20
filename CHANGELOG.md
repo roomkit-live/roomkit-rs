@@ -6,6 +6,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `RoomKitOptions::close_grace`, Python's `close_grace=5.0`: the one grace
+  the kit's close gives its running work before it cuts it, where it was a
+  fixed 5 s (RFC §12.10.4).
+
 ### Changed
 
 - **BREAKING — a sender whose name reads like an earlier sender's is labelled `Alice (2, not Alice)`**, where the label was `Alice (2)`, as in Python (RFC §6.4, RMK-1835): under the rank alone a model took the later sender for the first more than one time in two. The name after `not` is the label's own, cut within 24 characters. The second nameless sender of a channel keeps `@sms1 (2)`, and the speaker note is unchanged.

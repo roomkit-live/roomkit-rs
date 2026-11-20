@@ -32,6 +32,9 @@ pub(super) const IDENTITY_TIMEOUT: Duration = Duration::from_secs(10);
 /// Python's `delivery_gap_timeout=30.0`.
 const DELIVERY_GAP_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Python's `close_grace=5.0` (RFC §12.10.4).
+const CLOSE_GRACE: Duration = Duration::from_secs(5);
+
 /// What [`RoomKit::new`](crate::RoomKit::new) builds a kit with, Python's
 /// `RoomKit(store=None, identity_resolver=None, identity_channel_types=None,
 /// inbound_router=None, max_chain_depth=5, agent_response_policy=AGENT_CHAIN,
@@ -170,6 +173,11 @@ pub struct RoomKitOptions<S = InMemoryStore> {
     /// outside the pipeline are stored whatever it says. `None` stores
     /// every type.
     pub persistence_policy: Option<PersistencePolicy>,
+    /// Python `close_grace=5.0`: the one grace the kit's
+    /// [`close`](crate::RoomKit::close) gives its running work, a hook, a
+    /// store write, a transport send, from its start, before it cuts it
+    /// (RFC §12.10.4).
+    pub close_grace: Duration,
 }
 
 /// Python's defaults, over a new in-memory store. Defined for the in-memory
@@ -210,6 +218,7 @@ impl<S> RoomKitOptions<S> {
             telemetry: None,
             inbound_rate_limit: None,
             persistence_policy: None,
+            close_grace: CLOSE_GRACE,
         }
     }
 }
@@ -238,6 +247,7 @@ impl<S> fmt::Debug for RoomKitOptions<S> {
             .field("telemetry", &self.telemetry)
             .field("inbound_rate_limit", &self.inbound_rate_limit)
             .field("persistence_policy", &self.persistence_policy)
+            .field("close_grace", &self.close_grace)
             .finish_non_exhaustive()
     }
 }

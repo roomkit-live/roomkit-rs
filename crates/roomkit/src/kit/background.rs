@@ -4,7 +4,6 @@
 //! kit's one shutdown (`shutdown`).
 
 use std::sync::atomic::Ordering;
-use std::time::Duration;
 
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -15,11 +14,6 @@ use crate::context::ExecutionContext;
 use crate::error::RoomKitError;
 use crate::store::ConversationStore;
 use crate::tasks::CUT_UNWIND;
-
-/// The one grace the kit's close gives its running work, a hook, a store
-/// write, a transport send, from its start, before it cuts it (RFC
-/// §12.10.4): the Python implementation's `CLOSE_GRACE_S`.
-const CLOSE_GRACE: Duration = Duration::from_secs(5);
 
 impl<S: ConversationStore> RoomKit<S> {
     /// Closes the kit: refuses every new call, cuts its work, closes every
@@ -165,7 +159,7 @@ impl<S: ConversationStore> RoomKit<S> {
         let (tasks, turns) = (&self.inner.tasks, &self.inner.turns);
         // The running work's one grace, the cut turns storing what they
         // said included, the one a close's own call runs in among them.
-        let grace = Instant::now() + CLOSE_GRACE;
+        let grace = Instant::now() + self.inner.close_grace;
         // Beside the kit's own work, each within the one grace, neither holding
         // the other back: the discussions' turns, in the context of the close's
         // caller, so that a close from a hook's body under the room's lock takes
@@ -270,6 +264,8 @@ mod closing_observers;
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
     use crate::kit::RoomKitOptions;
     use crate::tasks::Kind;
@@ -279,9 +275,24 @@ mod tests {
     #[test]
     fn the_close_gives_five_seconds_of_grace_and_one_second_of_unwind() {
         assert_eq!(
-            (CLOSE_GRACE, CUT_UNWIND),
+            (RoomKitOptions::default().close_grace, CUT_UNWIND),
             (Duration::from_secs(5), Duration::from_secs(1))
         );
+    }
+
+    // Python: tests/test_kit_close.py::test_the_grace_is_the_one_the_kit_is_built_with
+    #[tokio::test(start_paused = true)]
+    async fn the_grace_is_the_one_the_kit_is_built_with() {
+        let grace = Duration::from_millis(50);
+        let kit = RoomKit::new(RoomKitOptions {
+            close_grace: grace,
+            ..Default::default()
+        });
+        let held = kit.inner.tasks.track_unabortable(Kind::Observer);
+        let started = Instant::now();
+        kit.close().await.unwrap();
+        assert_eq!(started.elapsed(), grace + CUT_UNWIND * 2);
+        drop(held);
     }
 
     // Python: tests/test_kit_close.py::test_work_ignoring_its_cut_is_abandoned_once_the_unwind_ran_out
@@ -310,7 +321,8 @@ mod tests {
             let started = Instant::now();
             kit.close().await.unwrap();
             let unwinds = if turn { 3 } else { 2 };
-            assert_eq!(started.elapsed(), CLOSE_GRACE + CUT_UNWIND * unwinds);
+            let grace = RoomKitOptions::default().close_grace;
+            assert_eq!(started.elapsed(), grace + CUT_UNWIND * unwinds);
             let mut left = vec![
                 "a call",
                 "a store write",

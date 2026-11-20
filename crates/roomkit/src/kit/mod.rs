@@ -250,6 +250,8 @@ pub(crate) struct Inner<S> {
     /// How long a delivery set waits on a cursor hole no lane runs before it
     /// skips it (RFC §13.5).
     pub(crate) delivery_gap_timeout: std::time::Duration,
+    /// The one grace the kit's close gives its running work (RFC §12.10.4).
+    pub(crate) close_grace: std::time::Duration,
     /// Where the kit reports its spans and metrics.
     pub(crate) telemetry: crate::telemetry::KitTelemetry,
     /// The tasks the kit runs in the background: observers, inbound runs.
@@ -416,6 +418,7 @@ impl<S: ConversationStore> RoomKit<S> {
             telemetry,
             inbound_rate_limit,
             persistence_policy,
+            close_grace,
         } = options;
         let telemetry = telemetry::telemetry_of(telemetry);
         store.set_telemetry(Arc::clone(&telemetry.provider), telemetry.sensitive);
@@ -458,6 +461,7 @@ impl<S: ConversationStore> RoomKit<S> {
             ))),
             verification_locks: KitLocks::new(key_space(&lock_manager, VERIFICATION_KIND)),
             delivery_gap_timeout,
+            close_grace,
             telemetry,
             tasks: Arc::default(),
             environment,

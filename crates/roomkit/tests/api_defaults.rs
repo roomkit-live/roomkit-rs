@@ -526,6 +526,8 @@ fn room_kit_options_defaults_as_python() {
     assert_eq!(defaults.max_chain_depth, 5);
     // roomkit.RoomKit.__init__(process_timeout) = 30.0
     assert_eq!(defaults.process_timeout, Duration::from_secs(30));
+    // roomkit.RoomKit.__init__(close_grace) = 5.0
+    assert_eq!(defaults.close_grace, Duration::from_secs(5));
     // roomkit.RoomKit.__init__(realtime) = None
     assert!(defaults.realtime.is_none());
     // roomkit.RoomKit.__init__(status_bus) = None
