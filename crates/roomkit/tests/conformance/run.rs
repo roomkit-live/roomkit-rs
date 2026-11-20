@@ -122,6 +122,13 @@ pub(crate) struct Run {
     pub(crate) workers: Option<Arc<dyn WorkerControl>>,
     /// Which actual executor handled a scripted turn, including after its channel was rebuilt.
     pub(crate) turn_workers: Mutex<HashMap<String, String>>,
+    /// Each executor turn's record, by the turn's id: its executor and its
+    /// place among that executor's records, whose `tools` gathers the calls
+    /// its host tool handler is handed (README, `executors`).
+    executor_turns: Mutex<HashMap<String, (String, usize)>>,
+    /// The human-input handler the runner holds per channel id (README,
+    /// `human_input.create`), made at the first call naming it.
+    human_inputs: Mutex<HashMap<String, roomkit::human_input::HumanInputHandler>>,
     /// The other processes of `setup.processes`, by id, in setup order
     /// (README, `processes`).
     processes: Mutex<Vec<(String, crate::Kit)>>,
@@ -269,6 +276,8 @@ impl Run {
             backend: Mutex::default(),
             workers: None,
             turn_workers: Mutex::default(),
+            executor_turns: Mutex::default(),
+            human_inputs: Mutex::default(),
             strategies: Mutex::default(),
             handoff_handlers: Mutex::default(),
             delegate_handlers: Mutex::default(),
@@ -281,6 +290,48 @@ impl Run {
 
     pub(crate) fn kit(&self) -> &crate::Kit {
         &self.kit
+    }
+
+    /// The human-input handler the runner holds for `channel_id`, made at
+    /// the first call naming it (README, `human_input.create`).
+    pub(crate) fn human_input(&self, channel_id: &str) -> roomkit::human_input::HumanInputHandler {
+        lock(&self.human_inputs)
+            .entry(channel_id.to_owned())
+            .or_insert_with(|| {
+                roomkit::human_input::HumanInputHandler::new(
+                    roomkit::human_input::HumanInputHandlerOptions::default(),
+                )
+            })
+            .clone()
+    }
+
+    /// A human-input request the run shows: the next `$p<n>` when it is new.
+    pub(crate) fn show_request(&self, pending_id: &str) {
+        saw_request(&mut lock(&self.observed), pending_id);
+    }
+
+    /// Keeps the executor `worker`'s record at `at`, the turn `turn_id`'s,
+    /// to gather the calls its host tool handler is handed.
+    pub(crate) fn keep_executor_turn(&self, turn_id: String, worker: String, at: usize) {
+        lock(&self.executor_turns).insert(turn_id, (worker, at));
+    }
+
+    /// Notes the call of `tool` the host tool handler of the turn `turn_id`
+    /// was handed, in that turn's executor record (README, `executors`).
+    pub(crate) fn note_executor_tool(&self, turn_id: &str, tool: &str) {
+        let Some((worker, at)) = lock(&self.executor_turns).get(turn_id).cloned() else {
+            return;
+        };
+        let mut observed = lock(&self.observed);
+        let tools = observed
+            .executors
+            .get_mut(&worker)
+            .and_then(|records| records.get_mut(at))
+            .and_then(|record| record.get_mut("tools"))
+            .and_then(Value::as_array_mut);
+        if let Some(tools) = tools {
+            tools.push(Value::String(tool.to_owned()));
+        }
     }
 
     /// `kit`, another process serving the rooms, known as `id` from now on.

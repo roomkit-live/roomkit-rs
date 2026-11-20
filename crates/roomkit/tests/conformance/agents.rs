@@ -1143,19 +1143,23 @@ fn undeclared_tools(spec: &Value, run: &Arc<Run>) -> Option<ToolHandler> {
     if undeclared.is_empty() {
         return None;
     }
-    Some(scripted_handler(undeclared, run))
+    Some(scripted_handler(undeclared, run, true))
 }
 
 /// A handler serving `tools`, scripted tools, each answering every call
 /// one way, held at its `gate` first, `run`'s; a name it does not hold is
-/// unserved.
-fn scripted_handler(tools: Vec<Value>, run: &Arc<Run>) -> ToolHandler {
+/// unserved. With `noted`, they are the agent's own tools, whose runs an
+/// executor turn records (README, `executors`: `tools`).
+fn scripted_handler(tools: Vec<Value>, run: &Arc<Run>, noted: bool) -> ToolHandler {
     let run = Arc::downgrade(run);
     let claims = super::report_claims::ReportClaims::default();
     ToolHandler::new(move |name, _arguments| {
         let behaviour = tools.iter().find(|tool| tool["name"] == name).cloned();
         let run = Weak::clone(&run);
         let claims = claims.clone();
+        if let Some(behaviour) = behaviour.as_ref().filter(|_| noted) {
+            note_executor_tool(&run, behaviour);
+        }
         async move {
             let Some(behaviour) = behaviour else {
                 return Err(ToolError::unserved(format!("{name} is not this handler's")));
@@ -1350,7 +1354,7 @@ fn turn_config(spec: &Value, run: &Arc<Run>) -> Result<AiChannelTurnConfig, Stri
         turn_budget_usd: spec["turn_budget_usd"].as_f64(),
         tool_handler: spec["tool_handler"]
             .as_array()
-            .map(|tools| scripted_handler(tools.clone(), run)),
+            .map(|tools| scripted_handler(tools.clone(), run, false)),
         skills: spec
             .get("skills")
             .map(|skills| run.skills.registry(skills, &spec["skills_requires_match"]))
@@ -1399,6 +1403,7 @@ fn tools(spec: &Value, run: &Arc<Run>) -> Tools {
             tools.tool(definition, move |_call: ToolCall, _context: ToolContext| {
                 let (behaviour, run) = (behaviour.clone(), Weak::clone(&run));
                 let claims = claims.clone();
+                note_executor_tool(&run, &behaviour);
                 async move {
                     write_record(&behaviour);
                     write_structured_content(&behaviour)?;
@@ -1423,6 +1428,19 @@ fn tools(spec: &Value, run: &Arc<Run>) -> Tools {
                 }
             })
         })
+}
+
+/// Notes the run of the scripted tool `behaviour` in the record of the
+/// executor turn running it, when it runs in one (README, `executors`:
+/// `tools`).
+fn note_executor_tool(run: &Weak<Run>, behaviour: &Value) {
+    if let (Some(run), Some(turn), Some(name)) = (
+        run.upgrade(),
+        roomkit::current_turn_id(),
+        behaviour["name"].as_str(),
+    ) {
+        run.note_executor_tool(&turn, name);
+    }
 }
 
 /// Writes a tool's, a memory's or a hook's `writes_record` on the turn's

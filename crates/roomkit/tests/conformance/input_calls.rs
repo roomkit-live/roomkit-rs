@@ -2,13 +2,19 @@
 //! "Calls"): `answer_input` and `reject_input`, the kit's doors to a
 //! turn's request (RFC §10.6.5), and the scripted hook on
 //! `on_user_input_required`, whose actions name the request `$request`.
+//! `human_input.<method>` is a method of the human-input handler the
+//! runner holds for a channel id, which nothing else is given: a request it
+//! opens during a turn belongs to the turn, one it opens after is its own.
 
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use roomkit::human_input::PendingInputEvent;
+use roomkit::human_input::{
+    CreateDetachedOptions, CreateOptions, PendingInput, PendingInputEvent, WaitOptions,
+};
+use roomkit::model::Metadata;
 use roomkit::model::hook::AllowOptions;
 use roomkit::model::{HookAction, HookResult, RoomContext};
 use roomkit::{HookError, InputRequestOptions, RejectInputOptions};
@@ -28,6 +34,11 @@ pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
         "input_request" | "await_input_request" => &["request_id"],
         "answer_input" => &["request_id", "value"],
         "reject_input" => &["request_id", "reason"],
+        "human_input.create" | "human_input.create_detached" => {
+            &["channel_id", "room_id", "tool_name", "arguments"]
+        }
+        "human_input.resolve" => &["channel_id", "request_id", "value"],
+        "human_input.wait" => &["channel_id", "request_id", "timeout_ms"],
         _ => return None,
     })
 }
@@ -42,6 +53,9 @@ pub(crate) async fn call(
     name: &str,
     spec: &Value,
 ) -> Result<(Called, Option<String>), Unreadable> {
+    if let Some(method) = name.strip_prefix("human_input.") {
+        return Ok((human_input(run, method, spec).await?, None));
+    }
     let request: String = field(spec, "request_id")?;
     if matches!(name, "input_request" | "await_input_request") {
         return read_request(run, name, spec, &request).await;
@@ -64,6 +78,59 @@ pub(crate) async fn call(
         finish(run, name, outcome, |taken| Value::Bool(*taken)),
         None,
     ))
+}
+
+/// A method of the human-input handler the runner holds for the call's
+/// `channel_id` (README, `human_input.create`).
+async fn human_input(run: &Arc<Run>, method: &str, spec: &Value) -> Result<Called, Unreadable> {
+    let channel_id: String = field(spec, "channel_id")?;
+    let handler = run.human_input(&channel_id);
+    let call = format!("human_input.{method}");
+    Ok(match method {
+        "create" | "create_detached" => {
+            let room_id: String = field(spec, "room_id")?;
+            let tool: String = field(spec, "tool_name")?;
+            let arguments: Metadata = optional(spec, "arguments")?.unwrap_or_default();
+            let opened = if method == "create" {
+                let options = CreateOptions {
+                    room_id,
+                    channel_id,
+                    ..CreateOptions::default()
+                };
+                handler.create(tool, arguments, options).await
+            } else {
+                let options = CreateDetachedOptions {
+                    room_id,
+                    channel_id,
+                    ..CreateDetachedOptions::default()
+                };
+                handler.create_detached(tool, arguments, options).await
+            };
+            finish(run, &call, opened, |pending: &PendingInput| {
+                run.show_request(&pending.pending_id);
+                Value::String(pending.pending_id.clone())
+            })
+        }
+        "resolve" => {
+            let request: String = field(spec, "request_id")?;
+            let value: String = field(spec, "value")?;
+            Ok(Value::Bool(handler.resolve(&request, value)))
+        }
+        "wait" => {
+            let request: String = field(spec, "request_id")?;
+            let bound: Option<u64> = optional(spec, "timeout_ms")?;
+            let options = bound.map_or_else(WaitOptions::default, |ms| WaitOptions {
+                timeout: Duration::from_millis(ms),
+            });
+            finish(
+                run,
+                &call,
+                handler.wait(&request, options).await,
+                |answer| Value::String(answer.clone()),
+            )
+        }
+        other => return Err(format!("no call human_input.{other}")),
+    })
 }
 
 /// The owner reader stays synchronous; only the explicit fixture wait polls.

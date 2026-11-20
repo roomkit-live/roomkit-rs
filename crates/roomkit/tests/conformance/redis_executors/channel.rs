@@ -79,19 +79,19 @@ impl WorkerChannel {
         Ok(channel)
     }
 
-    fn note(&self, call: &str, room: Option<&RoomId>, verb: Option<&str>) {
+    /// Records a call the executor made on this build, the place of its
+    /// record among the executor's, none when nothing is recorded.
+    fn note(&self, call: &str, room: Option<&RoomId>, verb: Option<&str>) -> Option<usize> {
         if let Some(room) = room {
             let first = lock(&self.seen).insert(room.clone());
             // A detach on a build which never entered this room releases nothing.
             if first && call == "on_room_detached" {
-                return;
+                return None;
             }
         }
-        let Some(run) = self.run.upgrade() else {
-            return;
-        };
+        let run = self.run.upgrade()?;
         if !run.recording.load(Ordering::SeqCst) {
-            return;
+            return None;
         }
         let mut record = json!({"call":call, "channel_id":self.channel_id(), "build":self.build});
         if let Some(room) = room {
@@ -100,11 +100,13 @@ impl WorkerChannel {
         if let Some(verb) = verb {
             record["verb"] = json!(verb);
         }
-        lock(&run.observed)
-            .executors
-            .entry(self.worker.clone())
-            .or_default()
-            .push(record);
+        if call == "on_event" {
+            record["tools"] = json!([]);
+        }
+        let mut observed = lock(&run.observed);
+        let records = observed.executors.entry(self.worker.clone()).or_default();
+        records.push(record);
+        Some(records.len() - 1)
     }
 }
 
@@ -178,7 +180,12 @@ impl Channel for WorkerChannel {
         if let (Some(run), Some(host)) = (self.run.upgrade(), roomkit::current_turn_host()) {
             lock(&run.turn_workers).insert(host.turn_id().to_owned(), self.worker.clone());
         }
-        self.note("on_event", Some(&event.room_id), None);
+        let at = self.note("on_event", Some(&event.room_id), None);
+        if let (Some(at), Some(run), Some(turn)) =
+            (at, self.run.upgrade(), roomkit::current_turn_id())
+        {
+            run.keep_executor_turn(turn, self.worker.clone(), at);
+        }
         forward!(self, on_event(event, binding, context).await)
     }
     async fn on_room_attached(

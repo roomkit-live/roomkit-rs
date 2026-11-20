@@ -167,6 +167,11 @@ pub(crate) fn error_of(error: &RoomKitError) -> Option<Value> {
         {
             named("already_set_up")
         }
+        // A human-input request given up before an answer, as its waiter
+        // reads it: withdrawn with its turn, or released (RFC §10.6.5).
+        RoomKitError::Runtime(message) if message == "Released before an answer arrived" => {
+            named("input_released")
+        }
         // A verb of the turn's host refused once the turn is over (RFC
         // §10.6.5), its error naming the verb first.
         RoomKitError::Runtime(message) if message.contains(" needs a turn: ") => {
