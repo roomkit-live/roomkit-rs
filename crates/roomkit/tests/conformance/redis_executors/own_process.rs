@@ -9,6 +9,18 @@
 use roomkit::RoomKitError;
 use serde_json::Value;
 
+/// What a channel such an executor hosts may hold.
+const CHANNEL: &[&str] = &[
+    "id",
+    "type",
+    "category",
+    "direction",
+    "capabilities",
+    "recipient_key",
+    "recent_events_window",
+    "declared",
+    "on_event",
+];
 /// What a reaction of a channel such an executor hosts may hold.
 const REACTION: &[&str] = &[
     "when",
@@ -21,10 +33,21 @@ const REACTION: &[&str] = &[
     "fail",
 ];
 
-/// Refuses the setup when `worker` cannot run in a process of its own: a
-/// channel it hosts is no scripted channel, or one of its reactions holds a
-/// gate or makes an action other than a host verb.
+/// Refuses the setup when `worker` cannot run in a process of its own: it
+/// holds hooks of its own or a turn it never answers, a channel it hosts
+/// holds more than a scripted channel's turn, or one of its reactions holds
+/// a gate or makes an action other than a host verb.
 pub(super) fn check(worker: &super::Worker, channels: &[Value]) -> Result<(), RoomKitError> {
+    if !worker.hooks.is_empty()
+        || !worker.room_hooks.is_empty()
+        || worker.gate.is_some()
+        || worker.answers == Some(false)
+    {
+        return Err(RoomKitError::Value(format!(
+            "executor {}: it answers and holds no hook apart",
+            worker.id
+        )));
+    }
     let problems: Vec<String> = channels
         .iter()
         .filter(|channel| channel["declared"] == true)
@@ -41,9 +64,14 @@ pub(super) fn check(worker: &super::Worker, channels: &[Value]) -> Result<(), Ro
 fn problems(worker: &str, channel: &Value) -> Vec<String> {
     let place = format!("executor {worker}, channel {}", channel["id"]);
     let mut found = Vec::new();
-    if channel.get("model").is_some() || channel.get("acp").is_some() {
+    if channel
+        .as_object()
+        .into_iter()
+        .flatten()
+        .any(|(member, _)| !CHANNEL.contains(&member.as_str()))
+    {
         found.push(format!(
-            "{place}: a process of its own hosts scripted channels alone"
+            "{place}: a process of its own hosts a scripted channel's turn alone"
         ));
     }
     for reaction in channel["on_event"].as_array().into_iter().flatten() {

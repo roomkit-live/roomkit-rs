@@ -360,6 +360,14 @@ async fn exercise(url: &str, scenario: &Value) -> Result<Vec<String>, RoomKitErr
     }
     let setup: Setup = serde_json::from_value(scenario["setup"].clone())
         .map_err(|error| RoomKitError::Value(error.to_string()))?;
+    let kit = &scenario["setup"]["kit"];
+    if kills_owner(scenario)
+        && (kit["turn_backend_faults"] == true || kit["executor_catalogue"] == false)
+    {
+        return Err(RoomKitError::Value(
+            "owner.kill takes no presence fixture of the kit".into(),
+        ));
+    }
     let topology = topology::Topology::new(url, scenario)?;
     let slot = RunSlot::default();
     let owner = topology.owner().clone();
@@ -388,8 +396,7 @@ async fn exercise(url: &str, scenario: &Value) -> Result<Vec<String>, RoomKitErr
     });
     let mut main = workers.presence.connection(owner.clone());
     if let Some(killable) = &workers.owner_kill {
-        // A scenario that kills the owner uses no presence fixture: the
-        // kit's turns cross the wrapper alone.
+        // The kit's turns cross the wrapper alone.
         main.turns =
             roomkit::turns::TurnBackendHandle::new(Arc::<owner_kill::OwnerKill>::clone(killable));
     }
