@@ -89,6 +89,20 @@ ROOMKIT_CONFORMANCE_JUNIT=target/conformance cargo test -p roomkit --test confor
 ROOMKIT_CONFORMANCE_JUNIT=target/conformance cargo test -p roomkit-sqlite --test conformance
 ```
 
+The scenarios with `setup.executors` run only across the Redis turn executor:
+a runner built with the `redis` feature (the SQLite and PostgreSQL runners
+always are) runs them when `REDIS_URL` names a Redis server, and skips them
+otherwise. Every other scenario runs in process either way. A pass that runs
+them names its backend `<backend>+redis-executors`, in its file and its class
+(`memory+redis-executors-current_thread.xml`, class
+`conformance.memory+redis-executors.current_thread`), so that it is never read
+as the pass that skips them.
+
+```sh
+REDIS_URL=redis://127.0.0.1:6379 ROOMKIT_CONFORMANCE_JUNIT=target/conformance \
+  cargo test -p roomkit --features redis --test conformance
+```
+
 roomkit-specs records these files as execution receipts, from a clean commit
 (`conformance/TRACEABILITY.md`, "Execution receipts").
 

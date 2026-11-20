@@ -144,6 +144,48 @@ fn a_distributed_scenario_outside_executors_reports_its_observed_failure() {
     assert!(run.report[0].contains("unexpected operation"));
 }
 
+/// A pass that runs the scenarios with executors, across the Redis turn
+/// executor, writes a file and a class of its own,
+/// `<backend>+redis-executors`; a pass that skips them writes the backend's.
+#[test]
+fn a_pass_running_the_executor_scenarios_is_named_apart() {
+    let runs: scenarios::ExecutorPass = |_, _| Some(Vec::new());
+    let apart = format!("{}+redis-executors", crate::BACKEND);
+    let skipped =
+        r#"><skipped message="§10.6.7: this pass has no Redis turn executor"/></testcase>"#;
+    for (executors, backend, outcome) in [
+        (None, crate::BACKEND, skipped),
+        (Some(runs), apart.as_str(), "/>"),
+    ] {
+        let root = suite_of(&[json!({"id": "area/runs-apart", "setup": {"executors": []}})]);
+        let named = scenarios::result_backend(crate::BACKEND, executors);
+        let file =
+            junit::claim_in(Some("results".into()), &root, &named, ONE_THREAD.runtime).unwrap();
+        let run = scenarios::run(&root, None, &ONE_THREAD, &[], executors);
+        let revision = Revision {
+            commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+            clean: true,
+        };
+        let output = Output { file, revision };
+        junit::write(&output, &named, ONE_THREAD.runtime, &run.cases);
+        let cases = cases_of(&output.file);
+        std::fs::remove_dir_all(&root).unwrap();
+
+        let class = format!("conformance.{backend}.current_thread");
+        assert_eq!(
+            output.file,
+            root.join("results")
+                .join(format!("{backend}-current_thread.xml"))
+        );
+        assert_eq!(
+            cases,
+            [format!(
+                r#"<testcase classname="{class}" name="area/runs-apart"{outcome}"#
+            )]
+        );
+    }
+}
+
 #[test]
 fn a_result_file_is_claimed_only_when_a_directory_is_named() {
     let root = new_directory();

@@ -25,7 +25,7 @@ pub(super) fn run(
     scenario: &Value,
     runtime: fn() -> tokio::runtime::Runtime,
 ) -> Option<Vec<String>> {
-    let url = std::env::var("REDIS_URL").ok()?;
+    let url = crate::scenarios::redis_url()?;
     let unknown = crate::shape::unknown_members(scenario);
     if !unknown.is_empty() {
         return Some(unknown);

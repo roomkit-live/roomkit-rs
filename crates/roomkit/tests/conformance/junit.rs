@@ -5,7 +5,10 @@
 //! the repository's root, each pass writes `<backend>-<runtime>.xml` there:
 //! one test case per selected scenario, named by its id, under the class
 //! `conformance.<backend>.<runtime>`, and the commit the run was at, with
-//! whether tracked files differed from it. Without the variable nothing is
+//! whether tracked files differed from it. A pass that runs the scenarios
+//! with executors, across the Redis turn executor (`REDIS_URL` set), names
+//! its backend `<backend>+redis-executors`
+//! (`crate::scenarios::result_backend`). Without the variable nothing is
 //! written.
 
 use std::ffi::OsString;

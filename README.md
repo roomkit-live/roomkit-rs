@@ -187,7 +187,9 @@ ROOMKIT_CONFORMANCE_FILTER=executors/ cargo test --locked -p roomkit --features 
 
 Set `ROOMKIT_CONFORMANCE_JUNIT` to a directory to retain the pass, failure
 and skip counts for each runtime. The SQLite and PostgreSQL conformance
-runners also accept `REDIS_URL`.
+runners also accept `REDIS_URL`. A pass that runs the executor scenarios
+across Redis names its backend `<backend>+redis-executors` in that file
+(CONTRIBUTING.md, "Conformance results").
 
 ## Examples and documentation
 

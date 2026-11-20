@@ -80,6 +80,29 @@ const NO_EXECUTOR: &str = "§10.6.7: this pass has no Redis turn executor";
 
 pub(crate) type ExecutorPass = fn(&Value, fn() -> tokio::runtime::Runtime) -> Option<Vec<String>>;
 
+/// The Redis server the scenarios with executors run across, as `REDIS_URL`
+/// names it.
+pub(crate) fn redis_url() -> Option<String> {
+    std::env::var("REDIS_URL").ok()
+}
+
+/// The pass over the scenarios with executors this run makes: the runner's
+/// own, when it has one and `REDIS_URL` names its Redis server.
+fn executor_pass() -> Option<ExecutorPass> {
+    crate::EXECUTOR_PASS.filter(|_| redis_url().is_some())
+}
+
+/// The backend's name in the result file of a pass that makes `executors`:
+/// `<backend>+redis-executors` when it runs the scenarios with executors,
+/// across the Redis turn executor, so that roomkit-specs records it apart
+/// from the pass that skips them; `backend` otherwise.
+pub(crate) fn result_backend(backend: &str, executors: Option<ExecutorPass>) -> String {
+    match executors {
+        Some(_) => format!("{backend}+redis-executors"),
+        None => backend.to_owned(),
+    }
+}
+
 /// The scenario at `path`, which names `id`.
 fn load(path: &Path, id: &str) -> Value {
     let scenario: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
@@ -189,23 +212,26 @@ fn judge(id: String, problems: &[String], known: &[(&str, &str)], run: &mut Run)
 /// Every scenario of the repository's copy runs on `pass`; those this
 /// implementation fails there are exactly `known`, the known failures.
 /// When `ROOMKIT_CONFORMANCE_JUNIT` names a directory, the pass writes its
-/// result file there (`crate::junit`).
+/// result file there (`crate::junit`), under the name [`result_backend`]
+/// gives it.
 #[expect(
     clippy::print_stdout,
     reason = "the suite prints its count, as a test does"
 )]
 pub(crate) fn every_scenario_gives_what_the_rfc_says(pass: &Pass, known: &[(&str, &str)]) {
     let filter = std::env::var("ROOMKIT_CONFORMANCE_FILTER").ok();
-    let output = junit::claim(crate::BACKEND, pass.runtime);
+    let executors = executor_pass();
+    let backend = result_backend(crate::BACKEND, executors);
+    let output = junit::claim(&backend, pass.runtime);
     let run = run(
         &suite().join("scenarios"),
         filter.as_deref(),
         pass,
         known,
-        crate::EXECUTOR_PASS,
+        executors,
     );
     if let Some(output) = &output {
-        junit::write(output, crate::BACKEND, pass.runtime, &run.cases);
+        junit::write(output, &backend, pass.runtime, &run.cases);
     }
     let skipped = run
         .cases
