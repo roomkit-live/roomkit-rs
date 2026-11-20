@@ -278,7 +278,7 @@ const RAISES: &[&str] = &["kind", "message"];
 const POLICY: &[&str] = &["allow", "deny", "role_overrides"];
 const ROLE_OVERRIDE: &[&str] = &["allow", "deny", "mode"];
 const MCP_SERVER: &[&str] = &["label", "gate_discovery", "declare", "tools"];
-const MCP_TOOL: &[&str] = &["name", "description", "input_schema", "returns"];
+const MCP_TOOL: &[&str] = &["name", "description", "input_schema", "returns", "is_error"];
 const MEMORY: &[&str] = &[
     "max_events",
     "returns_current_event",
@@ -460,6 +460,7 @@ const STEPS: &[(&str, &[&str])] = &[
     ("wait_for_lock", &["wait_for_lock", "waiters"]),
     ("lock_releases", &["lock_releases"]),
     ("acp_disconnect", &["acp_disconnect"]),
+    ("under_lock", &["under_lock", "do"]),
 ];
 
 /// Each call's arguments, beside `call` and `organization_id`.
@@ -1310,6 +1311,14 @@ fn step(step: &Value, path: &str, found: &mut Vec<String>) {
             concurrent,
             &["as", "expect", "kit"],
             &format!("{path}.concurrent[{index}]"),
+            found,
+        );
+    }
+    for (index, locked) in items(&step["do"]) {
+        call(
+            locked,
+            &["as", "expect", "kit"],
+            &format!("{path}.do[{index}]"),
             found,
         );
     }

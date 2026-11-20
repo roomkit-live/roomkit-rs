@@ -415,6 +415,50 @@ async fn run_step(run: &Arc<Run>, step: &Value, path: &str) -> Vec<Value> {
         }
     } else if step.get("idle").is_some() {
         run.idle().await;
+    } else if step["under_lock"].is_string() {
+        let calls = step["do"].as_array().cloned().unwrap_or_default();
+        let made = under_lock(run, step, path).await;
+        for (position, (call, outcome)) in calls.iter().zip(made).enumerate() {
+            check(
+                format!("{path}.do[{position}]"),
+                call.get("expect"),
+                outcome,
+            );
+        }
+    }
+    outcomes
+}
+
+/// Makes an `under_lock` step's calls under the room lock the host takes
+/// from the kit's lock manager, outside any pass (README, "Steps", RFC
+/// §13.5), each waited for, then releases the lock: their outcomes, in
+/// order.
+async fn under_lock(run: &Arc<Run>, step: &Value, path: &str) -> Vec<Value> {
+    let room = run
+        .resolve(step["under_lock"].clone(), &Scope::default())
+        .await;
+    let Ok(room_id) = RoomId::new(room.as_str().unwrap_or_default()) else {
+        run.problem(format!("{path}: no room id {room}"));
+        return Vec::new();
+    };
+    let manager = run.kit().lock_manager();
+    let lock = match manager.locked(&room_id).await {
+        Ok(lock) => lock,
+        Err(error) => {
+            run.problem(format!(
+                "{path}: the lock of {room_id} was refused: {error}"
+            ));
+            return Vec::new();
+        }
+    };
+    let mut outcomes = Vec::new();
+    for call in step["do"].as_array().into_iter().flatten() {
+        outcomes.push(run.invoke(call.clone(), Scope::default()).await);
+    }
+    if let Err(error) = lock.release().await {
+        run.problem(format!(
+            "{path}: releasing the lock of {room_id} failed: {error}"
+        ));
     }
     outcomes
 }

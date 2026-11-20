@@ -1163,6 +1163,9 @@ fn scripted_handler(tools: Vec<Value>, run: &Arc<Run>) -> ToolHandler {
             write_record(&behaviour);
             write_structured_content(&behaviour)?;
             post_progress(&behaviour, &run).await?;
+            if behaviour["report_claim_probe"] == "claim_then_gate" {
+                return Ok(super::report_claims::claim_then_gate(&behaviour, &run).await);
+            }
             if let (Some(gate), Some(run)) = (behaviour["gate"].as_str(), run.upgrade()) {
                 run.gates.hold(gate).await;
             }
@@ -1400,6 +1403,10 @@ fn tools(spec: &Value, run: &Arc<Run>) -> Tools {
                     write_record(&behaviour);
                     write_structured_content(&behaviour)?;
                     post_progress(&behaviour, &run).await?;
+                    if behaviour["report_claim_probe"] == "claim_then_gate" {
+                        let claimed = super::report_claims::claim_then_gate(&behaviour, &run);
+                        return Ok(claimed.await);
+                    }
                     if let (Some(gate), Some(run)) = (behaviour["gate"].as_str(), run.upgrade()) {
                         run.gates.hold(gate).await;
                     }

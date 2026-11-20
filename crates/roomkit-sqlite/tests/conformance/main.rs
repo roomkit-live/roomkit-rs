@@ -118,7 +118,7 @@ use crate::support::TempFile;
 
 /// Scenario id → the rule this implementation breaks on this store: the
 /// in-memory store's (crates/roomkit/tests/conformance), none beyond.
-pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[];
+pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = scenarios::HOST_LOCK_FAILURES;
 
 /// A scenario that has not finished by then fails instead of hanging the
 /// suite.

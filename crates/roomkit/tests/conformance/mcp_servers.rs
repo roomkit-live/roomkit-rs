@@ -141,7 +141,8 @@ async fn serve(spec: &Value) -> Result<Server, String> {
 }
 
 /// The server's answer to one request: its handshake, its tools as the
-/// spec writes them, and each call answered with the tool's `returns`.
+/// spec writes them, and each call answered with the tool's `returns`, a
+/// result that says `isError` when the tool's `is_error` is true.
 async fn answer(State(spec): State<Arc<Value>>, method: Method, body: Bytes) -> Response {
     if method == Method::DELETE {
         return StatusCode::NO_CONTENT.into_response();
@@ -169,7 +170,7 @@ async fn answer(State(spec): State<Arc<Value>>, method: Method, body: Bytes) -> 
             match tools.iter().find(|tool| &tool["name"] == called) {
                 Some(tool) => json!({
                     "content": [{ "type": "text", "text": tool["returns"] }],
-                    "isError": false,
+                    "isError": tool["is_error"] == true,
                 }),
                 None => json!({
                     "content": [{ "type": "text", "text": format!("Unknown tool: {called}") }],
