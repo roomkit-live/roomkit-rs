@@ -182,7 +182,10 @@ pub(crate) async fn run_with(
         Ok(read) => read,
         Err(problem) => return vec![format!("setup: {problem}")],
     };
-    let held = crate::held_ends::HeldEnds::of(&setup, &slot);
+    let held = match crate::held_ends::HeldEnds::of(&setup, &slot, workers.is_some()) {
+        Ok(held) => held,
+        Err(problem) => return vec![format!("setup: {problem}")],
+    };
     let mut shared_store = None;
     let text_events = TextEvents::default();
     let (kit, store_file) = crate::new_kit(|mut options| {

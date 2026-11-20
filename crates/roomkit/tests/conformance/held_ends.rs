@@ -9,6 +9,15 @@
 //! so cut is recorded with whether the owner, still holding the turn when
 //! the gate opened, read its end. The scenario's `turn_timeouts` are the
 //! backend's, as Python's runner gives the kit's backend those bounds.
+//!
+//! A kit given a transport takes its turns through it (the kit's
+//! application path, `RoomKitOptions::turn_backend`) rather than its own
+//! in-memory turns: the owner's side, its cancel bound and its account of
+//! an end owed are the same on both paths, and Python's kit takes its turns
+//! through an in-memory backend too. Every scenario that holds a turn's end
+//! or bounds its turns, outside `executors/`, takes that path. A run that
+//! carries its turns over a transport of its own, the Redis executor pass,
+//! holds no end: a scenario that asks it to is refused as a setup problem.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -38,9 +47,14 @@ pub(crate) struct HeldEnds {
 
 impl HeldEnds {
     /// The backend `setup` asks for, none when it neither holds a turn's
-    /// end nor bounds a turn. Bounds that are no milliseconds are a broken
-    /// fixture, which the schema refuses.
-    pub(crate) fn of(setup: &Value, run: &RunSlot) -> Option<Self> {
+    /// end nor bounds a turn, or when the run carries its turns over a
+    /// transport of its own (`own_transport`), where holding an end is a
+    /// setup problem.
+    pub(crate) fn of(
+        setup: &Value,
+        run: &RunSlot,
+        own_transport: bool,
+    ) -> Result<Option<Self>, String> {
         let gates: BTreeMap<String, String> = setup["channels"]
             .as_array()
             .into_iter()
@@ -50,16 +64,24 @@ impl HeldEnds {
                 Some((channel["id"].as_str()?.to_owned(), gate.to_owned()))
             })
             .collect();
-        let timeouts = timeouts(&setup["kit"]["turn_timeouts"]).unwrap();
-        if gates.is_empty() && timeouts.is_none() {
-            return None;
+        if own_transport {
+            return match gates.keys().next() {
+                Some(channel) => Err(format!(
+                    "{channel}: holds_end is not held over this run's own transport"
+                )),
+                None => Ok(None),
+            };
         }
-        Some(Self {
+        let timeouts = timeouts(&setup["kit"]["turn_timeouts"])?;
+        if gates.is_empty() && timeouts.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(Self {
             inner: InMemoryTurnBackend::new(),
             gates,
             timeouts,
             run: run.clone(),
-        })
+        }))
     }
 }
 
