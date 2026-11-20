@@ -166,10 +166,13 @@ fn without_rank(label: &str) -> &str {
 }
 
 /// Whether `tail` is what a ranked label holds between its parentheses: a
-/// rank, alone or followed by the name its sender is not.
+/// rank, alone or followed by the name its sender is not, which holds no
+/// parenthesis, as no name does.
 fn is_rank(tail: &str) -> bool {
-    let rank = tail.split_once(", not ").map_or(tail, |(rank, _)| rank);
-    !rank.is_empty() && rank.chars().all(|c| c.is_ascii_digit())
+    let (rank, is_not) = tail
+        .split_once(", not ")
+        .map_or((tail, ""), |(rank, is_not)| (rank, is_not));
+    !rank.is_empty() && rank.chars().all(|c| c.is_ascii_digit()) && !is_not.contains(['(', ')'])
 }
 
 /// Each name agents address people by, ignoring case, and the people it
@@ -678,6 +681,9 @@ mod tests {
             (" (2)", ""),
             ("Alice ()", "Alice ()"),
             ("Alice (, not Alice)", "Alice (, not Alice)"),
+            // No name holds a parenthesis: not the runtime's tail.
+            ("Alice (2, not A(B)", "Alice (2, not A(B)"),
+            ("Alice (2, not x) y)", "Alice (2, not x) y)"),
         ] {
             assert_eq!(label_name(label), name, "{label:?}");
         }
