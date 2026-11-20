@@ -13,8 +13,8 @@ use roomkit::model::{
     RoomEvent, RoomId,
 };
 use roomkit::{
-    Channel, ChannelError, DeliveryStream, HookError, HookFuture, SessionStartedEvent, StreamItem,
-    default_inbound_event,
+    Channel, ChannelError, CountryCode, DeliveryStream, HookError, HookFuture, SessionStartedEvent,
+    StreamItem, TransportChannel, TransportChannelOptions, default_inbound_event,
 };
 use roomkit_core::ops::ChannelConfig;
 use serde_json::{Value, json};
@@ -235,6 +235,42 @@ fn parsed_event(event: RoomEvent, patch: &Value) -> Result<RoomEvent, ScriptedFa
     serde_json::from_value(data).map_err(|e| ScriptedFailure(format!("a parsed patch: {e}")))
 }
 
+/// The implementation's transport channel of a scripted channel's type,
+/// whose address methods the channel answers with (README, `addressing`):
+/// its type's addressing, with the `country_code` the scenario declares;
+/// `None` for a channel without `addressing`. A code `CountryCode::new`
+/// refuses is the registration's `invalid_argument`, checked before
+/// (`country_code_refused`).
+fn addressed_transport(
+    spec: &Value,
+    declaration: &ChannelConfig,
+) -> Result<Option<TransportChannel>, String> {
+    let Some(addressing) = spec.get("addressing") else {
+        return Ok(None);
+    };
+    let country_code = addressing["country_code"]
+        .as_str()
+        .map(CountryCode::new)
+        .transpose()
+        .map_err(|error| error.to_string())?;
+    Ok(Some(TransportChannel::new(
+        declaration.channel_id.clone(),
+        declaration.channel_type.clone(),
+        TransportChannelOptions {
+            country_code,
+            ..TransportChannelOptions::default()
+        },
+    )))
+}
+
+/// Whether the implementation refuses the country code a scripted channel's
+/// `addressing` declares (RFC §5.7): the registration's `invalid_argument`.
+pub(crate) fn country_code_refused(spec: &Value) -> bool {
+    spec["addressing"]["country_code"]
+        .as_str()
+        .is_some_and(|code| CountryCode::new(code).is_err())
+}
+
 /// A channel whose parse, turn and delivery follow the scenario's reactions.
 pub(crate) struct ScriptedChannel {
     declaration: ChannelConfig,
@@ -255,6 +291,10 @@ pub(crate) struct ScriptedChannel {
     verbs: crate::channel_verbs::Verbs,
     /// What its own address methods answer: the defaults when `None`.
     addresses: Option<Value>,
+    /// The implementation's transport channel of its type, whose address
+    /// methods it answers with (README, `addressing`), in place of
+    /// `addresses` and of the defaults.
+    transport: Option<TransportChannel>,
     /// The rooms it streams in: every room when `None`.
     streams_in: Option<Vec<String>>,
     /// How many of the room's latest events it declares it reads.
@@ -292,10 +332,14 @@ impl ScriptedChannel {
                 serde_json::from_value::<ChannelCapabilities>(capabilities.clone())
                     .map_err(|e| e.to_string())?;
         }
-        declaration.recipient_key = spec
-            .get("recipient_key")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
+        let transport = addressed_transport(spec, &declaration)?;
+        declaration.recipient_key = match &transport {
+            Some(transport) => transport.recipient_key(),
+            None => spec
+                .get("recipient_key")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        };
         declaration.chat_key = None;
         declaration.supports_streaming_delivery = spec.get("streams") == Some(&Value::Bool(true));
         Ok(Self {
@@ -312,6 +356,7 @@ impl ScriptedChannel {
             binding_update: spec.get("update_binding").cloned(),
             verbs: crate::channel_verbs::Verbs::new(spec["verbs"].clone()),
             addresses: spec.get("addresses").cloned(),
+            transport,
             streams_in: spec
                 .get("streams_in")
                 .map(|rooms| serde_json::from_value(rooms.clone()))
@@ -483,6 +528,9 @@ impl Channel for ScriptedChannel {
     }
 
     fn normalize_address(&self, address: &str) -> String {
+        if let Some(transport) = &self.transport {
+            return transport.normalize_address(address);
+        }
         self.addresses
             .as_ref()
             .and_then(|addresses| addresses["normalizes"].get(address))
@@ -492,6 +540,9 @@ impl Channel for ScriptedChannel {
     }
 
     fn conversation_address(&self, message: &InboundMessage) -> String {
+        if let Some(transport) = &self.transport {
+            return transport.conversation_address(message);
+        }
         let key = self
             .addresses
             .as_ref()
@@ -503,6 +554,9 @@ impl Channel for ScriptedChannel {
     }
 
     fn reply_metadata(&self, message: &InboundMessage) -> BTreeMap<String, String> {
+        if let Some(transport) = &self.transport {
+            return transport.reply_metadata(message);
+        }
         self.reply_key()
             .map(|key| (key.to_owned(), self.conversation_address(message)))
             .into_iter()
@@ -510,6 +564,9 @@ impl Channel for ScriptedChannel {
     }
 
     fn recipient_metadata(&self, address: &str) -> BTreeMap<String, String> {
+        if let Some(transport) = &self.transport {
+            return transport.recipient_metadata(address);
+        }
         self.reply_key()
             .map(|key| (key.to_owned(), address.to_owned()))
             .into_iter()
@@ -517,6 +574,9 @@ impl Channel for ScriptedChannel {
     }
 
     fn recipient_address(&self, binding: &ChannelBinding) -> Option<String> {
+        if let Some(transport) = &self.transport {
+            return transport.recipient_address(binding);
+        }
         let declared = self.reply_key()?;
         let key = self
             .addresses

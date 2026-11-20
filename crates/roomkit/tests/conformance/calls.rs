@@ -229,11 +229,9 @@ pub(crate) async fn call(
         strategy if crate::strategy_calls::arguments(strategy).is_some() => {
             (crate::strategy_calls::call(run, name, spec).await?, None)
         }
-        "save_conversation_state" => (crate::routing_calls::call(run, name, spec).await?, None),
-        "default_router.route" => (
-            crate::routing_calls::default_route(run, name, spec).await?,
-            None,
-        ),
+        routing if crate::routing_calls::arguments(routing).is_some() => {
+            (crate::routing_calls::call(run, name, spec).await?, None)
+        }
         "delivery.cancel" | "delivery.wait" => (handle_call(run, name, spec).await?, None),
         "regenerate_response" | "regenerate_target" => regenerate_call(run, name, spec).await?,
         _ => (other_call(run, name, spec).await?, None),
@@ -790,6 +788,11 @@ pub(crate) fn register_channel_with_skills(
     let Ok(id) = ChannelId::new(channel["id"].as_str().unwrap_or_default()) else {
         return Ok(Err(named("invalid_argument")));
     };
+    // A country code the implementation refuses refuses the channel (RFC
+    // §5.7, README `addressing`).
+    if crate::scripted::country_code_refused(channel) {
+        return Ok(Err(named("invalid_argument")));
+    }
     let declared = channel["declared"] == true;
     let registered = if channel["type"] == "host" {
         register_built(

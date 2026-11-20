@@ -166,6 +166,7 @@ const CHANNEL: &[&str] = &[
     "tool_search_threshold_tokens",
     "audit",
     "addresses",
+    "addressing",
     "streams_in",
     "recent_events_window",
     "sender_is_participant",
@@ -174,6 +175,7 @@ const CHANNEL: &[&str] = &[
     "verbs",
 ];
 const ADDRESSES: &[&str] = &["normalizes", "conversation_key", "recipient_at"];
+const ADDRESSING: &[&str] = &["country_code"];
 const AGENT: &[&str] = &[
     "name",
     "role",
@@ -1034,12 +1036,9 @@ fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
         tool_policy(policy, &format!("{path}.tool_policy"), found);
     }
     mcp_servers(&channel["mcp_servers"], path, found);
-    optional(
-        &channel["addresses"],
-        ADDRESSES,
-        &format!("{path}.addresses"),
-        found,
-    );
+    for (member, known) in [("addresses", ADDRESSES), ("addressing", ADDRESSING)] {
+        optional(&channel[member], known, &format!("{path}.{member}"), found);
+    }
     optional(&channel["agent"], AGENT, &format!("{path}.agent"), found);
     memory(&channel["memory"], &format!("{path}.memory"), found);
     for (room, config) in channel["config_provider"].as_object().into_iter().flatten() {
