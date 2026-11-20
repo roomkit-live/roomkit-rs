@@ -121,6 +121,8 @@ pub(crate) struct Run {
     kit: crate::Kit,
     pub(crate) workers: Option<Arc<dyn WorkerControl>>,
     /// Which actual executor handled a scripted turn, including after its channel was rebuilt.
+    pub(crate) telemetry: Mutex<BTreeMap<String, Arc<roomkit::telemetry::MockTelemetryProvider>>>,
+    pub(crate) captured_errors: Mutex<HashMap<String, roomkit::RoomKitError>>,
     pub(crate) turn_workers: Mutex<HashMap<String, String>>,
     /// Each executor turn's record, by the turn's id: its executor and its
     /// place among that executor's records, whose `tools` gathers the calls
@@ -275,6 +277,8 @@ impl Run {
             chat_dialects: Mutex::default(),
             backend: Mutex::default(),
             workers: None,
+            telemetry: Mutex::default(),
+            captured_errors: Mutex::default(),
             turn_workers: Mutex::default(),
             executor_turns: Mutex::default(),
             human_inputs: Mutex::default(),

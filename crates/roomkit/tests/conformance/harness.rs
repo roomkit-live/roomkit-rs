@@ -91,7 +91,14 @@ fn kit_options<S>(
     mut options: RoomKitOptions<S>,
     kit: &Value,
     slot: &RunSlot,
+    telemetry: Option<&Arc<roomkit::telemetry::MockTelemetryProvider>>,
 ) -> RoomKitOptions<S> {
+    options.telemetry = telemetry.cloned().map(Into::into);
+    if let Some(names) = kit.get("error_classes") {
+        let names: Vec<crate::channel_verbs::turn_errors::FixtureClass> =
+            serde_json::from_value(names.clone()).unwrap();
+        options.error_classes = crate::channel_verbs::turn_errors::classes(&names);
+    }
     if let Some(router) = kit.get("router") {
         // A malformed answer is a broken fixture, never the default router.
         let answer = router.get("room_id").unwrap();
@@ -118,7 +125,10 @@ fn kit_options<S>(
         // Python's runner raises on it.
         options.persistence_policy = Some(serde_json::from_value(policy.clone()).unwrap());
     }
-    options
+    let options = identity::kit_options(options, kit, slot);
+    let options = crate::verification_calls::kit_options(options, kit);
+    let options = crate::media::kit_options(options, kit, slot);
+    crate::locks::kit_options(options, kit)
 }
 
 /// Per room, the answer's text its realtime was handed.
@@ -188,6 +198,8 @@ pub(crate) async fn run_with(
     };
     let mut shared_store = None;
     let text_events = TextEvents::default();
+    let telemetry = (setup["kit"]["telemetry"] == true)
+        .then(|| Arc::new(roomkit::telemetry::MockTelemetryProvider::default()));
     let (kit, store_file) = crate::new_kit(|mut options| {
         shared_store = Some(Arc::clone(&options.store));
         if scenario["expect"].get("text_events").is_some() {
@@ -196,14 +208,7 @@ pub(crate) async fn run_with(
                 recorded: Arc::clone(&text_events),
             }));
         }
-        let options = identity::kit_options(
-            kit_options(options, &setup["kit"], &slot),
-            &setup["kit"],
-            &slot,
-        );
-        let options = crate::verification_calls::kit_options(options, &setup["kit"]);
-        let options = crate::media::kit_options(options, &setup["kit"], &slot);
-        let mut options = crate::locks::kit_options(options, &setup["kit"]);
+        let mut options = kit_options(options, &setup["kit"], &slot, telemetry.as_ref());
         if let Some(backend) = queue {
             options.delivery_backend = Some(Arc::new(backend));
         }
@@ -220,6 +225,9 @@ pub(crate) async fn run_with(
     let snapshot_store = crate::observer_store(&store, &store_file).await;
     let mut run = Run::new(kit, store, snapshot_store, scenario);
     run.workers = workers;
+    if let Some(recorder) = telemetry {
+        lock(&run.telemetry).insert("owner".to_owned(), recorder);
+    }
     let run = Arc::new(run);
     slot.set(&run);
     *lock(&run.backend) = backend;

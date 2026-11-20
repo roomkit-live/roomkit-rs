@@ -1,5 +1,8 @@
 //! The scripted channel's local per-room verbs.
 
+#[path = "turn_errors.rs"]
+pub(crate) mod turn_errors;
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -61,6 +64,9 @@ impl Verbs {
                     .await;
             }
         }
+        if let Some(kind) = spec["raises_class"].as_str() {
+            return Err(turn_errors::failure(kind));
+        }
         if let Some(failure) = spec["fail"].as_str() {
             return Err(ClassedError::new(
                 "ScriptedFailureError",
@@ -107,5 +113,12 @@ pub(crate) async fn call(
             options,
         )
         .await;
-    Ok(finish(run, "channel_call", outcome, dump))
+    match (spec["capture_error"].as_str(), outcome) {
+        (Some(label), Err(error)) => {
+            let observed = turn_errors::inspect(&error);
+            crate::run::lock(&run.captured_errors).insert(label.to_owned(), error);
+            Ok(Ok(observed))
+        }
+        (_, answer) => Ok(finish(run, "channel_call", answer, dump)),
+    }
 }

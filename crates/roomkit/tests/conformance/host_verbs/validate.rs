@@ -30,6 +30,7 @@ pub(crate) fn handler_shape(script: &Value, path: &str, found: &mut Vec<String>)
             "returns",
             "returns_context",
             "returns_arguments",
+            "raises_captured",
             "raises",
             "as",
             "gate",

@@ -39,6 +39,8 @@ const PROCESS: &[&str] = &["id"];
 const EVENT_HANDLER: &[&str] = &["event", "reactions"];
 const EVENT_HANDLER_REACTION: &[&str] = &["when", "repeat", "gate", "do"];
 const KIT: &[&str] = &[
+    "error_classes",
+    "telemetry",
     "max_chain_depth",
     "process_timeout_ms",
     "turn_timeouts",
@@ -481,6 +483,14 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
     base_arguments(call)
 }
 
+const CHANNEL_CALL: &[&str] = &[
+    "channel_id",
+    "room_id",
+    "verb",
+    "arguments",
+    "capture_error",
+];
+
 fn base_arguments(call: &str) -> Option<&'static [&'static str]> {
     Some(match call {
         "close"
@@ -553,7 +563,8 @@ fn base_arguments(call: &str) -> Option<&'static [&'static str]> {
             "chain_depth",
             "instruction",
         ],
-        "channel_call" => &["channel_id", "room_id", "verb", "arguments"],
+        "telemetry.spans" => &["site", "kind", "attributes"],
+        "channel_call" => CHANNEL_CALL,
         "cancel_delivery" => &["key", "reason"],
         "steer" => &["channel_id", "directive", "room_id"],
         "agent.direct_prompt" => &["room_id", "channel_id", "event"],
@@ -610,6 +621,8 @@ fn executor_setup(setup: &Value, found: &mut Vec<String>) {
                 "id",
                 "hosts",
                 "organizations",
+                "telemetry",
+                "error_classes",
                 "started",
                 "answers",
                 "gate",
@@ -977,18 +990,24 @@ fn planning(channel: &Value, path: &str, found: &mut Vec<String>) {
     }
 }
 
+const VERB: &[&str] = &[
+    "keeps",
+    "reads",
+    "result",
+    "forgets",
+    "gate",
+    "fail",
+    "do",
+    "raises_class",
+];
+
 fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
     crate::continuation::check(channel, path, found);
     crate::speaking::check(channel, path, found);
     crate::acp_agents::handler::validate(channel, path, found);
     if let Some(verbs) = channel["verbs"].as_object() {
         for (name, verb) in verbs {
-            members(
-                verb,
-                &["keeps", "reads", "result", "forgets", "gate", "fail", "do"],
-                &format!("{path}.verbs.{name}"),
-                found,
-            );
+            members(verb, VERB, &format!("{path}.verbs.{name}"), found);
             for (index, action) in items(&verb["do"]) {
                 call(
                     action,

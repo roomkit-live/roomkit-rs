@@ -120,6 +120,12 @@ impl Channel for WorkerChannel {
     fn category(&self) -> ChannelCategory {
         forward!(self, category())
     }
+    fn set_turn_wiring(&self, wiring: roomkit::turns::TurnWiring) {
+        forward!(self, set_turn_wiring(wiring));
+    }
+    fn turn_wiring(&self) -> Option<roomkit::turns::TurnWiring> {
+        forward!(self, turn_wiring())
+    }
     fn capabilities(&self) -> ChannelCapabilities {
         forward!(self, capabilities())
     }

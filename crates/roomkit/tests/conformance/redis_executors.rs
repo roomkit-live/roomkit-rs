@@ -54,6 +54,10 @@ struct Worker {
     builds: Option<BTreeSet<String>>,
     max_channels: Option<usize>,
     #[serde(default)]
+    error_classes: Option<Vec<crate::channel_verbs::turn_errors::FixtureClass>>,
+    #[serde(default)]
+    telemetry: bool,
+    #[serde(default)]
     hooks: Vec<Value>,
     #[serde(default)]
     room_hooks: Vec<Value>,
@@ -111,6 +115,21 @@ impl Workers {
         let declarations = Arc::clone(&self.channels);
         let observed = self.slot.clone();
         let serving = worker.clone();
+        let telemetry: Option<Arc<dyn roomkit::telemetry::TelemetryProvider>> = if worker.telemetry
+        {
+            let run = self
+                .slot
+                .run()
+                .ok_or_else(|| RoomKitError::Runtime("scenario owner is unavailable".into()))?;
+            let recorder = Arc::new(roomkit::telemetry::MockTelemetryProvider::default());
+            crate::run::lock(&run.telemetry).insert(
+                format!("executor/{id}", id = worker.id),
+                Arc::clone(&recorder),
+            );
+            Some(recorder)
+        } else {
+            None
+        };
         TurnExecutor::new(
             move |channel| {
                 std::future::ready(serving.channel(channel.as_str(), &declarations, &observed))
@@ -121,6 +140,12 @@ impl Workers {
                 organizations: worker.organizations.clone(),
                 timeouts: self.topology.owner().timeouts(),
                 max_channels: worker.max_channels,
+                telemetry,
+                error_classes: worker
+                    .error_classes
+                    .as_deref()
+                    .map(crate::channel_verbs::turn_errors::classes)
+                    .unwrap_or_default(),
                 ..TurnExecutorOptions::default()
             },
         )

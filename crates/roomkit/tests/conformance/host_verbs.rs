@@ -26,7 +26,7 @@ use crate::scripted::ScriptedFailure;
 pub(crate) fn arguments(name: &str) -> Option<&'static [&'static str]> {
     match name {
         "declare_host_verb" => Some(&["name", "handler", "between_turns"]),
-        "host.call" => Some(&["verb", "arguments", "record_keys"]),
+        "host.call" => Some(&["verb", "arguments", "record_keys", "inspect_error"]),
         _ => None,
     }
 }
@@ -86,6 +86,12 @@ async fn declared(run: &Run, script: &Value, arguments: Metadata) -> Result<Valu
         }
     }
     change_record(script)?;
+    if let Some(label) = script["raises_captured"].as_str() {
+        let error = lock(&run.captured_errors)
+            .remove(label)
+            .ok_or_else(|| ScriptedFailure(format!("no captured error {label}")))?;
+        return Err(Box::new(error));
+    }
     if let Some(failure) = script.get("raises") {
         let message = failure["message"].as_str().unwrap_or_default().to_owned();
         return Err(match failure["kind"].as_str() {
@@ -237,6 +243,9 @@ async fn invoke(spec: &Value) -> Result<Value, Unreadable> {
     };
     Ok(match host.call(&verb, arguments).await {
         Ok(result) => json!({"result": result, "error": null}),
+        Err(error) if spec["inspect_error"] == true => {
+            json!({"result":null,"error":crate::channel_verbs::turn_errors::inspect(&error)})
+        }
         Err(error) => {
             let kind = match &error {
                 RoomKitError::RemoteTurn { kind, .. } if kind == "PermissionError" => {
