@@ -203,6 +203,9 @@ pub(crate) async fn perform(
     {
         run.run_action(action.clone(), scope.clone()).await;
     }
+    if let Some(held) = reaction.get("holds_cpu_ms").and_then(Value::as_u64) {
+        hold_cpu(Duration::from_millis(held));
+    }
     if let Some(gate) = reaction.get("after_do_gate").and_then(Value::as_str) {
         run.gates.hold(gate).await;
     }
@@ -212,6 +215,19 @@ pub(crate) async fn perform(
     match reaction.get("fail").and_then(Value::as_str) {
         Some(message) => Err(ScriptedFailure(message.to_owned())),
         None => Ok(()),
+    }
+}
+
+/// Keeps the calling thread busy for `held`, yielding nothing to its runtime
+/// meanwhile, as a turn busy with its CPU does (RFC §10.6.8).
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a busy thread reads the wall clock: a runtime's may be paused"
+)]
+fn hold_cpu(held: Duration) {
+    let until = std::time::Instant::now() + held;
+    while std::time::Instant::now() < until {
+        std::hint::spin_loop();
     }
 }
 

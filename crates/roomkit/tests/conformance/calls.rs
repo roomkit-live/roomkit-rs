@@ -571,6 +571,7 @@ async fn lifecycle_call(
         | "executor.calls"
         | "executor.kill"
         | "executor.close"
+        | "owner.kill"
         | "kit_executor.close"
         | "kit_executor.executor_id"
         | "executors"

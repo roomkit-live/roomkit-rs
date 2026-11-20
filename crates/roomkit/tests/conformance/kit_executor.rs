@@ -20,6 +20,23 @@ use serde_json::Value;
 use crate::calls::{Called, Unreadable, field, finish, optional};
 use crate::run::Run;
 
+/// An executor's lifecycle change, or the kit killed as its turns' owner,
+/// which the pass's executor fixture makes.
+async fn change_workers(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Called, Unreadable> {
+    let id: String = if name == "owner.kill" {
+        String::new()
+    } else {
+        field(spec, "executor")?
+    };
+    let workers = run
+        .workers
+        .as_ref()
+        .ok_or("this pass has no executor fixture")?;
+    Ok(finish(run, name, workers.change(name, &id).await, |()| {
+        Value::Null
+    }))
+}
+
 /// Make the named-hook or executor registration call.
 pub(crate) async fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Called, Unreadable> {
     let kit = run.kit();
@@ -35,16 +52,7 @@ pub(crate) async fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Cal
             Ok(finish(run, name, Ok(calls), crate::calls::dump))
         }
         "executor.pause" | "executor.resume" | "executor.start" | "executor.close"
-        | "executor.kill" => {
-            let id: String = field(spec, "executor")?;
-            let workers = run
-                .workers
-                .as_ref()
-                .ok_or("this pass has no executor fixture")?;
-            Ok(finish(run, name, workers.change(name, &id).await, |()| {
-                Value::Null
-            }))
-        }
+        | "executor.kill" | "owner.kill" => change_workers(run, name, spec).await,
         "kit_executor.executor_id" => Ok(finish(
             run,
             name,

@@ -27,11 +27,16 @@ pub(crate) fn arguments(name: &str) -> Option<&'static [&'static str]> {
     match name {
         "declare_host_verb" => Some(&["name", "handler", "between_turns"]),
         "host.call" => Some(&["verb", "arguments", "record_keys", "inspect_error"]),
+        "current_turn_host" => Some(&[]),
         _ => None,
     }
 }
 
 pub(crate) async fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Called, Unreadable> {
+    if name == "current_turn_host" {
+        // Whether a turn's host is bound where the action runs (RFC §10.6.5).
+        return Ok(Ok(Value::Bool(current_turn_host().is_some())));
+    }
     if name == "host.call" {
         let mut result = invoke(spec).await?;
         if spec.get("record_keys").is_some() {

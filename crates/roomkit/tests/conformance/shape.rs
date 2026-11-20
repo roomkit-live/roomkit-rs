@@ -370,6 +370,7 @@ const REACTION: &[&str] = &[
     "gate",
     "after_do_gate",
     "delay_ms",
+    "holds_cpu_ms",
     "do",
     "fail",
     "respond",
@@ -449,6 +450,7 @@ const EXPECT: &[&str] = &[
     "external_handlers",
     "executors",
     "turn_ends",
+    "killed_owner_frames",
     "script_executors",
     "sandbox_executors",
     "acp_wire",
@@ -506,7 +508,8 @@ fn base_arguments(call: &str) -> Option<&'static [&'static str]> {
         | "kit_executor.close"
         | "kit_executor.closed"
         | "kit_executor.executor_id"
-        | "executors" => &[],
+        | "executors"
+        | "owner.kill" => &[],
         "executor.pause" | "executor.resume" | "executor.start" | "executor.close"
         | "executor.kill" | "executor.calls" => &["executor"],
         "process_inbound" => &["message", "room_id", "defer_delivery"],
@@ -644,6 +647,7 @@ fn executor_setup(setup: &Value, found: &mut Vec<String>) {
                 "max_channels",
                 "hooks",
                 "room_hooks",
+                "own_process",
             ],
             &path,
             found,
@@ -886,7 +890,7 @@ fn optional(value: &Value, known: &[&str], path: &str, found: &mut Vec<String>) 
 
 /// A scripted ACP agent's members (README, "Scripted ACP agents").
 fn scripted_acp(acp: &Value, path: &str, found: &mut Vec<String>) {
-    use crate::acp_agents::{ACP, AGENT, INITIALIZE, PROMPT, SESSION_REPLY};
+    use crate::acp_agents::{ACP, AFTER_REPLY, AGENT, INITIALIZE, PROMPT, SESSION_REPLY};
     optional(acp, ACP, path, found);
     acp_directories(acp, path, found);
     crate::acp_agents::mcp::validate(acp, path, found);
@@ -952,6 +956,10 @@ fn scripted_acp(acp: &Value, path: &str, found: &mut Vec<String>) {
             &format!("{path}.agent.prompts[{index}]"),
             found,
         );
+        let after = &prompt["after_reply"];
+        let after_path = format!("{path}.agent.prompts[{index}].after_reply");
+        crate::acp_agents::permissions::validate(after, &after_path, found);
+        optional(after, AFTER_REPLY, &after_path, found);
     }
 }
 

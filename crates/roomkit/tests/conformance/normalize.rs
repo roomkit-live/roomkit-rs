@@ -54,6 +54,8 @@ pub(crate) struct Observed {
     pub(crate) executors: BTreeMap<String, Vec<Value>>,
     /// Per channel with `holds_end`, each of its turns its owner cut.
     pub(crate) turn_ends: BTreeMap<String, Vec<Value>>,
+    /// The type of each frame the turns' executors sent a killed owner.
+    pub(crate) killed_owner_frames: BTreeSet<String>,
     pub(crate) turns: BTreeMap<String, BTreeMap<String, Vec<Value>>>,
     /// Per room and scripted agent with a scripted memory, the events its
     /// memory was handed.

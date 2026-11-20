@@ -59,6 +59,16 @@ pub(crate) fn compare(run: &Run, scenario: &Value, observed: &Observed) -> Vec<S
         let actual = Value::Array(observed.turn_ends.get(channel).cloned().unwrap_or_default());
         comparison.check(expected, Some(&actual), &format!("turn_ends.{channel}"));
     }
+    if let Some(expected) = scenario["expect"].get("killed_owner_frames") {
+        let actual = Value::Array(
+            observed
+                .killed_owner_frames
+                .iter()
+                .map(|kind| Value::String(kind.clone()))
+                .collect(),
+        );
+        comparison.check(expected, Some(&actual), "killed_owner_frames");
+    }
     comparison.script_executors(&run.skills);
     comparison.sandbox_executors(&run.sandboxes);
     comparison.found

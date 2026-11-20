@@ -8,9 +8,11 @@ use roomkit::model::{
     InboundMessage, Metadata, RoomContext, RoomEvent, RoomId, SteeringDirective,
 };
 use roomkit::{Channel, ChannelDeclaration, ChannelError};
+use roomkit_acp::AcpChannel;
 use roomkit_ai::{Agent, AiChannel};
 use serde_json::{Value, json};
 
+use crate::acp_agents::ScriptedTransport;
 use crate::agents::{self, Paced, Scripted};
 use crate::run::{Run, lock};
 use crate::scripted::ScriptedChannel;
@@ -19,10 +21,14 @@ enum Built {
     Model(Box<AiChannel<Paced>>),
     Agent(Box<Agent<Paced>>),
     Script(Box<ScriptedChannel>),
+    Acp(Box<AcpChannel<ScriptedTransport>>),
 }
 
 impl Built {
     fn from_spec(spec: &Value, run: &Arc<Run>) -> Result<Self, String> {
+        if spec.get("acp").is_some() {
+            return Self::acp(spec, run);
+        }
         if spec.get("model").is_none() {
             return ScriptedChannel::new(spec, run)
                 .map(Box::new)
@@ -38,6 +44,18 @@ impl Built {
         };
         lock(&run.models).extend(models);
         Ok(built)
+    }
+
+    /// The executor's own copy of a declared ACP channel, with an agent of
+    /// its own, whose wire and pipe the run reads in place of the kit's copy
+    /// (README, "Scripted ACP agents").
+    fn acp(spec: &Value, run: &Arc<Run>) -> Result<Self, String> {
+        let id = ChannelId::new(spec["id"].as_str().unwrap_or_default())
+            .map_err(|error| format!("acp: {error}"))?;
+        let (channel, wire, pipe) = crate::acp_agents::scripted_acp_channel(spec, id.clone(), run)?;
+        lock(&run.acp_wires).insert(id.to_string(), wire);
+        lock(&run.acp_pipes).insert(id.to_string(), pipe);
+        Ok(Self::Acp(Box::new(channel)))
     }
 }
 
@@ -57,6 +75,7 @@ macro_rules! forward {
             Built::Model(channel) => Channel::$method(&**channel $(,$arg)*)$(.$wait)?,
             Built::Agent(channel) => Channel::$method(&**channel $(,$arg)*)$(.$wait)?,
             Built::Script(channel) => Channel::$method(&**channel $(,$arg)*)$(.$wait)?,
+            Built::Acp(channel) => Channel::$method(&**channel $(,$arg)*)$(.$wait)?,
         }
     };
 }

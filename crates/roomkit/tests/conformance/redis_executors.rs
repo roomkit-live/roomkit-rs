@@ -2,6 +2,10 @@
 //! with independent Redis nodes and compares the complete scenario expectations.
 #[path = "redis_executors/channel.rs"]
 mod channel;
+#[path = "redis_executors/own_process.rs"]
+mod own_process;
+#[path = "redis_executors/owner_kill.rs"]
+mod owner_kill;
 #[path = "redis_executors/presence.rs"]
 mod presence;
 #[path = "redis_executors/silent.rs"]
@@ -57,6 +61,8 @@ struct Worker {
     gate: Option<String>,
     builds: Option<BTreeSet<String>>,
     max_channels: Option<usize>,
+    /// Runs as in a process of its own: on a runtime and a thread of its own.
+    own_process: Option<bool>,
     #[serde(default)]
     error_classes: Option<Vec<crate::channel_verbs::turn_errors::FixtureClass>>,
     #[serde(default)]
@@ -113,6 +119,8 @@ struct Workers {
     /// Killed, then started again under their id by a later step: the
     /// restart follows the kill at once, as a supervisor's would.
     restarted: BTreeSet<String>,
+    /// The kit's turn backend, when a step kills the kit as its turns' owner.
+    owner_kill: Option<Arc<owner_kill::OwnerKill>>,
 }
 
 impl Workers {
@@ -168,6 +176,9 @@ impl Workers {
             .iter()
             .find(|w| w.id == id)
             .ok_or_else(|| RoomKitError::Value(format!("unknown executor: {id}")))?;
+        if worker.own_process == Some(true) {
+            own_process::check(worker, &self.channels)?;
+        }
         let mut active = self.active.lock().await;
         if active.contains_key(id) {
             return Err(RoomKitError::Value(format!(
@@ -191,13 +202,8 @@ impl Workers {
         let site = if worker.answers == Some(false) {
             site::Site::silent(&self.topology, executor, worker, run).await?
         } else {
-            site::Site::start(
-                &self.topology,
-                executor,
-                self.mortal.contains(id),
-                worker.kit.as_deref(),
-            )
-            .await?
+            let isolated = self.mortal.contains(id) || worker.own_process == Some(true);
+            site::Site::start(&self.topology, executor, isolated, worker.kit.as_deref()).await?
         };
         active.insert(id.to_owned(), site);
         Ok(())
@@ -228,6 +234,21 @@ impl Workers {
         site.advertise(no_channels).await
     }
 
+    /// Refuses a step that cannot reach an executor in a process of its own
+    /// (README, an executor's `own_process`): steps start or close it.
+    fn refuse_apart(&self, id: &str) -> Result<(), RoomKitError> {
+        if self
+            .declarations
+            .iter()
+            .any(|worker| worker.id == id && worker.own_process == Some(true))
+        {
+            return Err(RoomKitError::Value(format!(
+                "executor {id} runs in a process of its own: steps start or close it"
+            )));
+        }
+        Ok(())
+    }
+
     async fn remove(&self, id: &str) -> Result<site::Site, RoomKitError> {
         self.active
             .lock()
@@ -240,6 +261,7 @@ impl Workers {
 impl crate::run::WorkerControl for Workers {
     fn publication_taken<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<(), RoomKitError>> {
         Box::pin(async move {
+            self.refuse_apart(id)?;
             let hosting = self
                 .active
                 .lock()
@@ -299,6 +321,12 @@ impl crate::run::WorkerControl for Workers {
         id: &'a str,
     ) -> BoxFuture<'a, Result<(), RoomKitError>> {
         Box::pin(async move {
+            if matches!(
+                operation,
+                "executor.pause" | "executor.resume" | "executor.kill"
+            ) {
+                self.refuse_apart(id)?;
+            }
             match operation {
                 "executor.start" => self.start(id).await,
                 "executor.pause" => self.advertise(id, true).await,
@@ -307,6 +335,13 @@ impl crate::run::WorkerControl for Workers {
                 "executor.kill" => {
                     let observe = !self.restarted.contains(id);
                     self.remove(id).await?.kill(&self.topology, observe).await
+                }
+                "owner.kill" => {
+                    let owner = self.owner_kill.as_ref().ok_or_else(|| {
+                        RoomKitError::Value("owner.kill: the kit's backend was not wrapped".into())
+                    })?;
+                    owner.kill();
+                    Ok(())
                 }
                 other => Err(RoomKitError::Value(format!(
                     "unsupported executor operation: {other}"
@@ -325,10 +360,18 @@ async fn exercise(url: &str, scenario: &Value) -> Result<Vec<String>, RoomKitErr
     }
     let setup: Setup = serde_json::from_value(scenario["setup"].clone())
         .map_err(|error| RoomKitError::Value(error.to_string()))?;
+    let topology = topology::Topology::new(url, scenario)?;
     let slot = RunSlot::default();
+    let owner = topology.owner().clone();
+    let owner_kill = kills_owner(scenario).then(|| {
+        Arc::new(owner_kill::OwnerKill::new(
+            Arc::new(owner.clone()),
+            slot.clone(),
+        ))
+    });
     let workers = Arc::new(Workers {
         presence: presence::Presence::new(&scenario["setup"]["kit"], slot.clone()),
-        topology: topology::Topology::new(url, scenario)?,
+        topology,
         declarations: setup.executors,
         channels: Arc::new(setup.channels),
         slot,
@@ -341,9 +384,15 @@ async fn exercise(url: &str, scenario: &Value) -> Result<Vec<String>, RoomKitErr
             .filter_map(|step| step["executor"].as_str().map(str::to_owned))
             .collect(),
         restarted: restarted(scenario),
+        owner_kill,
     });
-    let owner = workers.topology.owner().clone();
-    let main = workers.presence.connection(owner.clone());
+    let mut main = workers.presence.connection(owner.clone());
+    if let Some(killable) = &workers.owner_kill {
+        // A scenario that kills the owner uses no presence fixture: the
+        // kit's turns cross the wrapper alone.
+        main.turns =
+            roomkit::turns::TurnBackendHandle::new(Arc::<owner_kill::OwnerKill>::clone(killable));
+    }
     let problems = crate::harness::run_with(
         scenario,
         workers.slot.clone(),
@@ -357,6 +406,9 @@ async fn exercise(url: &str, scenario: &Value) -> Result<Vec<String>, RoomKitErr
         },
     )
     .await;
+    if let Some(killed) = &workers.owner_kill {
+        killed.close();
+    }
     let running: Vec<_> = workers.active.lock().await.keys().cloned().collect();
     for id in running {
         workers.remove(&id).await?.close(&workers.topology).await?;
@@ -365,6 +417,15 @@ async fn exercise(url: &str, scenario: &Value) -> Result<Vec<String>, RoomKitErr
     let mut problems = problems;
     problems.extend(workers.presence.untaken());
     Ok(problems)
+}
+
+/// Whether a step kills the run's kit as its turns' owner.
+fn kills_owner(scenario: &Value) -> bool {
+    scenario["steps"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|step| step["call"] == "owner.kill")
 }
 
 /// The executors a step kills and a later step starts again under the same id.

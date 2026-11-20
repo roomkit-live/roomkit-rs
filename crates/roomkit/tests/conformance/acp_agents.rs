@@ -84,7 +84,11 @@ pub(crate) const PROMPT: &[&str] = &[
     "usage",
     "meta",
     "error",
+    "after_reply",
 ];
+/// The members of a prompt's `after_reply`: the agent's own activity once it
+/// answered the prompt, between two prompts.
+pub(crate) const AFTER_REPLY: &[&str] = &["gate", "updates", "permission_steps"];
 
 /// Members of a scripted session reply.
 pub(crate) const SESSION_REPLY: &[&str] = &["gate", "result", "error"];
@@ -487,6 +491,11 @@ async fn send_updates(writer: &Writer, session: &Value, updates: &Value) {
 async fn answer(agent: Arc<Agent>, message: Value, prompt: Option<Value>, writer: Writer) {
     let method = message["method"].as_str().unwrap_or_default();
     let params = &message["params"];
+    let after = prompt
+        .as_ref()
+        .filter(|_| method == "session/prompt")
+        .and_then(|prompt| prompt.get("after_reply"))
+        .cloned();
     let outcome: Result<Value, Value> = match (method, prompt) {
         ("initialize", _) => Ok(agent.initialized(params)),
         ("session/new" | "session/set_config_option" | "session/close", Some(reply)) => {
@@ -505,6 +514,29 @@ async fn answer(agent: Arc<Agent>, message: Value, prompt: Option<Value>, writer
         Err(error) => response["error"] = error,
     }
     send(&writer, &response).await;
+    if let Some(after) = after {
+        agent
+            .after_reply(&message["params"]["sessionId"], &after, &writer)
+            .await;
+    }
+}
+
+impl Agent {
+    /// The agent's own activity once it answered a prompt, held first at
+    /// its gate: its updates, then its permission steps, each as a prompt's,
+    /// for the prompt's session, outside any prompt.
+    async fn after_reply(&self, session: &Value, after: &Value, writer: &Writer) {
+        if let (Some(gate), Some(run)) = (after["gate"].as_str(), self.run.upgrade()) {
+            run.gates.hold(gate).await;
+        }
+        send_updates(writer, session, &after["updates"]).await;
+        for step in after["permission_steps"].as_array().into_iter().flatten() {
+            self.permissions
+                .exchange(session, &step["request"], writer)
+                .await;
+            send_updates(writer, session, &step["updates"]).await;
+        }
+    }
 }
 
 async fn send(writer: &Writer, message: &Value) {
