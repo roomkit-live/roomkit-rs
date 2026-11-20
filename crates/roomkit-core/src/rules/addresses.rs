@@ -404,7 +404,8 @@ pub(crate) fn normalize(
 /// A scheme (`whatsapp:`, `tel:`) and the separators `space - . ( )` are
 /// dropped, and so is the trunk prefix written `(0)` after a country code.
 /// A number written with `+` or the international prefix `00` is
-/// international. Six digits or fewer are a short code. A number starting
+/// international, `+` and its digits, however few. Otherwise, six digits or
+/// fewer are a short code. A number starting
 /// with the trunk prefix `0` is national: it takes the channel's country code
 /// in place of the `0`, or is kept as written. With a country code, any
 /// other number of more than ten digits that start with the code is
@@ -517,10 +518,16 @@ fn without_scheme(address: &str) -> &str {
     }
 }
 
-/// An international number without the trunk prefix written `(0)` after its
-/// country code: `+33 (0)6 12 34 56 78` dials `+33 6 12 34 56 78`.
+/// An international number, written with `+` or `00` once its separators
+/// are dropped, without the trunk prefix written `(0)` after its country
+/// code: `+33 (0)6 12 34 56 78` dials `+33 6 12 34 56 78`, and `0033 (0)6
+/// 12 34 56 78` dials `0033 6 12 34 56 78`.
 fn without_trunk_mark(number: &str) -> String {
-    if number.starts_with('+') {
+    let dialled: String = number
+        .chars()
+        .filter(|character| !matches!(character, ' ' | '-' | '.' | '(' | ')'))
+        .collect();
+    if dialled.starts_with('+') || dialled.starts_with("00") {
         number.replacen("(0)", "", 1)
     } else {
         number.to_owned()
@@ -550,11 +557,12 @@ fn dial(number: &str) -> Option<(bool, String)> {
     }
 }
 
-/// `+digits`, when they make a number: more than a short code's digits, at
-/// most E.164's, and a country code first, which never starts with `0`.
+/// `+digits`, when they make a number: at least one digit, at most E.164's,
+/// and a country code first, which never starts with `0`. A short code is
+/// read before, on the national digits alone.
 fn e164(digits: &str) -> Option<String> {
     let length = digits.len();
-    let number = length > MAX_SHORT_CODE_DIGITS && length <= MAX_DIGITS && !digits.starts_with('0');
+    let number = length > 0 && length <= MAX_DIGITS && !digits.starts_with('0');
     number.then(|| format!("+{digits}"))
 }
 
@@ -801,6 +809,14 @@ mod tests {
     #[test]
     fn a_trunk_prefix_written_after_the_country_code_is_dropped() {
         assert_eq!(phone("+33 (0)6 12 34 56 78"), "+33612345678");
+        assert_eq!(phone("0033 (0)6 12 34 56 78"), "+33612345678");
+    }
+
+    /// RFC §5.7: a short code is national digits; written with `+` or
+    /// `00`, a number of any length is international.
+    #[test]
+    fn an_international_number_of_six_digits_or_fewer_is_a_number() {
+        assert_eq!(["+12 34 56", "001234"].map(phone), ["+123456", "+1234"]);
     }
 
     #[test]

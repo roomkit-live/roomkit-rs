@@ -8,6 +8,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A phone channel writes a number dialled with `00` and the trunk prefix
+  `(0)` after its country code, `0033 (0)6 12 34 56 78`, as `+33612345678`,
+  and an international number of six digits or fewer, `+12 34 56`, as
+  `+123456`, as in Python: the first kept its `0`, the second was kept as
+  written (RFC §5.7).
+
 - A file outside a channel's `supported_media_types`, or over its
   `max_media_size_bytes`, reaches it as its text form, alone, in a composite
   or as a native edit's new content, as in Python (RFC §5.8).
