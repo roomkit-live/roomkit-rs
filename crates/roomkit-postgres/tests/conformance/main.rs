@@ -41,6 +41,8 @@ mod extra_tools;
 mod handoff_calls;
 #[path = "../../../roomkit/tests/conformance/harness.rs"]
 mod harness;
+#[path = "../../../roomkit/tests/conformance/held_ends.rs"]
+mod held_ends;
 #[path = "../../../roomkit/tests/conformance/host_verbs.rs"]
 mod host_verbs;
 #[path = "../../../roomkit/tests/conformance/identity.rs"]

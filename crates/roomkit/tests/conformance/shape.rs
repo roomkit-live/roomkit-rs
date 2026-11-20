@@ -174,6 +174,7 @@ const CHANNEL: &[&str] = &[
     "sender_is_participant",
     "memory",
     "agent",
+    "holds_end",
     "verbs",
 ];
 const ADDRESSES: &[&str] = &["normalizes", "conversation_key", "recipient_at"];
@@ -439,6 +440,7 @@ const EXPECT: &[&str] = &[
     "thinker_calls",
     "external_handlers",
     "executors",
+    "turn_ends",
     "script_executors",
     "sandbox_executors",
     "acp_wire",

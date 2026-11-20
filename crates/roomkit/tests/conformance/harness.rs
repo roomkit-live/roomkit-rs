@@ -182,6 +182,7 @@ pub(crate) async fn run_with(
         Ok(read) => read,
         Err(problem) => return vec![format!("setup: {problem}")],
     };
+    let held = crate::held_ends::HeldEnds::of(&setup, &slot);
     let mut shared_store = None;
     let text_events = TextEvents::default();
     let (kit, store_file) = crate::new_kit(|mut options| {
@@ -204,7 +205,7 @@ pub(crate) async fn run_with(
             options.delivery_backend = Some(Arc::new(backend));
         }
         options.orchestration = default;
-        configure(options)
+        crate::held_ends::carry(configure(options), held)
     })
     .await;
     let Some(store) = shared_store else {

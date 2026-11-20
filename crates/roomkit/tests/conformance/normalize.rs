@@ -52,6 +52,8 @@ pub(crate) struct Observed {
     pub(crate) room_callbacks: BTreeMap<String, BTreeMap<String, Vec<Value>>>,
     /// Calls on actual builds, grouped by the worker that made them.
     pub(crate) executors: BTreeMap<String, Vec<Value>>,
+    /// Per channel with `holds_end`, each of its turns its owner cut.
+    pub(crate) turn_ends: BTreeMap<String, Vec<Value>>,
     pub(crate) turns: BTreeMap<String, BTreeMap<String, Vec<Value>>>,
     /// Per room and scripted agent with a scripted memory, the events its
     /// memory was handed.

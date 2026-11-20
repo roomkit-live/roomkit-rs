@@ -323,7 +323,10 @@ async fn handle_call(
         return Err(format!("no deferred call is labelled {label}"));
     };
     if name == "delivery.wait" {
-        return Ok(finish(run, name, handle.wait().await, inbound_result));
+        return Ok(match handle.wait().await {
+            Err(RoomKitError::Timeout) => Err(named("cleanup_incomplete")),
+            outcome => finish(run, name, outcome, inbound_result),
+        });
     }
     let mut options = roomkit::CancelOptions::default();
     if let Some(reason) = optional::<String>(spec, "reason")? {
@@ -334,6 +337,7 @@ async fn handle_call(
     }
     match handle.cancel(options).await {
         Err(RoomKitError::Runtime(_)) => Ok(Err(named("waits_for_itself"))),
+        Err(RoomKitError::Timeout) => Ok(Err(named("cleanup_incomplete"))),
         outcome => Ok(finish(run, name, outcome, inbound_result)),
     }
 }
