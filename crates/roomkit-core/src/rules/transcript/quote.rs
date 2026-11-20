@@ -7,7 +7,7 @@ use super::rounds::is_python_space;
 
 /// `text` within `limit` characters, cut at a word, the cut ending in `…`:
 /// Python's `bounded_text`.
-fn bounded_text(text: &str, limit: usize) -> String {
+pub(super) fn bounded_text(text: &str, limit: usize) -> String {
     if text.chars().count() <= limit {
         return text.to_owned();
     }

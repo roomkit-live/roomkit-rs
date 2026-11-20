@@ -3,7 +3,7 @@
 //!
 //! A person is told apart by the label the transcript gives them (§6.4):
 //! their name kept to a name's characters, with the rank a look-alike of an
-//! earlier source carries (`Alice (2)`), or the channel of a sender with no
+//! earlier source carries (`Alice (2, not Alice)`), or the channel of a sender with no
 //! name (`@sms1`), a form no name takes.
 
 use std::collections::BTreeSet;
@@ -145,9 +145,10 @@ pub fn person_label(event: &RoomEvent, context: &RoomContext) -> String {
 }
 
 /// The name a label gives, without the rank a look-alike name carries nor
-/// the `(a participant)` an agent-like name does: `ALICE (2)` gives `ALICE`.
-/// No name holds a parenthesis, so the tail is the runtime's. Python's
-/// `label_name`.
+/// the `(a participant)` an agent-like name does: `ALICE (2, not ALICE)`
+/// gives `ALICE`, and so does the rank alone (`ALICE (2)`) that a label
+/// stored before RMK-1835 carries. No name holds a parenthesis, so the tail
+/// is the runtime's. Python's `label_name`.
 #[doc(hidden)]
 pub fn label_name(label: &str) -> &str {
     let label = label.strip_suffix(A_PARTICIPANT).unwrap_or(label);
@@ -155,13 +156,20 @@ pub fn label_name(label: &str) -> &str {
     label.strip_suffix(A_PARTICIPANT).unwrap_or(label)
 }
 
-/// `label` without a final ` (2)`.
+/// `label` without a final ` (2, not Name)`, or ` (2)`.
 fn without_rank(label: &str) -> &str {
     label
         .strip_suffix(')')
         .and_then(|open| open.rsplit_once(" ("))
-        .filter(|(_, rank)| !rank.is_empty() && rank.chars().all(|c| c.is_ascii_digit()))
+        .filter(|(_, tail)| is_rank(tail))
         .map_or(label, |(name, _)| name)
+}
+
+/// Whether `tail` is what a ranked label holds between its parentheses: a
+/// rank, alone or followed by the name its sender is not.
+fn is_rank(tail: &str) -> bool {
+    let rank = tail.split_once(", not ").map_or(tail, |(rank, _)| rank);
+    !rank.is_empty() && rank.chars().all(|c| c.is_ascii_digit())
 }
 
 /// Each name agents address people by, ignoring case, and the people it
@@ -172,7 +180,7 @@ fn without_rank(label: &str) -> &str {
 /// Cyrillic `а` in `@аlice`: an agent writing it believes it asks the agent),
 /// nor longer than [`NAME_LIMIT`]; two labels behind one name (`Alice Martin`,
 /// `AliceMartin`) make it ambiguous,
-/// a look-alike's ranked label (`Alice (2)`) is addressed by no name, and
+/// a look-alike's ranked label (`Alice (2, not Alice)`) is addressed by no name, and
 /// two nameless senders of a channel (`@chat`, `@chat (2)`) make its name
 /// ambiguous.
 #[must_use]
@@ -635,7 +643,7 @@ mod tests {
             .push(said("e2", "sms", Some("u2"), Some("YOU")));
         assert_eq!(
             person_label(&said("e3", "sms", Some("u2"), Some("YOU")), &context),
-            "YOU (2) (a participant)"
+            "YOU (2, not YOU) (a participant)"
         );
         // A participant is addressed by the name it records, whatever its turns
         // are labelled.
@@ -654,6 +662,11 @@ mod tests {
     #[test]
     fn a_label_s_name_leaves_the_runtime_s_tail_out() {
         for (label, name) in [
+            ("ALICE (2, not ALICE)", "ALICE"),
+            ("Jean Martin (3, not Jean\u{2026})", "Jean Martin"),
+            ("Alice (2, not Alice) (a participant)", "Alice"),
+            ("Alice (a participant) (2, not Alice)", "Alice"),
+            // The rank alone, of a label stored before RMK-1835.
             ("ALICE (2)", "ALICE"),
             ("Alice (a participant)", "Alice"),
             ("Alice (2) (a participant)", "Alice"),
@@ -664,6 +677,7 @@ mod tests {
             ("(2)", "(2)"),
             (" (2)", ""),
             ("Alice ()", "Alice ()"),
+            ("Alice (, not Alice)", "Alice (, not Alice)"),
         ] {
             assert_eq!(label_name(label), name, "{label:?}");
         }

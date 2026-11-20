@@ -267,8 +267,8 @@ mod tests {
     #[test]
     fn a_task_heading_names_who_asked_and_no_one_in_a_one_to_one_conversation() {
         assert_eq!(
-            task_heading(USER_REQUEST, None, Some("ALICE (2)")),
-            "Requested by ALICE (2), in the delegating agent's words:"
+            task_heading(USER_REQUEST, None, Some("ALICE (2, not ALICE)")),
+            "Requested by ALICE (2, not ALICE), in the delegating agent's words:"
         );
         assert_eq!(
             task_heading("The user asked:", Some("Alice"), Some("Bob")),

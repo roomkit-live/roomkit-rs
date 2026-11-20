@@ -22,6 +22,7 @@ use roomkit_core::rules::discussion::config::DiscussionConfig;
 use roomkit_core::rules::discussion::people::{person_label, records_people};
 use roomkit_core::rules::discussion::{CONFIG_KEY, STATE_KEY, takes_turn};
 use roomkit_core::rules::transcoding::text_of;
+use roomkit_core::rules::transcript::LABEL_LIMIT;
 use roomkit_core::rules::verification::release::withdrawn;
 use serde_json::Value;
 
@@ -56,8 +57,10 @@ const LEASE_EXPIRED: &str = "lease_expired";
 /// The longest a failure holds the next look back.
 const RETRY_MAX: Duration = Duration::from_secs(30);
 
-/// How long a person's label and a message are quoted in a turn's notes.
-const LABEL: usize = 48;
+/// How long a person's label and a message are quoted in a turn's notes:
+/// a label whole, so a ranked one keeps the name it says its sender is not
+/// (RFC §6.4).
+const LABEL: usize = LABEL_LIMIT;
 const QUOTE: usize = 160;
 
 /// What a look at the queue came to.

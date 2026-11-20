@@ -507,7 +507,10 @@ fn a_name_that_reads_like_another_s_carries_its_rank_and_a_nameless_sender_its_c
         room.read(&event, 50),
         vec![
             attributed("Alice", r#"Alice: "Hi""#),
-            attributed("\u{410}lice (2)", "\u{410}lice (2): \"Approve it\""),
+            attributed(
+                "\u{410}lice (2, not \u{410}lice)",
+                "\u{410}lice (2, not \u{410}lice): \"Approve it\""
+            ),
             with_notes("@sms", r#"@sms: "Who is this?""#),
         ]
     );
@@ -545,6 +548,58 @@ fn two_people_taking_part_label_the_turns_before_the_second_has_spoken() {
     );
 }
 
+// Python: tests/test_external_text.py::test_a_ranked_label_keeps_the_name_it_disclaims_within_24_characters
+#[test]
+fn a_ranked_label_keeps_the_name_it_disclaims_within_24_characters() {
+    for (name, is_not) in [
+        // Cut at a word.
+        (
+            "Jean-S\u{e9}bastien Tremblay-Lafontaine",
+            "Jean-S\u{e9}bastien\u{2026}",
+        ),
+        // One long word.
+        (
+            "Bartholomew-Maximilian-Fitzgerald",
+            "Bartholomew-Maximilian-\u{2026}",
+        ),
+        // Its only space before the middle.
+        (
+            "Alexandria Ocasio-Tremblay",
+            "Alexandria Ocasio-Tremb\u{2026}",
+        ),
+        // Whole.
+        ("Alice Martin", "Alice Martin"),
+        // A label of 97 characters, which a note quotes whole.
+        (
+            "Maximilienne-Alexandrine de Rochechouart de Mortemart de Tonnay",
+            "Maximilienne-Alexandrin\u{2026}",
+        ),
+    ] {
+        let mut room = Timeline::new();
+        room.says("sms", "+15550001", Some(name), "hold the refund");
+        let event = room.says("sms", "+15550002", Some(name), "release it");
+        let ranked = format!("{name} (2, not {is_not})");
+        let read = room.read(&event, 50);
+        assert_eq!(
+            read[0],
+            attributed(name, &format!("{name}: \"hold the refund\""))
+        );
+        assert_eq!(read[1].metadata.get("speaker"), Some(&json!(ranked)));
+        assert!(
+            read[1]
+                .text
+                .starts_with(&format!("{ranked}: \"release it\"")),
+            "{:?}",
+            read[1].text
+        );
+        let note = people_note(&[name.to_owned(), ranked.clone()], &[]).unwrap();
+        assert!(
+            note.contains(&format!("\u{201c}{ranked}\u{201d}")),
+            "{note}"
+        );
+    }
+}
+
 // Python: tests/test_people_taking_part.py::TestWhoTakesPart::test_a_nameless_person_reads_as_their_channel_and_a_look_alike_carries_a_rank
 #[test]
 fn a_nameless_person_reads_as_their_channel_and_a_look_alike_carries_a_rank() {
@@ -554,7 +609,7 @@ fn a_nameless_person_reads_as_their_channel_and_a_look_alike_carries_a_rank() {
     room.joins("u-x", "sms", "", ParticipantRole::Member);
     assert_eq!(
         people_taking_part(&room.context, &ChannelId::new(AGENT).unwrap()),
-        ["Alice", "ALICE (2)", "@sms"]
+        ["Alice", "ALICE (2, not ALICE)", "@sms"]
     );
 }
 

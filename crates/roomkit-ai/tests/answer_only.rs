@@ -81,8 +81,10 @@ async fn names_compare_as_the_room_gives_them_and_without_their_rank() {
         assert!(!policy.answers(None));
         for speaker in [
             "Sylvain",
+            "Sylvain (2, not Sylvain)",
+            "SYLVAIN (2, not SYLVAIN)",
+            "Sylvain (2, not Sylvain) (a participant)",
             "Sylvain (2)",
-            "SYLVAIN (2)",
             "Sylvain (a participant)",
         ] {
             assert_eq!(

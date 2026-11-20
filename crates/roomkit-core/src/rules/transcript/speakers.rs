@@ -15,7 +15,7 @@ use serde_json::Value;
 use super::super::authors::{Author, Authors};
 use super::super::unicode;
 use super::marks::PEOPLE_NOTE_OPENING;
-use super::quote::quoted;
+use super::quote::{bounded_text, quoted};
 use crate::model::{
     ChannelBinding, ChannelId, ChannelType, Participant, ParticipantRole, ParticipantStatus,
     RoomContext, RoomEvent,
@@ -27,9 +27,20 @@ const IDENTIFIER_EXTRA: &str = "_.@+-";
 /// The longest identifier the runtime gives, in characters.
 const IDENTIFIER_LIMIT: usize = 64;
 
-/// Characters of a person's label the people note quotes at most: a
-/// name's 64, its rank and `(a participant)`. Python's `_PERSON_LIMIT`.
-const PERSON_LIMIT: usize = 96;
+/// Characters of a label a note quotes at most (the people note, a
+/// discussion's turn notes): a name's 64, its rank with the name it is not
+/// and `(a participant)`, so a ranked label is never cut before the name it
+/// disclaims. Python's `LABEL_LIMIT`.
+pub const LABEL_LIMIT: usize = 120;
+
+/// Characters of a person's label the people note quotes at most. Python's
+/// `_PERSON_LIMIT`.
+const PERSON_LIMIT: usize = LABEL_LIMIT;
+
+/// Characters of the name a ranked label says its sender is not: whole
+/// within them, else cut at a word and ended with `…` ([`bounded_text`]).
+/// Python's `_NOT_NAME_LIMIT`.
+const NOT_NAME_LIMIT: usize = 24;
 
 /// People the people note names at most ([`people_note`]): past them it
 /// counts the others, so a large group does not put every name in every
@@ -92,18 +103,31 @@ pub(super) struct Speaker {
     named: bool,
 }
 
-/// Who said `event` (RFC §6.4): its author's name, with its rank when an
-/// earlier source's name reads like it (`Alice (2)`), or its channel as the
-/// room addresses it (`@sms1`) when its author has no name; `None` for the
-/// runtime's system events.
+/// `name` as the label of the source that holds `rank` among those whose
+/// names read alike (RFC §6.4): the name alone for the first, and for a
+/// later one its rank and the name it is not (`Alice (2, not Alice)`). Under
+/// its rank alone (`Alice (2)`) a model took a later source for the first
+/// more than one time in two (RMK-1835). Python's `_ranked`.
+pub(super) fn ranked(name: String, rank: u32) -> String {
+    if rank == 1 {
+        return name;
+    }
+    let is_not = bounded_text(&name, NOT_NAME_LIMIT);
+    format!("{name} ({rank}, not {is_not})")
+}
+
+/// Who said `event` (RFC §6.4): its author's name, with its rank and the
+/// name it is not when an earlier source's name reads like it
+/// (`Alice (2, not Alice)`), or its channel as the room addresses it
+/// (`@sms1`) when its author has no name; `None` for the runtime's system
+/// events.
 pub(super) fn speaker(event: &RoomEvent, authors: &mut Authors<'_>) -> Option<Speaker> {
     if event.source.channel_type == ChannelType::SYSTEM {
         return None;
     }
     let source = authors.source(event);
     let (label, named) = match authors.of(event) {
-        Some(Author { name, rank: 1 }) => (name, true),
-        Some(Author { name, rank }) => (format!("{name} ({rank})"), true),
+        Some(Author { name, rank }) => (ranked(name, rank), true),
         None => (addressed_label(&event.source.channel_id, authors), false),
     };
     Some(Speaker {
@@ -237,8 +261,7 @@ pub(super) fn people_as_read<'s>(
                 return speaker.label.clone();
             }
             match authors.person(person) {
-                Some(Author { name, rank: 1 }) => name,
-                Some(Author { name, rank }) => format!("{name} ({rank})"),
+                Some(Author { name, rank }) => ranked(name, rank),
                 None => next_free(&addressed_label(&person.channel_id, &authors), &mut taken),
             }
         })

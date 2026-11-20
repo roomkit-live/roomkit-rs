@@ -942,6 +942,10 @@ mod tests {
         state.record_asked(&id("dev"), "alice");
         assert_eq!(state.asked, [(id("dev"), "Alice".to_owned())]);
         assert_eq!(state.asking(Some("ALICE")), [id("dev")]);
+        assert_eq!(
+            state.asking(Some("Alice (2, not Alice)")),
+            Vec::<ChannelId>::new()
+        );
         assert_eq!(state.asking(Some("Alice (2)")), Vec::<ChannelId>::new());
     }
 

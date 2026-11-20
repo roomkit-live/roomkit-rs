@@ -50,20 +50,11 @@ pub(crate) const STORE_FAULT_FAILURES: &[(&str, &str)] = &[
 const TURN_HOOK_CONTEXT: &str = "RMK-1837: a turn's ON_TOOL_CALL hooks read the context the turn \
                                  started with, never the room when they fire (§9.3, §10.6.6)";
 
-/// The scenarios of two Python changes this implementation has not ported
-/// yet (RMK-1860), on every store: a look-alike's ranked label names who
-/// its sender is not, and a running turn reads its own author's messages
-/// only. The second's outcome depends on whether the turn still runs when
-/// the other person's message arrives, so its entries may pass.
-pub(crate) const LOOK_ALIKE_AND_STEERING_FAILURES: &[(&str, &str)] = &[
-    (
-        "memory/a-name-that-reads-like-an-earlier-sender-s-is-labelled-with-the-name-it-is-not",
-        LOOK_ALIKE_LABEL,
-    ),
-    (
-        "memory/a-ranked-label-cuts-the-name-it-disclaims-to-24-characters",
-        LOOK_ALIKE_LABEL,
-    ),
+/// The scenarios of a Python change this implementation has not ported
+/// yet (RMK-1860), on every store: a running turn reads its own author's
+/// messages only. Their outcome depends on whether the turn still runs when
+/// the other person's message arrives, so the entries may pass.
+pub(crate) const STEERING_FAILURES: &[(&str, &str)] = &[
     (
         "steering/another-person-s-message-is-served-under-its-own-role-s-tools",
         AUTHOR_ONLY_STEERING,
@@ -73,9 +64,6 @@ pub(crate) const LOOK_ALIKE_AND_STEERING_FAILURES: &[(&str, &str)] = &[
         AUTHOR_ONLY_STEERING,
     ),
 ];
-
-const LOOK_ALIKE_LABEL: &str = "RMK-1860: a look-alike's ranked label reads `Name (2)`, not \
-                                `Name (2, not Name)` (§6.4)";
 
 const AUTHOR_ONLY_STEERING: &str = "timing: RMK-1860: another person's message that arrives while \
                                     a turn runs is steered into that turn (§6.4, RK-6.4-036)";
@@ -315,7 +303,7 @@ pub(crate) fn every_scenario_gives_what_the_rfc_says(pass: &Pass, known: &[(&str
     let known: Vec<(&str, &str)> = known
         .iter()
         .chain(STORE_FAULT_FAILURES)
-        .chain(LOOK_ALIKE_AND_STEERING_FAILURES)
+        .chain(STEERING_FAILURES)
         .copied()
         .collect();
     let run = run(
