@@ -156,10 +156,19 @@ pub fn current_tool_call() -> Option<ToolCallContext> {
     current()?.turn.call.clone()
 }
 
-/// The participant whose event woke the turn (RFC §5.5, §11), or the
-/// explicit scope's actor. `None` when no participant woke it or outside
-/// a scope. This names the turn; it does not authenticate it: a handler
-/// accessing a person's data must require the participant's identification.
+/// The participant id of the event that woke the turn (RFC §5.5, §21.4), or
+/// the explicit scope's actor. `system` for an event the framework writes
+/// under its own name (a `deliver`, RFC §10.4), a name a routed message is
+/// refused under and only a host naming the room writes under.
+///
+/// `None` outside a scope, and when the waking event names no participant:
+/// one the host commits with `send_event` or `post` without naming one,
+/// another agent's message. `None` too for a participant's id on a channel
+/// that does not reach them (RFC §5.5). So `None` is not the host: a sender
+/// can produce it, and a gate compares the value with the id it expects.
+///
+/// This names the turn; it does not authenticate it: a handler accessing a
+/// person's data must require the participant's identification.
 pub fn current_tool_actor_id() -> Option<String> {
     current()?.turn.actor_id.clone()
 }
