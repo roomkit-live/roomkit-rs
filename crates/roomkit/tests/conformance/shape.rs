@@ -276,6 +276,7 @@ const TOOL: &[&str] = &[
     "returns_json",
     "returns_allowed_names",
     "returns_requester",
+    "returns_actor",
     "posts_progress",
     "report_claim_probe",
     "host_calls",

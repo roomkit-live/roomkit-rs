@@ -1495,6 +1495,10 @@ pub(crate) async fn answer(tool: &Value) -> Result<ToolResult, ToolError> {
         let requester = roomkit_ai::current_tool_requester();
         return Ok(ToolResult::Text(json!(requester).to_string()));
     }
+    if tool["returns_actor"].as_bool() == Some(true) {
+        let actor = roomkit_ai::current_tool_actor_id();
+        return Ok(ToolResult::Text(json!(actor).to_string()));
+    }
     if tool["returns_allowed_names"].as_bool() == Some(true) {
         let names = roomkit_ai::current_tool_allowed_names().map(|names| {
             let mut names: Vec<_> = names.into_iter().collect();
