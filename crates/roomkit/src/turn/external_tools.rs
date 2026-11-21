@@ -3,7 +3,7 @@
 
 use super::{
     Arc, BoxFuture, ConversationStore, HookExecution, HookTrigger, Inner, RoomContext, RoomId,
-    ToolCallChain, ToolCallOutcome, ToolCallReport, TurnHost, Weak, hooks,
+    ToolCallChain, ToolCallOutcome, ToolCallReport, ToolHookRoom, TurnHost, Weak, hooks,
 };
 
 impl crate::turns::ChannelTurnHooks {
@@ -59,7 +59,7 @@ impl TurnHost {
                 self.emit_tool_call(&self.event_of(report));
                 return;
             };
-            reporting.tool_report_context = Some(Arc::new(context));
+            reporting.tool_report_context = ToolHookRoom::Ready(Arc::new(context));
         }
         if !matches!(
             report.outcome,
@@ -84,16 +84,29 @@ impl TurnHost {
                 self.emit_tool_call(&self.event_of(report));
                 return;
             };
-            reporting.tool_report_context = Some(Arc::new(context));
+            reporting.tool_report_context = ToolHookRoom::Ready(Arc::new(context));
         }
         reporting.report_tool_call(report);
     }
 
-    pub(super) fn reported_tool_context(&self) -> RoomContext {
-        self.tool_report_context
-            .as_deref()
-            .unwrap_or(&self.shared.context)
-            .clone()
+    /// Build the room once for this ordinary call's hooks and observers (RFC §9.3).
+    #[doc(hidden)]
+    pub async fn for_tool_report(&self) -> Self {
+        let mut host = self.clone();
+        if !self.hooks(HookTrigger::OnToolCall).is_empty() {
+            host.tool_report_context = match self.owner_hook_room(HookTrigger::OnToolCall).await {
+                Some(context) => ToolHookRoom::Ready(Arc::new(context)),
+                None => ToolHookRoom::Unreachable,
+            };
+        }
+        host
+    }
+
+    pub(super) fn reported_tool_context(&self) -> &RoomContext {
+        match &self.tool_report_context {
+            ToolHookRoom::Ready(room) => room,
+            ToolHookRoom::Initial | ToolHookRoom::Unreachable => &self.shared.context,
+        }
     }
 
     pub(super) async fn external_call_chain(&self, report: &ToolCallReport) {
@@ -107,7 +120,7 @@ impl TurnHost {
                 spec,
                 Arc::clone(handler),
                 chain.current.clone(),
-                self.reported_tool_context(),
+                self.reported_tool_context().clone(),
                 |_| None,
             )
             .await;

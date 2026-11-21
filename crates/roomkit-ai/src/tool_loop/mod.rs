@@ -854,7 +854,7 @@ impl Loop {
         let mut running = Running::start(events, made);
         let started = Instant::now();
         let ends = if unrun {
-            self.unstarted_calls(&generation.calls)
+            self.unstarted_calls(&generation.calls).await
         } else {
             self.serve_round(&generation.calls, steering).await?
         };

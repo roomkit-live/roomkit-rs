@@ -113,9 +113,16 @@ pub struct TurnHost {
     shared: Arc<Shared>,
     room_hooks: Arc<[String]>,
     channel_rows: Arc<[RoomEvent]>,
-    /// The room snapshot built when this external tool report fires.
-    tool_report_context: Option<Arc<RoomContext>>,
+    /// One room read for the decision and observers of this occurrence.
+    tool_report_context: ToolHookRoom,
     report_claim: Option<ReportClaim>,
+}
+
+#[derive(Clone)]
+enum ToolHookRoom {
+    Initial,
+    Ready(Arc<RoomContext>),
+    Unreachable,
 }
 
 impl TurnHost {
@@ -636,10 +643,17 @@ impl TurnHost {
     #[doc(hidden)]
     pub async fn before_tool_use(&self, call: &ToolCall) -> ToolGate {
         let hooks = self.hooks(HookTrigger::BeforeToolUse);
-        let original = self.event_of(&ToolCallReport::new(call.clone()));
-        let chain = self.gate(&hooks, original).await;
+        let mut host = self.clone();
+        if !hooks.is_empty() {
+            let Some(context) = self.owner_hook_room(HookTrigger::BeforeToolUse).await else {
+                return refused(&call.name, None, None);
+            };
+            host.tool_report_context = ToolHookRoom::Ready(Arc::new(context));
+        }
+        let original = host.event_of(&ToolCallReport::new(call.clone()));
+        let chain = host.gate(&hooks, original).await;
         if chain.ended.is_none() {
-            self.observe_with(&hooks, &chain.current, &ExecutionContext::current(), 0);
+            host.observe_with(&hooks, &chain.current, &ExecutionContext::current(), 0);
         }
         let (allowed, reason) = chain.verdict();
         self.emit_before_tool_use(call, allowed, reason);
@@ -670,7 +684,7 @@ impl TurnHost {
                 spec,
                 Arc::clone(handler),
                 chain.current.clone(),
-                self.shared.context.clone(),
+                self.reported_tool_context().clone(),
                 |_| None,
             )
             .await;
@@ -839,12 +853,15 @@ impl TurnHost {
         ) {
             return report;
         }
+        if matches!(self.tool_report_context, ToolHookRoom::Unreachable) {
+            return report;
+        }
         let event = self.event_of(&report);
         ToolCallChain::judge(
             report,
             event,
             &self.hooks(HookTrigger::OnToolCall),
-            &self.shared.context,
+            self.reported_tool_context(),
             |spec, ran| self.report_timeout(spec, ran),
         )
         .await
@@ -893,7 +910,7 @@ impl TurnHost {
     /// to the kit's observers (RFC §9.3): each with the arguments it ran
     /// with, what it reads saying the turn ended first, at least as deep as
     /// the turn's response, in `execution`, the turn's context.
-    pub(crate) fn report_cut(&self, execution: &ExecutionContext, reason: &str) {
+    pub(crate) async fn report_cut(&self, execution: &ExecutionContext, reason: &str) {
         let running = std::mem::take(&mut self.calls().running);
         for running in running {
             let call = running.call;
@@ -904,7 +921,7 @@ impl TurnHost {
             let report = ToolCallReport::new(call)
                 .ended(ToolCallOutcome::Cancelled, Value::String(read))
                 .with_error_detail(format!("cancelled: {reason}"));
-            let mut host = self.clone();
+            let mut host = self.for_tool_report().await;
             host.report_claim = running.claim;
             host.observe(&report, execution, self.shared.response_depth);
         }
@@ -920,7 +937,9 @@ impl TurnHost {
             }
             let event = self.event_of(report);
             let hooks = self.hooks(HookTrigger::OnToolCall);
-            self.observe_with(&hooks, &event, execution, floor);
+            if !matches!(self.tool_report_context, ToolHookRoom::Unreachable) {
+                self.observe_with(&hooks, &event, execution, floor);
+            }
             self.emit_tool_call(&event);
         });
     }
@@ -951,7 +970,7 @@ impl TurnHost {
                 spec.clone(),
                 Arc::clone(handler),
                 event.clone(),
-                self.reported_tool_context(),
+                self.reported_tool_context().clone(),
             );
             let observing = execution.clone().observing(floor, observing);
             let (host, spec) = (self.clone(), spec.clone());
@@ -2075,7 +2094,7 @@ pub(crate) fn host(
         wiring: kit.wiring(),
         strategy_turn: false,
         answer_unscoped: true,
-        tool_report_context: None,
+        tool_report_context: ToolHookRoom::Initial,
         report_claim: None,
         room_hooks: Arc::default(),
         channel_rows: Arc::default(),

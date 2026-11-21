@@ -84,7 +84,7 @@ impl ChannelTurnHooks {
 
     pub(crate) async fn context(&self, trigger: HookTrigger) -> Option<RoomContext> {
         match &self.0 {
-            Binding::Turn(host) => Some(host.initial_context().clone()),
+            Binding::Turn(host) => host.owner_hook_room(trigger).await,
             Binding::Wired(bound) => bound.wiring.hook_context(&bound.room, trigger, None).await,
         }
     }

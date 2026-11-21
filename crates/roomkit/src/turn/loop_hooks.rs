@@ -242,17 +242,13 @@ impl crate::turns::ChannelTurnHooks {
             return;
         }
         let done: Box<dyn FnOnce() + Send> = Box::new(then);
-        if let Some(host) = self.host() {
-            self.observe_with(&hooks, payload, host.initial_context(), Some(done));
-        } else {
-            let bound = self.clone();
-            let payload = payload.clone();
-            self.spawn(Box::pin(async move {
-                if let Some(context) = bound.context(P::TRIGGER).await {
-                    bound.observe_with(&hooks, &payload, &context, Some(done));
-                }
-            }));
-        }
+        let bound = self.clone();
+        let payload = payload.clone();
+        self.spawn(Box::pin(crate::keep_context(async move {
+            if let Some(context) = bound.context(P::TRIGGER).await {
+                bound.observe_with(&hooks, &payload, &context, Some(done));
+            }
+        })));
     }
 
     async fn chain<P: TurnPayload>(

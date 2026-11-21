@@ -10,6 +10,20 @@ use crate::turns::wire::{ROOM_CONTEXT, ReadRoomContext};
 use crate::{ConversationStore, RoomKitError};
 
 impl TurnHost {
+    /// Local callbacks read the owner's store. A worker's hooks resolve the
+    /// carried snapshot through their owner link when dispatched.
+    pub(crate) async fn owner_hook_room(&self, trigger: crate::HookTrigger) -> Option<RoomContext> {
+        if self.shared.link.uses_worker_link()
+            || self.wiring.as_ref().is_some_and(|w| !w.kit_defaults)
+        {
+            return Some(self.shared.context.clone());
+        }
+        let wiring = self.wiring.as_ref()?;
+        wiring
+            .hook_context(self.room_id(), trigger, Some(&self.shared.context))
+            .await
+    }
+
     pub(crate) fn remote_hook_host(trigger: crate::HookTrigger, room: &RoomId) -> Option<Self> {
         if !trigger.is_turn_trigger() {
             return None;

@@ -9,33 +9,6 @@ use serde_json::Value;
 use crate::junit::{self, Case, Outcome};
 use crate::{harness, shape};
 
-/// The scenarios this implementation fails on every store, beside each
-/// runner's own known failures: a turn's `ON_TOOL_CALL` hooks on the kit's
-/// own executor read the context the turn started with, never the room
-/// when they fire, so a room read that fails cannot keep them from running
-/// (RMK-1837).
-pub(crate) const STORE_FAULT_FAILURES: &[(&str, &str)] = &[
-    (
-        "tools/a-call-whose-hooks-context-fails-keeps-its-handler-s-result-non-streaming",
-        TURN_HOOK_CONTEXT,
-    ),
-    (
-        "tools/a-call-whose-hooks-context-fails-keeps-its-handler-s-result-streaming",
-        TURN_HOOK_CONTEXT,
-    ),
-    (
-        "tools/a-failed-call-whose-observers-context-fails-is-reported-once",
-        TURN_HOOK_CONTEXT,
-    ),
-    (
-        "tools/a-refused-call-whose-observers-context-fails-is-reported-once",
-        TURN_HOOK_CONTEXT,
-    ),
-];
-
-const TURN_HOOK_CONTEXT: &str = "RMK-1837: a turn's ON_TOOL_CALL hooks read the context the turn \
-                                 started with, never the room when they fire (§9.3, §10.6.6)";
-
 /// The repository's copy of the suite.
 pub(crate) fn suite() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance")
@@ -268,12 +241,11 @@ pub(crate) fn every_scenario_gives_what_the_rfc_says(pass: &Pass, known: &[(&str
     let executors = executor_pass();
     let backend = result_backend(crate::BACKEND, executors);
     let output = junit::claim(&backend, pass.runtime);
-    let known: Vec<(&str, &str)> = known.iter().chain(STORE_FAULT_FAILURES).copied().collect();
     let run = run(
         &suite().join("scenarios"),
         filter.as_deref(),
         pass,
-        &known,
+        known,
         executors,
     );
     if let Some(output) = &output {

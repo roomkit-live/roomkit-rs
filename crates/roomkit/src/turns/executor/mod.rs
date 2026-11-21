@@ -213,7 +213,7 @@ impl Executor {
         // What the stream's close or cut wrote: no item follows it (RFC
         // §10.6.4).
         drop(changes.report(&self.sender, false));
-        self.end(cut, &host, &link);
+        self.end(cut, &host, &link).await;
         panicked.disarm();
     }
 
@@ -430,7 +430,7 @@ impl Executor {
     /// Ends the turn as `cut` leaves it: the calls it cut reported, the
     /// verbs it asked and that wait still failed, then its end, unless its
     /// owner is lost. No verb waits for an answer once the turn is over.
-    fn end(&self, cut: Option<Cut>, host: &TurnHost, link: &HostLink) {
+    async fn end(&self, cut: Option<Cut>, host: &TurnHost, link: &HostLink) {
         // What the turn's work publishes from now on is no trace's (RFC §6.4).
         self.turn.traced.store(false, Ordering::Release);
         link.close();
@@ -453,7 +453,8 @@ impl Executor {
                 // No read returned while the call ran: the arguments its gate
                 // fixed reach the owner before the turn's end (RFC §10.6.4).
                 drop(host.with_ran_with(|ran_with| self.sender.report_args(ran_with)));
-                host.report_cut(self.turn.stream_context().execution(), &reason);
+                host.report_cut(self.turn.stream_context().execution(), &reason)
+                    .await;
                 link.fail_all(&TurnError::new(
                     "cancelled",
                     format!("the turn was cut: {reason}"),
@@ -461,7 +462,8 @@ impl Executor {
             }
             Some(Cut::Lost(error)) => {
                 self.sender.silence();
-                host.report_cut(self.turn.stream_context().execution(), &error.kind);
+                host.report_cut(self.turn.stream_context().execution(), &error.kind)
+                    .await;
                 link.fail_all(&error);
                 return;
             }
