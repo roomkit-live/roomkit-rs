@@ -129,9 +129,14 @@ impl ReadTurns {
 /// holds.
 #[derive(Clone, Debug)]
 pub(crate) struct Lease {
-    holder: Arc<RunShared>,
     room_id: RoomId,
-    tenure: u64,
+    holder: Holder,
+}
+
+#[derive(Clone, Debug)]
+enum Holder {
+    Run(Arc<RunShared>, u64),
+    Host(watch::Receiver<()>),
 }
 
 impl RunShared {
@@ -413,9 +418,8 @@ impl RunShared {
     pub(super) fn lease_of(self: &Arc<Self>, room_id: &RoomId) -> Option<Lease> {
         match self.holdings().locks.get(room_id)? {
             Tenure::Own(tenure) => Some(Lease {
-                holder: Arc::clone(self),
+                holder: Holder::Run(Arc::clone(self), *tenure),
                 room_id: room_id.clone(),
-                tenure: *tenure,
             }),
             Tenure::Granted(lease) => Some(lease.clone()),
         }
@@ -423,6 +427,17 @@ impl RunShared {
 }
 
 impl Lease {
+    pub(crate) fn host(room_id: RoomId) -> (Self, watch::Sender<()>) {
+        let (live, released) = watch::channel(());
+        (
+            Self {
+                room_id,
+                holder: Holder::Host(released),
+            },
+            live,
+        )
+    }
+
     /// The room whose lock the lease is on.
     pub(crate) fn room_id(&self) -> &RoomId {
         &self.room_id
@@ -432,8 +447,15 @@ impl Lease {
     /// lock let its tenure go, releasing the lock or ending. A lease that
     /// is not live any more is over at once.
     pub(crate) async fn over(&self) {
+        let holder = match &self.holder {
+            Holder::Host(live) => {
+                let _ = live.clone().changed().await;
+                return;
+            }
+            Holder::Run(holder, _) => holder,
+        };
         loop {
-            let changed = self.holder.tenure_changes.notified();
+            let changed = holder.tenure_changes.notified();
             let mut changed = std::pin::pin!(changed);
             // Registered before the read: a change between the two wakes it.
             changed.as_mut().enable();
@@ -445,10 +467,12 @@ impl Lease {
     }
 
     /// Whether the holder still holds the lock under the lease's tenure.
-    pub(super) fn is_live(&self) -> bool {
-        matches!(
-            self.holder.holdings().locks.get(&self.room_id),
-            Some(Tenure::Own(tenure)) if *tenure == self.tenure
-        )
+    pub(crate) fn is_live(&self) -> bool {
+        match &self.holder {
+            Holder::Run(holder, tenure) => {
+                matches!(holder.holdings().locks.get(&self.room_id), Some(Tenure::Own(current)) if current == tenure)
+            }
+            Holder::Host(live) => live.has_changed().is_ok(),
+        }
     }
 }

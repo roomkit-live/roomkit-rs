@@ -40,7 +40,7 @@ impl TurnHost {
                 }
                 return;
             };
-            reporting.host.tool_report_context = Some(Arc::new(context));
+            reporting.host.tool_report_context = super::ToolHookRoom::Ready(Arc::new(context));
         }
         reporting.context_loaded = true;
         if let Some(report) = &reporting.report {
@@ -97,7 +97,7 @@ impl Drop for Reporting {
                         host.report_event_only(&report);
                         return;
                     };
-                    reporting.tool_report_context = Some(Arc::new(context));
+                    reporting.tool_report_context = super::ToolHookRoom::Ready(Arc::new(context));
                 }
                 reporting.report_call_under_held_id(&report);
             })));

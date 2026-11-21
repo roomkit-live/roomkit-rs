@@ -280,14 +280,16 @@ impl<S: ConversationStore> TurnExecutor<S> {
     /// # Errors
     /// A closed executor or a second admission of the same turn is refused.
     pub fn take(&self, link: Arc<dyn crate::turns::ExecutorLink>) -> Result<(), RoomKitError> {
+        let (written, accepted) = tokio::sync::oneshot::channel();
         let origin = crate::turns::executor::WorkerOrigin {
             context: link.turn_context(),
             waits_for_writes: true,
+            accepted: Some(accepted),
             owner: Some(self.kit.inner.turns.worker_owner()),
         };
         let turn = self.start_request(link.request().clone(), origin)?;
         let kit = Arc::downgrade(&self.kit.inner);
-        let running = crate::turn::TurnKit::spawn(&kit, Box::pin(turn.serve_link(link)));
+        let running = crate::turn::TurnKit::spawn(&kit, Box::pin(turn.serve_link(link, written)));
         if !running {
             return Err(RoomKitError::KitClosed);
         }

@@ -322,7 +322,11 @@ impl RoomLockManager for PostgresAdvisoryLockManager {
         &'a self,
         room_id: &'a RoomId,
     ) -> Pin<Box<dyn Future<Output = Result<Box<dyn RoomLock>, RoomKitError>> + Send + 'a>> {
-        Box::pin(self.take(room_id))
+        Box::pin(roomkit::track_host_room_lock(
+            self,
+            room_id,
+            self.take(room_id),
+        ))
     }
 
     /// Closes the pool if the manager opened it, as Python's `close()` when the

@@ -155,7 +155,7 @@ pub(crate) async fn process_kit(
 
 /// Scenario id → the rule this implementation breaks (roomkit-specs
 /// `conformance/README.md`, "Known failures").
-pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = scenarios::HOST_LOCK_FAILURES;
+pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[];
 
 /// A scenario that has not finished by then fails instead of hanging the
 /// suite.

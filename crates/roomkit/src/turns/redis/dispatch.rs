@@ -62,9 +62,11 @@ impl RedisTurnBackend {
         let backend = self.clone();
         let message = msg.clone();
         let admitted = self.dispatch(async move {
+            let (written, accepted) = tokio::sync::oneshot::channel();
             let turn = worker.native().take_from(
                 carried,
                 crate::turns::executor::WorkerOrigin {
+                    accepted: Some(accepted),
                     owner: Some(crate::turns::room_owner::WorkerOwner::Redis(
                         backend.remember_owner(&id, &message.sender),
                     )),
@@ -76,7 +78,7 @@ impl RedisTurnBackend {
                 tracing::warn!(%error, "Sending the turn handover result failed");
             } else if let Ok(turn) = turn {
                 backend
-                    .forward_worker(&message.sender, &id, turn, route)
+                    .forward_worker(&message.sender, &id, turn, route, written)
                     .await;
             }
         });
@@ -166,7 +168,10 @@ impl RedisTurnBackend {
         id: &str,
         mut turn: WorkerTurn,
         mut route: TurnRoute,
+        accepted: tokio::sync::oneshot::Sender<()>,
     ) {
+        // The first receipt confirms accepted is in the owner's Redis inbox.
+        let mut accepted = Some(accepted);
         let mut draining = self.0.draining.subscribe();
         let mut cut = false;
         let mut write = super::outbox::PendingWrite::default();
@@ -187,7 +192,12 @@ impl RedisTurnBackend {
                     let msg = Message::new("frame", self.node_id(), body, id, "");
                     write.start(self, peer, &msg)
                 }
-                result = write.finished() => result,
+                result = write.finished() => {
+                    if result.is_ok() && let Some(ready) = accepted.take() {
+                        let _ = ready.send(());
+                    }
+                    result
+                },
             };
             if let Err(error) = result {
                 tracing::warn!(%error, "Sending the turn frame failed");

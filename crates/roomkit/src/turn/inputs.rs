@@ -43,10 +43,18 @@ impl TurnHost {
         if event.room_id.is_empty() {
             return true;
         }
+        let hooks = self.input_hooks(&event);
+        let hooks = if hooks.is_empty() {
+            None
+        } else {
+            self.owner_hook_room(crate::HookTrigger::OnUserInputRequired)
+                .await
+                .map(|context| (hooks, context))
+        };
         let notification = InputNotification {
             kit: Arc::clone(&self.shared.kit),
             ids: (self.shared.room_id.clone(), self.shared.channel_id.clone()),
-            hooks: Some((self.input_hooks(&event), self.shared.context.clone())),
+            hooks,
             turn: Some(self.clone()),
             wiring: None,
         };

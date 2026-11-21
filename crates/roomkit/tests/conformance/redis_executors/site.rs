@@ -62,6 +62,12 @@ impl Site {
     }
 
     pub(super) async fn advertise(&self, executor: TurnExecutor) -> Result<(), RoomKitError> {
+        if matches!(self.mode, Mode::Silent(_)) {
+            return Err(RoomKitError::Value(format!(
+                "silent executor {} does not support pause or resume",
+                self.executor.executor_id()
+            )));
+        }
         let hosting = self.hosting.clone();
         let served = async move { hosting.serve(executor).await };
         if let Mode::Isolated(runtime) = &self.mode {

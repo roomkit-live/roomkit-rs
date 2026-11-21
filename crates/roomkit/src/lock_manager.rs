@@ -24,6 +24,10 @@ type LockFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, RoomKitError>> + 
 ///
 /// Python's `async with manager.locked(room_id):` is a guard here:
 /// `let lock = manager.locked(&room_id).await?; ...; lock.release().await?;`.
+/// With the built-in managers, a host holding this guard can call the kit
+/// for the same room. Use [`crate::keep_context`] when spawning a task
+/// that should share the guard's tenure (RFC §13.5).
+///
 /// A manager need not be reentrant: the kit grants a lock to the code that
 /// runs under it (a hook, a tool calling the kit back) without asking the
 /// manager again (RFC §9.5.1).
@@ -147,11 +151,11 @@ impl fmt::Debug for InMemoryLockManager {
 
 impl RoomLockManager for InMemoryLockManager {
     fn locked<'a>(&'a self, room_id: &'a RoomId) -> LockFuture<'a, Box<dyn RoomLock>> {
-        Box::pin(async move {
+        Box::pin(crate::track_host_room_lock(self, room_id, async move {
             let lock: Box<dyn RoomLock> =
                 Box::new(MemoryLock(self.rooms.lock_owned(room_id).await));
             Ok(lock)
-        })
+        }))
     }
 }
 

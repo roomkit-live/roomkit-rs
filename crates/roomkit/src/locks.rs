@@ -191,6 +191,7 @@ impl KitLocks {
     /// written to the store straight), as `create_room` refuses it (RFC
     /// §13.5).
     pub(crate) fn rooms(manager: Arc<dyn RoomLockManager>) -> Self {
+        crate::host_locks::register(&manager);
         Self {
             rooms: true,
             ..Self::new(manager)
@@ -212,8 +213,14 @@ impl KitLocks {
                 "A room id holds no NUL character".to_owned(),
             ));
         }
+        if self.rooms && crate::host_locks::lease(&*self.manager, key).is_some() {
+            return Ok(HeldLock {
+                lock: None,
+                key: key.clone(),
+            });
+        }
         let _waiter = Waiter::new(&self.waiting, key);
-        let lock = self.manager.locked(key).await?;
+        let lock = crate::host_locks::driver(self.manager.locked(key)).await?;
         Ok(HeldLock {
             lock: Some(lock),
             key: key.clone(),

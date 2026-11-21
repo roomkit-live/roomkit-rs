@@ -44,17 +44,18 @@ enum Gated {
 impl Loop {
     /// Announced calls a stop kept from entering: no gate or result, zero duration.
     /// Their report is the turn's cut, rather than a running call's close.
-    pub(super) fn unstarted_calls(&self, calls: &[Called]) -> Vec<ToolEnd> {
-        calls
-            .iter()
-            .enumerate()
-            .map(|(position, called)| {
+    pub(super) async fn unstarted_calls(&self, calls: &[Called]) -> Vec<ToolEnd> {
+        let mut ends = Vec::with_capacity(calls.len());
+        for (position, called) in calls.iter().enumerate() {
+            ends.push(
                 self.unrun(called, super::place_under_its_id(calls, position))
-            })
-            .collect()
+                    .await,
+            );
+        }
+        ends
     }
 
-    fn unrun(&self, called: &Called, nth: usize) -> ToolEnd {
+    async fn unrun(&self, called: &Called, nth: usize) -> ToolEnd {
         let call = called.call.clone();
         let tool = serde_json::to_string(&call.name).unwrap_or_default();
         let text = format!(
@@ -71,7 +72,7 @@ impl Loop {
             structured_content: None,
             references: Vec::new(),
         };
-        self.tell(called, nth, &report, &end);
+        self.tell(None, called, nth, &report, &end).await;
         end
     }
 
@@ -97,11 +98,13 @@ impl Loop {
             .await
         {
             Some(end) => end,
-            None => Ok(self.closed_call(called, nth, ran.clone(), started.elapsed())),
+            None => Ok(self
+                .closed_call(called, nth, ran.clone(), started.elapsed())
+                .await),
         }
     }
 
-    pub(super) fn closed_call(
+    pub(super) async fn closed_call(
         &self,
         called: &Called,
         nth: usize,
@@ -123,7 +126,7 @@ impl Loop {
             structured_content: None,
             references: Vec::new(),
         };
-        self.tell(called, nth, &report, &end);
+        self.tell(None, called, nth, &report, &end).await;
         end
     }
 
@@ -160,9 +163,20 @@ impl Loop {
         let (ended, parts) = self.shaped(ended);
         // A skill's activation the hooks left as it served it is read whole.
         let own = kept_whole(&ended.call.name).then(|| ended.result.clone());
-        let ended = match &self.context.callbacks {
-            Some(hooks) => hooks.on_tool_call(ended).await,
-            None => ended,
+        let (ended, host) = if matches!(
+            ended.outcome,
+            Some(ToolCallOutcome::Served | ToolCallOutcome::Unserved)
+        ) {
+            match (&self.turn, &self.context.callbacks) {
+                (Some(turn), _) => {
+                    let host = turn.for_tool_report().await;
+                    (host.on_tool_call(ended).await, Some(host))
+                }
+                (None, Some(hooks)) => (hooks.on_tool_call(ended).await, None),
+                (None, None) => (ended, None),
+            }
+        } else {
+            (ended, None)
         };
         if let Some(span) = span {
             span.end(raised_of(&ended));
@@ -209,7 +223,7 @@ impl Loop {
                 .report_wired_tool(&reported, called.report.callback())
                 .await;
         } else {
-            self.tell(called, nth, &reported, &end);
+            self.tell(host.as_ref(), called, nth, &reported, &end).await;
         }
         Ok(end)
     }
@@ -218,8 +232,15 @@ impl Loop {
     /// id, ended, before its end is read: a cut of the turn closes it so
     /// (RFC §12.2 step 13s), as Python's `ToolCallStartMarker.ended`; then
     /// reports it to the kit's observers.
-    fn tell(&self, called: &Called, nth: usize, reported: &ToolCallReport, end: &ToolEnd) {
-        let Some(turn) = &self.turn else {
+    async fn tell(
+        &self,
+        host: Option<&roomkit::TurnHost>,
+        called: &Called,
+        nth: usize,
+        reported: &ToolCallReport,
+        end: &ToolEnd,
+    ) {
+        let Some(turn) = host.or(self.turn.as_ref()) else {
             if let Some(hooks) = &self.context.callbacks {
                 hooks.report_abandoned_wired_tool(reported.clone(), called.report.callback());
             } else if end.outcome == ToolCallOutcome::Served {
@@ -229,7 +250,10 @@ impl Loop {
         };
         let turn = turn.with_tool_report_claim(called.report.callback());
         turn.call_ended(nth, end_row(end.clone()));
-        if called.duplicate {
+        if host.is_none() {
+            turn.report_decided_tool_call(reported, called.duplicate)
+                .await;
+        } else if called.duplicate {
             turn.report_call_under_held_id(reported);
         } else {
             turn.report_tool_call(reported);

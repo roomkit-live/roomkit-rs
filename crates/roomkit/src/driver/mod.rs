@@ -322,6 +322,7 @@ where
         };
         drive(&kit, environment, call, operation, Leases::Granted, how).await
     });
+    let run = crate::host_locks::keep(run);
     let context = ExecutionContext::current();
     let Some(task) = inner.tasks.spawn(Kind::Call, context.scope(run)) else {
         return Err(Stop::Failed(RoomKitError::KitClosed));

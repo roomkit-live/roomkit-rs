@@ -662,6 +662,10 @@ pub(crate) fn as_deep_as_its_turn(chain_depth: &mut u32) {
 /// lock the task's call waits for (decided in step 3 milestone 2). A task
 /// spawned without it acts for nothing from its start.
 ///
+/// A host holding a room lock outside a pass can also lend it to a spawned
+/// task with this function. Releasing or dropping the guard ends the loan.
+/// Each inbound call under that lock starts with its own reentry budget.
+///
 /// It is the Rust form of the Python implementation's `create_task`,
 /// which copies its caller's context. A task spawned in the kit's work, a
 /// delivery, a turn or a hook, that calls the kit and waits on its own
@@ -692,7 +696,7 @@ where
 {
     // Each carrier wraps the next. Keep large delivery futures out of
     // their initial states, especially when a nested scope spawns work.
-    let future = Box::pin(future);
+    let future = crate::host_locks::keep(Box::pin(future));
     // The tool call a handler runs within rides along, as Python's
     // `create_task` copies its `ContextVar` (RFC §21.4).
     let future = crate::tool_call_scope::within_current_tool_call(future);

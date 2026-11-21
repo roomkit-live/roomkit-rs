@@ -33,7 +33,7 @@ impl Loop {
             for (called, ran) in calls.iter().zip(ran) {
                 if !called.report.reported() {
                     crate::tools::within_reporting(Arc::clone(&called.report), async {
-                        self.report_abandoned(called, ran);
+                        self.report_abandoned(called, ran).await;
                     })
                     .await;
                 }
@@ -44,7 +44,7 @@ impl Loop {
 
     /// Python's `_report_unreported_calls`: observers alone see this cancellation;
     /// the reader closes the announced rows when it reads the round's failure.
-    fn report_abandoned(&self, called: &Called, ran: ToolCall) {
+    async fn report_abandoned(&self, called: &Called, ran: ToolCall) {
         let tool = serde_json::to_string(&ran.name).unwrap_or_default();
         let text = format!(
             "{{\"error\": \"Tool call cancelled\", \"tool\": {tool}, \"hint\": \"The turn ended before its result.\"}}"
@@ -58,10 +58,7 @@ impl Loop {
             return;
         };
         let turn = turn.with_tool_report_claim(called.report.callback());
-        if called.duplicate {
-            turn.report_call_under_held_id(&report);
-        } else {
-            turn.report_tool_call(&report);
-        }
+        turn.report_decided_tool_call(&report, called.duplicate)
+            .await;
     }
 }

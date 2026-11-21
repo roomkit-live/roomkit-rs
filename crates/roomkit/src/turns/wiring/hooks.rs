@@ -84,9 +84,23 @@ impl ChannelTurnHooks {
 
     pub(crate) async fn context(&self, trigger: HookTrigger) -> Option<RoomContext> {
         match &self.0 {
-            Binding::Turn(host) => Some(host.initial_context().clone()),
+            Binding::Turn(host) => host.owner_hook_room(trigger).await,
             Binding::Wired(bound) => bound.wiring.hook_context(&bound.room, trigger, None).await,
         }
+    }
+
+    /// Start the context read in firing order. A suspended read belongs to
+    /// the executor's observer work even if the caller is then cancelled.
+    pub(crate) fn start_observer(&self, mut work: BoxFuture<'static, ()>) {
+        if self.host().is_some()
+            && work
+                .as_mut()
+                .poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+                .is_ready()
+        {
+            return;
+        }
+        self.spawn(work);
     }
 
     pub(crate) fn spawn(&self, task: BoxFuture<'static, ()>) -> bool {

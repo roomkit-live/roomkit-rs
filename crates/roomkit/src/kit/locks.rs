@@ -49,6 +49,7 @@ mod tests {
     use crate::{
         AddMemberOptions, AttachChannelOptions, CreateRoomOptions, RequestVerificationOptions,
         RoomKit, RoomKitError, RoomKitOptions, SendEventOptions, UpdateEventOptions,
+        UpdateRoomMetadataOptions,
     };
 
     // Python: tests/test_lock_release.py::TestTheKitsHold::test_the_kit_s_lock_manager_is_the_one_given
@@ -60,6 +61,68 @@ mod tests {
             ..RoomKitOptions::default()
         });
         assert!(Arc::ptr_eq(&kit.lock_manager(), &given));
+        kit.close().await.unwrap();
+    }
+
+    /// RFC §13.5: a child with the host's context may change the room. Its
+    /// copy stops granting the lock once the host releases it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_child_borrows_only_the_live_host_lock() {
+        use tokio::sync::oneshot;
+        use tokio::time::{Duration, timeout};
+
+        let kit = Arc::new(RoomKit::new(RoomKitOptions::default()));
+        let room = kit
+            .create_room(CreateRoomOptions::default())
+            .await
+            .unwrap()
+            .id;
+        let manager = kit.lock_manager();
+        let lock = manager.locked(&room).await.unwrap();
+        let (go, after_release) = oneshot::channel();
+        let (changed, did_change) = oneshot::channel();
+        let child = tokio::spawn(crate::keep_context({
+            let kit = Arc::clone(&kit);
+            let room = room.clone();
+            async move {
+                kit.update_room_metadata(
+                    &room,
+                    crate::model::Metadata::new(),
+                    UpdateRoomMetadataOptions::default(),
+                )
+                .await
+                .unwrap();
+                changed.send(()).unwrap();
+                after_release.await.unwrap();
+                kit.update_room_metadata(
+                    &room,
+                    crate::model::Metadata::new(),
+                    UpdateRoomMetadataOptions::default(),
+                )
+                .await
+                .unwrap();
+            }
+        }));
+        timeout(Duration::from_secs(2), did_change)
+            .await
+            .unwrap()
+            .unwrap();
+        lock.release().await.unwrap();
+
+        let next = manager.locked(&room).await.unwrap();
+        go.send(()).unwrap();
+        timeout(Duration::from_secs(2), async {
+            while kit.inner.locks.waiting(&room) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        next.release().await.unwrap();
+        timeout(Duration::from_secs(2), child)
+            .await
+            .unwrap()
+            .unwrap();
         kit.close().await.unwrap();
     }
 
