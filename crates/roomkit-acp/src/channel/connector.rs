@@ -2,6 +2,7 @@
 //! `ACPConnectionMixin` and the room half of `ACPSessionsMixin`.
 
 mod cancellation;
+pub(super) use cancellation::cancel_prompt;
 mod context;
 mod detachment;
 pub(super) mod release;
@@ -15,13 +16,13 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use agent_client_protocol_schema::ProtocolVersion;
 use agent_client_protocol_schema::v1::{
-    AuthenticateRequest, CancelNotification, ClientCapabilities, CloseSessionRequest,
-    FileSystemCapabilities, Implementation, InitializeRequest, InitializeResponse,
+    AuthenticateRequest, ClientCapabilities, CloseSessionRequest, FileSystemCapabilities,
+    Implementation, InitializeRequest, InitializeResponse,
 };
 use roomkit::model::{ChannelId, Metadata, RoomId};
 use serde_json::Value;
 
-use super::client::{ChannelClient, Turns};
+use super::client::{ChannelClient, PendingPermissions, Turns};
 use crate::connection::AcpConnection;
 use crate::error::AcpError;
 use crate::mcp::McpServers;
@@ -40,6 +41,8 @@ pub(super) struct Connector<T: AcpTransport> {
     additional_directories: Vec<PathBuf>,
     mcp_servers: Option<McpServers>,
     pub(super) turns: Arc<Turns>,
+    /// The agent's permission requests waiting on their decision, by session.
+    pub(super) pending: Arc<PendingPermissions>,
     pub(super) publication: super::publication::Publisher,
     pub(super) handler: Arc<super::permissions::HandlerService>,
     /// One connection at a time.
@@ -82,6 +85,7 @@ impl<T: AcpTransport> Connector<T> {
             additional_directories,
             mcp_servers,
             turns: Arc::new(Turns::default()),
+            pending: Arc::new(PendingPermissions::default()),
             publication,
             handler: Arc::new(super::permissions::HandlerService::new(handler)),
             connecting: Arc::new(tokio::sync::Mutex::new(())),
@@ -169,6 +173,7 @@ impl<T: AcpTransport> Connector<T> {
         }
         let client = Arc::new(ChannelClient {
             turns: Arc::clone(&self.turns),
+            pending: Arc::clone(&self.pending),
             handler: self.handler.handler.clone(),
             publication: self.publication.clone(),
             trusted_usage: self.transport.provides_usage_metadata(),
@@ -311,8 +316,8 @@ impl<T: AcpTransport> Connector<T> {
             let prompting = self.turns.stop();
             let closing = if closes { sessions } else { Vec::new() };
             // An agent that stopped answering cannot hold the close.
-            let _late =
-                tokio::time::timeout(SHUTDOWN_GRACE, goodbye(connection, prompting, closing)).await;
+            let goodbye = goodbye(connection, &self.pending, prompting, closing);
+            let _late = tokio::time::timeout(SHUTDOWN_GRACE, goodbye).await;
         }
         // Under the connecting lock, as Python's teardown: a handshake under
         // way, or the close of one that was cut, ends first.
@@ -328,12 +333,13 @@ impl<T: AcpTransport> Connector<T> {
 /// each session closed, at once, as Python's `_say_goodbye` gathers them.
 async fn goodbye<C: AcpConnection>(
     connection: Arc<C>,
+    pending: &PendingPermissions,
     prompting: Vec<String>,
     sessions: Vec<String>,
 ) {
     for session in prompting {
         // An agent already gone has nothing to cancel.
-        let _gone = connection.cancel(CancelNotification::new(session)).await;
+        let _gone = cancel_prompt(&*connection, pending, session).await;
     }
     let mut closing = tokio::task::JoinSet::new();
     for session in sessions {

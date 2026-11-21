@@ -2,11 +2,11 @@
 
 use std::sync::Arc;
 
-use agent_client_protocol_schema::v1::CancelNotification;
 use roomkit::model::{ResponseMetadata, RoomId};
 use tokio::sync::OwnedMutexGuard;
 use tokio::task::AbortHandle;
 
+use crate::channel::connector::cancel_prompt;
 use crate::channel::connector::standalone::TurnSession;
 use crate::channel::{Active, Shared};
 use crate::connection::AcpConnection;
@@ -163,10 +163,8 @@ impl<T: AcpTransport> Drop for Hold<T> {
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move {
                 if let Some(prompt) = prompt {
-                    let _gone = prompt
-                        .connection
-                        .cancel(CancelNotification::new(prompt.session))
-                        .await;
+                    let pending = &shared.connector.pending;
+                    let _gone = cancel_prompt(&*prompt.connection, pending, prompt.session).await;
                 }
                 if let Some(mut temporary) = temporary {
                     temporary.release().await;

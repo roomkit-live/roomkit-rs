@@ -1,4 +1,4 @@
-//! Pending ACP approvals are owned by the connection, not the prompt task.
+//! An ACP permission request pending while its turn ends, or the agent withdraws it.
 
 use roomkit::model::RoomId;
 use roomkit_ai::OnToolCancelledOptions;
@@ -108,9 +108,9 @@ impl ExternalToolHandler for Waiting {
     }
 }
 
-// Python: test_acp_handler_cancellation::test_turn_cancellation_leaves_approval_to_the_handlers_withdrawal.
+// Python: test_acp_handler_cancellation::test_turn_cancellation_answers_a_pending_permission_cancelled.
 #[tokio::test]
-async fn turn_cancellation_leaves_approval_to_the_handlers_withdrawal() {
+async fn turn_cancellation_answers_a_pending_permission_cancelled() {
     for announced in [true, false] {
         tokio::time::timeout(PATIENCE, check_pending(announced))
             .await
@@ -118,6 +118,24 @@ async fn turn_cancellation_leaves_approval_to_the_handlers_withdrawal() {
     }
 }
 
+fn permission(id: &str, call: &str) -> serde_json::Value {
+    json!({"jsonrpc":"2.0","id":id,"method":"session/request_permission","params":{
+        "sessionId":"session-r1","toolCall":{"toolCallId":call,"title":"Read","rawInput":{}},
+        "options":[{"optionId":"a","name":"Allow","kind":"allow_once"},{"optionId":"r","name":"Reject","kind":"reject_once"}]}})
+}
+
+async fn write(agent: &mut Agent, message: &serde_json::Value) {
+    agent
+        .writer
+        .write_all(format!("{message}\n").as_bytes())
+        .await
+        .unwrap();
+}
+
+/// ACP: a client that cancels a prompt MUST answer each of its pending
+/// permission requests `cancelled`. The handler's decision is abandoned,
+/// and the call, announced or not, is reported once, cancelled (RFC §6.4,
+/// §9.3).
 async fn check_pending(announced: bool) {
     let handler = Arc::new(Waiting::default());
     let (channel, mut opened) = channel_with_handler(Arc::<Waiting>::clone(&handler));
@@ -146,43 +164,80 @@ async fn check_pending(announced: bool) {
     } else {
         agent.prompted(true).await
     };
-    let permission = json!({"jsonrpc":"2.0","id":"permission","method":"session/request_permission","params":{
-        "sessionId":"session-r1","toolCall":{"toolCallId":"read","title":"Read","rawInput":{}},
-        "options":[{"optionId":"a","name":"Allow","kind":"allow_once"},{"optionId":"r","name":"Reject","kind":"reject_once"}]}});
-    agent
-        .writer
-        .write_all(format!("{permission}\n").as_bytes())
-        .await
-        .unwrap();
+    write(&mut agent, &permission("permission", "read")).await;
     handler.asked.notified().await;
     assert!(channel.cancel(&RoomId::new("r1").unwrap()).await.unwrap());
     assert_eq!(agent.read().await["method"], "session/cancel");
+    let reply = agent.read().await;
+    assert_eq!(reply["id"], "permission");
+    assert_eq!(reply["result"]["outcome"], json!({"outcome": "cancelled"}));
     agent
         .answer(&prompt, json!({"stopReason":"cancelled"}))
         .await;
     let result = running.await.unwrap();
     assert!(result.error.is_none());
-    let withdrawn = handler.withdrawn.load(Ordering::SeqCst);
-    if !announced {
-        handler.resume.notify_one();
-    }
-    let reply = loop {
-        let reply = agent.read().await;
-        if reply["id"] == "permission" {
-            break reply;
-        }
-        assert_eq!(reply["method"], "session/cancel");
-    };
+    handler.abandoned.notified().await;
     close(&kit, &mut agent).await;
-    assert_eq!(reply["result"]["outcome"]["optionId"], "r");
-    assert_eq!(withdrawn, announced);
-    assert!(handler.completed.load(Ordering::SeqCst));
-    assert!(!handler.aborted.load(Ordering::SeqCst));
+    assert!(handler.withdrawn.load(Ordering::SeqCst));
+    assert!(handler.aborted.load(Ordering::SeqCst));
+    assert!(!handler.completed.load(Ordering::SeqCst));
     let observed = observed.lock().unwrap();
-    assert_eq!(observed.len(), usize::from(announced));
+    assert_eq!(observed.len(), 1);
     for (mode, event) in &*observed {
         assert_eq!(*mode, HookExecution::Async);
         assert!(event.cancelled && !event.refused);
         assert_eq!(event.tool_call_id, "read");
     }
+}
+
+// Python: test_acp_handler_cancellation::test_an_agents_cancel_request_leaves_the_decision_to_the_handler.
+/// The agent withdraws a pending permission request with
+/// `$/cancel_request`: ACP lets a client ignore it, and RoomKit does. The
+/// handler keeps deciding the request, and its decision is the answer the
+/// agent gets.
+#[tokio::test]
+async fn an_agents_cancel_request_leaves_the_decision_to_the_handler() {
+    tokio::time::timeout(PATIENCE, withdrawn_by_the_agent())
+        .await
+        .unwrap();
+}
+
+async fn withdrawn_by_the_agent() {
+    let handler = Arc::new(Waiting::default());
+    let (channel, mut opened) = channel_with_handler(Arc::<Waiting>::clone(&handler));
+    let kit = room(channel).await;
+    let parent = TurnRecord::default();
+    parent.current().insert("parent", json!(true));
+    let running = tokio::spawn(parent.scope(send(Arc::clone(&kit))));
+    let mut agent = Agent::new(opened.recv().await.unwrap());
+    let prompt = agent.prompted(true).await;
+    write(&mut agent, &permission("first", "read")).await;
+    handler.asked.notified().await;
+    let withdraw =
+        json!({"jsonrpc":"2.0","method":"$/cancel_request","params":{"requestId":"first"}});
+    write(&mut agent, &withdraw).await;
+    // Taken in wire order: once the second request reaches the handler, the
+    // notification before it was taken.
+    write(&mut agent, &permission("second", "write")).await;
+    handler.asked.notified().await;
+    assert!(!handler.withdrawn.load(Ordering::SeqCst));
+    assert!(!handler.aborted.load(Ordering::SeqCst));
+    handler.resume.notify_one();
+    handler.resume.notify_one();
+    let mut answers = std::collections::BTreeMap::new();
+    for _ in 0..2 {
+        let reply = agent.read().await;
+        answers.insert(
+            reply["id"].as_str().unwrap().to_owned(),
+            reply["result"].clone(),
+        );
+    }
+    let refused = json!({"outcome": {"outcome": "selected", "optionId": "r"}});
+    assert_eq!(answers["first"], refused);
+    assert_eq!(answers["second"], refused);
+    agent
+        .answer(&prompt, json!({"stopReason":"end_turn"}))
+        .await;
+    assert!(running.await.unwrap().error.is_none());
+    close(&kit, &mut agent).await;
 }

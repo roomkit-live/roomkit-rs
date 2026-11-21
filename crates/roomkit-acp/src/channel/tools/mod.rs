@@ -115,7 +115,10 @@ impl Tools {
     ) -> super::permissions::Decision {
         let call = {
             let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-            state.merge(update).map(|call| call.request.clone())
+            state.merge(update).map(|call| {
+                call.asked = true;
+                call.request.clone()
+            })
         };
         let Some(call) = call else {
             return super::permissions::Decision::default();
@@ -124,7 +127,6 @@ impl Tools {
         let decision = self.reports.decide(call, session).await;
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(call) = state.calls.iter_mut().find(|call| call.request.id == id) {
-            call.rejected = !decision.approved;
             call.decision = Some(decision.clone());
         }
         decision
@@ -178,8 +180,12 @@ impl Tools {
         }
         let mut rows = Vec::new();
         let mut pending = Vec::new();
+        // A call whose permission the agent asked is closed even if the agent
+        // never announced it: its refusal or failure is reported; an
+        // approval, or a decision still pending or abandoned, cut by the
+        // turn's end is reported cancelled (RFC §9.3).
         for call in &mut state.calls {
-            if call.finished || (!call.started && call.decision.is_none()) {
+            if call.finished || (!call.started && !call.asked) {
                 continue;
             }
             if !call.started {

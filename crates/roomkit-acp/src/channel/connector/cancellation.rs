@@ -4,14 +4,31 @@ use agent_client_protocol_schema::v1::CancelNotification;
 use roomkit::model::RoomId;
 
 use super::Connector;
+use crate::channel::client::PendingPermissions;
 use crate::{AcpConnection, AcpError, AcpTransport};
+
+/// Cancel `session`'s prompt with `session/cancel`, then answer each of its
+/// permission requests still pending `cancelled`, as ACP requires of a
+/// client that cancels a prompt: their decisions, the external tool
+/// handler's included, are abandoned (RFC §6.4). Python's `_cancel_session`.
+pub(in crate::channel) async fn cancel_prompt<C: AcpConnection>(
+    connection: &C,
+    pending: &PendingPermissions,
+    session: String,
+) -> Result<(), AcpError> {
+    connection
+        .cancel(CancelNotification::new(session.clone()))
+        .await?;
+    pending.abandon(&session);
+    Ok(())
+}
 
 impl<T: AcpTransport> Connector<T> {
     /// Cancel the captured turn session, even if its room has moved on.
     pub(in crate::channel) async fn cancel_session(&self, session: String) -> Result<(), AcpError> {
         let connection = self.lock().connection.clone();
         if let Some(connection) = connection {
-            connection.cancel(CancelNotification::new(session)).await?;
+            cancel_prompt(&*connection, &self.pending, session).await?;
         }
         Ok(())
     }
@@ -30,7 +47,7 @@ impl<T: AcpTransport> Connector<T> {
         let Some((connection, session)) = target else {
             return Ok(false);
         };
-        connection.cancel(CancelNotification::new(session)).await?;
+        cancel_prompt(&*connection, &self.pending, session).await?;
         Ok(true)
     }
 }

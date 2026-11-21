@@ -13,8 +13,10 @@ pub(super) const TURN_ENDED: &str = "The ACP turn ended before the tool reported
 pub(super) struct Call {
     pub(super) request: ToolCall,
     pub(super) started: bool,
+    /// The agent asked RoomKit's permission for the call: a request still
+    /// pending announces the call for the turn's cut (RFC §9.3).
+    pub(super) asked: bool,
     pub(super) finished: bool,
-    pub(super) rejected: bool,
     pub(super) decision: Option<crate::channel::permissions::Decision>,
     since: Instant,
     result: Value,
@@ -26,8 +28,8 @@ impl Call {
         Self {
             request: ToolCall::new(id, "tool", Metadata::new()),
             started: false,
+            asked: false,
             finished: false,
-            rejected: false,
             decision: None,
             since: Instant::now(),
             result: Value::Null,
@@ -62,6 +64,14 @@ impl Call {
         }
     }
 
+    /// RoomKit answered the agent's permission request with a rejection: it
+    /// refused the call, or its handler failed deciding it.
+    fn rejected(&self) -> bool {
+        self.decision
+            .as_ref()
+            .is_some_and(|decision| !decision.approved)
+    }
+
     pub(super) fn start(&self) -> ToolCallContent {
         let mut row = ToolCallContent::new(&self.request.name, &self.request.id);
         row.arguments.clone_from(&self.request.arguments);
@@ -71,7 +81,7 @@ impl Call {
     pub(super) fn end(&mut self, failed: bool, interrupted: bool) -> End {
         self.finished = true;
         let outcome = match (failed, interrupted) {
-            _ if self.rejected && (failed || interrupted) => {
+            _ if self.rejected() && (failed || interrupted) => {
                 if self.decision.as_ref().is_some_and(|d| d.failure.is_some()) {
                     ToolCallOutcome::Failed
                 } else {
@@ -149,7 +159,7 @@ impl Call {
             ToolCallStatus::Completed
         };
         row.outcome = Some(outcome);
-        row.refused_but_ran = self.rejected && outcome == ToolCallOutcome::Served;
+        row.refused_but_ran = self.rejected() && outcome == ToolCallOutcome::Served;
         row.duration_ms = Some(u64::try_from(self.since.elapsed().as_millis()).unwrap_or(u64::MAX));
         row.structured_content = self
             .display
@@ -159,7 +169,7 @@ impl Call {
     }
     fn end_error(&self, result: &Value, failed: bool, interrupted: bool) -> Option<String> {
         if interrupted {
-            Some(if self.rejected {
+            Some(if self.rejected() {
                 let decision = self.decision.as_ref();
                 decision
                     .and_then(|d| d.failure_error.clone())

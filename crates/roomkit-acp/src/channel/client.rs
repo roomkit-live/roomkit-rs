@@ -15,6 +15,9 @@ use agent_client_protocol_schema::v1::{
 use tokio::task::AbortHandle;
 
 mod notifications;
+mod pending;
+
+pub(super) use pending::PendingPermissions;
 
 use super::updates::Sink;
 use crate::client::AcpClient;
@@ -146,6 +149,7 @@ pub(super) trait SessionOptions: Send + Sync {
 /// The client the channel opens its transport with.
 pub(super) struct ChannelClient {
     pub(super) turns: Arc<Turns>,
+    pub(super) pending: Arc<PendingPermissions>,
     pub(super) handler: Option<Arc<dyn roomkit_ai::ExternalToolHandler>>,
     pub(super) sessions: Arc<dyn SessionOptions>,
     pub(super) publication: super::publication::Publisher,
@@ -197,12 +201,23 @@ impl AcpClient for ChannelClient {
     ) -> Pin<Box<dyn Future<Output = Result<RequestPermissionResponse, AcpError>> + Send + '_>>
     {
         Box::pin(async move {
-            self.turns.activity(&request.session_id.0);
+            let session = &request.session_id.0;
+            self.turns.activity(session);
             let update = serde_json::to_value(&request.tool_call).unwrap_or_default();
-            let decision = if let Some(tools) = self.turns.tools(&request.session_id.0) {
-                tools.decide(&update, &request.session_id.0).await
-            } else {
-                self.decide_outside_turn(&request, &update).await
+            let deciding = async {
+                if let Some(tools) = self.turns.tools(session) {
+                    tools.decide(&update, session).await
+                } else {
+                    self.decide_outside_turn(&request, &update).await
+                }
+            };
+            let Some(decision) = self.pending.decide(session, deciding).await else {
+                // RoomKit cancelled the session's prompt while the request
+                // was pending: ACP has it answered cancelled, the decision
+                // abandoned.
+                return Ok(RequestPermissionResponse::new(
+                    RequestPermissionOutcome::Cancelled,
+                ));
             };
             Ok(answer(&request, decision.approved))
         })
