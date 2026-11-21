@@ -3,13 +3,22 @@
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use tokio::sync::oneshot;
+use tokio::sync::Notify;
 
-/// Each session's pending requests: an id, and what abandons its decision.
-type BySession = HashMap<String, Vec<(u64, oneshot::Sender<()>)>>;
+/// One permission request, its decision being made.
+#[derive(Default)]
+struct Asking {
+    abandoned: AtomicBool,
+    /// Notified once the session's cancellation is out: the request is
+    /// answered.
+    woken: Notify,
+}
+
+/// Each session's pending requests.
+type BySession = HashMap<String, Vec<Arc<Asking>>>;
 
 /// The permission requests of each session whose decision is pending.
 ///
@@ -20,7 +29,6 @@ type BySession = HashMap<String, Vec<(u64, oneshot::Sender<()>)>>;
 #[derive(Default)]
 pub(in crate::channel) struct PendingPermissions {
     by_session: Mutex<BySession>,
-    next: AtomicU64,
 }
 
 impl PendingPermissions {
@@ -38,32 +46,52 @@ impl PendingPermissions {
         session: &str,
         decision: F,
     ) -> Option<F::Output> {
-        let (abandon, mut abandoned) = oneshot::channel();
-        let id = self.next.fetch_add(1, Ordering::Relaxed);
+        let asking = Arc::new(Asking::default());
         self.lock()
             .entry(session.to_owned())
             .or_default()
-            .push((id, abandon));
-        let _forget = Forget {
+            .push(Arc::clone(&asking));
+        let forget = Forget {
             pending: self,
             session,
-            id,
+            asking: &asking,
         };
         let decided = tokio::select! {
             biased;
-            Ok(()) = &mut abandoned => None,
+            () = asking.woken.notified() => None,
             decided = decision => Some(decided),
         };
-        // A decision made as the session was cancelled is abandoned all the same.
-        decided.filter(|_| abandoned.try_recv().is_err())
+        drop(forget);
+        if decided.is_some() && asking.abandoned.load(Ordering::Acquire) {
+            // Made while the cancellation was being sent: dropped, and the
+            // request answered once the cancellation is out.
+            asking.woken.notified().await;
+            return None;
+        }
+        decided
     }
 
-    /// Abandon every decision pending in `session`: each request is answered
-    /// `cancelled`, and its decision is dropped.
-    pub(in crate::channel) fn abandon(&self, session: &str) {
-        let asking = self.lock().remove(session).unwrap_or_default();
-        for (_, abandon) in asking {
-            let _decided = abandon.send(());
+    /// Abandon the decisions pending in `session` until the returned guard
+    /// drops, once the session's cancellation is sent: a decision made
+    /// meanwhile is dropped, and when the guard drops, however the sending
+    /// ended, each request is answered `cancelled` and its decision dropped.
+    pub(in crate::channel) fn abandon(&self, session: &str) -> Abandoned {
+        let asked = self.lock().get(session).cloned().unwrap_or_default();
+        for asking in &asked {
+            asking.abandoned.store(true, Ordering::Release);
+        }
+        Abandoned(asked)
+    }
+}
+
+/// The requests a cancellation abandoned, woken when it drops.
+#[must_use = "dropping it at once answers the requests before the cancellation goes"]
+pub(in crate::channel) struct Abandoned(Vec<Arc<Asking>>);
+
+impl Drop for Abandoned {
+    fn drop(&mut self) {
+        for asking in &self.0 {
+            asking.woken.notify_one();
         }
     }
 }
@@ -72,15 +100,15 @@ impl PendingPermissions {
 struct Forget<'a> {
     pending: &'a PendingPermissions,
     session: &'a str,
-    id: u64,
+    asking: &'a Arc<Asking>,
 }
 
 impl Drop for Forget<'_> {
     fn drop(&mut self) {
         let mut by_session = self.pending.lock();
-        if let Some(asking) = by_session.get_mut(self.session) {
-            asking.retain(|(id, _)| *id != self.id);
-            if asking.is_empty() {
+        if let Some(asked) = by_session.get_mut(self.session) {
+            asked.retain(|asking| !Arc::ptr_eq(asking, self.asking));
+            if asked.is_empty() {
                 by_session.remove(self.session);
             }
         }

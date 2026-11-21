@@ -38,8 +38,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - An ACP turn cancelled while the agent's permission request waits on its
   decision answers that request `cancelled`, as ACP requires of a client
   that cancels a prompt, and as in Python (RFC §6.4, RMK-423): the external
-  tool handler's decision is dropped, where the agent got the reject option
-  once the handler withdrew, or the handler's answer whenever it came. The
+  tool handler's decision is dropped, even one made as `session/cancel`
+  goes out or when the turn's caller is dropped, where the agent got the
+  reject option once the handler withdrew, or the handler's answer whenever
+  it came. A handler's pending `process_tool_call` future is now dropped. The
   call is reported once, cancelled, and the handler hears of it through
   `on_tool_cancelled`, a call the agent never announced included, which was
   reported nowhere (RFC §9.3).

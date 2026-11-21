@@ -339,7 +339,8 @@ async fn goodbye<C: AcpConnection>(
 ) {
     for session in prompting {
         // An agent already gone has nothing to cancel.
-        let _gone = cancel_prompt(&*connection, pending, session).await;
+        let abandoned = pending.abandon(&session);
+        let _gone = cancel_prompt(&*connection, abandoned, session).await;
     }
     let mut closing = tokio::task::JoinSet::new();
     for session in sessions {

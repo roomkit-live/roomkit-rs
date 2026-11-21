@@ -136,6 +136,11 @@ impl<T: AcpTransport> Drop for Hold<T> {
             .prompt
             .take()
             .filter(|prompt| !prompt.task.is_finished());
+        // Abandoned before the prompt stops: its end closes the calls, and a
+        // handler told so must not answer a request the cancel answers.
+        let abandoned = prompt
+            .as_ref()
+            .map(|prompt| self.shared.connector.pending.abandon(&prompt.session));
         if let Some(prompt) = &prompt {
             prompt.task.abort();
         }
@@ -162,9 +167,8 @@ impl<T: AcpTransport> Drop for Hold<T> {
         let retire = self.recovering || self.retire;
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move {
-                if let Some(prompt) = prompt {
-                    let pending = &shared.connector.pending;
-                    let _gone = cancel_prompt(&*prompt.connection, pending, prompt.session).await;
+                if let (Some(prompt), Some(abandoned)) = (prompt, abandoned) {
+                    let _gone = cancel_prompt(&*prompt.connection, abandoned, prompt.session).await;
                 }
                 if let Some(mut temporary) = temporary {
                     temporary.release().await;

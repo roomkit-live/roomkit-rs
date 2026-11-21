@@ -4,23 +4,23 @@ use agent_client_protocol_schema::v1::CancelNotification;
 use roomkit::model::RoomId;
 
 use super::Connector;
-use crate::channel::client::PendingPermissions;
+use crate::channel::client::Abandoned;
 use crate::{AcpConnection, AcpError, AcpTransport};
 
-/// Cancel `session`'s prompt with `session/cancel`, then answer each of its
+/// Cancel `session`'s prompt with `session/cancel`, and answer each of its
 /// permission requests still pending `cancelled`, as ACP requires of a
-/// client that cancels a prompt: their decisions, the external tool
-/// handler's included, are abandoned (RFC §6.4). Python's `_cancel_session`.
+/// client that cancels a prompt: `abandoned`, taken before the notification
+/// goes, drops their decisions, the external tool handler's included, and
+/// the answers follow the notification, however its sending ends (RFC §6.4).
+/// Python's `_cancel_session`.
 pub(in crate::channel) async fn cancel_prompt<C: AcpConnection>(
     connection: &C,
-    pending: &PendingPermissions,
+    abandoned: Abandoned,
     session: String,
 ) -> Result<(), AcpError> {
-    connection
-        .cancel(CancelNotification::new(session.clone()))
-        .await?;
-    pending.abandon(&session);
-    Ok(())
+    let sent = connection.cancel(CancelNotification::new(session)).await;
+    drop(abandoned);
+    sent
 }
 
 impl<T: AcpTransport> Connector<T> {
@@ -28,7 +28,8 @@ impl<T: AcpTransport> Connector<T> {
     pub(in crate::channel) async fn cancel_session(&self, session: String) -> Result<(), AcpError> {
         let connection = self.lock().connection.clone();
         if let Some(connection) = connection {
-            cancel_prompt(&*connection, &self.pending, session).await?;
+            let abandoned = self.pending.abandon(&session);
+            cancel_prompt(&*connection, abandoned, session).await?;
         }
         Ok(())
     }
@@ -47,7 +48,8 @@ impl<T: AcpTransport> Connector<T> {
         let Some((connection, session)) = target else {
             return Ok(false);
         };
-        cancel_prompt(&*connection, &self.pending, session).await?;
+        let abandoned = self.pending.abandon(&session);
+        cancel_prompt(&*connection, abandoned, session).await?;
         Ok(true)
     }
 }

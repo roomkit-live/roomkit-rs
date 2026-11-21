@@ -108,6 +108,8 @@ impl Tools {
     }
 
     /// Keep the call before awaiting approval, so teardown can cancel it.
+    /// The decision is kept on the call by [`Tools::record`], once it is
+    /// the answer.
     pub(super) async fn decide(
         &self,
         update: &Value,
@@ -123,13 +125,20 @@ impl Tools {
         let Some(call) = call else {
             return super::permissions::Decision::default();
         };
-        let id = call.id.clone();
-        let decision = self.reports.decide(call, session).await;
+        self.reports.decide(call, session).await
+    }
+
+    /// Keep `decision`, the answer to the agent's permission request for
+    /// the call `update` names, on that call: an abandoned one is never
+    /// kept, so the cut reports the call cancelled.
+    pub(super) fn record(&self, update: &Value, decision: &super::permissions::Decision) {
+        let Some(id) = update.get("toolCallId").and_then(Value::as_str) else {
+            return;
+        };
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(call) = state.calls.iter_mut().find(|call| call.request.id == id) {
             call.decision = Some(decision.clone());
         }
-        decision
     }
 
     fn start(&self, call: &Call, sender: &mpsc::UnboundedSender<ResponseItem>) {

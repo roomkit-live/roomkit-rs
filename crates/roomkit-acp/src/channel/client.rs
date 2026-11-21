@@ -17,7 +17,7 @@ use tokio::task::AbortHandle;
 mod notifications;
 mod pending;
 
-pub(super) use pending::PendingPermissions;
+pub(super) use pending::{Abandoned, PendingPermissions};
 
 use super::updates::Sink;
 use crate::client::AcpClient;
@@ -204,11 +204,11 @@ impl AcpClient for ChannelClient {
             let session = &request.session_id.0;
             self.turns.activity(session);
             let update = serde_json::to_value(&request.tool_call).unwrap_or_default();
+            let tools = self.turns.tools(session);
             let deciding = async {
-                if let Some(tools) = self.turns.tools(session) {
-                    tools.decide(&update, session).await
-                } else {
-                    self.decide_outside_turn(&request, &update).await
+                match &tools {
+                    Some(tools) => tools.decide(&update, session).await,
+                    None => self.decide_outside_turn(&request, &update).await,
                 }
             };
             let Some(decision) = self.pending.decide(session, deciding).await else {
@@ -219,6 +219,9 @@ impl AcpClient for ChannelClient {
                     RequestPermissionOutcome::Cancelled,
                 ));
             };
+            if let Some(tools) = &tools {
+                tools.record(&update, &decision);
+            }
             Ok(answer(&request, decision.approved))
         })
     }
