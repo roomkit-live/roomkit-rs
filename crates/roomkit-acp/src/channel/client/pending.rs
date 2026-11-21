@@ -76,10 +76,14 @@ impl PendingPermissions {
     /// meanwhile is dropped, and when the guard drops, however the sending
     /// ended, each request is answered `cancelled` and its decision dropped.
     pub(in crate::channel) fn abandon(&self, session: &str) -> Abandoned {
-        let asked = self.lock().get(session).cloned().unwrap_or_default();
+        // Marked under the lock a decision takes its request off the list
+        // under: a request still listed reads its mark once decided.
+        let by_session = self.lock();
+        let asked = by_session.get(session).cloned().unwrap_or_default();
         for asking in &asked {
             asking.abandoned.store(true, Ordering::Release);
         }
+        drop(by_session);
         Abandoned(asked)
     }
 }
