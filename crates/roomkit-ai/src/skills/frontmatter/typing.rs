@@ -1,6 +1,6 @@
 //! A plain scalar as the registry reads it, as Python's does: typed by
 //! YAML 1.1 (`SafeLoader`), then written by `str()`, so `true` is kept as
-//! `True` and `0x10` as `16` (RFC §24.1, RMK-1579); as written in a
+//! `True` and `0x10` as `16` (RFC §24.1, RMK-1579); untyped in a
 //! frontmatter Python reads line by line, which YAML does not read.
 
 use super::scalars::{Item, NULLS, list_item};

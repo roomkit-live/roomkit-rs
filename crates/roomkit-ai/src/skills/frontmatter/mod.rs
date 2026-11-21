@@ -35,6 +35,7 @@ mod typing;
 #[cfg(test)]
 mod differential;
 
+use crate::skills::served::reads_as_yaml;
 use crate::skills::{SkillError, SkillToolNames};
 use gates::Gates;
 use output::Output;
@@ -128,8 +129,8 @@ pub(crate) fn split(content: &str) -> Result<(&str, &str), String> {
 /// Says why the frontmatter cannot be read whole (see the module).
 pub(crate) fn read(text: &str) -> Result<Fields, String> {
     // Python reads a frontmatter as YAML, its plain scalars typed, unless
-    // YAML does not read it: then line by line, each value as written.
-    let typed = read_with::<Fields>(text, !fallback::needed(text))?;
+    // YAML does not read it: then line by line, untyped.
+    let typed = read_with::<Fields>(text, reads_as_yaml(text))?;
     let mut fields = if typed.typing.not_yaml {
         read_with::<Fields>(text, false)?.fields
     } else {

@@ -598,6 +598,10 @@ fn a_plain_scalar_is_kept_as_python_writes_its_yaml_value() {
             "flag: true\nnote: Use when: asked",
             json!({"flag": "true", "note": "Use when: asked"}),
         ),
+        (
+            "flag: true\nodd:value",
+            json!({"flag": "true", "odd": "value"}),
+        ),
     ];
     for (lines, expected) in cases {
         let metadata = discovered_metadata(lines);
@@ -607,6 +611,19 @@ fn a_plain_scalar_is_kept_as_python_writes_its_yaml_value() {
             "{lines:?}"
         );
     }
+}
+
+/// Whether Python reads a frontmatter as YAML is YAML's call, not the
+/// line reader's: a nested map is YAML, so the other values are typed; a
+/// value YAML does not read (`@alice`) leaves the frontmatter to Python's
+/// line reading, untyped. Python also keeps the map and `@alice`, which
+/// this reader leaves out (RMK-1900).
+#[test]
+fn whether_values_are_typed_is_yaml_s_reading_of_the_whole_frontmatter() {
+    let typed = discovered_metadata("flag: true\nmetadata:\n  author: org");
+    assert_eq!(typed.extra_metadata.get("flag"), Some(&json!("True")));
+    let untyped = discovered_metadata("author: @alice\nversion: 1.10");
+    assert_eq!(untyped.extra_metadata.get("version"), Some(&json!("1.10")));
 }
 
 // Python: tests/test_skills.py::TestParseSkillMetadata::test_a_field_s_plain_scalar_is_typed_as_another_key_s

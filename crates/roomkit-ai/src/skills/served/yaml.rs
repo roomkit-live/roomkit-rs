@@ -90,7 +90,30 @@ fn split(content: &str) -> Result<(&str, &str), String> {
     Ok((head.trim(), body.trim()))
 }
 
+/// Whether Python reads `text`, a local skill's frontmatter, as YAML: its
+/// `SafeLoader` constructs a mapping from it, where Python reads one it
+/// cannot line by line. Unlike a served entry's, no JSON form is needed:
+/// `.inf` is read.
+pub(in crate::skills) fn reads_as_yaml(text: &str) -> bool {
+    read_node(text).is_ok_and(|node| {
+        matches!(&node, Node::Mapping(_, tag) if matches!(tag.as_str(), "" | "map"))
+            && normalize::validate(&node).is_ok()
+    })
+}
+
 fn parse(text: &str) -> Result<Map<String, Value>, String> {
+    let node = read_node(text)?;
+    normalize::validate(&node)?;
+    match normalize::value(node)? {
+        Value::Object(object) => Ok(object),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
+            Err("the frontmatter is not a mapping".to_owned())
+        }
+    }
+}
+
+/// The one document `text` holds, its scalars resolved, within the bounds.
+fn read_node(text: &str) -> Result<Node, String> {
     bounds(text)?;
     let mut parser = Parser::new_from_str(text);
     let mut stack: Vec<Frame> = Vec::new();
@@ -138,13 +161,7 @@ fn parse(text: &str) -> Result<Map<String, Value>, String> {
     if !roots.is_empty() || !stack.is_empty() {
         return Err("the frontmatter is not YAML".to_owned());
     }
-    normalize::validate(&node)?;
-    match normalize::value(node)? {
-        Value::Object(object) => Ok(object),
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
-            Err("the frontmatter is not a mapping".to_owned())
-        }
-    }
+    Ok(node)
 }
 
 fn push(stack: &mut [Frame], roots: &mut Vec<Node>, node: Node) {
