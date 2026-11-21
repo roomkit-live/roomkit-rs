@@ -168,6 +168,7 @@ impl<S: ConversationStore> RoomKit<S> {
                 .collect()
         };
         for channel in channels {
+            self.inner.agent_presence.remote.recheck(&channel);
             if let Err(error) = self.publish_agent(room, &channel, false, &executors).await {
                 tracing::warn!(target: "roomkit::turns", %room, %channel, %error, "publishing the agent's presence failed; it is tried again");
             }

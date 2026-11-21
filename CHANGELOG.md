@@ -25,6 +25,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A declared agent reports going offline when the room saw its remote worker
+  come online and leave between registry polls (RMK-1796).
+
 - `validate_public_url` refuses an address of the shared address space
   (`100.64.0.0/10`, RFC 6598: carrier-grade NAT and overlay networks) and a
   site-local IPv6 address (`fec0::/10`), written or resolved, as

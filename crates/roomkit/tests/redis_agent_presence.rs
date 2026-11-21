@@ -223,6 +223,32 @@ async fn two_room_owners_publish_each_remote_worker_change_once() {
     second.close().await.unwrap();
 }
 
+// The room can observe a worker that comes and goes between registry polls.
+#[tokio::test]
+async fn an_attached_room_reports_a_worker_that_leaves_between_polls() {
+    use EphemeralEventType::{PresenceOffline, PresenceOnline};
+    let Some((_, node)) = test_nodes(Duration::from_secs(1)) else {
+        return;
+    };
+    let room = Room::new();
+    let owner = node();
+    let kit = room.owner(owner.clone());
+    let peer = node();
+    // Serving a different channel runs an initial coverage check while the
+    // room's agent is still absent. Closing it below triggers the next one.
+    let other = dynamic_worker("other", "other-");
+    owner.serve(other.clone()).await.unwrap();
+    let agent = worker("host-1");
+    peer.serve(agent.clone()).await.unwrap();
+    let mut events = room.create(&kit).await;
+    expect_event(&mut events, PresenceOnline).await;
+    peer.close().await.unwrap();
+    other.close().await;
+    expect_event(&mut events, PresenceOffline).await;
+    agent.close().await;
+    kit.close().await.unwrap();
+}
+
 #[tokio::test]
 async fn a_local_serve_and_close_publish_without_waiting_for_a_heartbeat() {
     use EphemeralEventType::{PresenceOffline, PresenceOnline};

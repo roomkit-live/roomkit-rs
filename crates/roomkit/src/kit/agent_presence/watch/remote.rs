@@ -28,6 +28,17 @@ pub(super) struct Monitor {
     pub(super) forgetting: Mutex<BTreeSet<RoomId>>,
 }
 
+impl Monitor {
+    // A room can observe a worker that comes and goes between monitor polls.
+    // Recheck that channel's rooms even if the registry returns to its old value.
+    pub(super) fn recheck(&self, agent: &ChannelId) {
+        self.covering
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(agent);
+    }
+}
+
 impl<S: ConversationStore> RoomKit<S> {
     pub(in crate::kit) fn wire_presence_watch(&self) {
         let Some(backend) = self.inner.turns.configured_backend() else {
