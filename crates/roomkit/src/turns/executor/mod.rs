@@ -84,7 +84,7 @@ pub(super) fn take(
     };
     let run = async move {
         executor
-            .run(controls, Incoming::Local(Box::new(carried)))
+            .run(controls, Incoming::Local(Box::new(carried)), None)
             .await;
     };
     #[cfg(test)]
@@ -138,12 +138,24 @@ enum Cut {
 
 impl Executor {
     /// Runs the turn to its end, which the owner is told unless lost.
-    async fn run(&self, mut controls: PipeReceiver<Control>, incoming: Incoming) {
+    async fn run(
+        &self,
+        mut controls: PipeReceiver<Control>,
+        incoming: Incoming,
+        accepted: Option<tokio::sync::oneshot::Receiver<()>>,
+    ) {
         if self
             .send(&Frame::Accepted {
                 executor_id: self.id.clone(),
             })
             .is_err()
+        {
+            return;
+        }
+        // A remote transport must finish writing accepted before channel work can
+        // occupy this runtime (RFC §10.6.8). A failed write drops the sender.
+        if let Some(accepted) = accepted
+            && accepted.await.is_err()
         {
             return;
         }

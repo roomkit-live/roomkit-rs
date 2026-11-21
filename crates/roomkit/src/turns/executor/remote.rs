@@ -17,6 +17,7 @@ use crate::turns::{MemoryTurn, Turns};
 pub(crate) struct WorkerOrigin {
     pub(crate) context: TurnContext,
     pub(crate) waits_for_writes: bool,
+    pub(crate) accepted: Option<tokio::sync::oneshot::Receiver<()>>,
     pub(crate) owner: Option<crate::turns::room_owner::WorkerOwner>,
 }
 
@@ -80,7 +81,11 @@ impl WorkerTurn {
             .unzip();
         let work = async move {
             executor
-                .run(incoming, Incoming::Worker(Box::new(request), build))
+                .run(
+                    incoming,
+                    Incoming::Worker(Box::new(request), build),
+                    origin.accepted,
+                )
                 .await;
             drop(end);
             if let Some(wait) = wait {
@@ -199,13 +204,14 @@ impl WorkerTurn {
     pub(crate) fn serve_link(
         mut self,
         application: Arc<dyn crate::turns::ExecutorLink>,
+        accepted: tokio::sync::oneshot::Sender<()>,
     ) -> impl Future<Output = ()> + Send + 'static {
         let end = LinkEnd(application);
         async move {
             {
                 let link = &*end.0;
                 let incoming = read_controls(link, &self.memory);
-                let outgoing = write_frames(link, &mut self.frames);
+                let outgoing = write_frames(link, &mut self.frames, accepted);
                 tokio::pin!(outgoing);
                 tokio::select! {
                     () = incoming => outgoing.await,
@@ -243,10 +249,19 @@ async fn read_controls(link: &dyn crate::turns::ExecutorLink, memory: &MemoryTur
     memory.controls.shut();
 }
 
-async fn write_frames(link: &dyn crate::turns::ExecutorLink, frames: &mut PipeReceiver<Frame>) {
+async fn write_frames(
+    link: &dyn crate::turns::ExecutorLink,
+    frames: &mut PipeReceiver<Frame>,
+    accepted: tokio::sync::oneshot::Sender<()>,
+) {
+    let mut accepted = Some(accepted);
     while let Ok((seq, frame)) = frames.get().await {
         match link.send(frame).await {
-            Ok(written) if written == seq => {}
+            Ok(written) if written == seq => {
+                if let Some(ready) = accepted.take() {
+                    let _ = ready.send(());
+                }
+            }
             Ok(written) => {
                 tracing::warn!(
                     seq,
