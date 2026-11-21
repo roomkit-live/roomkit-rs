@@ -244,7 +244,7 @@ impl crate::turns::ChannelTurnHooks {
         let done: Box<dyn FnOnce() + Send> = Box::new(then);
         let bound = self.clone();
         let payload = payload.clone();
-        self.spawn(Box::pin(crate::keep_context(async move {
+        self.start_observer(Box::pin(crate::keep_context(async move {
             if let Some(context) = bound.context(P::TRIGGER).await {
                 bound.observe_with(&hooks, &payload, &context, Some(done));
             }

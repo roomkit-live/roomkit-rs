@@ -72,8 +72,7 @@ impl Loop {
             structured_content: None,
             references: Vec::new(),
         };
-        let host = self.report_host().await;
-        self.tell(host.as_ref(), called, nth, &report, &end);
+        self.tell(None, called, nth, &report, &end).await;
         end
     }
 
@@ -127,8 +126,7 @@ impl Loop {
             structured_content: None,
             references: Vec::new(),
         };
-        let host = self.report_host().await;
-        self.tell(host.as_ref(), called, nth, &report, &end);
+        self.tell(None, called, nth, &report, &end).await;
         end
     }
 
@@ -165,11 +163,20 @@ impl Loop {
         let (ended, parts) = self.shaped(ended);
         // A skill's activation the hooks left as it served it is read whole.
         let own = kept_whole(&ended.call.name).then(|| ended.result.clone());
-        let host = self.report_host().await;
-        let ended = match (&host, &self.context.callbacks) {
-            (Some(host), _) => host.on_tool_call(ended).await,
-            (None, Some(hooks)) => hooks.on_tool_call(ended).await,
-            (None, None) => ended,
+        let (ended, host) = if matches!(
+            ended.outcome,
+            Some(ToolCallOutcome::Served | ToolCallOutcome::Unserved)
+        ) {
+            match (&self.turn, &self.context.callbacks) {
+                (Some(turn), _) => {
+                    let host = turn.for_tool_report().await;
+                    (host.on_tool_call(ended).await, Some(host))
+                }
+                (None, Some(hooks)) => (hooks.on_tool_call(ended).await, None),
+                (None, None) => (ended, None),
+            }
+        } else {
+            (ended, None)
         };
         if let Some(span) = span {
             span.end(raised_of(&ended));
@@ -216,20 +223,16 @@ impl Loop {
                 .report_wired_tool(&reported, called.report.callback())
                 .await;
         } else {
-            self.tell(host.as_ref(), called, nth, &reported, &end);
+            self.tell(host.as_ref(), called, nth, &reported, &end).await;
         }
         Ok(end)
-    }
-
-    async fn report_host(&self) -> Option<roomkit::TurnHost> {
-        Some(self.turn.as_ref()?.for_tool_report().await)
     }
 
     /// Tells the kit how `called`, the `nth` of its round's calls under its
     /// id, ended, before its end is read: a cut of the turn closes it so
     /// (RFC §12.2 step 13s), as Python's `ToolCallStartMarker.ended`; then
     /// reports it to the kit's observers.
-    fn tell(
+    async fn tell(
         &self,
         host: Option<&roomkit::TurnHost>,
         called: &Called,
@@ -237,7 +240,7 @@ impl Loop {
         reported: &ToolCallReport,
         end: &ToolEnd,
     ) {
-        let Some(turn) = host else {
+        let Some(turn) = host.or(self.turn.as_ref()) else {
             if let Some(hooks) = &self.context.callbacks {
                 hooks.report_abandoned_wired_tool(reported.clone(), called.report.callback());
             } else if end.outcome == ToolCallOutcome::Served {
@@ -247,7 +250,10 @@ impl Loop {
         };
         let turn = turn.with_tool_report_claim(called.report.callback());
         turn.call_ended(nth, end_row(end.clone()));
-        if called.duplicate {
+        if host.is_none() {
+            turn.report_decided_tool_call(reported, called.duplicate)
+                .await;
+        } else if called.duplicate {
             turn.report_call_under_held_id(reported);
         } else {
             turn.report_tool_call(reported);

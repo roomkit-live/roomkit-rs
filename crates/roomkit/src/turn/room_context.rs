@@ -19,6 +19,7 @@ impl TurnHost {
             return Some(self.shared.context.clone());
         }
         let wiring = self.wiring.as_ref()?;
+        let _order = self.shared.hook_reads.lock().await;
         wiring
             .hook_context(self.room_id(), trigger, Some(&self.shared.context))
             .await

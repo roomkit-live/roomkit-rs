@@ -51,17 +51,14 @@ impl Loop {
         );
         let report =
             ToolCallReport::new(ran).ended(ToolCallOutcome::Cancelled, Value::String(text));
-        let Some(turn) = self.report_host().await else {
+        let Some(turn) = &self.turn else {
             if let Some(hooks) = &self.context.callbacks {
                 hooks.report_abandoned_wired_tool(report, called.report.callback());
             }
             return;
         };
         let turn = turn.with_tool_report_claim(called.report.callback());
-        if called.duplicate {
-            turn.report_call_under_held_id(&report);
-        } else {
-            turn.report_tool_call(&report);
-        }
+        turn.report_decided_tool_call(&report, called.duplicate)
+            .await;
     }
 }

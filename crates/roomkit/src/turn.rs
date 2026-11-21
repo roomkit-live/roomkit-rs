@@ -158,6 +158,8 @@ struct Shared {
     response_depth: u32,
     /// The calls the gate let run, until they are reported.
     calls: Mutex<Calls>,
+    /// Fresh hook snapshots start in the order in which the turn fires them.
+    hook_reads: tokio::sync::Mutex<()>,
     /// What the turn queued to publish.
     publisher: Arc<publish::Publisher>,
     /// True unless the owner explicitly closes a stream it stopped reading.
@@ -881,17 +883,39 @@ impl TurnHost {
     /// a channel that calls it too runs the hooks twice.
     #[doc(hidden)]
     pub fn report_tool_call(&self, report: &ToolCallReport) {
-        {
-            let mut calls = self.calls();
-            if let Some(position) = calls
-                .running
-                .iter()
-                .position(|call| call.call.id == report.call.id)
-            {
-                calls.running.remove(position);
-            }
-        }
+        self.finished_running(&report.call.id);
         self.report_call_under_held_id(report);
+    }
+
+    fn finished_running(&self, id: &str) {
+        let mut calls = self.calls();
+        if let Some(position) = calls.running.iter().position(|call| call.call.id == id) {
+            calls.running.remove(position);
+        }
+    }
+
+    /// Report a final outcome that no synchronous hook can change (RFC §9.3).
+    /// A cut while reading the observers' room leaves this report running.
+    #[doc(hidden)]
+    pub async fn report_decided_tool_call(&self, report: &ToolCallReport, duplicate: bool) {
+        if !duplicate {
+            self.finished_running(&report.call.id);
+        }
+        if self.hooks(HookTrigger::OnToolCall).is_empty() {
+            self.report_call_under_held_id(report);
+            return;
+        }
+        let host = self.clone();
+        let report = report.clone();
+        let (finished, wait) = tokio::sync::oneshot::channel();
+        let hooks = crate::turns::ChannelTurnHooks::from(self.clone());
+        hooks.start_observer(Box::pin(crate::keep_context(async move {
+            host.for_tool_report()
+                .await
+                .report_call_under_held_id(&report);
+            let _ = finished.send(());
+        })));
+        let _ = wait.await;
     }
 
     /// Reports `report`, a call refused for coming under an id another call
@@ -2108,6 +2132,7 @@ pub(crate) fn host(
             link,
             response_depth,
             calls: Mutex::new(Calls::default()),
+            hook_reads: tokio::sync::Mutex::new(()),
             publisher: Arc::default(),
             stream_cut: AtomicBool::new(true),
         }),

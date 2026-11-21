@@ -89,6 +89,20 @@ impl ChannelTurnHooks {
         }
     }
 
+    /// Start the context read in firing order. A suspended read belongs to
+    /// the executor's observer work even if the caller is then cancelled.
+    pub(crate) fn start_observer(&self, mut work: BoxFuture<'static, ()>) {
+        if self.host().is_some()
+            && work
+                .as_mut()
+                .poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+                .is_ready()
+        {
+            return;
+        }
+        self.spawn(work);
+    }
+
     pub(crate) fn spawn(&self, task: BoxFuture<'static, ()>) -> bool {
         if let Binding::Wired(bound) = &self.0
             && let Some(prompt) = bound.prompt.clone()
