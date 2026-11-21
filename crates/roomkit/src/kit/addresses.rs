@@ -29,6 +29,7 @@ impl<S> Inner<S> {
             chain_floor: ExecutionContext::current().turn_depth().unwrap_or(0),
             publication: None,
             runtime_record: None,
+            framework_own: false,
         })
     }
 }

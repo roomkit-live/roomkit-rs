@@ -44,6 +44,12 @@ pub struct MessageAnswers {
     /// other message. Python's `DeliveryItem.runtime_record`, which the
     /// delivery path sets.
     pub runtime_record: Option<String>,
+    /// Whether the framework wrote the message itself (a `deliver`: RFC
+    /// §10.4), which the delivery path says of its own message and nothing
+    /// says of any other. The identity step leaves such a message alone
+    /// (RFC §11.6); it never reads the sender `system` for it, which any
+    /// caller can write. Python's `is_framework_message`.
+    pub framework_own: bool,
 }
 
 impl MessageAnswers {
@@ -69,6 +75,7 @@ impl MessageAnswers {
             chain_floor: 0,
             publication: None,
             runtime_record: None,
+            framework_own: false,
         }
     }
 

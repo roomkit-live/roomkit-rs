@@ -120,7 +120,10 @@ enum State {
 /// Whether step 5 runs for `event`, which `channel` parsed, in the room
 /// `context` holds: the kit resolves senders of the channel's type (RFC
 /// §11.4), the channel does not name its own senders, and the room has not
-/// identified this one on the channel (RFC §11.6).
+/// identified this one on the channel (RFC §11.6). The framework's own
+/// message is left alone before this is asked (`Arrival`'s
+/// `framework_own`): resolved, the host's own delivery was challenged like
+/// a stranger's by the identity hooks and blocked (RMK-1874).
 pub(super) fn wanted(
     config: &KitConfig,
     channel: &ChannelConfig,

@@ -193,6 +193,9 @@ pub(super) struct Arrival {
     /// What the runtime wrote, when the delivery path publishes the
     /// runtime's own text: its event's runtime record (RFC §6.4).
     runtime_record: Option<String>,
+    /// Whether the framework wrote the message itself, as the delivery path
+    /// says of its own (RFC §10.4): step 5 leaves it alone (RFC §11.6).
+    framework_own: bool,
     state: State,
 }
 
@@ -253,6 +256,7 @@ impl Arrival {
             release_error: None,
             publication: None,
             runtime_record: None,
+            framework_own: false,
             state: State::Start,
         }
     }
@@ -265,6 +269,7 @@ impl Arrival {
             self.chain_floor = answers.chain_floor;
             self.publication.clone_from(&answers.publication);
             self.runtime_record.clone_from(&answers.runtime_record);
+            self.framework_own = answers.framework_own;
             self.sender = answers.sender(&self.message);
         }
         self
@@ -682,7 +687,9 @@ impl Arrival {
             Ok(arrived) => arrived,
             Err(stopped) => return Progress::Done(Err(stopped)),
         };
-        if !identity::wanted(cx.config, &self.channel, &arrived.event, &arrived.context) {
+        let wanted = !self.framework_own
+            && identity::wanted(cx.config, &self.channel, &arrived.event, &arrived.context);
+        if !wanted {
             identity::as_the_record_named(
                 cx.config,
                 &self.channel,

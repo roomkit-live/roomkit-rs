@@ -31,6 +31,10 @@ pub(crate) struct Publishing {
     /// The runtime record of the runtime's own text (a background result
     /// handed back), which its event carries (RFC §6.4).
     pub(crate) runtime_record: Option<String>,
+    /// Whether the message is the delivery path's own, which the framework
+    /// wrote itself (RFC §10.4): the identity step leaves it alone (RFC
+    /// §11.6). `false` for a caller's message, whatever its sender id.
+    pub(crate) own: bool,
 }
 
 /// What belongs to this call before any await, kept through its arrival.
@@ -168,6 +172,7 @@ impl<S: ConversationStore> RoomKit<S> {
             .map(|mut answers| {
                 answers.publication = publication.key;
                 answers.runtime_record = publication.runtime_record;
+                answers.framework_own = publication.own;
                 answers
             });
         let ProcessInboundOptions {

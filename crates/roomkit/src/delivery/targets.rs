@@ -223,6 +223,7 @@ impl<S: ConversationStore> RoomKit<S> {
         let publishing = Publishing {
             key,
             runtime_record: request.runtime_record.clone(),
+            own: true,
         };
         let result = self
             .publish_within(section, message, &request.room_id, publishing)
