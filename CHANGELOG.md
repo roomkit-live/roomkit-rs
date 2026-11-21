@@ -25,6 +25,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Email senders accept a case-insensitive `mailto:` prefix and preserve
+  unrecognized addresses verbatim. Phone numbers accept Python's whitespace
+  separators, including tabs and non-breaking spaces (RMK-1825).
+
 - A declared agent reports going offline when the room saw its remote worker
   come online and leave between registry polls (RMK-1796).
 

@@ -401,7 +401,7 @@ pub(crate) fn normalize(
 /// number, or reads as one written without its country code on a channel
 /// that configures none: such an address is kept as written (gap G-052).
 ///
-/// A scheme (`whatsapp:`, `tel:`) and the separators `space - . ( )` are
+/// A scheme (`whatsapp:`, `tel:`), whitespace and the separators `- . ( )` are
 /// dropped, and so is the trunk prefix written `(0)` after a country code.
 /// A number written with `+` or the international prefix `00` is
 /// international, `+` and its digits, however few. Otherwise, six digits or
@@ -418,7 +418,7 @@ pub(crate) fn normalize(
 /// reading them as international would merge two people. No E.164 number
 /// starts with `0`.
 pub(crate) fn phone_number(address: &str, country_code: Option<&CountryCode>) -> Option<String> {
-    let number = without_trunk_mark(without_scheme(address.trim()));
+    let number = without_trunk_mark(without_scheme(address.trim_matches(address_space)));
     let (international, digits) = dial(&number)?;
     if international {
         return e164(&digits);
@@ -439,12 +439,25 @@ pub(crate) fn phone_number(address: &str, country_code: Option<&CountryCode>) ->
 /// `address` lower-case, without its display name (RFC §5.7): `Alice
 /// <Alice@Example.com>` is `alice@example.com`.
 pub(crate) fn email_address(address: &str) -> String {
-    let address = address.trim();
-    let bare = address
+    let trimmed = address.trim_matches(address_space);
+    let bare = trimmed
         .strip_suffix('>')
         .and_then(|named| named.rsplit_once('<'))
-        .map_or(address, |(_, bare)| bare);
-    bare.trim().to_lowercase()
+        .filter(|(_, inner)| !inner.is_empty() && !inner.contains('>'))
+        .map_or(trimmed, |(_, inner)| inner.trim_matches(address_space));
+    let bare = bare
+        .split_once(':')
+        .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("mailto"))
+        .map_or(bare, |(_, mailbox)| mailbox);
+    if bare.split_once('@').is_some_and(|(local, domain)| {
+        !local.is_empty() && !domain.is_empty() && !domain.contains('@')
+    }) && !bare.contains(['<', '>'])
+        && !bare.contains(address_space)
+    {
+        bare.to_lowercase()
+    } else {
+        address.to_owned()
+    }
 }
 
 /// The binding metadata key a channel of `channel_type` delivers to by
@@ -512,10 +525,19 @@ fn without_scheme(address: &str) -> &str {
                     .chars()
                     .all(|character| character.is_ascii_alphabetic()) =>
         {
-            rest.trim_start()
+            rest.trim_start_matches(address_space)
         }
         Some(_) | None => address,
     }
+}
+
+// Python's str.strip() and regex whitespace include these four separators.
+fn address_space(c: char) -> bool {
+    c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c)
+}
+
+fn dial_separator(c: char) -> bool {
+    address_space(c) || matches!(c, '-' | '.' | '(' | ')')
 }
 
 /// An international number, written with `+` or `00` once its separators
@@ -525,7 +547,7 @@ fn without_scheme(address: &str) -> &str {
 fn without_trunk_mark(number: &str) -> String {
     let dialled: String = number
         .chars()
-        .filter(|character| !matches!(character, ' ' | '-' | '.' | '(' | ')'))
+        .filter(|&character| !dial_separator(character))
         .collect();
     if dialled.starts_with('+') || dialled.starts_with("00") {
         number.replacen("(0)", "", 1)
@@ -544,7 +566,7 @@ fn dial(number: &str) -> Option<(bool, String)> {
         match character {
             '0'..='9' => digits.push(character),
             '+' if digits.is_empty() && !plus => plus = true,
-            ' ' | '-' | '.' | '(' | ')' => {}
+            c if dial_separator(c) => {}
             _ => return None,
         }
     }
@@ -845,6 +867,52 @@ mod tests {
     #[test]
     fn a_plus_after_a_digit_is_no_number() {
         assert_eq!(phone_number("1+5550000001", None), None);
+    }
+
+    #[test]
+    fn email_wrapping_and_unrecognized_senders_match_python() {
+        for address in [
+            "alice@example.com",
+            "Alice@Example.COM",
+            "  alice@example.com ",
+            "Alice Martin <Alice@Example.com>",
+            "\"Martin, Alice\" <alice@example.com>",
+            "mailto:Alice@Example.com",
+            "  Alice <MAILTO:Alice@Example.COM> ",
+        ] {
+            assert_eq!(
+                normalize(address, Addressing::EmailAddress, None),
+                "alice@example.com"
+            );
+        }
+        for address in [
+            "",
+            "system",
+            "user-42",
+            "Not An Address",
+            "a@b@c",
+            "  Not An Address  ",
+            "mailto:",
+            "@example.com",
+            "Alice@",
+            "Alice <Bad Addr>",
+        ] {
+            assert_eq!(normalize(address, Addressing::EmailAddress, None), address);
+        }
+    }
+
+    #[test]
+    fn phone_separators_include_python_whitespace() {
+        for address in [
+            "+33\u{a0}6\u{a0}12 34 56 78",
+            "+33\t6 12 34 56 78",
+            "0\u{1c}033 (0)6 12 34 56 78",
+        ] {
+            assert_eq!(
+                normalize(address, Addressing::PhoneNumber, None),
+                "+33612345678"
+            );
+        }
     }
 
     #[test]
