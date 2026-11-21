@@ -200,13 +200,20 @@ async fn a_direct_injection_past_its_deadline_raises_and_writes_nothing() {
             )
             .unwrap();
         }
-        let result = bounded(kit.send_event(
-            &r,
-            &channel("sms"),
-            TextContent::new("hi"),
-            SendEventOptions::default(),
-        ))
-        .await;
+        // A competing task waits for the lock. The host itself can reenter.
+        let sender = kit.clone();
+        let result = bounded(tokio::spawn(async move {
+            sender
+                .send_event(
+                    &r,
+                    &channel("sms"),
+                    TextContent::new("hi"),
+                    SendEventOptions::default(),
+                )
+                .await
+        }))
+        .await
+        .unwrap();
         *kit.store().held_read.lock().unwrap() = None;
         if let Some(lock) = held {
             lock.release().await.unwrap();
@@ -247,9 +254,13 @@ async fn an_attach_waiting_for_the_room_lock_times_out_without_a_binding() {
     .unwrap();
     let r = room("r");
     let held = locks.locked(&r).await.unwrap();
-    let result = bounded(kit.process_inbound(said("hi"), into("r")))
-        .await
-        .unwrap();
+    let sender = kit.clone();
+    let result = bounded(tokio::spawn(async move {
+        sender.process_inbound(said("hi"), into("r")).await
+    }))
+    .await
+    .unwrap()
+    .unwrap();
     held.release().await.unwrap();
     assert_eq!(
         (result.blocked, result.reason.as_deref()),
