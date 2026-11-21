@@ -101,7 +101,9 @@ pub async fn track_host_room_lock(
     room: &RoomId,
     acquire: impl Future<Output = Result<Box<dyn RoomLock>, RoomKitError>>,
 ) -> Result<Box<dyn RoomLock>, RoomKitError> {
-    if DRIVER_ACQUIRE.try_with(|()| ()).is_ok() {
+    // NUL keys belong to other lock namespaces (such as delivery claims).
+    // A raw guard on one cannot grant access to a room (RFC §13.5).
+    if room.as_str().contains('\0') || DRIVER_ACQUIRE.try_with(|()| ()).is_ok() {
         return acquire.await;
     }
     if lease(manager, room).is_some() {
