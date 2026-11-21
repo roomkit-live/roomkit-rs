@@ -467,3 +467,22 @@ fn an_executor_inventory_needs_no_channel_definitions() {
         assert!(problems.is_empty(), "{problems:?}");
     }
 }
+
+#[test]
+fn pausing_a_silent_executor_is_refused_before_another_peer_can_advertise() {
+    if !crate::backend_available() {
+        return;
+    }
+    let scenario = serde_json::json!({
+        "id": "executors/silent-pause",
+        "setup": { "executors": [{"id":"mute", "hosts":["agent"], "answers":false}] },
+        "steps": [
+            {"call":"executor.pause","executor":"mute","expect":{"error":"invalid_argument"}},
+            {"call":"executor.resume","executor":"mute","expect":{"error":"invalid_argument"}},
+            {"call":"executor.close","executor":"mute"}
+        ]
+    });
+    if let Some(problems) = run(&scenario, crate::scenarios::ONE_THREAD.build) {
+        assert!(problems.is_empty(), "{problems:?}");
+    }
+}
