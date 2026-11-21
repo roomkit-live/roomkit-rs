@@ -9,20 +9,6 @@ use serde_json::Value;
 use crate::junit::{self, Case, Outcome};
 use crate::{harness, shape};
 
-/// The calls a host makes under a room lock it holds outside any pass wait
-/// for that lock (RMK-1828, RFC §9.5.1 Reentrance, §13.5), whatever the
-/// store: these scenarios run and must fail until the kit nests them.
-pub(crate) const HOST_LOCK_FAILURES: &[(&str, &str)] = &[
-    (
-        "reentrancy/a-call-under-a-lock-the-host-holds-commits-what-its-hooks-inject-once-the-host-released-it",
-        "RMK-1828: a call under a lock the host holds waits for that lock (§9.5.1 Reentrance)",
-    ),
-    (
-        "reentrancy/each-call-under-a-lock-the-host-holds-draws-on-a-budget-of-its-own",
-        "RMK-1828: a call under a lock the host holds waits for that lock (§9.5.1 Reentrance)",
-    ),
-];
-
 /// The scenarios this implementation fails on every store, beside each
 /// runner's own known failures: a turn's `ON_TOOL_CALL` hooks on the kit's
 /// own executor read the context the turn started with, never the room

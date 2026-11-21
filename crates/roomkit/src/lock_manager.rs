@@ -147,11 +147,11 @@ impl fmt::Debug for InMemoryLockManager {
 
 impl RoomLockManager for InMemoryLockManager {
     fn locked<'a>(&'a self, room_id: &'a RoomId) -> LockFuture<'a, Box<dyn RoomLock>> {
-        Box::pin(async move {
+        Box::pin(crate::track_host_room_lock(self, room_id, async move {
             let lock: Box<dyn RoomLock> =
                 Box::new(MemoryLock(self.rooms.lock_owned(room_id).await));
             Ok(lock)
-        })
+        }))
     }
 }
 

@@ -692,7 +692,7 @@ where
 {
     // Each carrier wraps the next. Keep large delivery futures out of
     // their initial states, especially when a nested scope spawns work.
-    let future = Box::pin(future);
+    let future = crate::host_locks::keep(Box::pin(future));
     // The tool call a handler runs within rides along, as Python's
     // `create_task` copies its `ContextVar` (RFC §21.4).
     let future = crate::tool_call_scope::within_current_tool_call(future);

@@ -69,11 +69,14 @@ mod gaps;
 mod history;
 mod hooks;
 mod host;
+mod host_locks;
 pub mod human_input;
 pub mod identity;
 mod inbound;
 mod kit;
 mod lock_manager;
+#[doc(hidden)]
+pub use host_locks::track_host_room_lock;
 mod locks;
 mod media;
 pub mod orchestration;

@@ -342,7 +342,10 @@ impl<'kit> Held<'kit> {
         if self.leases == Leases::Refused && context.is_admitted_to(&room_id) {
             return Hold::Refused(room_id);
         }
-        if let Some(lease) = context.lease(&room_id) {
+        if let Some(lease) = context
+            .lease(&room_id)
+            .or_else(|| crate::host_locks::lease(&**rooms.locks.manager(), &room_id))
+        {
             if self.leases == Leases::Refused {
                 return Hold::Refused(room_id);
             }

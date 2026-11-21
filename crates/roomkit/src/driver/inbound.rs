@@ -629,6 +629,8 @@ pub(super) struct Caller {
     /// Whether the call returns at its decision whatever its context: its
     /// delivery deferred (RFC §10.1 step 18, `defer_delivery`).
     defer: bool,
+    /// A host holds the lock until after this call returns.
+    host_lease: Option<Lease>,
     /// Whether the call is decided (`Step::decided`).
     decided: bool,
     /// Whether the run saw that its caller stopped waiting.
@@ -792,6 +794,7 @@ impl Caller {
             deadline: crate::deadline::CallDeadline::default(),
             answer: Some(answer),
             defer,
+            host_lease: None,
             decided: false,
             gone: false,
             departure: Departure::default(),
@@ -886,7 +889,8 @@ impl Caller {
         if let Ok(result) = &decided.result {
             self.record.decide(result);
         }
-        let detaches = self.defer
+        let detaches = self.host_lease.as_ref().is_some_and(Lease::is_live)
+            || self.defer
             || decided
                 .room_id
                 .as_ref()
@@ -1141,7 +1145,15 @@ async fn run_leased<S: ConversationStore>(
         return Ran::ended(Err(error));
     }
     let (inbound, deadline) = inbound;
-    let (inbound, context, hand) = placed(inbound, room_id, ExecutionContext::current(), leases);
+    let host_lease =
+        room_id.and_then(|room| crate::host_locks::lease(&**inner.locks.manager(), room));
+    let (inbound, context, hand) = placed(
+        inbound,
+        room_id,
+        ExecutionContext::current(),
+        leases,
+        host_lease.clone(),
+    );
     // Nested on the lease of a run that did not adopt it, the call's later
     // sections are granted the lock while that lease lives, as a separate
     // operation's are (RFC §13.5).
@@ -1155,6 +1167,7 @@ async fn run_leased<S: ConversationStore>(
     let kit = Arc::clone(inner);
     let mut caller = Caller::new(answer, defer, Arc::clone(&record), kit.telemetry.clone());
     caller.hand = hand;
+    caller.host_lease = host_lease;
     caller.deadline = deadline;
     // The key names the delivery until the run is over, or until the call's
     // caller is answered before the entries it adopted.
@@ -1344,12 +1357,16 @@ fn placed(
     room_id: Option<&RoomId>,
     context: ExecutionContext,
     leases: Leases,
+    host_lease: Option<Lease>,
 ) -> (Inbound, ExecutionContext, Option<Under>) {
     let hand = room_id
         .filter(|room_id| context.hands(room_id))
         .and_then(|_| context.take_hand())
         .map(|(room_id, guard)| Under::Hand(room_id, guard));
-    let Some(under) = hand.or_else(|| declined_under(room_id, &context, leases)) else {
+    let Some(under) = hand
+        .or_else(|| declined_under(room_id, &context, leases))
+        .or_else(|| host_lease.map(Under::Lease))
+    else {
         return (charged(inbound, room_id, &context), context, None);
     };
     let room_id = under.room_id().clone();
