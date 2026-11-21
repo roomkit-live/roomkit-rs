@@ -2,6 +2,9 @@
 //! The Python helper also applies these special-purpose ranges and mapped
 //! IPv4 semantics on earlier patch releases.
 //! The explicit exceptions distinguish special-purpose networks from their public subranges.
+//! The shared address space and the site-local range are refused as
+//! non-public, as Python's helper refuses what `ipaddress` does not call
+//! global and what it calls site-local.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
@@ -57,6 +60,18 @@ const V6_RESERVED: &[(u128, u32)] = &[
     (0xfe00_0000_0000_0000_0000_0000_0000_0000, 9), // fe00::/9
 ];
 
+/// Shared address space (RFC 6598): carrier-grade NAT and overlay networks.
+/// `ipaddress` calls it neither private nor global.
+const V4_NON_PUBLIC: &[(u32, u32)] = &[
+    (0x6440_0000, 10), // 100.64.0.0/10
+];
+
+/// Site-local addresses (RFC 3879): deprecated, still routed inside sites,
+/// and global to `ipaddress`.
+const V6_NON_PUBLIC: &[(u128, u32)] = &[
+    (0xfec0_0000_0000_0000_0000_0000_0000_0000, 10), // fec0::/10
+];
+
 pub(super) fn check(host: &str, address: IpAddr) -> Result<(), String> {
     let reason = match address {
         IpAddr::V4(v4) => ipv4_reason(v4),
@@ -85,6 +100,8 @@ fn ipv4_reason(address: Ipv4Addr) -> Option<&'static str> {
         Some("private")
     } else if address.is_multicast() {
         Some("multicast")
+    } else if within(V4_NON_PUBLIC) {
+        Some("non-public")
     } else {
         None
     }
@@ -104,6 +121,8 @@ fn ipv6_reason(address: Ipv6Addr) -> Option<&'static str> {
         Some("reserved")
     } else if address.is_multicast() {
         Some("multicast")
+    } else if within(V6_NON_PUBLIC) {
+        Some("non-public")
     } else {
         None
     }
@@ -133,6 +152,38 @@ mod tests {
                 check("service.example", literal.parse().unwrap()).is_ok(),
                 public,
                 "{literal}"
+            );
+        }
+    }
+
+    // Python: tests/test_providers/test_public_url.py::
+    // test_an_address_that_is_not_of_the_public_internet_is_refused.
+    #[test]
+    fn an_address_that_is_not_of_the_public_internet_is_refused() {
+        for (literal, public) in [
+            ("100.64.0.0", false),
+            ("100.64.0.1", false),
+            ("100.100.100.200", false),
+            ("100.127.255.255", false),
+            ("::ffff:100.64.0.1", false),
+            ("100.63.255.255", true),
+            ("100.128.0.0", true),
+            ("fec0::1", false),
+            ("feff:ffff::1", false),
+            ("fe7f::1", false),
+            ("ff00::1", false),
+        ] {
+            assert_eq!(
+                check("service.example", literal.parse().unwrap()).is_ok(),
+                public,
+                "{literal}"
+            );
+        }
+        for literal in ["100.64.0.1", "100.100.100.200", "fec0::1"] {
+            let refusal = check("service.example", literal.parse().unwrap()).unwrap_err();
+            assert_eq!(
+                refusal,
+                format!("URL host \"service.example\" resolves to non-public address {literal}")
             );
         }
     }

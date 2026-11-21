@@ -25,6 +25,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `validate_public_url` refuses an address of the shared address space
+  (`100.64.0.0/10`, RFC 6598: carrier-grade NAT and overlay networks) and a
+  site-local IPv6 address (`fec0::/10`), written or resolved, as
+  `non-public`, as in Python (RMK-1876). It refused loopback, private,
+  reserved and multicast addresses and let these through:
+  `https://100.64.0.1/` was accepted.
+
 - A `deliver` is no longer put to the identity resolver, as in Python (RFC
   §11.6, RMK-1874). The framework's own message was resolved like a
   stranger's: with an `ON_IDENTITY_UNKNOWN` or `ON_IDENTITY_AMBIGUOUS` hook

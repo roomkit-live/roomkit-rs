@@ -14,6 +14,26 @@ fn a_host_can_check_an_address_without_rewriting_it() {
     assert!(validate_public_url("https://127.0.0.1", &offline).is_err());
 }
 
+// Python: tests/test_providers/test_public_url.py::
+// test_an_address_that_is_not_of_the_public_internet_is_refused.
+#[test]
+fn a_host_off_the_public_internet_is_refused() {
+    let offline = ValidatePublicUrlOptions {
+        resolve_dns: false,
+        ..Default::default()
+    };
+    for url in [
+        "https://100.64.0.1/",
+        "https://100.100.100.200/latest",
+        "https://[fec0::1]/",
+    ] {
+        let refusal = validate_public_url(url, &offline).unwrap_err();
+        assert!(refusal.contains("non-public address"), "{url}: {refusal}");
+    }
+    assert!(validate_public_url("https://100.63.255.255/", &offline).is_ok());
+    assert!(validate_public_url("https://100.128.0.0/", &offline).is_ok());
+}
+
 #[test]
 fn callers_can_set_the_schemes_and_the_default_checks_dns() {
     let defaults = ValidatePublicUrlOptions::default();
