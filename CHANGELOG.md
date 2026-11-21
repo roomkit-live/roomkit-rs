@@ -71,6 +71,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The rows of a streamed answer take the thread parent of the message they answer, rooted as each row commits, as in Python: they were posted at the top level (RFC §10.1 step 8).
 - An edit or a delete whose target the store no longer holds at its commit fails whole with `RoomKitError::EventNotFound`, as in Python: it failed with `RoomKitError::Store` (RFC §10.3, §14.3).
 
+### Security
+
+- `Skill::read_reference`, `LoadedSkill::read_reference` and the local
+  skills of `SkillRegistry::read_file` read a reference through the handle
+  their check opened, as the model's reader and the loading of `SKILL.md`
+  already did, where they read the path again by its name: someone able to
+  write into the skill could swap the file for a link out between the two
+  and have a file outside the skill read (RFC §24.6, §17.8, RMK-1008). A
+  file that changed while it was read, or whose place `/proc/self/fd`
+  cannot give on Linux, is refused as a `SkillFileError::Path`.
+
 ## [0.2.0] — 2026-11-18
 
 The second release of roomkit-rs brings most of the Python implementation's

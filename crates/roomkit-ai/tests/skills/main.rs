@@ -7,6 +7,8 @@
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
 mod availability;
+#[cfg(unix)]
+mod contained_reads;
 mod copy_matcher;
 mod database_frontmatter;
 mod discovery;
