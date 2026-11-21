@@ -33,7 +33,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   PENDING it was stored under a `pending-…` id, with a participant record
   for the framework's sender. The framework knows its own message by where
   it comes from, not by the sender `system`: a message a caller writes under
-  that name is resolved as before.
+  that name is resolved as before, an instruction sent through
+  `process_inbound` included. An application whose kit runs identity hooks
+  sends its own instructions with `deliver` and its `instruction` option.
 
 - A phone channel writes a number dialled with `00` and the trunk prefix
   `(0)` after its country code, `0033 (0)6 12 34 56 78`, as `+33612345678`,
