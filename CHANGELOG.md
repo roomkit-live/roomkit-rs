@@ -25,7 +25,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- A `deliver` is no longer put to the identity resolver, as in Python (RFC §11.6, RMK-1874). The framework's own message was resolved like a stranger's: with an `ON_IDENTITY_UNKNOWN` or `ON_IDENTITY_AMBIGUOUS` hook that challenges such senders, the host's own delivery was challenged and blocked, and the agent it addressed never ran; under a resolver answering PENDING it was stored under a `pending-…` id, with a participant record for the framework's sender. The framework knows its own message by where it comes from, not by the sender `system`: a message a caller writes under that name is resolved as before.
+- A `deliver` is no longer put to the identity resolver, as in Python (RFC
+  §11.6, RMK-1874). The framework's own message was resolved like a
+  stranger's: with an `ON_IDENTITY_UNKNOWN` or `ON_IDENTITY_AMBIGUOUS` hook
+  that challenges such senders, the host's own delivery was challenged and
+  blocked, and the agent it addressed never ran; under a resolver answering
+  PENDING it was stored under a `pending-…` id, with a participant record
+  for the framework's sender. The framework knows its own message by where
+  it comes from, not by the sender `system`: a message a caller writes under
+  that name is resolved as before.
+
 - A phone channel writes a number dialled with `00` and the trunk prefix
   `(0)` after its country code, `0033 (0)6 12 34 56 78`, as `+33612345678`,
   and an international number of six digits or fewer, `+12 34 56`, as

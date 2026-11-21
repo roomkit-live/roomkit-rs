@@ -687,9 +687,13 @@ impl Arrival {
             Ok(arrived) => arrived,
             Err(stopped) => return Progress::Done(Err(stopped)),
         };
-        let wanted = !self.framework_own
-            && identity::wanted(cx.config, &self.channel, &arrived.event, &arrived.context);
-        if !wanted {
+        if self.framework_own {
+            // The framework's own message is no sender's: it is neither put
+            // to the resolver nor sent under a record its sender's name
+            // once got (RFC §11.6 case 3, RMK-1874).
+            return self.verify(cx, arrived, None);
+        }
+        if !identity::wanted(cx.config, &self.channel, &arrived.event, &arrived.context) {
             identity::as_the_record_named(
                 cx.config,
                 &self.channel,
