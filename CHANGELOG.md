@@ -22,6 +22,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   argument of another type, joined by `; `, several of a kind in one reason
   (`missing required arguments 'title', 'steps'`). A call with one argument
   that does not fit reads as before (RFC §21.1, RMK-1848).
+- **BREAKING — a local skill's frontmatter value written as a plain YAML
+  scalar is kept as Python keeps it**, the text Python's `str()` writes of
+  the value YAML 1.1 types it to, where it was kept as written (RFC §24.1,
+  RMK-1579): `true`, `yes` or `on` as `True`, `0x10` as `16`, `012` as
+  `10`, `1.` as `1.0`, `3.10` as `3.1`, a time as Python writes it, in
+  `extra_metadata` as in the four fields `SkillMetadata` reads, list items
+  too. A quoted value, a block scalar, and every value of a frontmatter
+  Python reads line by line (one YAML does not read, such as `Use when:
+  asked` or a leading glob) keep their text. Migration: quote a value
+  whose text matters (`version: "3.10"`).
 
 ### Fixed
 
@@ -70,6 +80,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A room a first message opens takes the kit's default strategy before its `ON_ROOM_CREATED` hooks, whose context holds the agents it attached, as in Python (RFC §9.2, §10.1 step 2, §19.7). A set-up that fails fails the message, with a store error where Python raises the set-up's own (RMK-1811).
 - The rows of a streamed answer take the thread parent of the message they answer, rooted as each row commits, as in Python: they were posted at the top level (RFC §10.1 step 8).
 - An edit or a delete whose target the store no longer holds at its commit fails whole with `RoomKitError::EventNotFound`, as in Python: it failed with `RoomKitError::Store` (RFC §10.3, §14.3).
+
+- A local skill whose `SKILL.md` declares one of the Agent Skills
+  invocation keys RoomKit does not read (`disable-model-invocation`,
+  `user-invocable`, `context`, `agent`) is discovered, the key kept in
+  `extra_metadata`, where discovery refused it, as in Python (RFC §24.2,
+  RMK-1579).
 
 ### Security
 

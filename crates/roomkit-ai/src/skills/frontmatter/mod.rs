@@ -10,7 +10,10 @@
 //! key's line, or `- item` lines), its items joined by commas. It reads
 //! the other keys' values the same way, as Python's `extra_metadata`
 //! keeps them, and leaves out one it cannot read whole (a nested map, say),
-//! the skill read all the same. It refuses:
+//! the skill read all the same. A plain scalar of those fields and keys is
+//! kept as Python writes the value YAML 1.1 types it to (`true` as `True`,
+//! `0x10` as `16`), unless Python reads the frontmatter line by line
+//! (`typing`). It refuses:
 //!
 //! - a frontmatter past 65,536 characters, or holding more than 64
 //!   brackets and braces open at once (§24.1);
@@ -27,6 +30,7 @@ mod fallback;
 mod gates;
 mod output;
 mod scalars;
+mod typing;
 
 #[cfg(test)]
 mod differential;
@@ -37,9 +41,10 @@ use output::Output;
 use roomkit::model::Metadata;
 
 use self::scalars::{
-    BlockHeader, Item, NULLS, block_header, block_text, flow_list, list_item, not_a_plain_text,
-    quoted_whole, without_comment,
+    BlockHeader, Item, block_header, block_text, flow_list_with, not_a_plain_text, quoted_whole,
+    without_comment,
 };
+use self::typing::Typing;
 
 /// The most characters a frontmatter takes (RFC §24.1).
 pub(crate) const FRONTMATTER_MAX: usize = 64 * 1024;
@@ -122,7 +127,14 @@ pub(crate) fn split(content: &str) -> Result<(&str, &str), String> {
 ///
 /// Says why the frontmatter cannot be read whole (see the module).
 pub(crate) fn read(text: &str) -> Result<Fields, String> {
-    let mut fields = read_into::<Fields>(text)?;
+    // Python reads a frontmatter as YAML, its plain scalars typed, unless
+    // YAML does not read it: then line by line, each value as written.
+    let typed = read_with::<Fields>(text, !fallback::needed(text))?;
+    let mut fields = if typed.typing.not_yaml {
+        read_with::<Fields>(text, false)?.fields
+    } else {
+        typed.fields
+    };
     if let Some(value) = &fields.requires {
         let text = match value {
             SkillToolNames::Text(text) => text.clone(),
@@ -147,7 +159,7 @@ pub(crate) fn read(text: &str) -> Result<Fields, String> {
 pub fn parse_frontmatter(content: &str) -> Result<(Metadata, String), SkillError> {
     let invalid = |message| SkillError::Frontmatter { message };
     let (text, body) = split(content).map_err(invalid)?;
-    let mut fields = read_into::<Metadata>(text).map_err(invalid)?;
+    let mut fields = read_with::<Metadata>(text, false).map_err(invalid)?.fields;
     if fallback::needed(text) {
         fields = fallback::read(text).map_err(invalid)?;
     } else {
@@ -156,7 +168,10 @@ pub fn parse_frontmatter(content: &str) -> Result<(Metadata, String), SkillError
     Ok((fields, body.to_owned()))
 }
 
-fn read_into<D: Output>(text: &str) -> Result<D, String> {
+/// The reader once it has read `text`, a frontmatter, its plain scalars
+/// typed as Python's YAML reading types them when `typed` (the registry's
+/// reading alone).
+fn read_with<D: Output>(text: &str, typed: bool) -> Result<Reader<D>, String> {
     if text.chars().count() > FRONTMATTER_MAX {
         return Err(format!(
             "the frontmatter is past {FRONTMATTER_MAX} characters"
@@ -172,11 +187,12 @@ fn read_into<D: Output>(text: &str) -> Result<D, String> {
         ));
     }
     let mut reader = Reader::<D>::default();
+    reader.typing.typed = typed && D::REGISTRY;
     for (number, line) in text.lines().enumerate() {
         reader.line(number + 1, line)?;
     }
     reader.continued(|reader| reader.finish(true))?;
-    Ok(reader.fields)
+    Ok(reader)
 }
 
 /// The most brackets and braces `text` holds open at once, quotes not
@@ -272,6 +288,8 @@ struct Reader<D> {
     /// The other keys, each field past [`FIELDS`] naming its own:
     /// `extra[field - FIELDS.len()]`.
     extra: Vec<String>,
+    /// How a plain scalar is read.
+    typing: Typing,
 }
 
 impl<D: Output> Reader<D> {
@@ -365,7 +383,8 @@ impl<D: Output> Reader<D> {
     /// A `- item` line, under a key alone on its line.
     fn item(&mut self, line: &str) -> Result<(), String> {
         let indent = line.len() - line.trim_start().len();
-        match &mut self.open {
+        let Self { open, typing, .. } = self;
+        match open {
             Open::Skipped => Ok(()),
             Open::Gates(gates) => gates.line(line),
             Open::Items {
@@ -379,7 +398,7 @@ impl<D: Output> Reader<D> {
                 }
                 *first = Some(indent);
                 let text = line.trim_start().get(1..).unwrap_or_default().trim();
-                match list_item(text) {
+                match typing.item(text) {
                     Item::Text(item) => items.push(item),
                     Item::Nothing => {}
                     Item::Unread => return Err(unread(*field)),
@@ -409,16 +428,6 @@ impl<D: Output> Reader<D> {
             self.open = Open::Gates(Gates::read(key, value)?);
             return Ok(());
         }
-        if D::REGISTRY
-            && matches!(
-                key,
-                "disable-model-invocation" | "user-invocable" | "context" | "agent"
-            )
-        {
-            return Err(format!(
-                "the frontmatter declares unsupported invocation policy: {key}"
-            ));
-        }
         if value.starts_with(['&', '!']) {
             return Err(format!(
                 "the frontmatter's {key} holds an anchor or a tag, which a line-by-line \
@@ -428,13 +437,13 @@ impl<D: Output> Reader<D> {
         let Some(field) = FIELDS.iter().position(|field| *field == key) else {
             let field = FIELDS.len() + self.extra.len();
             self.extra.push(key.to_owned());
-            self.open = match open_value(field, value) {
+            self.open = match open_value(field, value, &mut self.typing) {
                 Err(_) if D::REGISTRY => Open::Skipped,
                 result => result?,
             };
             return Ok(());
         };
-        self.open = open_value(field, value)?;
+        self.open = open_value(field, value, &mut self.typing)?;
         Ok(())
     }
 
@@ -453,10 +462,9 @@ impl<D: Output> Reader<D> {
                 items,
                 indent,
             } => (field, indent.map(|_| SkillToolNames::List(items))),
-            Open::Plain { field, text, .. } => (
-                field,
-                (!NULLS.contains(&text.as_str())).then_some(SkillToolNames::Text(text)),
-            ),
+            Open::Plain { field, text, .. } => {
+                (field, self.typing.plain(text).map(SkillToolNames::Text))
+            }
             Open::Block {
                 field,
                 header,
@@ -517,8 +525,9 @@ fn key_and_value(line: &str) -> Option<(&str, &str)> {
     (starts_as_a_word && a_word).then_some((key, value))
 }
 
-/// The value a field's key line opens, from what follows its colon.
-fn open_value(field: usize, value: &str) -> Result<Open, String> {
+/// The value a field's key line opens, from what follows its colon, its
+/// plain list items read as `typing` reads them.
+fn open_value(field: usize, value: &str, typing: &mut Typing) -> Result<Open, String> {
     let refused = || unread(field);
     let plain = without_comment(value).trim();
     if plain.is_empty() {
@@ -542,7 +551,7 @@ fn open_value(field: usize, value: &str) -> Result<Open, String> {
             .ok_or_else(refused);
     }
     if value.starts_with('[') {
-        let items = flow_list(plain).ok_or_else(refused)?;
+        let items = flow_list_with(plain, |item| typing.item(item)).ok_or_else(refused)?;
         return Ok(Open::Ended {
             field,
             value: Some(SkillToolNames::List(items)),

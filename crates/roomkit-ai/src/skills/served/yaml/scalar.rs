@@ -94,6 +94,46 @@ fn invalid<T>() -> Result<T, String> {
     Err("the frontmatter is not YAML".to_owned())
 }
 
+/// A plain scalar of a local skill's frontmatter as Python's registry keeps
+/// it: `str()` of the value `SafeLoader` resolves it to (YAML 1.1).
+#[derive(Debug, PartialEq, Eq)]
+pub(in crate::skills) enum PythonText {
+    /// A null, which leaves the key out.
+    Null,
+    /// What Python writes of the value: `True`, `16`, `1.0`, `inf`, a
+    /// date or a time as its `str()`, a text as itself.
+    Text(String),
+    /// A scalar `SafeLoader` constructs no value from (`=`, `<<`, an
+    /// impossible date, an integer past 64 bits here): Python then reads
+    /// the whole frontmatter line by line, each value as written.
+    NotYaml,
+}
+
+/// `plain`, a plain scalar whole (no quotes, no comment), as Python's
+/// registry keeps it.
+pub(in crate::skills) fn python_text(plain: &str) -> PythonText {
+    let text = match implicit(plain).as_str() {
+        "null" => return PythonText::Null,
+        "bool" => Some(
+            if matches!(
+                plain,
+                "yes" | "Yes" | "YES" | "true" | "True" | "TRUE" | "on" | "On" | "ON"
+            ) {
+                "True"
+            } else {
+                "False"
+            }
+            .to_owned(),
+        ),
+        "int" => integer(plain).map(|number| number.to_string()),
+        "float" => float(plain).map(roomkit_core::model::python_float),
+        "timestamp" => timestamp::read(plain),
+        "merge" | "value" => None,
+        _ => Some(plain.to_owned()),
+    };
+    text.map_or(PythonText::NotYaml, PythonText::Text)
+}
+
 fn implicit(text: &str) -> String {
     match text {
         "" | "~" | "null" | "Null" | "NULL" => "null",

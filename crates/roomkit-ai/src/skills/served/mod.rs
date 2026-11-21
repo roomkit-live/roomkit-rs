@@ -28,4 +28,6 @@ pub const MAX_TOTAL_SIZE: u64 = 16 * 1024 * 1024;
 pub use origin::{AddMcpServerOptions, ApproveExecution, ServedOrigin, SkillExecutionRequest};
 pub use skill::{LoadedSkill, McpSkill, McpSkillOptions};
 
+pub(super) use yaml::{PythonText, python_text};
+
 pub use yaml::verify_frontmatter;

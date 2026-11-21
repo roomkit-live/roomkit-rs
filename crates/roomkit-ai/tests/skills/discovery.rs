@@ -506,55 +506,118 @@ fn a_copy_limits_availability_without_rereading_or_mutating_the_source() {
     );
 }
 
-/// A key of the Agent Skills format that RoomKit does not read, Claude
-/// Code's `allowed-tools` (hyphenated, unlike the `allowed_tools` that
-/// gates), loads the skill and is kept as written (RFC §24.2).
+/// A key of the Agent Skills format that RoomKit does not read, such as
+/// Claude Code's `allowed-tools` (hyphenated, unlike the `allowed_tools`
+/// that gates) or its invocation keys, loads the skill and is kept as
+/// written (RFC §24.2, RMK-1579).
 // Python: tests/test_skills.py::TestParseSkillMetadata::test_an_agent_skills_key_is_kept_as_extra_metadata
 #[test]
 fn an_agent_skills_key_is_kept_as_extra_metadata() {
-    let root = TempDir::new();
-    root.skill_with(
-        "skills",
-        "agent-skill",
-        &skill_md(
-            "agent-skill",
-            "Has a foreign key",
-            "allowed-tools: Bash(git:*) Read\n",
-        ),
-    );
-    let registry = SkillRegistry::default();
-    let found = registry
-        .discover(&[root.path().join("skills")], DiscoverOptions::default())
-        .unwrap();
-    assert_eq!(found, 1);
-    let metadata = registry.get_metadata("agent-skill").unwrap();
-    assert_eq!(
-        serde_json::Value::Object(metadata.extra_metadata.clone()),
-        json!({"allowed-tools": "Bash(git:*) Read"})
-    );
-}
-
-#[test]
-fn foreign_invocation_policies_are_not_silently_ignored() {
-    for field in [
-        "disable-model-invocation",
-        "user-invocable",
-        "context",
-        "agent",
+    for (key, value) in [
+        ("allowed-tools", "Bash(git:*) Read"),
+        ("disable-model-invocation", "\"true\""),
+        ("user-invocable", "\"false\""),
+        ("context", "fork"),
+        ("agent", "Explore"),
     ] {
         let root = TempDir::new();
         root.skill_with(
             "skills",
-            "restricted",
+            "agent-skill",
             &skill_md(
-                "restricted",
-                "A restricted skill",
-                &format!("{field}: true\n"),
+                "agent-skill",
+                "Has a foreign key",
+                &format!("{key}: {value}\n"),
             ),
         );
-        let error = SkillRegistry::default()
+        let registry = SkillRegistry::default();
+        let found = registry
             .discover(&[root.path().join("skills")], DiscoverOptions::default())
-            .unwrap_err();
-        assert!(error.to_string().contains(field));
+            .unwrap();
+        assert_eq!(found, 1, "{key}");
+        let metadata = registry.get_metadata("agent-skill").unwrap();
+        assert_eq!(
+            serde_json::Value::Object(metadata.extra_metadata.clone()),
+            json!({ key: value.trim_matches('"') })
+        );
+        assert!(metadata.gated_tool_names().is_empty(), "{key}");
     }
+}
+
+/// The metadata `lines`, frontmatter lines after a name and a description,
+/// give a skill discovered from a directory.
+fn discovered_metadata(lines: &str) -> SkillMetadata {
+    let root = TempDir::new();
+    root.skill_with(
+        "skills",
+        "typed",
+        &format!("---\nname: typed\ndescription: d\n{lines}\n---\nBody"),
+    );
+    let registry = SkillRegistry::default();
+    registry
+        .discover(&[root.path().join("skills")], DiscoverOptions::default())
+        .unwrap();
+    registry.get_metadata("typed").unwrap()
+}
+
+/// A key RoomKit does not read keeps the text Python's `str()` writes of
+/// the value YAML 1.1 types a plain scalar to, unless Python reads the
+/// frontmatter line by line, where YAML does not read it (RFC §24.1,
+/// RMK-1579).
+// Python: tests/test_skills.py::TestParseSkillMetadata::test_a_plain_scalar_is_kept_as_python_writes_its_yaml_value
+#[test]
+fn a_plain_scalar_is_kept_as_python_writes_its_yaml_value() {
+    let cases = [
+        ("flag: true", json!({"flag": "True"})),
+        ("flag: Off", json!({"flag": "False"})),
+        ("size: 0x10", json!({"size": "16"})),
+        ("size: 012", json!({"size": "10"})),
+        ("size: 1_000", json!({"size": "1000"})),
+        ("size: 1:30", json!({"size": "90"})),
+        ("ratio: 1.", json!({"ratio": "1.0"})),
+        ("ratio: 1.5e+3", json!({"ratio": "1500.0"})),
+        ("ratio: 1.5e3", json!({"ratio": "1.5e3"})),
+        ("ratio: -.inf", json!({"ratio": "-inf"})),
+        (
+            "at: 2024-01-01T10:00:00Z",
+            json!({"at": "2024-01-01 10:00:00+00:00"}),
+        ),
+        ("flag: \"true\"", json!({"flag": "true"})),
+        ("flag: y", json!({"flag": "y"})),
+        (
+            "tags: [yes, 0x10, 'no', ~]",
+            json!({"tags": "True, 16, no"}),
+        ),
+        ("tags:\n- on\n- '1.0'", json!({"tags": "True, 1.0"})),
+        // Not YAML: read line by line, every value as written.
+        (
+            "flag: true\nweird: =",
+            json!({"flag": "true", "weird": "="}),
+        ),
+        (
+            "flag: true\nnote: Use when: asked",
+            json!({"flag": "true", "note": "Use when: asked"}),
+        ),
+    ];
+    for (lines, expected) in cases {
+        let metadata = discovered_metadata(lines);
+        assert_eq!(
+            serde_json::Value::Object(metadata.extra_metadata),
+            expected,
+            "{lines:?}"
+        );
+    }
+}
+
+// Python: tests/test_skills.py::TestParseSkillMetadata::test_a_field_s_plain_scalar_is_typed_as_another_key_s
+#[test]
+fn a_field_s_plain_scalar_is_typed_as_another_key_s() {
+    let metadata = discovered_metadata("license: yes\ncompatibility: 3.10");
+    assert_eq!(
+        (
+            metadata.license.as_deref(),
+            metadata.compatibility.as_deref()
+        ),
+        (Some("True"), Some("3.1"))
+    );
 }

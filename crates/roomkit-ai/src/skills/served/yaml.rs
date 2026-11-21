@@ -3,6 +3,8 @@
 mod normalize;
 mod scalar;
 
+pub(in crate::skills) use scalar::{PythonText, python_text};
+
 use super::SkillEntry;
 use crate::SkillError;
 use saphyr_parser::{Event, Parser};

@@ -23,8 +23,9 @@ pub struct SkillMetadata {
     /// Tool-name patterns kept closed until this skill is activated (RFC §24.2).
     pub allowed_tools: Option<SkillToolNames>,
     /// The frontmatter's other keys, each with its value as text, a list's
-    /// items joined by commas; a key with no value, or one the line-by-line
-    /// reading cannot read whole, is left out.
+    /// items joined by commas, a plain scalar as Python writes the value
+    /// YAML 1.1 types it to (`true` as `True`); a key with no value, or one
+    /// the line-by-line reading cannot read whole, is left out.
     pub extra_metadata: Metadata,
 }
 
