@@ -107,6 +107,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and have a file outside the skill read (RFC §24.6, §17.8, RMK-1008). A
   file that changed while it was read, or whose place `/proc/self/fd`
   cannot give on Linux, is refused as a `SkillFileError::Path`.
+- A delegated task's `context` no longer writes how its worker's turn
+  ended, as in Python (RFC §23.3, RMK-1418): the result's metadata started
+  from the context, so a `delegate_task` call whose model put
+  `loop_end_reason`, `error_reported` or `turns` in it had a completed task
+  read as cut short, a failure read as already reported, or a turn record
+  its worker never had, on the result and on `ON_TASK_COMPLETED`. Those
+  three keys are the framework's: a context's are dropped, and the
+  framework writes its own.
 
 ## [0.2.0] — 2026-11-18
 

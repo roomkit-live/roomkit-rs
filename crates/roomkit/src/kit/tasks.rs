@@ -59,6 +59,21 @@ const LOOP_END_REASON: &str = "loop_end_reason";
 /// (RFC §23.3 step 6): Python's `error_reported`.
 const ERROR_REPORTED: &str = "error_reported";
 
+/// The keys of a task's metadata only the framework writes: how its
+/// worker's turn ended, whether its failure was reported, and the turn's
+/// record (RFC §23.3 step 6). A context that carries one, which a model
+/// writes on a `delegate_task` call, never stands for the framework's
+/// (Python's `_TASK_END_KEYS`).
+const TASK_END_KEYS: [&str; 3] = [LOOP_END_REASON, ERROR_REPORTED, TURNS_KEY];
+
+/// The task's metadata the `context` starts, without the keys only the
+/// framework writes (Python's `_context_metadata`).
+fn context_metadata(context: Option<&Metadata>) -> Metadata {
+    let mut metadata = context.cloned().unwrap_or_default();
+    metadata.retain(|key, _| !TASK_END_KEYS.contains(&key.as_str()));
+    metadata
+}
+
 #[cfg(test)]
 #[path = "tests/post_shutdown.rs"]
 mod post_shutdown;
@@ -191,7 +206,7 @@ impl TaskEnd {
         context: Option<&Metadata>,
         turns: Metadata,
     ) -> Self {
-        let mut metadata = context.cloned().unwrap_or_default();
+        let mut metadata = context_metadata(context);
         if !turns.is_empty() {
             metadata.insert(TURNS_KEY.to_owned(), Value::Object(turns));
         }
@@ -236,7 +251,7 @@ impl TaskEnd {
     /// A task cancelled from outside: no output, its worker's turn under
     /// `turns`, `cancelled`, once its run had begun.
     pub(crate) fn cancelled(context: Option<&Metadata>, began: bool, worker: &ChannelId) -> Self {
-        let mut metadata = context.cloned().unwrap_or_default();
+        let mut metadata = context_metadata(context);
         if began {
             let entry = json!({ worker.as_str(): { LOOP_END_REASON: "cancelled" } });
             metadata.insert(TURNS_KEY.to_owned(), entry);
