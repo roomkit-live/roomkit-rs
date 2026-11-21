@@ -25,6 +25,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A turn on another executor reads its channel's private history once.
+  If that read fails, the turn runs with the room conversation and an empty
+  set of private rows (RFC §10.6.5, RMK-1887).
+
 - Email senders accept a case-insensitive `mailto:` prefix and preserve
   unrecognized addresses verbatim. Phone numbers accept Python's whitespace
   separators, including tabs and non-breaking spaces (RMK-1825).

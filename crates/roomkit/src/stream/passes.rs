@@ -166,8 +166,14 @@ async fn second_pass<S: ConversationStore>(
         asked,
     } = answering;
     let window = inner.config().recent_events_limit(&context.bindings);
-    let context = crate::history::turn_context(&*inner.store, &binding, &asked, context, window);
-    let context = context.await;
+    let history = crate::history::for_turn(
+        &*inner.store,
+        &binding,
+        event,
+        context,
+        window,
+        crate::history::AsOf::Answering(&asked),
+    );
     let kit: Arc<dyn TurnKit> = Arc::new(Arc::downgrade(inner));
     let read = StreamRead {
         responder: binding.clone(),
@@ -177,7 +183,7 @@ async fn second_pass<S: ConversationStore>(
     let submitted = move |turn| delivery.map(|delivery| delivery.follows(&turn));
     match inner
         .turns
-        .run(&kit, &binding, event, context, true, submitted)
+        .run_with_history(&kit, &binding, history, true, submitted)
         .await
     {
         // Mute closes the answer unread unless read-only takes precedence (RFC §7.5).

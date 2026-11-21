@@ -35,6 +35,9 @@ pub(crate) struct AbstractOnly {
     pause_armed: std::sync::atomic::AtomicBool,
     pub(crate) room_read_reached: tokio::sync::Notify,
     pub(crate) room_read_released: tokio::sync::Notify,
+    /// Count channel tool-memory queries and optionally fail the next one.
+    pub(crate) tool_reads: std::sync::atomic::AtomicUsize,
+    pub(crate) fail_tool_read: std::sync::atomic::AtomicBool,
     pub(crate) store: InMemoryStore,
 }
 
@@ -256,6 +259,22 @@ impl ConversationStore for AbstractOnly {
         room_id: &RoomId,
         options: store::ListEventsOptions,
     ) -> Result<Vec<RoomEvent>, StoreError> {
+        if options.newest_first
+            && options.event_filter.as_ref().is_some_and(|filter| {
+                filter.source_channel_id.is_some()
+                    && filter.event_types.as_deref()
+                        == Some(&[
+                            roomkit::model::EventType::ToolCallStart,
+                            roomkit::model::EventType::ToolCallEnd,
+                        ])
+            })
+        {
+            use std::sync::atomic::Ordering;
+            self.tool_reads.fetch_add(1, Ordering::Relaxed);
+            if self.fail_tool_read.swap(false, Ordering::Relaxed) {
+                return Err(StoreError::Value("channel rows unavailable".into()));
+            }
+        }
         self.store.list_events(room_id, options).await
     }
 

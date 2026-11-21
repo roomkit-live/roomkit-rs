@@ -768,18 +768,15 @@ async fn take_turn<S: ConversationStore>(
     (context, strategy_turn): (RoomContext, bool),
     window: usize,
 ) -> Outcome {
-    let context = crate::history::turn_context(&*inner.store, &binding, &event, context, window);
-    let context = context.await;
-    run_turn(
-        inner,
-        shared,
-        effect,
-        binding,
+    let history = crate::history::for_turn(
+        &*inner.store,
+        &binding,
         event,
         context,
-        strategy_turn,
-    )
-    .await
+        window,
+        crate::history::AsOf::Trigger,
+    );
+    run_turn(inner, shared, effect, &binding, history, strategy_turn).await
 }
 
 /// The channel's own turn on an event standing in for the one asked, for
@@ -799,27 +796,32 @@ async fn answer_in_place<S: ConversationStore>(
         context,
         asked,
     } = answering;
-    let context = crate::history::turn_context(&*inner.store, &binding, &asked, context, window);
-    let context = context.await;
-    run_turn(inner, shared, effect, binding, event, context, true).await
+    let history = crate::history::for_turn(
+        &*inner.store,
+        &binding,
+        event,
+        context,
+        window,
+        crate::history::AsOf::Answering(&asked),
+    );
+    run_turn(inner, shared, effect, &binding, history, true).await
 }
 
 /// The turn of `binding`'s channel on `event` in `context`, its history
 /// read, for the call `effect`.
-async fn run_turn<S: ConversationStore>(
+async fn run_turn<S: ConversationStore, F: Future<Output = (RoomEvent, RoomContext)> + Send>(
     inner: &Arc<Inner<S>>,
     shared: &RunShared,
     effect: EffectId,
-    binding: ChannelBinding,
-    event: RoomEvent,
-    context: RoomContext,
+    binding: &ChannelBinding,
+    history: impl FnOnce(bool) -> F + Send,
     strategy_turn: bool,
 ) -> Outcome {
     let kit: Arc<dyn TurnKit> = Arc::new(Arc::downgrade(inner));
     let cut = |turn| shared.turn_submitted(effect, turn);
     let answered = inner
         .turns
-        .run(&kit, &binding, event, context, strategy_turn, cut)
+        .run_with_history(&kit, binding, history, strategy_turn, cut)
         .await;
     let outcome = match answered {
         Ok(Answer::Output(output)) => checked_output(output),
@@ -904,13 +906,19 @@ async fn first_pass<S: ConversationStore>(
     window: usize,
 ) -> Outcome {
     let (event, binding, context) = *first;
-    let context = crate::history::turn_context(&*inner.store, &binding, &event, context, window);
-    let context = context.await;
+    let history = crate::history::for_turn(
+        &*inner.store,
+        &binding,
+        event,
+        context,
+        window,
+        crate::history::AsOf::Trigger,
+    );
     let kit: Arc<dyn TurnKit> = Arc::new(Arc::downgrade(inner));
     let cut = |turn| shared.turn_submitted(effect, turn);
     let answered = inner
         .turns
-        .run(&kit, &binding, event, context, true, cut)
+        .run_with_history(&kit, &binding, history, true, cut)
         .await;
     let output = match answered {
         Ok(Answer::Streamed(output, turn)) => {

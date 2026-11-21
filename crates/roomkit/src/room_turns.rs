@@ -8,7 +8,7 @@
 //! once the set is over, outside the room's delivery lane, it waits until
 //! the turns asked before it are over, then runs the turn on the room as it
 //! is then, less the messages committed after it was asked
-//! ([`history::turn_context_as_asked`]), and gives its place up once its
+//! ([`history::for_turn`]), and gives its place up once its
 //! rows are stored, so the next turn reads that answer. A stream never read
 //! (its delivery cancelled, its run over) gives its place up unread: the
 //! turn never starts.
@@ -204,8 +204,14 @@ impl Queued {
         let Some(context) = room_now(&*inner.store, asked, &binding).await else {
             return Started::Answered(nothing());
         };
-        let context =
-            history::turn_context_as_asked(&*inner.store, &binding, &event, context, window).await;
+        let history = history::for_turn(
+            &*inner.store,
+            &binding,
+            event,
+            context,
+            window,
+            history::AsOf::Queued,
+        );
         let kit: Arc<dyn TurnKit> = Arc::new(Arc::downgrade(inner));
         let delivery = stops.delivery.clone();
         let run = within_kit(
@@ -213,7 +219,7 @@ impl Queued {
             span,
             inner
                 .turns
-                .run(&kit, &binding, event, context, false, move |turn| {
+                .run_with_history(&kit, &binding, history, false, move |turn| {
                     delivery.map(|delivery| delivery.follows(&turn))
                 }),
         );

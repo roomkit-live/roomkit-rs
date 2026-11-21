@@ -39,6 +39,42 @@ pub(crate) const TOOL_ROWS: u64 = 60;
 /// at a time (Python's `_HISTORY_ROWS_PAGE`).
 pub(crate) const HISTORY_ROWS_PAGE: u64 = 500;
 
+/// Which event bounds the room conversation when a kit submits a turn.
+pub(crate) enum AsOf<'a> {
+    Trigger,
+    Answering(&'a RoomEvent),
+    Queued,
+}
+
+/// Load the room conversation once placement has decided how to carry the
+/// private rows. A local channel gets them inline. A distributed request
+/// reads them separately at submission, after visibility sets its boundary.
+pub(crate) fn for_turn<'a, S: ConversationStore>(
+    store: &'a S,
+    binding: &'a ChannelBinding,
+    event: RoomEvent,
+    context: RoomContext,
+    window: usize,
+    as_of: AsOf<'a>,
+) -> impl FnOnce(bool) -> crate::channel::BoxFuture<'a, (RoomEvent, RoomContext)> {
+    move |separate_rows| {
+        Box::pin(async move {
+            let asked = match as_of {
+                AsOf::Answering(asked) => asked,
+                AsOf::Trigger | AsOf::Queued => &event,
+            };
+            let context =
+                turn_context(store, binding, asked, context, window, !separate_rows).await;
+            let context = if matches!(as_of, AsOf::Queued) {
+                with_waited_answers(store, binding, &event, context, window).await
+            } else {
+                context
+            };
+            (event, context)
+        })
+    }
+}
+
 /// `context`, the one the pipeline hands `binding`'s channel for its turn
 /// on `event`, with its history read from `store`: the room's latest
 /// `window` messages before `event`, then `event` itself, as stored, when it is
@@ -51,9 +87,10 @@ pub(crate) async fn turn_context<S: ConversationStore>(
     event: &RoomEvent,
     context: RoomContext,
     window: usize,
+    inline_rows: bool,
 ) -> RoomContext {
     let read_through = context.recent_events.iter().map(|known| known.index).max();
-    match read(store, binding, event, window, read_through).await {
+    match read(store, binding, event, window, read_through, inline_rows).await {
         Ok((history, history_start_index)) => {
             let whole = RoomContext {
                 recent_events: history,
@@ -85,14 +122,13 @@ pub(crate) async fn turn_context<S: ConversationStore>(
 /// `event`: the answers of the turns before it, never a message that came
 /// after it, which waits a turn of its own. An edit or a deletion made
 /// meanwhile applies, as the store holds it now.
-pub(crate) async fn turn_context_as_asked<S: ConversationStore>(
+async fn with_waited_answers<S: ConversationStore>(
     store: &S,
     binding: &ChannelBinding,
     event: &RoomEvent,
-    context: RoomContext,
+    mut context: RoomContext,
     window: usize,
 ) -> RoomContext {
-    let mut context = turn_context(store, binding, event, context, window).await;
     let own = EventFilter {
         event_types: Some(vec![EventType::Message]),
         source_channel_id: Some(binding.channel_id.clone()),
@@ -151,6 +187,7 @@ async fn read<S: ConversationStore>(
     event: &RoomEvent,
     window: usize,
     read_through: Option<u64>,
+    inline_rows: bool,
 ) -> Result<(Vec<RoomEvent>, Option<u64>), StoreError> {
     let messages = EventFilter {
         event_types: Some(vec![EventType::Message]),
@@ -162,12 +199,14 @@ async fn read<S: ConversationStore>(
     if !matches!(event.r#type, EventType::Message | EventType::Instruction) {
         history.push(stored(store, event).await);
     }
-    let first = history
-        .iter()
-        .map(|known| known.index)
-        .chain(answered_index(event))
-        .min();
-    history.extend(private_rows(store, binding, &event.room_id, first).await?);
+    if inline_rows {
+        let first = history
+            .iter()
+            .map(|known| known.index)
+            .chain(answered_index(event))
+            .min();
+        history.extend(private_rows(store, binding, &event.room_id, first).await?);
+    }
     history.sort_by_key(|event| event.index);
     history.dedup_by(|later, earlier| later.id == earlier.id);
     Ok((history, history_start_index))
@@ -449,7 +488,7 @@ mod tests {
             let mut context = RoomContext::new(Room::new(room_id()));
             context.history_start_index = Some(999);
             context.recent_events = events.clone();
-            let read = turn_context(&store, &agent, &events[3], context, window).await;
+            let read = turn_context(&store, &agent, &events[3], context, window, true).await;
             assert_eq!(read.history_start_index, boundary);
             assert!(!read.recent_events.iter().any(|event| event.index == 1));
         }
@@ -475,7 +514,7 @@ mod tests {
         agent.category = ChannelCategory::Intelligence;
         let mut context = RoomContext::new(Room::new(room_id()));
         context.bindings.push(agent.clone());
-        let mut context = turn_context(kit.store(), &agent, &trigger, context, 3).await;
+        let mut context = turn_context(kit.store(), &agent, &trigger, context, 3, true).await;
         let original_boundary = context.history_start_index;
         let mut visible = event(4, Some("other"));
         visible.r#type = EventType::InstructionRead;
@@ -558,7 +597,7 @@ mod tests {
         let agent = binding("agent", ChannelType::AI);
         let mut context = RoomContext::new(Room::new(room_id()));
         context.bindings = vec![binding("sms", ChannelType::SMS), agent.clone()];
-        let read = turn_context(store, &agent, trigger, context, 50).await;
+        let read = turn_context(store, &agent, trigger, context, 50, true).await;
         let indexes = read.recent_events.iter().map(|event| event.index).collect();
         let messages = read
             .recent_events
@@ -636,7 +675,7 @@ mod tests {
         let agent = binding("agent", ChannelType::AI);
         let mut context = RoomContext::new(Room::new(room_id()));
         context.bindings = vec![binding("sms", ChannelType::SMS), agent.clone()];
-        let read = turn_context(&store, &agent, &trigger, context, 50).await;
+        let read = turn_context(&store, &agent, &trigger, context, 50, true).await;
         let rows: Vec<(u64, bool)> = read
             .recent_events
             .iter()
@@ -671,11 +710,11 @@ mod tests {
         let agent = binding("agent", ChannelType::AI);
         let mut context = RoomContext::new(Room::new(room_id()));
         context.bindings = vec![binding("sms", ChannelType::SMS), agent.clone()];
-        let read = turn_context(&store, &agent, &copy, context.clone(), 50).await;
+        let read = turn_context(&store, &agent, &copy, context.clone(), 50, true).await;
         assert_eq!(read.recent_events.last(), Some(&delete));
         let mut unknown = copy.clone();
         unknown.id = EventId::new("evt_unknown").unwrap();
-        let read = turn_context(&store, &agent, &unknown, context, 50).await;
+        let read = turn_context(&store, &agent, &unknown, context, 50, true).await;
         assert_eq!(read.recent_events.last(), Some(&unknown));
     }
 
@@ -691,7 +730,7 @@ mod tests {
         let mut context = RoomContext::new(Room::new(room_id()));
         context.bindings = vec![binding("sms", ChannelType::SMS), agent.clone()];
         context.recent_events = read.to_vec();
-        let read = turn_context(store, &agent, trigger, context, 50).await;
+        let read = turn_context(store, &agent, trigger, context, 50, true).await;
         read.recent_events.iter().map(|event| event.index).collect()
     }
 

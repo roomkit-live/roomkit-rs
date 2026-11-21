@@ -126,7 +126,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 
 use roomkit_core::model::{
-    ChannelBinding, ChannelId, ChannelOutput, ErrorRecord, RoomContext, RoomEvent, RoomId,
+    ChannelBinding, ChannelCategory, ChannelId, ChannelOutput, ErrorRecord, RoomContext, RoomEvent,
+    RoomId,
 };
 use roomkit_core::rules::transcript::TurnAuthor;
 use serde::Serialize;
@@ -437,44 +438,68 @@ impl Turns {
         strategy_turn: bool,
         submitted: impl FnOnce(Canceller) -> G,
     ) -> Result<Answer, TurnFailure> {
-        // The turn's tasks run in a unit of their own, within the call's
-        // run's: a close from the turn's work spares them all (RFC
-        // §12.10.4).
-        self.ready()
-            .await
-            .map_err(|e| TurnFailure::crossed(&self.error_classes().record(&e)))?;
-        let channel = kit.channel(&binding.channel_id);
-        let mut context = context;
-        let channel_rows = if self.client.is_none() && self.sends_channel_rows(channel.as_deref()) {
-            crate::history::distributed::distributed_rows(
-                kit.as_ref(),
-                binding,
-                &event,
-                &mut context,
-            )
-            .await
-        } else {
-            Vec::new()
-        };
-        let marks = Marks::current().with(Unit::new());
-        let input = submission::Input {
-            event,
-            context,
+        self.run_with_history(
+            kit,
+            binding,
+            |_| std::future::ready((event, context)),
             strategy_turn,
-            channel_rows,
-        };
-        let (mut turn, _following) = if let Some(app) = self.application_driver() {
-            marks
-                .scoped(self.start_application(app, kit, binding, input, submitted))
-                .await?
-        } else {
-            marks.sync_scope(|| self.start_turn(kit, binding, input, submitted))?
-        };
-        let (output, streams) = turn.output(self.cutting()).await?;
-        Ok(if streams {
-            Answer::Streamed(Box::new(output), turn)
-        } else {
-            Answer::Output(Box::new(output))
+            submitted,
+        )
+        .await
+    }
+
+    /// Prepare a kit-owned turn's history for its placement before submitting it.
+    pub(crate) fn run_with_history<G: Send, F: Future<Output = (RoomEvent, RoomContext)> + Send>(
+        self: &Arc<Self>,
+        kit: &Arc<dyn TurnKit>,
+        binding: &ChannelBinding,
+        prepare: impl FnOnce(bool) -> F + Send,
+        strategy_turn: bool,
+        submitted: impl FnOnce(Canceller) -> G,
+    ) -> std::pin::Pin<Box<impl Future<Output = Result<Answer, TurnFailure>>>> {
+        Box::pin(async move {
+            // The turn's tasks run in a unit of their own, within the call's
+            // run's: a close from the turn's work spares them all (RFC
+            // §12.10.4).
+            self.ready()
+                .await
+                .map_err(|e| TurnFailure::crossed(&self.error_classes().record(&e)))?;
+            let channel = kit.channel(&binding.channel_id);
+            let separate_rows = self.client.is_none()
+                && binding.category == ChannelCategory::Intelligence
+                && self.sends_channel_rows(channel.as_deref());
+            let (event, mut context) = prepare(separate_rows).await;
+            let channel_rows = if separate_rows {
+                crate::history::distributed::distributed_rows(
+                    kit.as_ref(),
+                    binding,
+                    &event,
+                    &mut context,
+                )
+                .await
+            } else {
+                Vec::new()
+            };
+            let marks = Marks::current().with(Unit::new());
+            let input = submission::Input {
+                event,
+                context,
+                strategy_turn,
+                channel_rows,
+            };
+            let (mut turn, _following) = if let Some(app) = self.application_driver() {
+                marks
+                    .scoped(self.start_application(app, kit, binding, input, submitted))
+                    .await?
+            } else {
+                marks.sync_scope(|| self.start_turn(kit, binding, input, submitted))?
+            };
+            let (output, streams) = turn.output(self.cutting()).await?;
+            Ok(if streams {
+                Answer::Streamed(Box::new(output), turn)
+            } else {
+                Answer::Output(Box::new(output))
+            })
         })
     }
 
