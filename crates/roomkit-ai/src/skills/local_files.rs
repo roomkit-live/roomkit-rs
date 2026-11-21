@@ -45,8 +45,8 @@ impl Skill {
 
     /// Reads a reference as UTF-8 with universal newlines (RFC §24.6),
     /// through the handle its check opened, never by its name again: one
-    /// swapped for a link out meanwhile is refused, not read
-    /// ([`files::open_inside`]). This direct host API has no model-tool
+    /// swapped for a link out meanwhile is refused, not read, as the
+    /// model's reader reads one. This direct host API has no model-tool
     /// byte limit.
     ///
     /// # Errors
