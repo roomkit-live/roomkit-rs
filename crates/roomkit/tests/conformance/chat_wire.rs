@@ -1,138 +1,66 @@
 //! A scripted model's `chat_dialect` (README, "Scripted agents"): each of its
-//! requests written through this implementation's Chat Completions rendering,
-//! to a local server that keeps what it is sent. The model still answers from
-//! its rounds; the rendering is read once the run is over.
+//! requests as this implementation's Chat Completions rendering writes it
+//! for the dialect. The model still answers from its rounds; the rendering
+//! is read once the run is over.
+//!
+//! The rendering is the core's (`roomkit_ai::chat_messages`), and a dialect
+//! is what its `ChatDialect` states: where a server reads a round's earlier
+//! reasoning (RFC §6.4). A vendor's provider is no part of this repository,
+//! Anthropic's native Messages rendering among them: a scenario that names
+//! `anthropic` fails here, and the runner lists it as a known failure.
 
-use roomkit_ai::{AiContext, AiProvider};
-use roomkit_openai::deepseek::{DeepSeekAiProvider, DeepSeekConfig};
-use roomkit_openai::kimi::{KimiAiProvider, KimiConfig};
-use roomkit_openai::minimax::{MiniMaxAiProvider, MiniMaxConfig};
-use roomkit_openai::{OpenAiAiProvider, OpenAiConfig};
+use roomkit_ai::{AiContext, ChatDialect, ChatDialectOptions};
 use serde_json::Value;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
 
-const ANSWER: &str = r#"{"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":""}}]}"#;
+/// The field DeepSeek, MiniMax and Kimi read a round's earlier reasoning in.
+const REASONING_CONTENT: &str = "reasoning_content";
+
+/// What the Chat Completions dialect `name` states, as the vendor's
+/// provider of RoomKit's Python implementation states it (its
+/// `ChatDialect`); `None` for a rendering that is no Chat Completions
+/// dialect.
+fn options(name: &str) -> Option<ChatDialectOptions> {
+    let reads_reasoning = ChatDialectOptions {
+        thinking_field: Some(REASONING_CONTENT.to_owned()),
+        ..ChatDialectOptions::default()
+    };
+    let options = match name {
+        // OpenAI's own rendering sends no reasoning back.
+        "openai" => ChatDialectOptions::default(),
+        // OpenAI's, told by its configuration the field the server reads;
+        // MiniMax's: the field on a round or an answer that reasoned.
+        "openai_thinking_field" | "minimax" => reads_reasoning,
+        // DeepSeek's: the field on every round that called tools, empty for
+        // one that did not reason.
+        "deepseek" => ChatDialectOptions {
+            round_thinking_required: true,
+            ..reads_reasoning
+        },
+        // Kimi's: a single space for a round that did not reason, since an
+        // empty field reads as a missing one.
+        "kimi" => ChatDialectOptions {
+            round_thinking_required: true,
+            round_thinking_placeholder: " ".to_owned(),
+            ..reads_reasoning
+        },
+        _ => return None,
+    };
+    Some(options)
+}
 
 /// What `context` is on the wire under `dialect`: the request's `messages`.
 ///
 /// # Errors
 ///
-/// A dialect this implementation does not have, or a request that fails.
-pub(crate) async fn chat_messages(dialect: &str, context: &AiContext) -> Result<Value, String> {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .map_err(|e| e.to_string())?;
-    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
-    let base_url = format!("http://127.0.0.1:{port}/v1");
-    let (answer, content_type) = if dialect == "anthropic" {
-        (
-            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"scripted\",\"usage\":{}}}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
-            "text/event-stream",
-        )
-    } else {
-        (ANSWER, "application/json")
-    };
-    let server = tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.map_err(|e| e.to_string())?;
-        let body = read_request(&mut stream).await?;
-        let head = format!(
-            "HTTP/1.1 200 OK\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{answer}",
-            answer.len()
-        );
-        stream
-            .write_all(head.as_bytes())
-            .await
-            .map_err(|e| e.to_string())?;
-        serde_json::from_slice::<Value>(&body).map_err(|e| e.to_string())
-    });
-    let failed = |error: roomkit_ai::ProviderError| error.to_string();
-    match dialect {
-        "anthropic" => {
-            let config = roomkit_anthropic::AnthropicConfig {
-                base_url: Some(base_url),
-                enable_prompt_caching: false,
-                ..roomkit_anthropic::AnthropicConfig::new("scripted", "scripted")
-            };
-            roomkit_anthropic::AnthropicAiProvider::new(config)
-                .map_err(failed)?
-                .generate(context)
-                .await
-                .map_err(failed)?;
-        }
-        "openai" => {
-            let config = OpenAiConfig {
-                base_url: Some(base_url),
-                ..OpenAiConfig::new("scripted", "scripted")
-            };
-            let provider = OpenAiAiProvider::new(config).map_err(failed)?;
-            provider.generate(context).await.map_err(failed)?;
-        }
-        "openai_thinking_field" => {
-            let config = OpenAiConfig {
-                base_url: Some(base_url),
-                thinking_field: Some("reasoning_content".to_owned()),
-                ..OpenAiConfig::new("scripted", "scripted")
-            };
-            let provider = OpenAiAiProvider::new(config).map_err(failed)?;
-            provider.generate(context).await.map_err(failed)?;
-        }
-        "deepseek" => {
-            let config = DeepSeekConfig {
-                base_url,
-                ..DeepSeekConfig::new("scripted", "scripted")
-            };
-            let provider = DeepSeekAiProvider::new(config).map_err(failed)?;
-            provider.generate(context).await.map_err(failed)?;
-        }
-        "minimax" => {
-            let config = MiniMaxConfig {
-                base_url,
-                ..MiniMaxConfig::new("scripted", "scripted")
-            };
-            let provider = MiniMaxAiProvider::new(config).map_err(failed)?;
-            provider.generate(context).await.map_err(failed)?;
-        }
-        "kimi" => {
-            let config = KimiConfig {
-                base_url,
-                ..KimiConfig::new("scripted", "scripted")
-            };
-            let provider = KimiAiProvider::new(config).map_err(failed)?;
-            provider.generate(context).await.map_err(failed)?;
-        }
-        other => {
-            server.abort();
-            return Err(format!(
-                "chat_dialect {other}: roomkit-rs has no such rendering"
-            ));
-        }
-    }
-    let mut sent = server.await.map_err(|e| e.to_string())??;
-    Ok(sent["messages"].take())
-}
-
-/// The body of the one request `stream` carries.
-async fn read_request(stream: &mut TcpStream) -> Result<Vec<u8>, String> {
-    let mut read = Vec::new();
-    let mut chunk = [0_u8; 4096];
-    loop {
-        if let Some(end) = read.windows(4).position(|window| window == b"\r\n\r\n") {
-            let head = String::from_utf8_lossy(&read[..end]).to_ascii_lowercase();
-            let length: usize = head
-                .lines()
-                .find_map(|line| line.strip_prefix("content-length:"))
-                .and_then(|length| length.trim().parse().ok())
-                .ok_or("a request with no content-length")?;
-            let body = end + 4;
-            if read.len() >= body + length {
-                return Ok(read[body..body + length].to_vec());
-            }
-        }
-        let got = stream.read(&mut chunk).await.map_err(|e| e.to_string())?;
-        if got == 0 {
-            return Err("a request cut short".to_owned());
-        }
-        read.extend_from_slice(&chunk[..got]);
-    }
+/// A dialect this implementation does not have, or messages that do not
+/// render.
+pub(crate) fn chat_messages(dialect: &str, context: &AiContext) -> Result<Value, String> {
+    let no_rendering = || format!("chat_dialect {dialect}: roomkit-rs has no such rendering");
+    let stated = options(dialect).ok_or_else(no_rendering)?;
+    let stated = ChatDialect::new(stated).map_err(|error| error.to_string())?;
+    let prompt = context.system_prompt.as_deref();
+    let messages = roomkit_ai::chat_messages(&context.messages, prompt, &stated, "scripted");
+    messages
+        .map(Value::Array)
+        .map_err(|error| error.to_string())
 }

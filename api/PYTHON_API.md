@@ -118,11 +118,6 @@ the mapping and its tests. The check does not generate or update this document.
 | `roomkit::store::ConversationStore` | — | `is_process_local` |
 | `roomkit::StoreError` | — | `Unavailable`, `unavailable` |
 | `roomkit::model::ResponseMetadata` | — | `get`, `contains_key`, `len`, `is_empty`, `insert`, `pop`, `setdefault`, `update`, `clear`, `with_value`, `to_metadata` |
-| `roomkit_openai::TokenSource` | — | Whole type |
-| `roomkit_openai::TokenFuture` | — | Whole type |
-| `roomkit_openai::TokenError` | — | Whole type |
-| `roomkit_openai::OpenAiApi` | — | Whole type |
-| `roomkit_openai::OpenAiConfig` | — | `api`, `token_source`, `tool_namespace` |
 | — | `roomkit.ChannelOutput.__init__` | `response_stream` |
 | — | `roomkit.TurnHost` | `__init__` |
 | — | `roomkit.DeliveryHandle` | `__init__` |
@@ -218,7 +213,6 @@ the mapping and its tests. The check does not generate or update this document.
 | `roomkit_ai::SkillRegistry::{gated_tool_names,closed_tool_names}` | Same names | Explicit `activated` set; empty means Python's default `()` (HITL 73da84cd) |
 | `roomkit_ai::SkillToolNames` | `SkillMetadata.allowed_tools: str \| list[str] \| None` | Whole type: `Text(String)` or `List(Vec<String>)`, wrapped in `Option` (HITL ed472959) |
 | `roomkit_ai::ImageResolver` | — | Whole type |
-| `roomkit_openai::OpenAiConfig` | — | `vision` |
 | `roomkit_ai::ToolEntry` | — | Whole type |
 | `roomkit_ai::ToolResult` | — | Whole type |
 | `roomkit_ai::DynAiProvider` | — | Whole type |

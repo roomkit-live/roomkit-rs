@@ -33,6 +33,28 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a leading glob), which Python reads line by line, is read untyped as
   before. Migration: quote a value whose text matters (`version: "3.10"`).
 
+### Removed
+
+- **BREAKING — the model providers left this repository.** `roomkit-openai`
+  (with its DeepSeek, MiniMax and Kimi providers), `roomkit-anthropic` and
+  `roomkit-provider-http` are no longer crates of the engine. The providers
+  are in [roomkit-providers](https://github.com/roomkit-live/roomkit-providers),
+  built on the engine's provider contract (`roomkit_ai::AiProvider`):
+  `roomkit-providers-openai` holds `OpenAi`, `DeepSeek`, `Kimi` and `MiniMax`,
+  `roomkit-providers-anthropic` holds `Anthropic`. The engine keeps the
+  contract, `MockAiProvider`, and the Chat Completions renderer with its
+  dialects (`chat_messages`, `ChatDialect`).
+- The fourteen examples that ran an agent on a provider moved to
+  roomkit-providers (`rust-examples/`) with what they shared, the WebSocket
+  service and its browser page among them.
+- The conformance runner writes a scripted model's `chat_dialect` with the
+  engine's own renderer, for the Chat Completions dialects (`openai`,
+  `openai_thinking_field`, `deepseek`, `minimax`, `kimi`). The two shared
+  scenarios that read Anthropic's rendering
+  (`reasoning/signed-blocks-and-tool-results-replay-in-order`,
+  `reasoning/a-block-without-a-signature-is-not-replayed`) are known
+  failures here: roomkit-providers holds that rendering and tests it.
+
 ### Fixed
 
 - `ErrorClasses::record` preserves the original class, attributes and causes

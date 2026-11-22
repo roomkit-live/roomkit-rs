@@ -125,7 +125,21 @@ use crate::support::TempFile;
 
 /// Scenario id → the rule this implementation breaks on this store: the
 /// in-memory store's (crates/roomkit/tests/conformance), none beyond.
-pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[];
+pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[
+    (
+        "reasoning/a-block-without-a-signature-is-not-replayed",
+        ANTHROPIC_RENDERING,
+    ),
+    (
+        "reasoning/signed-blocks-and-tool-results-replay-in-order",
+        ANTHROPIC_RENDERING,
+    ),
+];
+
+/// Why a scenario that reads Anthropic's rendering fails here.
+const ANTHROPIC_RENDERING: &str = "§6.4: the scenario reads the request as Anthropic's Messages \
+    API carries it (`chat_dialect: anthropic`), a vendor's provider, which is no part of \
+    this repository; roomkit-providers holds it";
 
 /// A scenario that has not finished by then fails instead of hanging the
 /// suite.

@@ -23,8 +23,9 @@ effect protocol is an implementation interface, not a replacement for this API.
 ## Adapters
 
 `roomkit-ai` implements the provider-independent AI channel and tool loop.
-`roomkit-openai` and `roomkit-anthropic` implement provider protocols, sharing HTTP
-support through `roomkit-provider-http`. `roomkit-mcp` exposes MCP tools and
+The model providers implement its provider contract outside this repository, in
+[roomkit-providers](https://github.com/roomkit-live/roomkit-providers), which
+depends on these crates. `roomkit-mcp` exposes MCP tools and
 `roomkit-acp` connects external agents. SQLite and PostgreSQL adapters implement
 the storage boundaries.
 

@@ -89,7 +89,7 @@ pub struct AiChannelOptions {
     pub system_prompt: Option<String>,
     /// How freely the model samples, handed to the provider: Python's
     /// `float`, 0.7 by default. A model that takes no temperature is the
-    /// provider's to know (`OpenAiConfig::supports_custom_temperature`).
+    /// provider's to know (its configuration's `supports_custom_temperature`).
     pub temperature: f64,
     /// The most tokens a generation writes; `None` leaves it to the
     /// provider's configuration.

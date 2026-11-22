@@ -12,7 +12,9 @@ and conversation state.
 
 - Rooms, channel bindings, participant identities, event visibility and routing.
 - AI agents with streamed responses, tool calls, policies, hooks and orchestration.
-- OpenAI-compatible Chat Completions, Responses and native Anthropic Messages.
+- A provider contract the model providers implement: OpenAI-compatible Chat
+  Completions and Responses, native Anthropic Messages and others live in
+  [roomkit-providers](https://github.com/roomkit-live/roomkit-providers).
 - MCP tools over stdio or Streamable HTTP, plus an Agent Client Protocol adapter.
 - In-memory, SQLite and PostgreSQL storage, with lifecycle and cancellation handling.
 - A core without I/O, separated from the Tokio runtime and external adapters.
@@ -36,24 +38,18 @@ Install [Rust through rustup](https://rustup.rs/), then:
 git clone https://github.com/roomkit-live/roomkit-rs.git
 cd roomkit-rs
 cargo run --locked --example echo_room
-cargo run --locked --example server_agent
+cargo run --locked --example agent_chain
 ```
 
 The checkout selects its pinned Rust toolchain. Rust **1.92** is the minimum
-supported version. These default example runs use fixtures and need no model
-account or credentials.
+supported version. The examples use fixtures and need no model account or
+credentials.
 
-To run the example WebSocket service against your own OpenAI-compatible server:
-
-```sh
-OPENAI_BASE_URL=http://localhost:8000/v1 OPENAI_MODEL=your-model \
-  cargo run --locked --example server_agent -- --serve
-```
-
-Set `OPENAI_API_KEY` if the server requires authentication. The service example
-is a starting point for integration, not a production authentication policy.
-[server_agent.rs](examples/server_agent.rs) shows the complete setup;
-[web_chat.rs](examples/web_chat.rs) adds a browser interface.
+This repository holds no model provider. The examples of an agent on a real
+provider, a WebSocket service with its browser page among them, are in
+[roomkit-providers](https://github.com/roomkit-live/roomkit-providers)
+(`rust-examples/`), where they run against a local fake of the provider's wire,
+or against your own OpenAI-compatible server.
 
 ## Add it to a Rust application
 
@@ -65,9 +61,13 @@ revision for every RoomKit engine crate** so Cargo builds one set of types.
 [dependencies]
 roomkit = { git = "https://github.com/roomkit-live/roomkit-rs", rev = "FULL_COMMIT_SHA" }
 roomkit-ai = { git = "https://github.com/roomkit-live/roomkit-rs", rev = "FULL_COMMIT_SHA" }
-roomkit-openai = { git = "https://github.com/roomkit-live/roomkit-rs", rev = "FULL_COMMIT_SHA" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
+
+A model provider comes from
+[roomkit-providers](https://github.com/roomkit-live/roomkit-providers), which
+is built on these crates: pin a revision of it that names the engine revision
+you use.
 
 ### PostgreSQL driver
 
@@ -137,14 +137,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | --- | --- |
 | [`roomkit`](crates/roomkit) | Tokio runtime, rooms, channels, hooks, routing and orchestration |
 | [`roomkit-ai`](crates/roomkit-ai) | Provider-independent AI channel, tool loop, skills and policies |
-| [`roomkit-openai`](crates/roomkit-openai) | OpenAI-compatible Chat Completions and Responses providers |
-| [`roomkit-anthropic`](crates/roomkit-anthropic) | Native Anthropic Messages provider |
 | [`roomkit-mcp`](crates/roomkit-mcp) | MCP client and tools; enable `http` for remote servers |
 | [`roomkit-acp`](crates/roomkit-acp) | Agent Client Protocol adapter |
 | [`roomkit-sqlite`](crates/roomkit-sqlite) | SQLite conversation store |
 | [`roomkit-postgres`](crates/roomkit-postgres) | PostgreSQL store, locking and knowledge source |
 | [`roomkit-core`](crates/roomkit-core) | Models, rules and operations without I/O |
-| [`roomkit-provider-http`](crates/roomkit-provider-http) | Shared HTTP provider support |
 
 Applications normally depend on `roomkit` and the adapters they use.
 `roomkit-core` and the effect protocol are implementation interfaces; see
@@ -196,16 +193,12 @@ across Redis names its backend `<backend>+redis-executors` in that file
 | Example | What it demonstrates |
 | --- | --- |
 | [echo_room](examples/echo_room.rs) | A room and its channels |
-| [server_agent](examples/server_agent.rs) | A WebSocket service with an AI agent and SQLite |
-| [web_chat](examples/web_chat.rs) | A browser connected to the service |
-| [anthropic_agent](examples/anthropic_agent.rs) | Native Messages and tool discovery |
-| [mcp_tools](examples/mcp_tools.rs) | MCP tools exposed to an agent |
+| [agent_chain](examples/agent_chain.rs) | Two agents answering each other, within the chain depth |
+| [ai_router_local_or_hosted](examples/ai_router_local_or_hosted.rs) | A router choosing the model of each turn |
 | [room_lifecycle](examples/room_lifecycle.rs) | Room lifecycle and timers |
 | [telemetry](examples/telemetry.rs) | Traces and metrics |
 
-Each example checks its default scenario. Live provider calls are explicitly
-opted into and may incur provider charges. Read the example's header before
-running live mode.
+Each example checks what it shows, with no model account and no network.
 
 Build the API documentation locally:
 

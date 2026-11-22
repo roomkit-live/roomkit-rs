@@ -1607,13 +1607,13 @@ pub(crate) fn requests(model: &ScriptedProvider) -> Vec<Value> {
 
 /// Each request `model` received with what `dialect` writes of it on the wire
 /// beside it (README, `models`, `chat_messages`).
-pub(crate) async fn requests_on_the_wire(
+pub(crate) fn requests_on_the_wire(
     model: &ScriptedProvider,
     dialect: &str,
 ) -> Result<Vec<Value>, String> {
     let mut requests = requests(model);
     for (read, context) in requests.iter_mut().zip(model.requests()) {
-        read["chat_messages"] = crate::chat_wire::chat_messages(dialect, &context).await?;
+        read["chat_messages"] = crate::chat_wire::chat_messages(dialect, &context)?;
     }
     Ok(requests)
 }

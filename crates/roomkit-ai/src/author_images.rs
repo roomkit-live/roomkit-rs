@@ -800,7 +800,7 @@ mod tests {
 
     // Python: tests/test_author_images.py::TestRefusal::test_a_refusal_before_any_request_refuses_nothing
     // (a provider's own refusals, flagged where each is raised: the
-    // schema's below, the model's and a tool name's in roomkit-openai) and
+    // schema's below, the model's and a tool name's in a vendor's provider) and
     // test_a_refusal_raised_from_one_before_any_request_is_its_own (an
     // error raised from one is read as itself)
     #[test]

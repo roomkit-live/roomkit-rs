@@ -2102,10 +2102,8 @@ dependencies = [
  "redis",
  "roomkit-acp",
  "roomkit-ai",
- "roomkit-anthropic",
  "roomkit-core",
  "roomkit-mcp",
- "roomkit-openai",
  "scrypt",
  "serde",
  "serde_json",
@@ -2156,22 +2154,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "roomkit-anthropic"
-version = "0.2.0"
-dependencies = [
- "futures-core",
- "jiff",
- "pretty_assertions",
- "reqwest",
- "roomkit",
- "roomkit-ai",
- "roomkit-core",
- "roomkit-provider-http",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "roomkit-core"
 version = "0.2.0"
 dependencies = [
@@ -2190,19 +2172,13 @@ dependencies = [
 name = "roomkit-examples"
 version = "0.2.0"
 dependencies = [
- "axum",
  "futures-util",
  "roomkit",
  "roomkit-acp",
  "roomkit-ai",
- "roomkit-anthropic",
- "roomkit-mcp",
- "roomkit-openai",
- "roomkit-sqlite",
  "serde",
  "serde_json",
  "tokio",
- "tokio-tungstenite",
 ]
 
 [[package]]
@@ -2234,27 +2210,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "roomkit-openai"
-version = "0.2.0"
-dependencies = [
- "futures-core",
- "jiff",
- "pretty_assertions",
- "reqwest",
- "roomkit",
- "roomkit-ai",
- "roomkit-core",
- "roomkit-provider-http",
- "rustls",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tracing",
- "webpki-roots",
-]
-
-[[package]]
 name = "roomkit-postgres"
 version = "0.2.0"
 dependencies = [
@@ -2270,10 +2225,8 @@ dependencies = [
  "roomkit",
  "roomkit-acp",
  "roomkit-ai",
- "roomkit-anthropic",
  "roomkit-core",
  "roomkit-mcp",
- "roomkit-openai",
  "rustls",
  "serde",
  "serde_json",
@@ -2288,17 +2241,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "roomkit-provider-http"
-version = "0.2.0"
-dependencies = [
- "pretty_assertions",
- "reqwest",
- "rustls",
- "thiserror",
- "webpki-roots",
-]
-
-[[package]]
 name = "roomkit-sqlite"
 version = "0.2.0"
 dependencies = [
@@ -2310,10 +2252,8 @@ dependencies = [
  "roomkit",
  "roomkit-acp",
  "roomkit-ai",
- "roomkit-anthropic",
  "roomkit-core",
  "roomkit-mcp",
- "roomkit-openai",
  "rusqlite",
  "serde",
  "serde_json",

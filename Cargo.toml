@@ -21,9 +21,6 @@ roomkit-acp = { path = "crates/roomkit-acp" }
 roomkit-ai = { path = "crates/roomkit-ai" }
 roomkit-core = { path = "crates/roomkit-core" }
 roomkit-mcp = { path = "crates/roomkit-mcp" }
-roomkit-openai = { path = "crates/roomkit-openai" }
-roomkit-anthropic = { path = "crates/roomkit-anthropic" }
-roomkit-provider-http = { path = "crates/roomkit-provider-http" }
 roomkit-postgres = { path = "crates/roomkit-postgres" }
 roomkit-sqlite = { path = "crates/roomkit-sqlite" }
 
@@ -42,13 +39,13 @@ nix = { version = "~0.31", default-features = false, features = ["signal"] }
 fancy-regex = "=0.20.2"
 futures-core = { version = "0.3", default-features = false, features = ["std"] }
 jiff = { version = "0.2", default-features = false, features = ["alloc"] }
-# The OpenAI agent's HTTP client (step 4, decision 4): rustls with its ring
-# provider and the webpki roots, so no system TLS library is needed, and no
-# HTTP/2, proxy or charset support, which a Chat Completions call does not
-# need. 0.13 has no ring-backed rustls feature: each client is given a rustls
-# configuration with the ring provider and the webpki roots, and asks for
-# uncompressed answers whatever features a host enables. `rustls-no-provider`
-# still compiles rustls-platform-verifier, unused with that configuration.
+# The HTTP client of roomkit-mcp's optional HTTP backend: rustls with its
+# ring provider and the webpki roots, so no system TLS library is needed, and
+# no HTTP/2, proxy or charset support. 0.13 has no ring-backed rustls
+# feature: each client is given a rustls configuration with the ring provider
+# and the webpki roots, and asks for uncompressed answers whatever features a
+# host enables. `rustls-no-provider` still compiles rustls-platform-verifier,
+# unused with that configuration.
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 webpki-roots = "1"
@@ -119,13 +116,10 @@ whoami = "2"
 # The advisory lock's key, Python's `hashlib.blake2b(digest_size=8)`, so that
 # processes of both implementations exclude each other (roomkit-postgres).
 blake2 = { version = "0.11", default-features = false }
-# The server examples' (decision 4 of step 4), development only: axum's
-# WebSocket server over HTTP/1, the client its checks connect with, without
-# TLS, both on the tungstenite axum uses, and the combinators that split a
-# socket into its two directions.
+# Development only: the server a test serves in process (the conformance
+# runner's MCP servers), and the combinators of a stream.
 axum = { version = "0.8", default-features = false, features = ["http1", "query", "tokio", "ws"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
-tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect"] }
 
 # Keep the pool, its TLS connector and the store on the same driver until
 # rust-postgres/rust-postgres#1409 ships. Applications repeat this root patch.

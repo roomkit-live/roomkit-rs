@@ -1,1 +1,0 @@
-../../../skills-private/supplier-prices.md

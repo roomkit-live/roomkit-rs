@@ -724,12 +724,12 @@ async fn observe(run: &Arc<Run>, step_outcomes: Vec<Value>) -> Observed {
     for (channel, model) in &models {
         let mut requests = match dialects.get(channel) {
             None => crate::agents::requests(model),
-            Some(dialect) => crate::agents::requests_on_the_wire(model, dialect)
-                .await
-                .unwrap_or_else(|problem| {
+            Some(dialect) => {
+                crate::agents::requests_on_the_wire(model, dialect).unwrap_or_else(|problem| {
                     problems.push(format!("models.{channel}: {problem}"));
                     Vec::new()
-                }),
+                })
+            }
         };
         if let Some(methods) = lock(&run.model_methods).get(channel) {
             for (request, method) in requests.iter_mut().zip(lock(methods).iter()) {

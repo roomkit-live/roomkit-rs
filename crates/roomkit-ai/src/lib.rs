@@ -8,8 +8,9 @@
 //! - [`AiProvider`]: a model, Python's provider contract: an
 //!   [`AiContext`] in, an [`AiResponse`] out, or its structured stream of
 //!   [`StreamEvent`]s (text, calls, the end), which the tool loop reads.
-//!   `roomkit-openai` implements it for OpenAI-compatible endpoints;
-//!   [`MockAiProvider`], Python's `MockAIProvider`, answers from a list.
+//!   The vendors' providers implement it outside this repository
+//!   (roomkit-providers); [`MockAiProvider`], Python's `MockAIProvider`,
+//!   answers from a list.
 //! - [`AiTool`], [`ToolHandler`], [`Tool`] and [`ToolEntry`]: the tools a
 //!   channel declares, the handler serving them by name, and the tools that
 //!   serve themselves; an MCP server gives its tools and its handler

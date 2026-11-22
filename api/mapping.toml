@@ -56,12 +56,6 @@ roomkit_ai = ["roomkit.providers.ai", "roomkit", "roomkit.tools", "roomkit.skill
 "roomkit_ai::sandbox" = ["roomkit.sandbox"]
 "roomkit_ai::speaking" = ["roomkit.speaking", "roomkit"]
 "roomkit_ai::classifiers" = ["roomkit.classifiers", "roomkit"]
-roomkit_openai = ["roomkit.providers.openai"]
-roomkit_provider_http = ["roomkit.providers"]
-roomkit_anthropic = ["roomkit.providers.anthropic"]
-"roomkit_openai::deepseek" = ["roomkit.providers.deepseek"]
-"roomkit_openai::minimax" = ["roomkit.providers.minimax"]
-"roomkit_openai::kimi" = ["roomkit.providers.kimi"]
 roomkit_mcp = ["roomkit.tools"]
 roomkit_acp = ["roomkit"]
 roomkit_sqlite = ["roomkit", "roomkit.store"]
@@ -396,33 +390,6 @@ rust = "roomkit::model::ResponseMetadata"
 members = ["get", "contains_key", "len", "is_empty", "insert", "pop", "setdefault", "update", "clear", "with_value", "to_metadata"]
 approved = "2026-11-03"
 reason = "language: Python's MutableMapping, record[key] = value among its forms, has no Rust operator on a shared record: methods of its names (HITL 5f1b8943)"
-
-[[exception]]
-rust = "roomkit_openai::TokenSource"
-approved = "2026-10-30"
-reason = "Rust host credential source for reusable authentication; Python integration is a separate follow-up (architecture: Renewable provider credentials)"
-
-[[exception]]
-rust = "roomkit_openai::TokenFuture"
-approved = "2026-10-30"
-reason = "Rust host credential source for reusable authentication; Python integration is a separate follow-up (architecture: Renewable provider credentials)"
-
-[[exception]]
-rust = "roomkit_openai::TokenError"
-approved = "2026-10-30"
-reason = "Rust host credential source for reusable authentication; Python integration is a separate follow-up (architecture: Renewable provider credentials)"
-
-
-[[exception]]
-rust = "roomkit_openai::OpenAiApi"
-approved = "2026-10-30"
-reason = "Responses requested in Rust first; its Python counterpart is a separate follow-up (architecture: Responses support)"
-
-[[exception]]
-rust = "roomkit_openai::OpenAiConfig"
-members = ["api", "token_source", "tool_namespace"]
-approved = "2026-10-30"
-reason = "Responses requested in Rust first; its Python configuration is a separate follow-up (architecture: Responses support)"
 
 [[exception]]
 python = "roomkit.ChannelOutput.__init__"
@@ -807,7 +774,6 @@ params = ["voice_channel_id", "greet_on_handoff", "greeting_prompt", "farewell_p
 scope = "media"
 reason = "not in 0.x: a pipeline's voice channel, its voice map, a realtime channel's sessions and its handoff greetings (left out of the orchestration lots with voice and realtime, HITL a9e5d1a3; RMK-1233)"
 
-
 [[exception]]
 rust = "roomkit::HandoffHandler"
 members = ["set_greeting_map", "set_agents", "set_on_handoff_complete"]
@@ -1121,12 +1087,6 @@ approved = "2026-10-30"
 reason = "Async host-owned room-scoped image resolution (architecture: Author images)"
 
 [[exception]]
-rust = "roomkit_openai::OpenAiConfig"
-members = ["vision"]
-approved = "2026-10-30"
-reason = "Explicit native author image capability (architecture: Author images)"
-
-[[exception]]
 rust = "roomkit_ai::ToolEntry"
 approved = "2026-11-17"
 reason = "Python's tools and extract_tools take AITool | Tool | dict in one list: Rust uses Definition, Tool and Schema(Metadata) in the existing union; invalid schemas return AiError"
@@ -1217,30 +1177,6 @@ reason = "language: a scoped future replaces Python's enclosed with block, prese
 rust = "roomkit_ai::turn_report_claim"
 python = "roomkit.tools.turn_report_claim"
 py_spec = "sha256:6765d26373e63029a54e07f8583e556ee714dcb6428e55bbe8ee258d9787012c"
-
-[[missing]]
-python = "roomkit.providers.openai.OpenAIAIProvider.__init__"
-params = ["transport"]
-scope = "tier1b"
-reason = "not in 0.x: an injected HTTP transport; the provider builds its own client"
-
-[[missing]]
-python = "roomkit.providers.deepseek.DeepSeekAIProvider.__init__"
-params = ["transport"]
-scope = "tier1b"
-reason = "not in 0.x: an injected HTTP transport; the provider builds its own client, as OpenAI's"
-
-[[missing]]
-python = "roomkit.providers.minimax.MiniMaxAIProvider.__init__"
-params = ["transport"]
-scope = "tier1b"
-reason = "not in 0.x: an injected HTTP transport; the provider builds its own client, as OpenAI's"
-
-[[missing]]
-python = "roomkit.providers.kimi.KimiAIProvider.__init__"
-params = ["transport"]
-scope = "tier1b"
-reason = "not in 0.x: an injected HTTP transport; the provider builds its own client, as OpenAI's"
 
 [[missing]]
 python = "roomkit.tools.MCPToolProvider"
@@ -1374,8 +1310,6 @@ rust = "roomkit_ai::FireOnToolHookOptions"
 approved = "2026-11-13"
 reason = "Named keyword arguments of Python's protected _fire_on_tool_hook helper (HITL 915d07a5-8f40-4b74-8f9f-16087e3b9b92)"
 
-
-
 [[exception]]
 rust = "roomkit_ai::SkillRegistry::gated_tool_names"
 params = ["activated"]
@@ -1397,7 +1331,6 @@ reason = "language: extra_tools returns shared cloneable host definitions with g
 rust = "roomkit_ai::PlanTaskHandle"
 approved = "2026-11-17"
 reason = "language: PlanUpdatedEvent copies its tasks list and shares its task objects with the stored plan. Clone shares an object; new owns its map, get copies its nested values, replace replaces it whole, and with_mut edits it atomically in a synchronous non-reentrant callback."
-
 
 [[exception]]
 rust = "roomkit_ai::LoadedSkill"

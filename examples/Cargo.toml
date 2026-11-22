@@ -17,30 +17,14 @@ path = "shared/lib.rs"
 [dependencies]
 roomkit.workspace = true
 roomkit-ai.workspace = true
-roomkit-openai.workspace = true
-roomkit-anthropic.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-# The fake of the OpenAI wire (shared/openai.rs) is a local HTTP server.
-tokio = { workspace = true, features = ["net", "io-util"] }
-# The server the server examples run (shared/server.rs): its WebSocket
-# server, the socket's two directions and the error of a message over its
-# limit, and its store, on which the skills example (agent_skills.rs)
-# restarts as well. The server examples' checks connect with
-# tokio-tungstenite's client.
-axum.workspace = true
-futures-util.workspace = true
-roomkit-sqlite.workspace = true
-tokio-tungstenite.workspace = true
+tokio.workspace = true
 
-# What the shared library does not use: the signal that stops a server
-# example when it serves, and the process the web chat's check reads its
-# page's script with (web_chat.rs, `node --check`).
 [dev-dependencies]
-# The MCP example's (mcp_tools.rs), which starts itself as its MCP server.
-roomkit-mcp.workspace = true
 roomkit-acp.workspace = true
-tokio = { workspace = true, features = ["process", "signal"] }
+# The stream a scripted model answers in (close_with_work_in_flight.rs).
+futures-util.workspace = true
 
 [lints]
 workspace = true
@@ -166,68 +150,9 @@ path = "identity_addresses.rs"
 # Agents.
 
 [[example]]
-name = "openai_agent"
-path = "openai_agent.rs"
-
-[[example]]
-name = "agent_fallback"
-path = "agent_fallback.rs"
-
-[[example]]
 name = "ai_router_local_or_hosted"
 path = "ai_router_local_or_hosted.rs"
 
 [[example]]
-name = "ai_response_schema"
-path = "ai_response_schema.rs"
-
-[[example]]
-name = "agent_tools"
-path = "agent_tools.rs"
-
-[[example]]
-name = "agent_tool_search"
-path = "agent_tool_search.rs"
-
-[[example]]
-name = "close_from_a_tool"
-path = "close_from_a_tool.rs"
-
-[[example]]
-name = "tool_call_intent"
-path = "tool_call_intent.rs"
-
-[[example]]
 name = "close_with_work_in_flight"
 path = "close_with_work_in_flight.rs"
-
-[[example]]
-name = "agent_tool_history"
-path = "agent_tool_history.rs"
-
-[[example]]
-name = "agent_skills"
-path = "agent_skills.rs"
-
-[[example]]
-name = "mcp_tools"
-path = "mcp_tools.rs"
-
-# A server: an agent over WebSocket, kept in SQLite, and a page to chat
-# with it.
-
-[[example]]
-name = "streamed_answer"
-path = "streamed_answer.rs"
-
-[[example]]
-name = "server_agent"
-path = "server_agent.rs"
-
-[[example]]
-name = "web_chat"
-path = "web_chat.rs"
-
-[[example]]
-name = "anthropic_agent"
-path = "anthropic_agent.rs"
