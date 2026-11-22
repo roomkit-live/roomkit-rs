@@ -257,8 +257,10 @@ impl Loop {
     /// Reports the turn that ended for `reason` after `rounds` rounds of
     /// calls, having `spent` what it did, to `ON_AI_RESPONSE`'s hooks,
     /// then emits `ai_response` once they ended (RFC §8.2, §9.2). Outside a
-    /// kit nothing fires.
-    pub(super) fn report(&self, reason: LoopEndReason, rounds: u32, spent: &Spent) {
+    /// kit nothing fires. It returns once it read the room and started the
+    /// hooks, as Python's turn awaits its report before its stream closes:
+    /// a later turn's observers never start before this one's (RFC §9.3).
+    pub(super) async fn report(&self, reason: LoopEndReason, rounds: u32, spent: &Spent) {
         let Some(turn) = self.context.callbacks.clone() else {
             return;
         };
@@ -284,7 +286,8 @@ impl Loop {
         };
         let data = crate::turn_wiring::response_data(&event);
         let host = turn.clone();
-        turn.observe(&event, move || host.emit_later("ai_response", data));
+        turn.observe_after_context_then(&event, move || host.emit_later("ai_response", data))
+            .await;
     }
 
     /// The turn's toolset as its hooks read it, by the tools' own schemas:

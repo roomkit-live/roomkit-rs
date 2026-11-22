@@ -96,6 +96,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `user-invocable`, `context`, `agent`) is discovered, the key kept in
   `extra_metadata`, where discovery refused it, as in Python (RFC §24.2,
   RMK-1579).
+- An AI or ACP turn returns once its `ON_AI_RESPONSE` hooks have read the
+  room and started, as in Python, where on a store whose reads suspend
+  (PostgreSQL) they read it in a task of their own after the turn, and a
+  later turn's hooks could start first (RFC §9.3, RMK-1914).
 
 ### Security
 

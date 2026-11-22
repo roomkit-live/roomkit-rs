@@ -63,6 +63,10 @@ struct Answered {
 type Work<T> =
     Pin<Box<dyn Future<Output = (Result<Option<Answered>, ChannelError>, Option<Hold<T>>)> + Send>>;
 
+/// A completed turn's report to `ON_AI_RESPONSE`: it reads the room, then
+/// starts the hooks, before the turn's stream ends.
+type Reporting = Pin<Box<dyn Future<Output = ()> + Send>>;
+
 /// The stream of a turn: nothing runs until it is read; the turn's work
 /// then runs as it is read, the agent's text handed on as it comes.
 pub(super) struct TurnStream<T: AcpTransport> {
@@ -75,6 +79,7 @@ pub(super) struct TurnStream<T: AcpTransport> {
     ending: Option<Result<Option<Answered>, ChannelError>>,
     hold: Option<Hold<T>>,
     cleanup: Option<Pin<Box<dyn Future<Output = Hold<T>> + Send>>>,
+    reporting: Option<Reporting>,
     channel_id: ChannelId,
     room_id: RoomId,
     record: ResponseMetadata,
@@ -134,6 +139,7 @@ impl<T: AcpTransport> TurnStream<T> {
             ending: None,
             hold: None,
             cleanup: None,
+            reporting: None,
             channel_id,
             room_id,
             record,
@@ -170,6 +176,28 @@ impl<T: AcpTransport> TurnStream<T> {
         Poll::Ready(())
     }
 
+    /// Reports the completed turn once, then polls the report: the stream
+    /// ends once its observers started (`report`).
+    fn poll_report(&mut self, cx: &mut Context<'_>) -> Poll<()> {
+        if !self.reported
+            && let Some(Ok(Some(answered))) = &self.ending
+        {
+            self.reporting = self.report(answered);
+            self.reported = true;
+        }
+        self.poll_reporting(cx)
+    }
+
+    fn poll_reporting(&mut self, cx: &mut Context<'_>) -> Poll<()> {
+        if let Some(reporting) = &mut self.reporting {
+            if reporting.as_mut().poll(cx).is_pending() {
+                return Poll::Pending;
+            }
+            self.reporting = None;
+        }
+        Poll::Ready(())
+    }
+
     fn begin_session_cleanup(&mut self, cx: &mut Context<'_>) -> bool {
         // Failed recovery closes only after the queued output was read, and
         // keeps the same room lock until its terminal item is handed over.
@@ -202,7 +230,7 @@ impl<T: AcpTransport> TurnStream<T> {
             // The observer sees a completed turn, even when it runs before
             // the cleanup future's first poll on another worker.
             hold.retire_active();
-            self.report(answered);
+            self.reporting = self.report(answered);
             self.reported = true;
         }
     }
@@ -211,10 +239,11 @@ impl<T: AcpTransport> TurnStream<T> {
     /// then emits `ai_response` (RFC §8.2, §9.2), as Python's
     /// `_report_response`: its text, its end as its record names it, the
     /// counters the agent returned, unaltered. Outside a kit nothing fires.
-    fn report(&self, answered: &Answered) {
-        let Some(host) = &self.callbacks else {
-            return;
-        };
+    /// The stream awaits the report, which reads the room and starts the
+    /// hooks, as Python's turn awaits it before its stream closes: a later
+    /// turn's observers never start before this one's (RFC §9.3).
+    fn report(&self, answered: &Answered) -> Option<Reporting> {
+        let host = self.callbacks.clone()?;
         let (segments, content) =
             response_transcript(self.said.iter().filter(|text| !text.is_empty()).cloned());
         let latency_ms = u64::try_from(answered.started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -239,7 +268,12 @@ impl<T: AcpTransport> TurnStream<T> {
         data.insert("latency_ms".to_owned(), Value::from(latency_ms));
         data.insert("streaming".to_owned(), Value::Bool(true));
         let emitter = host.clone();
-        host.observe(&event, move || emitter.emit_later("ai_response", data));
+        Some(Box::pin(async move {
+            host.observe_after_context_then(&event, move || {
+                emitter.emit_later("ai_response", data);
+            })
+            .await;
+        }))
     }
 }
 
@@ -281,15 +315,15 @@ impl<T: AcpTransport> Stream for TurnStream<T> {
             hold.retire_steering();
         }
         this.report_standalone_response();
-        if this.begin_session_cleanup(cx) {
+        if this.poll_reporting(cx).is_pending()
+            || this.begin_session_cleanup(cx)
+            || this.poll_report(cx).is_pending()
+        {
             return Poll::Pending;
         }
         this.done = true;
         let ending = match this.ending.take() {
-            Some(Ok(Some(answered))) => {
-                if !this.reported {
-                    this.report(&answered);
-                }
+            Some(Ok(Some(_))) => {
                 if let Some(hold) = &mut this.hold {
                     hold.completed();
                 }

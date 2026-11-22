@@ -563,7 +563,7 @@ impl Loop {
         out.give(Ok(TurnItem::End(end))).await;
         // Once the reader read past the end, as Python's turn reports it
         // when its stream is read to its close.
-        self.report(reason, rounds, &spent);
+        self.report(reason, rounds, &spent).await;
     }
 
     /// Fails the answer itself: a response schema or host continuation policy
@@ -696,7 +696,7 @@ impl Loop {
                 ..self.end_of(LoopEndReason::Error, rounds, limits.timeout)
             };
             out.give(Ok(TurnItem::End(end))).await;
-            self.report(LoopEndReason::Error, rounds, &spent);
+            self.report(LoopEndReason::Error, rounds, &spent).await;
         }
         out.give(Err(error)).await;
     }
