@@ -448,7 +448,7 @@ pub(crate) fn scripted_agent_with_skills(
         options.retry_policy = Some(retry_policy(policy)?);
     }
     let mut models = vec![(id.to_string(), model)];
-    keep_chat_dialect(&spec["model"], id.to_string(), run);
+    keep_chat_dialect(&spec["model"], id.to_string(), run)?;
     let serving = if spec.get("fallback_model").is_none() && spec.get("router").is_none() {
         Serving::Model(Box::new(paced))
     } else {
@@ -540,7 +540,7 @@ fn scripted_router(
     let mut router: Option<Box<dyn AiRouter>> = None;
     if let Some(fallback) = spec.get("fallback_model") {
         let name = format!("{id}/fallback");
-        keep_chat_dialect(fallback, name.clone(), run);
+        keep_chat_dialect(fallback, name.clone(), run)?;
         let (fallback, paced) = scripted_model(fallback, run, &name, shared(&name))?;
         models.push((name, fallback));
         // Every turn on its own model, a spent generation handed to the other.
@@ -550,7 +550,7 @@ fn scripted_router(
     if let Some(script) = spec.get("router") {
         for (name, model) in script["models"].as_object().into_iter().flatten() {
             let name = format!("{id}/{name}");
-            keep_chat_dialect(model, name.clone(), run);
+            keep_chat_dialect(model, name.clone(), run)?;
             let (model, paced) = scripted_model(model, run, &name, shared(&name))?;
             models.push((name.clone(), model));
             pickable.push((name, Arc::new(paced)));
@@ -752,12 +752,19 @@ fn bounds(spec: &Value, options: &mut AiChannelOptions) -> Result<(), String> {
     Ok(())
 }
 
-/// The Chat Completions rendering the model `spec` names, if any, under the
-/// name `expect.models` gives the model (README, `model.chat_dialect`).
-fn keep_chat_dialect(spec: &Value, model: String, run: &Arc<Run>) {
-    if let Some(dialect) = spec["chat_dialect"].as_str() {
-        crate::run::lock(&run.chat_dialects).insert(model, dialect.to_owned());
+/// The core's chat dialect under the options the model `spec` states, if
+/// any, under the name `expect.models` gives the model (README,
+/// `model.chat_dialect`).
+///
+/// # Errors
+///
+/// Options that do not read, or that the core refuses.
+fn keep_chat_dialect(spec: &Value, model: String, run: &Arc<Run>) -> Result<(), String> {
+    if let Some(stated) = spec.get("chat_dialect") {
+        let dialect = crate::chat_wire::dialect(stated)?;
+        crate::run::lock(&run.chat_dialects).insert(model, dialect);
     }
+    Ok(())
 }
 
 /// The scripted model `spec` describes, and the provider reading it, its
@@ -1605,11 +1612,12 @@ pub(crate) fn requests(model: &ScriptedProvider) -> Vec<Value> {
     model.requests().iter().map(request).collect()
 }
 
-/// Each request `model` received with what `dialect` writes of it on the wire
-/// beside it (README, `models`, `chat_messages`).
+/// Each request `model` received with what the core's chat rendering writes
+/// of it on the wire under `dialect`, beside it (README, `models`,
+/// `chat_messages`).
 pub(crate) fn requests_on_the_wire(
     model: &ScriptedProvider,
-    dialect: &str,
+    dialect: &roomkit_ai::ChatDialect,
 ) -> Result<Vec<Value>, String> {
     let mut requests = requests(model);
     for (read, context) in requests.iter_mut().zip(model.requests()) {

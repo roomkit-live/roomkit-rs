@@ -38,7 +38,7 @@ const TURN_INSTRUCTION: &str = "_turn_instruction";
 /// The first pass's own instruction: Python's `_build_pass1_instruction`.
 const PASS1_INSTRUCTION: &str = "Extract the core topic or subject from the user's request. \
 Output only the topic, nothing else. No questions, no instructions, no formatting. Example: user \
-says 'analyse anthropic' \u{2192} 'Anthropic'";
+says 'analyse electric cars' \u{2192} 'Electric cars'";
 
 /// What the supervisor answers when its first pass stopped short of an
 /// answer: Python's `FALLBACK_FAILED`.

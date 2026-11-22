@@ -202,9 +202,9 @@ pub(crate) struct Run {
     pub(crate) acp_mcp_requests: Mutex<BTreeMap<String, crate::acp_agents::Wire>>,
     pub(crate) acp_context_requests: Mutex<BTreeMap<String, crate::acp_agents::Wire>>,
     pub(crate) acp_pipes: Mutex<BTreeMap<String, Arc<crate::acp_agents::AgentPipe>>>,
-    /// The Chat Completions rendering of a model that names one, by the
+    /// The core's chat dialect of a model that states its options, by the
     /// model's name (README, `model.chat_dialect`).
-    pub(crate) chat_dialects: Mutex<BTreeMap<String, String>>,
+    pub(crate) chat_dialects: Mutex<BTreeMap<String, roomkit_ai::ChatDialect>>,
     /// The in-memory delivery backend the kit was built with, whose queue
     /// and worker the idle wait waits for (README, "Setup").
     pub(crate) backend: Mutex<Option<roomkit::InMemoryDeliveryBackend>>,

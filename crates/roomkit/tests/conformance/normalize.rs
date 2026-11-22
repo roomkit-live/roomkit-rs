@@ -421,7 +421,7 @@ mod tests {
     #[test]
     fn acp_option_ids_are_not_event_ids() {
         let options = json!([
-            {"id":"model","type":"select","currentValue":"opus"},
+            {"id":"model","type":"select","currentValue":"large"},
             {"id":"fast","type":"boolean","currentValue":true},
         ]);
         let observed = Observed {

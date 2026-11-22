@@ -6,6 +6,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- The supervisor's default first-pass instruction gives a neutral example,
+  `'analyse electric cars' → 'Electric cars'`, where it named a vendor, as
+  in Python (RFC §19.7.3, RMK-1982).
+- The conformance runner reads a scripted model's `chat_dialect` as the
+  `ChatDialectOptions` the scenario states, and names no vendor; the two
+  scenarios that read a vendor's own rendering left the shared corpus, so
+  the runners have no known failure left (RMK-1982).
+
 ## [0.3.0] — 2026-11-22
 
 ### Added
