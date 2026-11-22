@@ -119,6 +119,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   its worker never had, on the result and on `ON_TASK_COMPLETED`. Those
   three keys are the framework's: a context's are dropped, and the
   framework writes its own.
+- **`url` 2.5.9** fixes RUSTSEC-2026-0592: the workspace requires it, where
+  `url = "2.5"` admitted 2.5.8, which `cargo deny` now refuses (RMK-1958).
 
 ## [0.2.0] — 2026-11-18
 

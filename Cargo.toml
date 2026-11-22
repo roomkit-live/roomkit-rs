@@ -59,7 +59,7 @@ http-body-util = "0.1.5"
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
 serde = { version = "1", features = ["derive"] }
 # MCP resource URI normalization, using the version already locked for HTTP.
-url = "2.5"
+url = "2.5.9"
 # An object keeps its members in the order they were written, as Python's
 # dict does (RMK-1198): a tool's JSON result, a call's arguments, a
 # metadata map read and written alike.
