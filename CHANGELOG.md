@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-11-22
+
 ### Added
 
 - `RoomKitOptions::close_grace`, Python's `close_grace=5.0`: the one grace
@@ -124,6 +126,24 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   context and have started, as in Python: on a store whose reads suspend
   (PostgreSQL), they read it in a task of their own after the turn, and a
   later turn's hooks could start first (RFC §9.3, RMK-1914).
+
+- A call made to the kit under a room lock the host holds returns, as in
+  Python (RFC §9.5.1, §13.5, RMK-1828): with a built-in lock manager,
+  `manager.locked(&room_id)` then `kit.send_event` for that room waited for
+  the lock its own caller held, and only a `process_timeout` ended it. The
+  call now runs on a budget of its own, and the events its hooks inject
+  commit once the host has released the lock.
+- A turn's `ON_TOOL_CALL` hooks and its tool observers read the room when
+  they fire, as in Python, where they read the context their turn started
+  with (RFC §9.3, RMK-1837): a hook saw none of the metadata written during
+  the turn. When that read fails, the hooks and the observers do not run,
+  the call keeps its handler's outcome, and its `tool_call` framework event
+  still reports it once.
+- An executor in a process of its own sends `accepted` before the turn's
+  work starts, as in Python, where it sent it once that work first yielded
+  (RFC §10.6.8, RMK-1873): a turn busy with its CPU from its start for
+  longer than `TurnTimeouts::accept` was failed `executor_lost` by its
+  owner.
 
 ### Security
 
@@ -807,6 +827,7 @@ repository at the tag `v0.1.0`, as git dependencies, with Rust 1.92 or later
 implementation, each with its card (RMK-1070 to RMK-1077, and the review's
 RMK-1082 to RMK-1106 under RMK-1081), to close after this release.
 
-[Unreleased]: https://github.com/roomkit-live/roomkit-rs/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/roomkit-live/roomkit-rs/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/roomkit-live/roomkit-rs/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/roomkit-live/roomkit-rs/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/roomkit-live/roomkit-rs/releases/tag/v0.1.0
