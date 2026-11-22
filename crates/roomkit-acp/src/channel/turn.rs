@@ -314,8 +314,9 @@ impl<T: AcpTransport> Stream for TurnStream<T> {
         if let Some(hold) = &this.hold {
             hold.retire_steering();
         }
-        // A standalone turn reports before its session's cleanup, a room's
-        // or a detached turn's after it, as in Python.
+        // A standalone turn reports before its temporary session's cleanup,
+        // as in Python; a detached turn after its room session's cleanup,
+        // where Python reports before the discard.
         this.report_standalone_response();
         if this.poll_reporting(cx).is_pending()
             || this.begin_session_cleanup(cx)

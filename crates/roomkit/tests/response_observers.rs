@@ -210,7 +210,10 @@ async fn a_standalone_acp_turn_reports_before_its_session_closes() {
     tokio::time::timeout(PATIENCE, gate.reached.notified())
         .await
         .unwrap();
-    assert!(tokio::time::timeout(BRIEF, &mut sent).await.is_err());
+    assert!(
+        tokio::time::timeout(BRIEF, &mut sent).await.is_err(),
+        "the standalone turn returned before its ON_AI_RESPONSE report read the room"
+    );
     assert_eq!(
         closed.load(Ordering::SeqCst),
         0,
