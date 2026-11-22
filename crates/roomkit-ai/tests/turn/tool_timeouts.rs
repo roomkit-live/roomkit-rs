@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use roomkit::model::{EventContent, EventType, ToolCallOutcome};
 use roomkit_ai::{
-    AiChannel, AiChannelOptions, AiChannelTurnConfig, AiResponse, AiTool, AiToolCall,
+    AiChannel, AiChannelOptions, AiChannelTurnConfig, AiResponse, AiTool, AiToolCall, FinishReason,
     MockAiProvider, MockAiProviderOptions, ToolHandler, ToolResult,
 };
 use serde_json::{Value, json};
@@ -32,7 +32,7 @@ async fn configured(
 ) -> (Room, MockAiProvider, Arc<AtomicBool>) {
     let mut response = AiResponse::new("");
     response.tool_calls = vec![AiToolCall::new("c1", "slow")];
-    response.finish_reason = Some("tool_calls".to_owned());
+    response.finish_reason = Some(FinishReason::ToolCalls);
     let model = MockAiProvider::new(MockAiProviderOptions {
         ai_responses: Some(vec![response, AiResponse::new("done")]),
         streaming,

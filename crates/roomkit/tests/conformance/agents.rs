@@ -29,9 +29,9 @@ use roomkit_ai::{
     Agent, AgentOptions, AiChannel, AiChannelOptions, AiChannelTurnConfig, AiContentPart,
     AiContext, AiImagePart, AiMessage, AiMessageContent, AiProvider, AiResponse, AiRole, AiRouter,
     AiRouterFuture, AiTextPart, AiThinkingPart, AiTool, AiToolCall, DynAiProvider, FallbackRouter,
-    HumanInputToolHandler, HumanInputToolHandlerOptions, ModelInfo, ModelPricing, ProviderError,
-    ProviderErrorOptions, ProviderStream, RouteReason, RouteRequest, Routed, ServedCall,
-    StreamDone, StreamEvent, StreamTextDelta, StreamThinkingDelta, StreamToolCallDelta,
+    FinishReason, HumanInputToolHandler, HumanInputToolHandlerOptions, ModelInfo, ModelPricing,
+    ProviderError, ProviderErrorOptions, ProviderStream, RouteReason, RouteRequest, Routed,
+    ServedCall, StreamDone, StreamEvent, StreamTextDelta, StreamThinkingDelta, StreamToolCallDelta,
     StreamUsage, Tool, ToolContext, ToolEntry, ToolError, ToolHandler, ToolPolicy, ToolResult,
     ToolResultPart, Tools, check_schema_answer, checked_stream, schema_for_generate,
 };
@@ -255,12 +255,12 @@ impl WholeModel {
         for call in &mut response.tool_calls {
             labelled(&self.run, &mut call.arguments);
         }
-        let finish = response.finish_reason.as_deref();
+        let finish = response.finish_reason;
         if let Some(schema) = &context.response_schema
             && response.tool_calls.is_empty()
-            && !finish.is_some_and(malformed_call)
+            && !malformed_call(finish)
         {
-            let refusal = (finish == Some("refusal")).then_some("refusal");
+            let refusal = (finish == Some(FinishReason::Refusal)).then_some("refusal");
             check_schema_answer(
                 &response.content,
                 schema,
@@ -274,15 +274,16 @@ impl WholeModel {
 }
 
 /// Whether a round ended on a call its provider would not hand over.
-fn malformed_call(finish_reason: &str) -> bool {
-    ["malformed_function_call", "unexpected_tool_call"]
-        .iter()
-        .any(|malformed| finish_reason.eq_ignore_ascii_case(malformed))
+fn malformed_call(finish_reason: Option<FinishReason>) -> bool {
+    matches!(
+        finish_reason,
+        Some(FinishReason::MalformedCall | FinishReason::UnexpectedCall)
+    )
 }
 
 /// Why a scripted round declined to answer: its `refusal` finish reason.
 fn refused(done: &StreamDone) -> Option<String> {
-    (done.finish_reason.as_deref() == Some("refusal")).then(|| "refusal".to_owned())
+    (done.finish_reason == Some(FinishReason::Refusal)).then(|| "refusal".to_owned())
 }
 
 /// A stream failing once, with the error a schema's check gave before the
@@ -986,7 +987,7 @@ fn streaming_round(spec: &Value, events: &[Value]) -> Result<ScriptedRound, Stri
         });
     }
     read.push(StreamEvent::Done(StreamDone {
-        finish_reason: finish_reason(spec, called),
+        finish_reason: finish_reason(spec, called)?,
         usage: usage(spec)?,
         ..StreamDone::default()
     }));
@@ -1014,7 +1015,7 @@ fn whole_round(spec: &Value, whole: &Value) -> Result<ScriptedRound, String> {
             .collect()
     });
     Ok(ScriptedRound::whole_response(AiResponse {
-        finish_reason: finish_reason(spec, !calls.is_empty()),
+        finish_reason: finish_reason(spec, !calls.is_empty())?,
         usage: usage(spec)?,
         tool_calls: calls,
         thinking: text(whole, "thinking"),
@@ -1071,13 +1072,17 @@ fn served_call(value: &Value) -> Result<Option<ServedCall>, String> {
     Ok(Some(ServedCall { result, is_error }))
 }
 
-/// How a round ends, `tool_calls` by default when it calls, else `stop`.
-fn finish_reason(spec: &Value, called: bool) -> Option<String> {
-    if spec.get("finish_reason").is_some_and(Value::is_null) {
-        return None;
+/// How a round ends, `tool_calls` by default when it calls, else `stop`: a
+/// word of the provider contract's vocabulary (RFC §6.7), any other refused.
+pub(crate) fn finish_reason(spec: &Value, called: bool) -> Result<Option<FinishReason>, String> {
+    match spec.get("finish_reason") {
+        Some(Value::Null) => Ok(None),
+        Some(word) => serde_json::from_value(word.clone())
+            .map(Some)
+            .map_err(|_| format!("finish_reason: {word} is not a stop reason")),
+        None if called => Ok(Some(FinishReason::ToolCalls)),
+        None => Ok(Some(FinishReason::Stop)),
     }
-    let default = if called { "tool_calls" } else { "stop" };
-    Some(spec["finish_reason"].as_str().unwrap_or(default).to_owned())
 }
 
 /// What a round used.
@@ -1117,7 +1122,7 @@ pub(crate) fn round(spec: &Value) -> Result<ScriptedRound, String> {
         .map(|(id, name, arguments)| (id.as_str(), name.as_str(), arguments.as_str()));
     let mut round = ScriptedRound::calling(spec["text"].as_str().unwrap_or_default(), made)
         .with_usage(usage(spec)?);
-    round.done.finish_reason = finish_reason(spec, !calls.is_empty());
+    round.done.finish_reason = finish_reason(spec, !calls.is_empty())?;
     if let Some(deltas) = spec.get("deltas") {
         let deltas = deltas.as_array().ok_or("deltas: not a list")?;
         round = round.in_pieces(deltas.iter().filter_map(Value::as_str));

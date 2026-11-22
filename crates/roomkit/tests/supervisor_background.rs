@@ -23,8 +23,8 @@ use roomkit::{
     ProcessInboundOptions, RoomKit, RoomKitOptions, Supervisor,
 };
 use roomkit_ai::{
-    Agent, AgentOptions, AiContext, AiProvider, AiResponse, AiToolCall, MockAiProvider,
-    MockAiProviderOptions, ProviderError,
+    Agent, AgentOptions, AiContext, AiProvider, AiResponse, AiToolCall, FinishReason,
+    MockAiProvider, MockAiProviderOptions, ProviderError,
 };
 use serde_json::json;
 use tokio::sync::{Notify, Semaphore};
@@ -54,7 +54,7 @@ fn calls(call_id: &str, tool: &str, task: &str) -> AiResponse {
     let mut call = AiToolCall::new(call_id, tool);
     call.arguments = Metadata::from_iter([("task".to_owned(), json!(task))]);
     AiResponse {
-        finish_reason: Some("tool_calls".to_owned()),
+        finish_reason: Some(FinishReason::ToolCalls),
         tool_calls: vec![call],
         ..AiResponse::new("")
     }

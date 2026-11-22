@@ -21,7 +21,8 @@ use roomkit::{
     ProcessInboundOptions, RoomKit, RoomKitOptions,
 };
 use roomkit_ai::{
-    Agent, AgentOptions, AiResponse, AiToolCall, MockAiProvider, MockAiProviderOptions,
+    Agent, AgentOptions, AiResponse, AiToolCall, FinishReason, MockAiProvider,
+    MockAiProviderOptions,
 };
 use serde_json::json;
 
@@ -57,7 +58,7 @@ fn reviewer(name: &str, role: &str, reviews: &[&str]) -> Agent<MockAiProvider> {
             ),
         ]);
         let calling = AiResponse {
-            finish_reason: Some("tool_calls".to_owned()),
+            finish_reason: Some(FinishReason::ToolCalls),
             tool_calls: vec![call],
             ..AiResponse::new("")
         };

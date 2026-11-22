@@ -27,7 +27,7 @@ use roomkit_ai::tasks::{
 };
 use roomkit_ai::{
     Agent, AgentOptions, AiContentPart, AiContext, AiMessageContent, AiResponse, AiToolCall,
-    MockAiProvider, MockAiProviderOptions, ToolResult,
+    FinishReason, MockAiProvider, MockAiProviderOptions, ToolResult,
 };
 use serde_json::json;
 use tokio::sync::Notify;
@@ -399,7 +399,7 @@ fn kit_delegating_configured<S: ConversationStore>(
         streaming,
         ai_responses: Some(vec![
             AiResponse {
-                finish_reason: Some("tool_calls".to_owned()),
+                finish_reason: Some(FinishReason::ToolCalls),
                 tool_calls: vec![call],
                 ..AiResponse::new("")
             },

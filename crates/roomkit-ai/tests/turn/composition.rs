@@ -13,8 +13,8 @@ use roomkit::model::Cancel;
 use roomkit::realtime::{EphemeralEvent, EphemeralEventType};
 use roomkit::{SteerOptions, SubscribeRoomOptions};
 use roomkit_ai::{
-    AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, AiToolCall, MockAiProvider,
-    MockAiProviderOptions, ProviderError, ProviderStream, StreamDone, StreamEvent,
+    AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, AiToolCall, FinishReason,
+    MockAiProvider, MockAiProviderOptions, ProviderError, ProviderStream, StreamDone, StreamEvent,
     StreamThinkingDelta, StreamToolCall, StreamToolCallDelta,
 };
 use serde_json::json;
@@ -145,7 +145,7 @@ impl Stream for Fragments {
                 }
             }
             3 => StreamEvent::Done(StreamDone {
-                finish_reason: Some("tool_calls".to_owned()),
+                finish_reason: Some(FinishReason::ToolCalls),
                 ..StreamDone::default()
             }),
             _ => return Poll::Ready(None),

@@ -10,8 +10,8 @@ use pretty_assertions::assert_eq;
 use roomkit::model::ChannelId;
 use roomkit_ai::{
     AiChannel, AiChannelOptions, AiContext, AiError, AiMessage, AiProvider, AiResponse, AiRole,
-    AiTool, MockAiProvider, MockAiProviderOptions, ProviderError, ResponseSchemaError,
-    ResponseSchemaErrorOptions, ResponseSchemaFailure, StreamEvent,
+    AiTool, FinishReason, MockAiProvider, MockAiProviderOptions, ProviderError,
+    ResponseSchemaError, ResponseSchemaErrorOptions, ResponseSchemaFailure, StreamEvent,
 };
 use serde_json::{Map, Value, json};
 
@@ -55,9 +55,9 @@ fn mock(responses: Vec<AiResponse>, response_schema: bool, streaming: bool) -> M
 }
 
 /// A response saying `text`, ending `finish`.
-fn said(text: &str, finish: &str) -> AiResponse {
+fn said(text: &str, finish: FinishReason) -> AiResponse {
     AiResponse {
-        finish_reason: Some(finish.to_owned()),
+        finish_reason: Some(finish),
         ..AiResponse::new(text)
     }
 }
@@ -87,7 +87,7 @@ async fn drain(
 // Python: tests/test_response_schema.py::TestMockHonoursTheContract::test_generate_returns_the_json_document
 #[tokio::test]
 async fn generate_returns_the_json_document() {
-    let provider = mock(vec![said(ANSWER, "stop")], true, false);
+    let provider = mock(vec![said(ANSWER, FinishReason::Stop)], true, false);
     let response = provider
         .generate(&context(Some(verdict()), Vec::new()))
         .await;
@@ -100,7 +100,7 @@ async fn generate_returns_the_json_document() {
 // Python: tests/test_response_schema.py::TestMockHonoursTheContract::test_a_provider_without_support_refuses_before_sending
 #[tokio::test]
 async fn a_provider_without_support_refuses_before_sending() {
-    let provider = mock(vec![said(ANSWER, "stop")], false, false);
+    let provider = mock(vec![said(ANSWER, FinishReason::Stop)], false, false);
     let error = provider
         .generate(&context(Some(verdict()), Vec::new()))
         .await
@@ -113,7 +113,7 @@ async fn a_provider_without_support_refuses_before_sending() {
 // Python: tests/test_response_schema.py::TestMockHonoursTheContract::test_tools_in_the_same_turn_are_refused
 #[tokio::test]
 async fn tools_in_the_same_turn_are_refused() {
-    let provider = mock(vec![said(ANSWER, "stop")], true, false);
+    let provider = mock(vec![said(ANSWER, FinishReason::Stop)], true, false);
     let tool = AiTool::new("lookup", "Look it up").expect("a name every vendor takes");
     let error = provider
         .generate(&context(Some(verdict()), vec![tool]))
@@ -127,7 +127,10 @@ async fn tools_in_the_same_turn_are_refused() {
 #[tokio::test]
 async fn streaming_carries_the_schema_and_checks_the_answer() {
     let provider = mock(
-        vec![said(ANSWER, "stop"), said("Sure.", "stop")],
+        vec![
+            said(ANSWER, FinishReason::Stop),
+            said("Sure.", FinishReason::Stop),
+        ],
         true,
         true,
     );
@@ -144,21 +147,20 @@ async fn streaming_carries_the_schema_and_checks_the_answer() {
 #[tokio::test]
 async fn an_answer_without_its_document_raises() {
     let cases = [
-        (said("", "refusal"), ResponseSchemaFailure::Refusal),
         (
-            said(r#"{"label": "y"#, "length"),
+            said("", FinishReason::Refusal),
+            ResponseSchemaFailure::Refusal,
+        ),
+        (
+            said(r#"{"label": "y"#, FinishReason::Length),
             ResponseSchemaFailure::Truncated,
         ),
         (
-            said(r#"{"label": "y"#, "model_length"),
-            ResponseSchemaFailure::Truncated,
-        ),
-        (
-            said("Sure, the answer is yes.", "stop"),
+            said("Sure, the answer is yes.", FinishReason::Stop),
             ResponseSchemaFailure::InvalidJson,
         ),
         (
-            said(r#"{"verdict": "yes"}"#, "stop"),
+            said(r#"{"verdict": "yes"}"#, FinishReason::Stop),
             ResponseSchemaFailure::InvalidJson,
         ),
     ];
@@ -175,7 +177,11 @@ async fn an_answer_without_its_document_raises() {
 // Python: tests/test_response_schema.py::TestMockHonoursTheContract::test_prose_without_a_schema_is_left_alone
 #[tokio::test]
 async fn prose_without_a_schema_is_left_alone() {
-    let provider = mock(vec![said("Sure, the answer is yes.", "stop")], true, false);
+    let provider = mock(
+        vec![said("Sure, the answer is yes.", FinishReason::Stop)],
+        true,
+        false,
+    );
     let response = provider.generate(&context(None, Vec::new())).await;
     assert_eq!(response.expect("prose").content, "Sure, the answer is yes.");
 }
@@ -205,7 +211,7 @@ fn the_error_is_a_provider_error_never_retried() {
 // provider refuses the schema before any request, in the check's words.
 #[tokio::test]
 async fn a_schema_outside_the_subset_is_refused_before_any_request() {
-    let provider = mock(vec![said(ANSWER, "stop")], true, false);
+    let provider = mock(vec![said(ANSWER, FinishReason::Stop)], true, false);
     let mut open = verdict();
     open.insert("additionalProperties".to_owned(), Value::Bool(true));
     let error = provider

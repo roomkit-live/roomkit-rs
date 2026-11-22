@@ -8,8 +8,8 @@ use roomkit::model::Metadata;
 use serde_json::Value;
 
 use crate::provider::{
-    AiContext, AiProvider, AiResponse, ModelInfo, ProviderError, ProviderStream, StreamDone,
-    StreamEvent, StreamToolCall, StreamToolCallDelta, TextStream, check_schema_answer,
+    AiContext, AiProvider, AiResponse, FinishReason, ModelInfo, ProviderError, ProviderStream,
+    StreamDone, StreamEvent, StreamToolCall, StreamToolCallDelta, TextStream, check_schema_answer,
     checked_stream, is_malformed_call, response_events, schema_for_generate,
 };
 use crate::stream::{Yielder, items, next};
@@ -147,12 +147,12 @@ impl MockAiProvider {
     fn checked_answer(&self, context: &AiContext) -> Result<AiResponse, ProviderError> {
         self.refuse_unsupported(context)?;
         let response = self.answer(context);
-        let finish = response.finish_reason.as_deref();
+        let finish = response.finish_reason;
         if let Some(schema) = &context.response_schema
             && response.tool_calls.is_empty()
             && !is_malformed_call(finish)
         {
-            let refusal = (finish == Some("refusal")).then_some("refusal");
+            let refusal = (finish == Some(FinishReason::Refusal)).then_some("refusal");
             check_schema_answer(&response.content, schema, "mock", refusal, finish)?;
         }
         Ok(response)
@@ -293,7 +293,7 @@ fn call_deltas(call: &StreamToolCall, chunks: i64) -> Vec<StreamToolCallDelta> {
 
 /// Why a scripted response declined: its `refusal` ending.
 fn refused(done: &StreamDone) -> Option<String> {
-    (done.finish_reason.as_deref() == Some("refusal")).then(|| "refusal".to_owned())
+    (done.finish_reason == Some(FinishReason::Refusal)).then(|| "refusal".to_owned())
 }
 
 /// A response saying `text`, ending `stop`, with Python's mock usage.
@@ -302,7 +302,7 @@ fn text_response(text: &str) -> AiResponse {
     usage.insert("prompt_tokens".to_owned(), Value::from(10));
     usage.insert("completion_tokens".to_owned(), Value::from(5));
     AiResponse {
-        finish_reason: Some("stop".to_owned()),
+        finish_reason: Some(FinishReason::Stop),
         usage,
         ..AiResponse::new(text)
     }

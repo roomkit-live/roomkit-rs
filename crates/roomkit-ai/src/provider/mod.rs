@@ -10,6 +10,7 @@ mod context;
 mod date;
 mod dynamic;
 mod error;
+mod finish_reason;
 mod first_token;
 mod image_parts;
 mod json_schema;
@@ -41,6 +42,7 @@ pub(crate) use self::context::{ai_messages, ai_messages_with};
 pub use self::date::Date;
 pub use self::dynamic::DynAiProvider;
 pub use self::error::{ProviderError, ProviderErrorOptions, is_context_overflow_message};
+pub use self::finish_reason::FinishReason;
 #[doc(hidden)]
 pub use self::first_token::FirstToken;
 pub use self::image_parts::{image_part_base64, image_part_payload, image_part_uri};
@@ -214,7 +216,7 @@ pub trait AiProvider: Send + Sync + 'static {
                     }
                     // A text stream reports no usage and no stop reason.
                     let done = StreamDone {
-                        finish_reason: Some("stop".to_owned()),
+                        finish_reason: Some(FinishReason::Stop),
                         ..StreamDone::default()
                     };
                     out.give(Ok(StreamEvent::Done(done))).await;

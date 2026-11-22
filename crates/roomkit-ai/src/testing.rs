@@ -8,9 +8,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use roomkit::model::Metadata;
 
 use crate::provider::{
-    AiContext, AiProvider, AiResponse, AiToolCall, ProviderError, ProviderErrorOptions,
-    ProviderStream, StreamDone, StreamEvent, StreamTextDelta, StreamThinkingDelta, read_tool_calls,
-    response_events,
+    AiContext, AiProvider, AiResponse, AiToolCall, FinishReason, ProviderError,
+    ProviderErrorOptions, ProviderStream, StreamDone, StreamEvent, StreamTextDelta,
+    StreamThinkingDelta, read_tool_calls, response_events,
 };
 use crate::stream::{Yielder, items};
 
@@ -112,7 +112,7 @@ impl ScriptedRound {
             thinking: Vec::new(),
             calls: Vec::new(),
             done: StreamDone {
-                finish_reason: Some("stop".to_owned()),
+                finish_reason: Some(FinishReason::Stop),
                 ..StreamDone::default()
             },
             fails: None,
@@ -153,7 +153,7 @@ impl ScriptedRound {
                 .map(|(id, name, arguments)| (id.to_owned(), name.to_owned(), arguments.to_owned()))
                 .collect(),
             done: StreamDone {
-                finish_reason: Some("tool_calls".to_owned()),
+                finish_reason: Some(FinishReason::ToolCalls),
                 ..StreamDone::default()
             },
             fails: None,
@@ -299,8 +299,8 @@ impl ScriptedRound {
 
     /// The same round, ending for `finish_reason`.
     #[must_use]
-    pub fn with_finish_reason(mut self, finish_reason: impl Into<String>) -> Self {
-        self.done.finish_reason = Some(finish_reason.into());
+    pub fn with_finish_reason(mut self, finish_reason: FinishReason) -> Self {
+        self.done.finish_reason = Some(finish_reason);
         self
     }
 
@@ -477,7 +477,7 @@ impl ScriptedRound {
     /// round's ending. For a test's own provider.
     #[doc(hidden)]
     pub fn tool_calls(&self) -> Vec<AiToolCall> {
-        let mut calls = read_tool_calls(self.calls.clone(), self.done.finish_reason.as_deref());
+        let mut calls = read_tool_calls(self.calls.clone(), self.done.finish_reason);
         for call in &mut calls {
             if let Some((_, metadata)) = self.call_metadata.iter().find(|(id, _)| *id == call.id) {
                 call.metadata.clone_from(metadata);

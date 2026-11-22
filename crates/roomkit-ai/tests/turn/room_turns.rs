@@ -24,8 +24,8 @@ use roomkit::{
 };
 use roomkit_ai::{
     Agent, AgentOptions, AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, AiTool,
-    AiToolCall, MockAiProvider, MockAiProviderOptions, ProviderError, ToolContext, ToolResult,
-    Tools,
+    AiToolCall, FinishReason, MockAiProvider, MockAiProviderOptions, ProviderError, ToolContext,
+    ToolResult, Tools,
 };
 use tokio::sync::watch;
 
@@ -599,7 +599,7 @@ async fn a_strategy_that_takes_the_agent_s_turns_orders_them_itself() {
     let reviewing = MockAiProvider::new(MockAiProviderOptions {
         ai_responses: Some(vec![
             AiResponse {
-                finish_reason: Some("tool_calls".to_owned()),
+                finish_reason: Some(FinishReason::ToolCalls),
                 tool_calls: vec![verdict],
                 ..AiResponse::new("")
             },

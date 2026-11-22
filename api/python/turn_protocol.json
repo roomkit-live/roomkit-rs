@@ -27,7 +27,7 @@
       "request"
     ]
   },
-  "commit": "24d9cd90c8dbb4a3aa166f621672987bca28fab0",
+  "commit": "94e50fd112fb0ddefdc517ab63c22ae41df24079",
   "protocol_records": {
     "roomkit.core.hooks.SyncPipelineResult": {
       "__init__": [

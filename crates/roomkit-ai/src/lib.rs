@@ -140,9 +140,9 @@ pub use self::mock::{MockAiProvider, MockAiProviderOptions};
 pub use self::provider::{
     API_KEY_METADATA_KEY, AiContentPart, AiContext, AiImagePart, AiMessage, AiMessageContent,
     AiProvider, AiResponse, AiRole, AiTextPart, AiThinkingPart, AiToolCall, AiToolCallPart,
-    AiToolResultPart, CallIds, Date, DynAiProvider, ModelInfo, ModelPricing, ProviderError,
-    ProviderErrorOptions, ProviderStream, RoundTranscript, SPEECH_CAPABILITY, ServedCall,
-    StreamDone, StreamEvent, StreamTextDelta, StreamThinkingDelta, StreamToolCall,
+    AiToolResultPart, CallIds, Date, DynAiProvider, FinishReason, ModelInfo, ModelPricing,
+    ProviderError, ProviderErrorOptions, ProviderStream, RoundTranscript, SPEECH_CAPABILITY,
+    ServedCall, StreamDone, StreamEvent, StreamTextDelta, StreamThinkingDelta, StreamToolCall,
     StreamToolCallDelta, StreamUsage, TRANSCRIPTION_CAPABILITY, TextStream, ThinkingBlocks,
     is_context_overflow_message, round_parts, speech_tags, stream_call_of, thinking_parts_of,
     tool_arguments, tool_call_of, with_speech_tags,

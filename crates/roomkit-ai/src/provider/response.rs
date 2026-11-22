@@ -9,19 +9,7 @@ use serde_json::Value;
 
 use super::call_rules::{ArgumentStatus, blank};
 use super::context::AiThinkingPart;
-
-/// The endings under which a response ran out of room: the output cap, the
-/// context window filling up mid-answer, in each provider's word.
-const OUT_OF_ROOM: [&str; 4] = [
-    "length",
-    "max_tokens",
-    "model_context_window_exceeded",
-    "model_length",
-];
-
-/// The endings beside running out of room that can stop a call
-/// mid-arguments: a generation error, a content filter, a refusal.
-const CUTTING: [&str; 3] = ["error", "content_filter", "refusal"];
+use super::finish_reason::FinishReason;
 
 /// A whole generation (RFC §6.7): Python's `AIResponse(*, content,
 /// finish_reason=None, usage={}, metadata={}, tasks=[], observations=[], tool_calls=[])`.
@@ -29,9 +17,10 @@ const CUTTING: [&str; 3] = ["error", "content_filter", "refusal"];
 pub struct AiResponse {
     /// Its text.
     pub content: String,
-    /// Why it stopped, in the provider's own word (`stop`, `tool_calls`,
-    /// `length`...); `None` when it gave none.
-    pub finish_reason: Option<String>,
+    /// Why it stopped, in the contract's one vocabulary, which the provider
+    /// maps its vendor's words onto; `None` when it gave no reason the
+    /// provider knows.
+    pub finish_reason: Option<FinishReason>,
     /// What it used: integer counters by name (`input_tokens`,
     /// `output_tokens`...), which the turn's record sums.
     pub usage: Metadata,
@@ -164,7 +153,7 @@ impl AiToolCall {
         id: impl Into<String>,
         name: impl Into<String>,
         raw: &str,
-        finish_reason: Option<&str>,
+        finish_reason: Option<FinishReason>,
         last: bool,
     ) -> Self {
         let read = read_arguments(raw);
@@ -184,7 +173,7 @@ impl AiToolCall {
 #[doc(hidden)]
 pub fn read_tool_calls(
     raw: Vec<(String, String, String)>,
-    finish_reason: Option<&str>,
+    finish_reason: Option<FinishReason>,
 ) -> Vec<AiToolCall> {
     let last = raw.len().checked_sub(1);
     raw.into_iter()
@@ -282,31 +271,34 @@ pub(super) fn read_arguments(raw: &str) -> Option<Metadata> {
 }
 
 /// Whether a response that ended for `finish_reason` may have stopped its
-/// last call mid-arguments: it ran out of room, a filter or a refusal
-/// stopped it, or its stream ended with no reason at all.
-pub(super) fn cuts_calls(finish_reason: Option<&str>) -> bool {
+/// last call mid-arguments: it ran out of room, failed, a filter or a
+/// refusal stopped it, or its stream ended with no reason at all.
+pub(super) fn cuts_calls(finish_reason: Option<FinishReason>) -> bool {
     finish_reason.is_none_or(|reason| {
-        is_truncation(Some(reason)) || CUTTING.contains(&reason.to_ascii_lowercase().as_str())
+        matches!(
+            reason,
+            FinishReason::Length
+                | FinishReason::Error
+                | FinishReason::ContentFilter
+                | FinishReason::Refusal
+        )
     })
 }
 
-/// The endings of a response whose call its provider did not hand over:
-/// one it could not parse, or one to a tool the request did not enable.
-const MALFORMED_CALL: [&str; 2] = ["malformed_function_call", "unexpected_tool_call"];
-
-/// Whether a response ended on a call its provider did not hand over:
-/// Python's `is_malformed_call`.
-pub(crate) fn is_malformed_call(finish_reason: Option<&str>) -> bool {
-    finish_reason.is_some_and(|reason| {
-        MALFORMED_CALL
-            .iter()
-            .any(|malformed| reason.eq_ignore_ascii_case(malformed))
-    })
+/// Whether a response ended on a call its provider did not hand over, one
+/// it could not parse or one to a tool the request did not enable: Python's
+/// `is_malformed_call`.
+pub(crate) fn is_malformed_call(finish_reason: Option<FinishReason>) -> bool {
+    matches!(
+        finish_reason,
+        Some(FinishReason::MalformedCall | FinishReason::UnexpectedCall)
+    )
 }
 
-/// Whether a response that ended for `finish_reason` ran out of room.
-pub fn is_truncation(finish_reason: Option<&str>) -> bool {
-    finish_reason.is_some_and(|reason| OUT_OF_ROOM.contains(&reason.to_ascii_lowercase().as_str()))
+/// Whether a response that ended for `finish_reason` ran out of room:
+/// `length`.
+pub fn is_truncation(finish_reason: Option<FinishReason>) -> bool {
+    finish_reason == Some(FinishReason::Length)
 }
 
 /// One event of a structured stream (RFC §6.7, Appendix A.9): Python's
@@ -497,8 +489,8 @@ pub struct StreamUsage {
 /// usage={}, metadata={})`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StreamDone {
-    /// Why it stopped.
-    pub finish_reason: Option<String>,
+    /// Why it stopped, as [`AiResponse::finish_reason`].
+    pub finish_reason: Option<FinishReason>,
     /// What it used.
     pub usage: Metadata,
     /// As [`AiResponse::metadata`]: what the response says of itself
@@ -699,7 +691,10 @@ mod tests {
         );
     }
 
-    fn read(calls: &[(&str, &str)], finish_reason: &str) -> Vec<(String, Value, bool, bool)> {
+    fn read(
+        calls: &[(&str, &str)],
+        finish_reason: FinishReason,
+    ) -> Vec<(String, Value, bool, bool)> {
         let raw = calls
             .iter()
             .map(|(id, arguments)| {
@@ -734,7 +729,7 @@ mod tests {
             ("d", "[1, 2]"),
         ];
         assert_eq!(
-            read(&calls, "tool_calls"),
+            read(&calls, FinishReason::ToolCalls),
             vec![
                 ("a".to_owned(), json!({ "order": "42" }), false, false),
                 ("b".to_owned(), json!({}), false, false),
@@ -749,7 +744,7 @@ mod tests {
     #[test]
     fn only_the_last_call_of_a_cut_response_with_no_argument_text_is_cut() {
         let calls = [("a", ""), ("b", r#"{"order": "1"}"#), ("c", "")];
-        let marks: Vec<(bool, bool)> = read(&calls, "length")
+        let marks: Vec<(bool, bool)> = read(&calls, FinishReason::Length)
             .into_iter()
             .map(|(_, _, partial, garbled)| (partial, garbled))
             .collect();

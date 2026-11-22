@@ -16,7 +16,7 @@ use roomkit_ai::memory::{
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
     AiChannel, AiChannelOptions, AiContext, AiMessage, AiProvider, AiResponse, AiRole, AiTool,
-    AiToolResultPart, ProviderError, ToolError, Tools, read_tool_calls,
+    AiToolResultPart, FinishReason, ProviderError, ToolError, Tools, read_tool_calls,
 };
 use serde_json::json;
 
@@ -169,15 +169,15 @@ async fn an_earlier_round_reads_as_its_calls_then_their_results_whole() {
                 )
             })
             .collect();
-        let finish_reason = Some("tool_calls".to_owned());
+        let finish_reason = Some(FinishReason::ToolCalls);
         AiResponse {
-            tool_calls: read_tool_calls(calls, finish_reason.as_deref()),
+            tool_calls: read_tool_calls(calls, finish_reason),
             finish_reason,
             ..AiResponse::new("")
         }
     };
     let answering = |text: &str| AiResponse {
-        finish_reason: Some("stop".to_owned()),
+        finish_reason: Some(FinishReason::Stop),
         ..AiResponse::new(text)
     };
     let model = Whole::new([

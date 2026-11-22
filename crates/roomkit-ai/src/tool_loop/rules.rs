@@ -13,8 +13,8 @@ use super::Bounds;
 use crate::ContinuationPolicy;
 use crate::error::AiError;
 use crate::provider::{
-    ProviderError, ResponseSchemaError, ResponseSchemaErrorOptions, ResponseSchemaFailure,
-    is_malformed_call, is_truncation,
+    FinishReason, ProviderError, ResponseSchemaError, ResponseSchemaErrorOptions,
+    ResponseSchemaFailure, is_malformed_call, is_truncation,
 };
 use crate::turn_budget::TurnBudget;
 
@@ -34,10 +34,6 @@ plain text.";
 /// (roomkit's `UNEXPECTED_CALL_NUDGE`).
 const UNEXPECTED_CALL_NUDGE: &str = "The tool you called is not available in this request, so \
 it did not run. Use one of the declared tools, or answer in plain text.";
-
-/// The ending of a response whose call its provider did not hand over:
-/// one to a tool the request did not enable.
-const UNEXPECTED_CALL: &str = "unexpected_tool_call";
 
 /// The limits one turn's loop runs under, and the tries it has spent.
 #[derive(Debug)]
@@ -147,7 +143,7 @@ impl Limits {
         &mut self,
         had_tool_round: bool,
         text: &str,
-        finish_reason: Option<&str>,
+        finish_reason: Option<FinishReason>,
         policy: Option<&ContinuationPolicy>,
         cancelled: impl FnOnce() -> bool,
     ) -> Result<Retry, ProviderError> {
@@ -167,8 +163,8 @@ impl Limits {
             });
         }
         self.empty_retries += 1;
-        tracing::warn!(target: "roomkit::ai", finish_reason, retry = self.empty_retries,
-            of = self.max_empty_retries, "the round is asked again");
+        tracing::warn!(target: "roomkit::ai", finish_reason = finish_reason.map(FinishReason::as_str),
+            retry = self.empty_retries, of = self.max_empty_retries, "the round is asked again");
         let mut said = Vec::with_capacity(2);
         if !is_blank(text) {
             said.push(Message::new(Role::Assistant, text));
@@ -189,17 +185,12 @@ pub(super) enum Retry {
 fn continuation_nudge(
     policy: Option<&ContinuationPolicy>,
     text: &str,
-    finish: Option<&str>,
+    finish: Option<FinishReason>,
 ) -> Result<Option<String>, ProviderError> {
     let Some(policy) = policy else {
         return Ok(None);
     };
-    let natural = finish.is_some_and(|reason| {
-        ["stop", "end_turn", "stop_sequence"]
-            .iter()
-            .any(|word| reason.eq_ignore_ascii_case(word))
-    });
-    if is_blank(text) || !natural {
+    if is_blank(text) || finish != Some(FinishReason::Stop) {
         return Ok(None);
     }
     policy(text)
@@ -213,11 +204,10 @@ fn continuation_nudge(
 fn empty_round_nudge(
     had_tool_round: bool,
     text: &str,
-    finish_reason: Option<&str>,
+    finish_reason: Option<FinishReason>,
 ) -> Option<&'static str> {
     if is_malformed_call(finish_reason) {
-        let unexpected =
-            finish_reason.is_some_and(|reason| reason.eq_ignore_ascii_case(UNEXPECTED_CALL));
+        let unexpected = finish_reason == Some(FinishReason::UnexpectedCall);
         return Some(if unexpected {
             UNEXPECTED_CALL_NUDGE
         } else {
@@ -230,7 +220,7 @@ fn empty_round_nudge(
     if is_truncation(finish_reason) {
         tracing::warn!(
             target: "roomkit::ai",
-            finish_reason,
+            finish_reason = finish_reason.map(FinishReason::as_str),
             "the response ran out of room before any answer"
         );
         return None;
@@ -262,7 +252,7 @@ pub(super) fn unanswered(constrained: bool, reason: LoopEndReason) -> Option<Pro
 pub(super) fn final_round_reason(
     had_tool_round: bool,
     text: &str,
-    finish_reason: Option<&str>,
+    finish_reason: Option<FinishReason>,
     limit: Option<LoopEndReason>,
 ) -> LoopEndReason {
     if is_malformed_call(finish_reason) {
@@ -292,22 +282,40 @@ mod tests {
             (
                 true,
                 "",
-                Some("MALFORMED_FUNCTION_CALL"),
+                Some(FinishReason::MalformedCall),
                 None,
                 LoopEndReason::EmptyResponse,
             ),
             (
                 true,
                 "",
-                Some("unexpected_tool_call"),
+                Some(FinishReason::UnexpectedCall),
                 timeout,
                 LoopEndReason::Timeout,
             ),
             (true, "Answer", None, timeout, LoopEndReason::Completed),
             (false, "", None, None, LoopEndReason::Completed),
-            (true, "", Some("length"), timeout, LoopEndReason::Truncated),
-            (true, " ", Some("stop"), timeout, LoopEndReason::Timeout),
-            (true, "", Some("stop"), None, LoopEndReason::EmptyResponse),
+            (
+                true,
+                "",
+                Some(FinishReason::Length),
+                timeout,
+                LoopEndReason::Truncated,
+            ),
+            (
+                true,
+                " ",
+                Some(FinishReason::Stop),
+                timeout,
+                LoopEndReason::Timeout,
+            ),
+            (
+                true,
+                "",
+                Some(FinishReason::Stop),
+                None,
+                LoopEndReason::EmptyResponse,
+            ),
         ];
         for (had_tool_round, text, finish_reason, limit, expected) in cases {
             assert_eq!(

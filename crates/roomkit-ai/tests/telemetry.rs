@@ -25,8 +25,8 @@ use roomkit::{
 };
 use roomkit_ai::{
     AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, AiResponseEvent, AiTool,
-    AiToolCall, ProviderError, ProviderErrorOptions, ProviderStream, StreamDone, StreamEvent,
-    StreamTextDelta, ToolError, ToolResult, Tools, tool_arguments,
+    AiToolCall, FinishReason, ProviderError, ProviderErrorOptions, ProviderStream, StreamDone,
+    StreamEvent, StreamTextDelta, ToolError, ToolResult, Tools, tool_arguments,
 };
 use serde_json::{Value, json};
 use tokio::sync::Notify;
@@ -805,7 +805,7 @@ async fn a_turn_s_request_names_the_broadcast_it_runs_under() {
 async fn a_cut_schema_room_turn_fails_its_span() {
     let (kit, mock) = room_of(false, Vec::new()).await;
     let call = AiResponse {
-        finish_reason: Some("tool_calls".to_owned()),
+        finish_reason: Some(FinishReason::ToolCalls),
         tool_calls: vec![AiToolCall::new("c", "lookup")],
         ..AiResponse::new("")
     };

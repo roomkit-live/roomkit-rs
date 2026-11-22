@@ -18,8 +18,8 @@ use roomkit::{RoomKit, RoomKitOptions, SubscribeRoomOptions};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
     AiChannel, AiChannelOptions, AiContentPart, AiContext, AiMessageContent, AiProvider,
-    AiResponse, AiRole, AiTool, ProviderError, ProviderStream, StreamDone, StreamEvent,
-    StreamTextDelta, StreamThinkingDelta, StreamToolCall, ToolResult, Tools,
+    AiResponse, AiRole, AiTool, FinishReason, ProviderError, ProviderStream, StreamDone,
+    StreamEvent, StreamTextDelta, StreamThinkingDelta, StreamToolCall, ToolResult, Tools,
 };
 use serde_json::Value;
 
@@ -262,7 +262,7 @@ async fn a_round_s_calls_keep_their_place_among_the_blocks_whatever_their_ids() 
     };
     let call = |id: &str| StreamEvent::ToolCall(StreamToolCall::new(id, "lookup"));
     let done = StreamDone {
-        finish_reason: Some("tool_calls".to_owned()),
+        finish_reason: Some(FinishReason::ToolCalls),
         ..StreamDone::default()
     };
     let first = ScriptedRound::streaming([

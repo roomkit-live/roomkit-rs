@@ -19,7 +19,7 @@ impl Loop {
         messages: &mut Vec<Message>,
         (steering, out): (&Steering, &Yielder<Result<TurnItem, ProviderError>>),
     ) -> Result<Option<LoopEndReason>, ProviderError> {
-        let finish = generation.done.finish_reason.as_deref();
+        let finish = generation.done.finish_reason;
         let policy = self.continuation.as_ref().filter(|_| has_tools);
         match limits.try_again(had_tool_round, &generation.text, finish, policy, || {
             steering.cancelled()

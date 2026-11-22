@@ -8,6 +8,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **BREAKING — a generation ends in one closed vocabulary, `FinishReason`**, where `finish_reason` was the provider's own word, as in Python (RFC §6.7, RMK-1987): `Stop`, `ToolCalls`, `Length`, `ContentFilter`, `Refusal`, `MalformedCall`, `UnexpectedCall` and `Error`, written as `stop`, `tool_calls`, `length`, `content_filter`, `refusal`, `malformed_call`, `unexpected_call` and `error`. `AiResponse::finish_reason` and `StreamDone::finish_reason` are `Option<FinishReason>`, as are the `finish_reason` of `is_truncation`, `call_cut`, `call_partial`, `call_garbled`, `AiToolCall::read`, `read_tool_calls` and `check_schema_answer`, and `ScriptedRound::with_finish_reason` takes one. The tool loop and the response-schema check read these words only: no vendor's word (`end_turn`, `MAX_TOKENS`, `MALFORMED_FUNCTION_CALL`...) is a truncation, a natural stop or a call that could not be parsed anymore. Migration: a provider maps its vendor's words onto `FinishReason` before it builds an `AiResponse` or a `StreamDone`, and a word it does not know onto `None`, which reads as a stream that ended without a reason: the response's last call, if its arguments did not arrive whole, is cut.
 - The supervisor's default first-pass instruction gives a neutral example,
   `'analyse electric cars' → 'Electric cars'`, where it named a vendor, as
   in Python (RFC §19.7.3, RMK-1982).

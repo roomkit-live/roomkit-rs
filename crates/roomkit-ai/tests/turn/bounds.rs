@@ -12,8 +12,8 @@ use roomkit::testing::TurnTap;
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
     AiChannel, AiChannelOptions, AiContext, AiError, AiMessage, AiProvider, AiResponse, AiTool,
-    Date, FallbackRouter, HumanInputToolHandler, HumanInputToolHandlerOptions, ModelInfo,
-    ModelPricing, ProviderError, SkillRegistry, ToolPolicy, ToolResult, Tools,
+    Date, FallbackRouter, FinishReason, HumanInputToolHandler, HumanInputToolHandlerOptions,
+    ModelInfo, ModelPricing, ProviderError, SkillRegistry, ToolPolicy, ToolResult, Tools,
 };
 use serde_json::{Value, json};
 
@@ -131,7 +131,7 @@ async fn an_empty_answer_after_a_round_is_asked_again_within_its_tries() {
             50,
             vec![
                 call(),
-                ScriptedRound::answering("").with_finish_reason("length"),
+                ScriptedRound::answering("").with_finish_reason(FinishReason::Length),
             ],
             ("truncated", 1, 2, 0),
         ),
@@ -183,8 +183,8 @@ async fn an_empty_answer_after_a_round_is_asked_again_within_its_tries() {
 #[tokio::test]
 async fn a_call_the_provider_did_not_hand_over_is_told_and_asked_again() {
     for (finish_reason, told) in [
-        ("MALFORMED_FUNCTION_CALL", MALFORMED),
-        ("unexpected_tool_call", UNEXPECTED),
+        (FinishReason::MalformedCall, MALFORMED),
+        (FinishReason::UnexpectedCall, UNEXPECTED),
     ] {
         let model = ScriptedProvider::new([
             ScriptedRound::answering("Let me check.").with_finish_reason(finish_reason),

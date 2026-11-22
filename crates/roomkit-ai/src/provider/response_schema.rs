@@ -7,6 +7,7 @@ use std::fmt;
 
 use serde_json::{Map, Value};
 
+use super::finish_reason::FinishReason;
 use super::json_schema::{SchemaMismatchOptions, check_portable_schema, schema_mismatch};
 use super::response::{is_malformed_call, is_truncation};
 use super::{
@@ -207,7 +208,7 @@ pub fn schema_for_generate<'a>(
 /// Python's `check_schema_answer(content, *, schema, provider, refusal=None,
 /// finish_reason=None)`. `content` is the answer's text, its reasoning
 /// split out; `refusal` why the model declined, when it did; an answer that
-/// ran out of room is truncated, under every provider's word for it. The
+/// ran out of room (`length`) is truncated. The
 /// document is checked against the schema itself, not only parsed: a
 /// server that takes the constraint and ignores it answers JSON of
 /// another shape. For a provider.
@@ -222,7 +223,7 @@ pub fn check_schema_answer(
     schema: &Map<String, Value>,
     provider: &str,
     refusal: Option<&str>,
-    finish_reason: Option<&str>,
+    finish_reason: Option<FinishReason>,
 ) -> Result<(), ProviderError> {
     if let Some(refusal) = refusal {
         let message = format!("the model declined to answer: {refusal}");
@@ -231,7 +232,7 @@ pub fn check_schema_answer(
     if is_truncation(finish_reason) {
         let message = format!(
             "the JSON answer was cut ({}): raise max_tokens, or shorten the context",
-            finish_reason.unwrap_or_default()
+            finish_reason.map(FinishReason::as_str).unwrap_or_default()
         );
         return Err(failed(message, ResponseSchemaFailure::Truncated, provider));
     }
@@ -280,10 +281,10 @@ pub fn checked_stream<'a>(
                     Ok(StreamEvent::TextDelta(delta)) => text.push_str(&delta.text),
                     Ok(StreamEvent::ToolCall(_)) => called = true,
                     Ok(StreamEvent::Done(done))
-                        if !called && !is_malformed_call(done.finish_reason.as_deref()) =>
+                        if !called && !is_malformed_call(done.finish_reason) =>
                     {
                         let declined = refusal(done);
-                        let finish = done.finish_reason.as_deref();
+                        let finish = done.finish_reason;
                         if let Err(error) = check_schema_answer(
                             &text,
                             schema,

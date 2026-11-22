@@ -17,8 +17,9 @@ use roomkit::testing::TurnTap;
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
     AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, AiToolCall, Date,
-    FallbackRouter, MockAiProvider, MockAiProviderOptions, ModelInfo, ModelPricing, ProviderError,
-    ProviderStream, StreamDone, StreamEvent, StreamTextDelta, StreamUsage, Tools, tool_arguments,
+    FallbackRouter, FinishReason, MockAiProvider, MockAiProviderOptions, ModelInfo, ModelPricing,
+    ProviderError, ProviderStream, StreamDone, StreamEvent, StreamTextDelta, StreamUsage, Tools,
+    tool_arguments,
 };
 use roomkit_core::rules::transcoding::text_of;
 use serde_json::{Value, json};
@@ -99,9 +100,9 @@ fn text(text: &str) -> Step {
     Step::Event(Box::new(StreamEvent::TextDelta(StreamTextDelta::new(text))))
 }
 
-fn done(finish_reason: &str, usage: Value) -> Step {
+fn done(finish_reason: FinishReason, usage: Value) -> Step {
     Step::Event(Box::new(StreamEvent::Done(StreamDone {
-        finish_reason: Some(finish_reason.to_owned()),
+        finish_reason: Some(finish_reason),
         usage: serde_json::from_value::<Metadata>(usage).unwrap(),
         ..StreamDone::default()
     })))
@@ -198,9 +199,9 @@ async fn a_stream_is_read_past_its_done_event() {
         let room = room_over(model.clone()).await;
         model.set(vec![
             text("Voici"),
-            done("stop", first.clone()),
+            done(FinishReason::Stop, first.clone()),
             text(" la suite"),
-            done("stop", second),
+            done(FinishReason::Stop, second),
         ]);
         room.says("Hello?").await;
         assert_eq!(
@@ -233,7 +234,7 @@ async fn a_cancel_past_a_done_event_keeps_what_it_reported() {
     });
     model.set(vec![
         text("Voici"),
-        done("stop", used.clone()),
+        done(FinishReason::Stop, used.clone()),
         Step::Wait(cancel),
         text(" jamais"),
     ]);
@@ -261,7 +262,7 @@ async fn a_usage_the_price_cannot_read_stops_the_read_at_its_done_event() {
     let room = room_under(model.clone(), options).await;
     model.set(vec![
         text("Voici"),
-        done("stop", json!({ "input_tokens": "many" })),
+        done(FinishReason::Stop, json!({ "input_tokens": "many" })),
         text(" jamais"),
     ]);
     let result = room.says("Hello?").await;
@@ -301,8 +302,8 @@ async fn each_done_event_is_priced_as_one_response() {
     let used = json!({ "input_tokens": 150, "output_tokens": 0 });
     model.set(vec![
         Step::Event(Box::new(StreamEvent::ToolCall(call.into()))),
-        done("tool_calls", used.clone()),
-        done("tool_calls", used),
+        done(FinishReason::ToolCalls, used.clone()),
+        done(FinishReason::ToolCalls, used),
     ]);
     room.says("Order 1?").await;
     assert_eq!(loop_end(&tap).0, json!("empty_response"));

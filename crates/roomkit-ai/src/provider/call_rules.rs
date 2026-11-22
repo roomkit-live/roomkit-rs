@@ -2,6 +2,7 @@
 
 use serde_json::Value;
 
+use super::finish_reason::FinishReason;
 use super::response::{cuts_calls, read_arguments};
 
 // Each function has its own options type, following the public API convention.
@@ -47,17 +48,25 @@ pub fn unreadable_arguments(raw: &Value) -> bool {
 }
 
 /// Whether the model's last call failed to arrive whole under a cut.
-pub fn call_cut(raw: &Value, finish_reason: Option<&str>, options: CallCutOptions) -> bool {
+pub fn call_cut(raw: &Value, finish_reason: Option<FinishReason>, options: CallCutOptions) -> bool {
     ArgumentStatus::of(raw, finish_reason, options.last).cut
 }
 
 /// Whether the call must be refused.
-pub fn call_partial(raw: &Value, finish_reason: Option<&str>, options: CallPartialOptions) -> bool {
+pub fn call_partial(
+    raw: &Value,
+    finish_reason: Option<FinishReason>,
+    options: CallPartialOptions,
+) -> bool {
     ArgumentStatus::of(raw, finish_reason, options.last).partial
 }
 
 /// Whether the provider supplied unreadable arguments without a cut.
-pub fn call_garbled(raw: &Value, finish_reason: Option<&str>, options: CallGarbledOptions) -> bool {
+pub fn call_garbled(
+    raw: &Value,
+    finish_reason: Option<FinishReason>,
+    options: CallGarbledOptions,
+) -> bool {
     ArgumentStatus::of(raw, finish_reason, options.last).garbled
 }
 
@@ -74,7 +83,7 @@ pub(super) struct ArgumentStatus {
 }
 
 impl ArgumentStatus {
-    fn of(raw: &Value, finish_reason: Option<&str>, last: bool) -> Self {
+    fn of(raw: &Value, finish_reason: Option<FinishReason>, last: bool) -> Self {
         let text_arrived = raw.as_str().is_some_and(|text| !blank(text));
         Self::from_read(unreadable_arguments(raw), text_arrived, finish_reason, last)
     }
@@ -82,7 +91,7 @@ impl ArgumentStatus {
     pub(super) fn from_read(
         unreadable: bool,
         text_arrived: bool,
-        finish_reason: Option<&str>,
+        finish_reason: Option<FinishReason>,
         last: bool,
     ) -> Self {
         let cut = last && cuts_calls(finish_reason) && (unreadable || !text_arrived);

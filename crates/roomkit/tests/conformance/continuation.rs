@@ -108,6 +108,19 @@ mod tests {
         }
     }
 
+    /// A scripted round ends on a word of the provider contract's
+    /// vocabulary (RFC §6.7); a vendor's own word is refused.
+    #[test]
+    fn a_round_ends_on_a_stop_reason_of_the_contract() {
+        let ended =
+            |word: &str| crate::agents::finish_reason(&json!({ "finish_reason": word }), false);
+        assert_eq!(ended("length"), Ok(Some(roomkit_ai::FinishReason::Length)));
+        assert_eq!(
+            ended("max_tokens"),
+            Err(r#"finish_reason: "max_tokens" is not a stop reason"#.to_owned())
+        );
+    }
+
     #[test]
     fn an_explicit_absent_finish_reason_is_not_a_natural_stop() {
         for spec in [

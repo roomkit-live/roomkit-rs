@@ -25,8 +25,8 @@ use roomkit::{
 };
 use roomkit_ai::{
     Agent, AgentOptions, AiContentPart, AiContext, AiMessageContent, AiProvider, AiResponse,
-    AiToolCall, MockAiProvider, MockAiProviderOptions, ProviderError, ProviderErrorOptions,
-    ToolResult,
+    AiToolCall, FinishReason, MockAiProvider, MockAiProviderOptions, ProviderError,
+    ProviderErrorOptions, ToolResult,
 };
 use serde_json::json;
 use warnings::Warnings;
@@ -53,7 +53,7 @@ fn calls(tool: &str, task: &str) -> AiResponse {
     let mut call = AiToolCall::new("c1", tool);
     call.arguments = Metadata::from_iter([("task".to_owned(), json!(task))]);
     AiResponse {
-        finish_reason: Some("tool_calls".to_owned()),
+        finish_reason: Some(FinishReason::ToolCalls),
         tool_calls: vec![call],
         ..AiResponse::new("")
     }
@@ -344,7 +344,7 @@ fn calling(tool: &str, arguments: serde_json::Value) -> AiResponse {
         call.arguments = members;
     }
     AiResponse {
-        finish_reason: Some("tool_calls".to_owned()),
+        finish_reason: Some(FinishReason::ToolCalls),
         tool_calls: vec![call],
         ..AiResponse::new("")
     }

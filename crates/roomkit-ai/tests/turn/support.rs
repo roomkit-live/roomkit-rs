@@ -17,7 +17,7 @@ use roomkit::{
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
     AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, AiRole, AiTool, AiToolCall,
-    ProviderError, ToolResult, Tools, tool_arguments,
+    FinishReason, ProviderError, ToolResult, Tools, tool_arguments,
 };
 use roomkit_core::ops::ChannelConfig;
 use serde_json::json;
@@ -383,22 +383,22 @@ impl Endless {
             })
             .filter(|message| message.role == AiRole::Assistant)
             .count();
-        let ended = |content: String, finish_reason: &str| AiResponse {
-            finish_reason: Some(finish_reason.to_owned()),
+        let ended = |content: String, finish_reason: FinishReason| AiResponse {
+            finish_reason: Some(finish_reason),
             ..AiResponse::new(content)
         };
         if done == 0 && self.turns.fetch_add(1, Ordering::SeqCst) >= MOST_TURNS {
-            return ended(String::new(), "stop");
+            return ended(String::new(), FinishReason::Stop);
         }
         if done < self.rounds {
             let mut call = AiToolCall::new(format!("c{done}"), "lookup_order");
             call.arguments = tool_arguments(r#"{"order": "1"}"#);
             return AiResponse {
                 tool_calls: vec![call],
-                ..ended(format!("Round {done}."), "tool_calls")
+                ..ended(format!("Round {done}."), FinishReason::ToolCalls)
             };
         }
-        ended("Answer.".to_owned(), "stop")
+        ended("Answer.".to_owned(), FinishReason::Stop)
     }
 }
 
