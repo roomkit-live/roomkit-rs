@@ -67,8 +67,10 @@ impl TurnHost {
     /// Starts the kit's hooks on the trigger of `payload`, an observed one,
     /// for this turn's agent and room, each in the background within its
     /// timeout, then runs `then` once every one ended, at once when none is
-    /// registered: Python's `_fire_async_hooks(..., then=...)`, which
-    /// `ON_AI_RESPONSE` fires (RFC §9.2).
+    /// registered: Python's `_fire_async_hooks(..., then=...)`. The room is
+    /// read in the background: a turn's `ON_AI_RESPONSE` report, which
+    /// starts its hooks before the turn ends, awaits
+    /// `ChannelTurnHooks::observe_after_context_then` instead (RFC §9.2).
     #[doc(hidden)]
     pub fn observe_turn<P: TurnPayload>(&self, payload: &P, then: impl FnOnce() + Send + 'static) {
         crate::turns::ChannelTurnHooks::from(self.clone()).observe(payload, then);

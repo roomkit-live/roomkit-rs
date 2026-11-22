@@ -259,7 +259,7 @@ impl Loop {
     /// then emits `ai_response` once they ended (RFC §8.2, §9.2). Outside a
     /// kit nothing fires. It returns once it read the room and started the
     /// hooks, as Python's turn awaits its report before its stream closes:
-    /// a later turn's observers never start before this one's (RFC §9.3).
+    /// a later turn's hooks never start before this one's.
     pub(super) async fn report(&self, reason: LoopEndReason, rounds: u32, spent: &Spent) {
         let Some(turn) = self.context.callbacks.clone() else {
             return;

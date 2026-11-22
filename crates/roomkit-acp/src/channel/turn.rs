@@ -241,7 +241,7 @@ impl<T: AcpTransport> TurnStream<T> {
     /// counters the agent returned, unaltered. Outside a kit nothing fires.
     /// The stream awaits the report, which reads the room and starts the
     /// hooks, as Python's turn awaits it before its stream closes: a later
-    /// turn's observers never start before this one's (RFC §9.3).
+    /// turn's hooks never start before this one's.
     fn report(&self, answered: &Answered) -> Option<Reporting> {
         let host = self.callbacks.clone()?;
         let (segments, content) =
@@ -314,6 +314,8 @@ impl<T: AcpTransport> Stream for TurnStream<T> {
         if let Some(hold) = &this.hold {
             hold.retire_steering();
         }
+        // A standalone turn reports before its session's cleanup, a room's
+        // or a detached turn's after it, as in Python.
         this.report_standalone_response();
         if this.poll_reporting(cx).is_pending()
             || this.begin_session_cleanup(cx)

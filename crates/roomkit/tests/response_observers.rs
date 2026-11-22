@@ -1,9 +1,9 @@
-//! A turn's `ON_AI_RESPONSE` observers read the room and start before the
-//! turn returns, on an AI channel and on an ACP channel: Python's turn awaits
-//! its report, room read included, before its stream closes, so a later
-//! turn's observers never start before this one's (RFC §9.3; RMK-1914, the
-//! scenario `acp/steer-isolates-running-rooms` on a store whose reads
-//! suspend).
+//! A turn's `ON_AI_RESPONSE` hooks get their room context and start before
+//! the turn returns, on an AI channel and on an ACP channel, a standalone ACP
+//! turn's before its session closes: Python's turn awaits its report, room
+//! read included, before its stream closes, so a later turn's hooks never
+//! start before this one's (RMK-1914, the scenario
+//! `acp/steer-isolates-running-rooms` on a store whose reads suspend).
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
@@ -11,6 +11,7 @@
 mod store;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use agent_client_protocol_schema::v1::{
@@ -20,11 +21,13 @@ use agent_client_protocol_schema::v1::{
     SetSessionConfigOptionResponse, StopReason,
 };
 use roomkit::model::hook::AllowOptions;
-use roomkit::model::{ChannelId, ChannelType, HookResult, InboundMessage, RoomId, TextContent};
+use roomkit::model::{
+    ChannelId, ChannelType, EventType, HookResult, InboundMessage, RoomId, TextContent,
+};
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, CreateRoomOptions, HookExecution, HookOptions, HookTrigger,
-    ProcessInboundOptions, RoomKit, RoomKitOptions,
+    ProcessInboundOptions, RoomKit, RoomKitOptions, SendEventOptions,
 };
 use roomkit_acp::{
     AcpChannel, AcpChannelOptions, AcpClient, AcpConnection, AcpError, AcpTransport,
@@ -166,7 +169,7 @@ async fn an_acp_turn_returns_after_its_response_observers_read_the_room() {
         id("agent"),
         "/srv",
         AcpChannelOptions {
-            transport: Some(Arming(Arc::clone(&gate))),
+            transport: Some(Arming::new(&gate)),
             ..Default::default()
         },
     )
@@ -175,9 +178,71 @@ async fn an_acp_turn_returns_after_its_response_observers_read_the_room() {
     the_turn_returns_after_its_report_read(kit, &gate, responses).await;
 }
 
+/// A standalone ACP turn reports before it closes its own session, as
+/// Python's `_report_response` runs before `_close_turn_session`.
+#[tokio::test(start_paused = true)]
+async fn a_standalone_acp_turn_reports_before_its_session_closes() {
+    let gate = Arc::new(ContextGate::default());
+    let transport = Arming::new(&gate);
+    let closed = Arc::clone(&transport.closed);
+    let agent = AcpChannel::new(
+        id("agent"),
+        "/srv",
+        AcpChannelOptions {
+            transport: Some(transport),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let (kit, mut responses) = kit(&gate, agent).await;
+    let sender = Arc::clone(&kit);
+    let mut sent = tokio::spawn(async move {
+        let options = SendEventOptions {
+            event_type: EventType::Instruction,
+            standalone: true,
+            addressed_to: Some(vec![id("agent")]),
+            ..Default::default()
+        };
+        sender
+            .send_event(&room(), &id("ws"), TextContent::new("Summarize."), options)
+            .await
+    });
+    tokio::time::timeout(PATIENCE, gate.reached.notified())
+        .await
+        .unwrap();
+    assert!(tokio::time::timeout(BRIEF, &mut sent).await.is_err());
+    assert_eq!(
+        closed.load(Ordering::SeqCst),
+        0,
+        "the standalone session closed before its turn's report read the room"
+    );
+    gate.release.notify_one();
+    let observed = tokio::time::timeout(PATIENCE, responses.recv()).await;
+    assert_eq!(observed.unwrap().as_deref(), Some("r1"));
+    tokio::time::timeout(PATIENCE, sent)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(closed.load(Ordering::SeqCst), 1);
+}
+
 /// An agent that ends each prompt at once, having armed the gate: the
 /// turn's own room reads are done by then, its next one is its report's.
-struct Arming(Arc<ContextGate>);
+/// It counts the sessions it was asked to close.
+struct Arming {
+    gate: Arc<ContextGate>,
+    closed: Arc<AtomicUsize>,
+}
+
+impl Arming {
+    fn new(gate: &Arc<ContextGate>) -> Self {
+        Self {
+            gate: Arc::clone(gate),
+            closed: Arc::default(),
+        }
+    }
+}
 
 #[expect(clippy::unused_async_trait_impl, reason = "transport fixture")]
 impl AcpTransport for Arming {
@@ -188,18 +253,30 @@ impl AcpTransport for Arming {
     }
 
     async fn open(&self, _: Arc<dyn AcpClient>) -> Result<ArmingConnection, AcpError> {
-        Ok(ArmingConnection(Arc::clone(&self.0)))
+        Ok(ArmingConnection {
+            gate: Arc::clone(&self.gate),
+            closed: Arc::clone(&self.closed),
+            sessions: AtomicUsize::new(0),
+        })
     }
 
     async fn close(&self) {}
 }
 
-struct ArmingConnection(Arc<ContextGate>);
+struct ArmingConnection {
+    gate: Arc<ContextGate>,
+    closed: Arc<AtomicUsize>,
+    sessions: AtomicUsize,
+}
 
 #[expect(clippy::unused_async_trait_impl, reason = "connection fixture")]
 impl AcpConnection for ArmingConnection {
     async fn initialize(&self, _: InitializeRequest) -> Result<InitializeResponse, AcpError> {
-        Ok(serde_json::from_value(serde_json::json!({"protocolVersion": 1})).unwrap())
+        let announced = serde_json::json!({
+            "protocolVersion": 1,
+            "agentCapabilities": { "sessionCapabilities": { "close": {} } },
+        });
+        Ok(serde_json::from_value(announced).unwrap())
     }
 
     async fn authenticate(&self, _: AuthenticateRequest) -> Result<AuthenticateResponse, AcpError> {
@@ -207,11 +284,12 @@ impl AcpConnection for ArmingConnection {
     }
 
     async fn new_session(&self, _: NewSessionRequest) -> Result<NewSessionResponse, AcpError> {
-        Ok(NewSessionResponse::new("session-1"))
+        let session = self.sessions.fetch_add(1, Ordering::SeqCst) + 1;
+        Ok(NewSessionResponse::new(format!("session-{session}")))
     }
 
     async fn prompt(&self, _: PromptRequest) -> Result<PromptResponse, AcpError> {
-        self.0.arm();
+        self.gate.arm();
         Ok(PromptResponse::new(StopReason::EndTurn))
     }
 
@@ -223,6 +301,7 @@ impl AcpConnection for ArmingConnection {
         &self,
         _: CloseSessionRequest,
     ) -> Result<CloseSessionResponse, AcpError> {
+        self.closed.fetch_add(1, Ordering::SeqCst);
         Ok(CloseSessionResponse::new())
     }
 
