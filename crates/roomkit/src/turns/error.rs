@@ -636,6 +636,22 @@ mod tests {
     #[error("the provider failed")]
     struct Outer(#[source] std::io::Error);
 
+    #[test]
+    fn a_delivery_stream_error_retains_the_record_from_its_own_turn() {
+        let classes = crate::turns::ErrorClasses::default();
+        for status in [403, 503] {
+            let mut record = WireError::new("ProviderError", "request failed");
+            record
+                .attributes
+                .insert("status_code".into(), status.into());
+            record
+                .causes
+                .push(WireError::new("ReadError", "the stream ended"));
+            let error: crate::ChannelError = Box::new(RemoteError(record.clone()));
+            assert_eq!(classes.record(&*error), record);
+        }
+    }
+
     /// An agent's turn cancelled on its executor crosses as Python's
     /// `TurnLinkError("executor_lost", ...)` (roomkit
     /// `src/roomkit/turns/_owner_turn.py`), its reason among its

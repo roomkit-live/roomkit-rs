@@ -35,6 +35,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `ErrorClasses::record` preserves the original class, attributes and causes
+  of an error read from a delivery stream.
 - An ACP turn cancelled while the agent's permission request waits on its
   decision answers that request `cancelled`, as ACP requires of a client
   that cancels a prompt, and as in Python (RFC §6.4, RMK-423): the external

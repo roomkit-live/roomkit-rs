@@ -86,6 +86,7 @@ impl ErrorClasses {
     }
 
     /// Encode an error and its ordered source chain for another participant.
+    /// A failure received from a delivery stream retains its original wire record.
     pub fn record(&self, error: &(dyn Error + Send + Sync + 'static)) -> ErrorRecord {
         self.encode_with(error, || super::error::turn_failure(error))
     }
@@ -142,6 +143,9 @@ impl ErrorClasses {
 }
 
 fn crossed<'a>(error: &'a (dyn Error + 'static)) -> Option<&'a ErrorRecord> {
+    if let Some(stream) = error.downcast_ref::<super::error::RemoteError>() {
+        return Some(&stream.0);
+    }
     match error.downcast_ref::<RoomKitError>() {
         Some(RoomKitError::RemoteTurn {
             detail: Some(detail),
