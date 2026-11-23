@@ -905,6 +905,47 @@ mod tests {
         );
     }
 
+    /// A voice its channel labels is a source of its own, recorded as the
+    /// Python implementation records it, digest for digest (RFC §6.4,
+    /// §12.2.3, RMK-2026): the same name under another label, or under a
+    /// label with no epoch, is another source and ranks second.
+    #[test]
+    fn a_labelled_voice_records_as_the_python_implementation_does() {
+        let mut context = room();
+        let mut records = Vec::new();
+        for (label, epoch, name) in [
+            ("A", Some(0), "Speaker A"),
+            ("B", Some(0), "Speaker B"),
+            ("A", None, "Speaker A"),
+        ] {
+            let mut event = message("ws", "owner", Some(name));
+            event
+                .metadata
+                .insert(SPEAKER_LABEL.to_owned(), Value::String(label.to_owned()));
+            if let Some(epoch) = epoch {
+                event
+                    .metadata
+                    .insert(SPEAKER_EPOCH.to_owned(), json!(epoch));
+            }
+            let written = with_author(&mut event, &context, None).unwrap();
+            records.push(event.metadata.get(AUTHOR).cloned());
+            if written.is_some() {
+                context.author_register = written;
+            }
+        }
+        let author = |name: &str, rank: u32, source: &str| {
+            Some(json!({ "name": name, "rank": rank, "source": source }))
+        };
+        assert_eq!(
+            records,
+            vec![
+                author("Speaker A", 1, "bac9440936a40aed"),
+                author("Speaker B", 1, "0c6c890ef5fe82bb"),
+                author("Speaker A", 2, "610284d9d7c39a62"),
+            ]
+        );
+    }
+
     /// A record the event came with is the runtime's alone: dropped.
     #[test]
     fn drops_a_record_the_event_came_with() {
