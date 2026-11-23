@@ -40,6 +40,11 @@ pub(crate) const AUTHOR_REGISTER: &str = "author_register";
 /// sender's name under.
 const SENDER_NAME: &str = "sender_name";
 
+/// The event metadata keys a channel's diarization labels a voice of its
+/// sender's stream with, and the stream it heard it in (RFC §12.2.3).
+const SPEAKER_LABEL: &str = "speaker_label";
+const SPEAKER_EPOCH: &str = "speaker_epoch";
+
 /// The register's version, the Python implementation's.
 const VERSION: i64 = 3;
 
@@ -248,18 +253,51 @@ pub(crate) fn author_name(event: &RoomEvent, people: &People<'_>) -> Option<Stri
 }
 
 /// Who `event` comes from: the room's participant, whichever channel
-/// reached them; else its sender on its channel; else its channel.
+/// reached them; else the voice its channel's diarization labels on its
+/// sender's stream (RFC §12.2.3), so that two voices of one microphone are
+/// two sources; else its sender on its channel; else its channel.
 pub(crate) fn source_of(event: &RoomEvent, people: &People<'_>) -> Vec<String> {
     if let Some(person) = people.of(event) {
         return vec!["participant".to_owned(), person.id.to_string()];
     }
     let channel = event.source.channel_id.to_string();
+    if let Some((label, epoch)) = voice_of(event) {
+        let sender = event
+            .source
+            .participant_id
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default();
+        return vec!["voice".to_owned(), channel, sender, label, epoch];
+    }
     match &event.source.participant_id {
         Some(sender) if !sender.as_str().is_empty() => {
             vec!["sender".to_owned(), channel, sender.to_string()]
         }
         Some(_) | None => vec!["channel".to_owned(), channel],
     }
+}
+
+/// The label and the stream epoch of the voice `event` is from, as its
+/// channel's diarization set them (`metadata.speaker_label` and
+/// `metadata.speaker_epoch`, RFC §12.2.3); `None` for no label. An epoch that
+/// is not an integer reads as empty, as in the Python implementation.
+fn voice_of(event: &RoomEvent) -> Option<(String, String)> {
+    let Some(Value::String(label)) = event.metadata.get(SPEAKER_LABEL) else {
+        return None;
+    };
+    if label.is_empty() {
+        return None;
+    }
+    let epoch = match event.metadata.get(SPEAKER_EPOCH) {
+        Some(Value::Number(number)) => number
+            .as_i64()
+            .map(|epoch| epoch.to_string())
+            .or_else(|| number.as_u64().map(|epoch| epoch.to_string()))
+            .unwrap_or_default(),
+        _ => String::new(),
+    };
+    Some((label.clone(), epoch))
 }
 
 /// `parts` hashed with `salt`, the room's id: the first 16 hexadecimal

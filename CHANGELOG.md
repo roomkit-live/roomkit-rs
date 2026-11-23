@@ -25,6 +25,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   scenarios that read a vendor's own rendering left the shared corpus, so
   the runners have no known failure left (RMK-1982).
 
+### Fixed
+
+- Two voices a channel's diarization labels on one sender's stream
+  (`metadata.speaker_label` in its `speaker_epoch`) are two speakers, as in
+  Python (RFC §6.4, §12.2.3, RMK-2026): the model reads each of their turns
+  under its name, where they counted as one speaker and read unlabelled
+  unless a participant record named them.
+
 ## [0.3.0] — 2026-11-22
 
 ### Added
