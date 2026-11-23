@@ -1,6 +1,5 @@
 //! Redis Streams transport for text turns between processes (RFC §10.6).
 mod after_turn;
-pub(crate) use after_turn::PeerOwner;
 mod changes;
 pub(crate) use changes::{CoverageNotice, ServingBackends};
 mod control;

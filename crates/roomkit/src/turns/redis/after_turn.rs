@@ -2,7 +2,6 @@
 //! The last 10,000 received turns retain their routes, as in Python's Redis Routes.
 mod owners;
 pub(super) use owners::TurnOwners;
-use serde_json::Value;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 use uuid::Uuid;
@@ -10,7 +9,6 @@ use uuid::Uuid;
 use super::stream::Message;
 use super::{Node, RedisTurnBackend};
 use crate::RoomKitError;
-use crate::turns::ErrorClasses;
 use crate::turns::wire::{OwnerMessage, OwnerMessageEnvelope, RoomCall, RoomCallResult};
 use crate::turns::{RoomOwner, RoomPublication, TurnFuture};
 use crate::turns::{in_memory, lock};
@@ -47,18 +45,6 @@ impl PeerOwner {
         lock(&backend.0.routes)
             .turn_owners
             .peer(self.turn_id.as_deref()?)
-    }
-
-    pub(crate) async fn call(
-        &self,
-        call: RoomCall,
-        error_classes: &ErrorClasses,
-    ) -> Result<Value, RoomKitError> {
-        let result = self.call_result(call).await?;
-        if let Some(error) = result.error {
-            return Err(error_classes.rebuild(&error));
-        }
-        Ok(result.result)
     }
 
     async fn call_result(&self, call: RoomCall) -> Result<RoomCallResult, RoomKitError> {
@@ -109,24 +95,9 @@ impl PeerOwner {
         Ok(result)
     }
 
-    /// Enqueue immediately: a subsequent room call must follow this work
-    /// in the owner's Redis stream even if the caller never yields between them.
-    pub(crate) fn publish(&self, message: RoomPublication) {
-        match self.publication(message) {
-            Ok(Some(local)) => {
-                tokio::spawn(async move {
-                    if let Err(error) = local.await {
-                        tracing::debug!(%error, "a publication after a turn did not reach its owner");
-                    }
-                });
-            }
-            Ok(None) => {}
-            Err(error) => {
-                tracing::debug!(%error, "a publication after a turn did not reach its owner");
-            }
-        }
-    }
-
+    /// Enqueues at once for an owner on another node: a room call that
+    /// follows must follow this work in the owner's Redis stream, even when
+    /// the caller never yields between them.
     fn publication(
         &self,
         message: RoomPublication,

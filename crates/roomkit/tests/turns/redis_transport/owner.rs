@@ -67,3 +67,53 @@ async fn a_retained_worker_host_reaches_the_first_attending_owner_through_the_pu
         worker.close().await;
     }).await.unwrap();
 }
+
+/// Work a turn began keeps its way to its owner once its executor is gone,
+/// whether its turn was submitted on the executor's node or on another: the
+/// port the backend gave the executor carries the verb, as any backend's
+/// does (RFC §10.6.3).
+#[tokio::test]
+#[ignore = "requires REDIS_URL"]
+async fn a_host_reaches_its_owner_through_the_public_redis_backend_once_its_executor_is_gone() {
+    let mut reached = Vec::new();
+    tokio::time::timeout(Duration::from_secs(20), async {
+        for remote in [false, true] {
+            let prefix = format!("test:roomkit:public-gone:{}", Uuid::new_v4());
+            let owner = backend(&prefix);
+            let worker_node = if remote {
+                backend(&prefix)
+            } else {
+                owner.clone()
+            };
+            let (events, _received) = mpsc::unbounded_channel();
+            let recorder = Arc::new(Recorder("owner", events));
+            owner.attend(recorder).await.unwrap();
+            let (executor, mut captured) = worker();
+            worker_node.serve(Arc::new(executor.clone())).await.unwrap();
+            let link = owner.submit(request()).await.unwrap();
+            while !matches!(link.receive().await.unwrap().1, Frame::End) {}
+            link.release();
+            let host = captured.recv().await.unwrap();
+            // The executor goes: closed, replaced on its node, then dropped,
+            // which the end of what its channels captured tells.
+            executor.close().await;
+            let (next, _hosts) = worker();
+            worker_node.serve(Arc::new(next.clone())).await.unwrap();
+            drop(executor);
+            let gone = tokio::time::timeout(Duration::from_secs(3), captured.recv()).await;
+            assert!(matches!(gone, Ok(None)), "the executor is still held");
+            let answer = host.call("probe", None).await;
+            reached.push((host.reachable(), answer.map(|reply| reply["owner"].clone())));
+            next.close().await;
+            worker_node.close().await.unwrap();
+            owner.close().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        reached,
+        [(true, Ok(json!("owner"))), (true, Ok(json!("owner")))],
+        "submitted on the executor's node, then on another"
+    );
+}

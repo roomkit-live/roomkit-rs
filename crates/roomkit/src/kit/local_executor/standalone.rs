@@ -8,7 +8,7 @@ use tokio::sync::watch;
 
 use crate::channel::{BoxFuture, DynChannel};
 use crate::turn::TurnKit;
-#[cfg(any(test, feature = "redis"))]
+#[cfg(test)]
 use crate::turns::CarriedRequest;
 use crate::turns::wire::WireError;
 use crate::turns::{WorkerTurn, executor};
@@ -201,7 +201,7 @@ impl<S: ConversationStore> TurnExecutor<S> {
         self.take_from(carried, executor::WorkerOrigin::default())
     }
 
-    #[cfg(any(test, feature = "redis"))]
+    #[cfg(test)]
     pub(crate) fn take_from(
         &self,
         carried: CarriedRequest,

@@ -117,6 +117,21 @@ impl ExecutorLink for ExecutorEnd {
     }
 }
 
+/// The executor's end of a turn whose owner reads `turn`'s frames and writes
+/// the controls `controls` receives: also what another backend hands an
+/// executor of this process it placed a turn on.
+pub(in crate::turns) fn executor_end(
+    request: TurnRequest,
+    turn: Arc<MemoryTurn>,
+    controls: PipeReceiver<Control>,
+) -> Arc<dyn ExecutorLink> {
+    Arc::new(ExecutorEnd {
+        request,
+        turn,
+        controls: Reader::new(controls),
+    })
+}
+
 pub(super) fn submit(
     backend: &InMemoryTurnBackend,
     worker: &Worker,
@@ -134,11 +149,7 @@ pub(super) fn submit(
         controls,
         TurnTimeouts::default(),
     ));
-    let link = Arc::new(ExecutorEnd {
-        request: delivered,
-        turn: Arc::clone(&turn),
-        controls: Reader::new(receiving),
-    });
+    let link = executor_end(delivered, Arc::clone(&turn), receiving);
     let token = {
         let mut state = lock(&backend.state);
         if state.closed {

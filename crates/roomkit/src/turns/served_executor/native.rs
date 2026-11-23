@@ -1,14 +1,10 @@
 //! The transport can keep the native admission and shutdown path after erasing the store.
 use std::sync::Weak;
 
+#[cfg(feature = "redis")]
+use crate::RedisTurnBackend;
 use crate::turns::executor::Lifecycle;
-#[cfg(feature = "redis")]
-use crate::turns::executor::WorkerOrigin;
-#[cfg(feature = "redis")]
-use crate::turns::{CarriedRequest, WorkerTurn};
 use crate::{ConversationStore, TurnExecutor};
-#[cfg(feature = "redis")]
-use crate::{RedisTurnBackend, RoomKitError};
 
 use super::ServedExecutor;
 
@@ -23,12 +19,6 @@ pub(crate) trait Native {
     fn lifecycle(&self) -> Weak<Lifecycle>;
     #[cfg(feature = "redis")]
     fn served_by(&self, backend: &RedisTurnBackend);
-    #[cfg(feature = "redis")]
-    fn take_from(
-        &self,
-        request: CarriedRequest,
-        origin: WorkerOrigin,
-    ) -> Result<WorkerTurn, RoomKitError>;
 }
 
 impl<S: ConversationStore> Native for TurnExecutor<S> {
@@ -45,14 +35,6 @@ impl<S: ConversationStore> Native for TurnExecutor<S> {
     #[cfg(feature = "redis")]
     fn served_by(&self, backend: &RedisTurnBackend) {
         self.served_by(backend);
-    }
-    #[cfg(feature = "redis")]
-    fn take_from(
-        &self,
-        request: CarriedRequest,
-        origin: WorkerOrigin,
-    ) -> Result<WorkerTurn, RoomKitError> {
-        self.take_from(request, origin)
     }
 }
 

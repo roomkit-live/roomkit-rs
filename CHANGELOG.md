@@ -13,6 +13,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `ExecutorLink`, as it reads any transport's (RFC §10.6.3, RMK-2012): a
   control it cannot read cuts the turn `owner_lost`, where the Redis path
   cut it `frame_invalid`.
+- Work begun by a turn that came by Redis keeps its way to its owner once
+  its executor is gone, as through any backend's port (RFC §10.6.3,
+  RMK-2012): `TurnHost::reachable` stays true and a verb asks the owner,
+  where it failed `KitClosed`.
 - The supervisor's default first-pass instruction gives a neutral example,
   `'analyse electric cars' → 'Electric cars'`, where it named a vendor, as
   in Python (RFC §19.7.3, RMK-1982).

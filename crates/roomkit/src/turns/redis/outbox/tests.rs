@@ -1,4 +1,5 @@
 //! Exercise real Redis write refusal without interfering with any other inbox.
+use std::task::{Context, Waker};
 use std::time::Duration;
 
 use redis::AsyncCommands;
@@ -6,7 +7,7 @@ use redis::streams::StreamRangeReply;
 use uuid::Uuid;
 
 use super::*;
-use crate::turns::RedisTurnBackendOptions;
+use crate::turns::{RedisTurnBackendOptions, RoomOwner};
 
 fn backend() -> RedisTurnBackend {
     let url = std::env::var("REDIS_URL").expect("Set REDIS_URL to the test service");
@@ -103,7 +104,10 @@ async fn a_publication_precedes_the_next_question_from_the_same_host() {
         "frame": {"type":"framework_event","event_type":"ai_response","data":{}}
     }))
     .unwrap();
-    port.publish(publication);
+    // As a turn's outlet sends it: polled once, the caller never yielding.
+    let mut sent = port.room_publication(publication);
+    let enqueued = sent.as_mut().poll(&mut Context::from_waker(Waker::noop()));
+    assert!(enqueued.is_ready(), "the publication waited to be enqueued");
     backend.post(peer, &envelope("owner")).await.unwrap();
     let mut conn = backend.connection().await.unwrap();
     let key = backend.key("inbox:owner");

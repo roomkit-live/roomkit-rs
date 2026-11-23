@@ -42,7 +42,8 @@ async fn a_captured_host_reports_the_closing_owners_refusal() {
         return;
     };
     owner.attend().await.unwrap();
-    let port = worker.remember_owner("turn", owner.node_id());
+    // The call names its turn: its owner is the one that turn came from.
+    let port = worker.remember_owner("old", owner.node_id());
     let OwnerMessageEnvelope {
         message: OwnerMessage::RoomCall(call),
     } = serde_json::from_str(&room_call("late")).unwrap()
@@ -60,10 +61,12 @@ async fn a_captured_host_reports_the_closing_owners_refusal() {
     let mut draining = owner.0.draining.subscribe();
     let after_cut = async {
         drop(draining.wait_for(|closing| *closing).await.unwrap());
-        let reason = port
-            .call(call, &crate::turns::ErrorClasses::default())
-            .await
-            .unwrap_err();
+        // As a turn's host reads its owner's answer: a refusal is its error.
+        let reason = match crate::turns::RoomOwner::room_call(&port, call).await {
+            Ok(reply) => crate::turns::ErrorClasses::default()
+                .rebuild(&reply.error.expect("the closing owner's refusal")),
+            Err(error) => error,
+        };
         release.notify_one();
         reason
     };

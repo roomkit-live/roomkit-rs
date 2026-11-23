@@ -438,12 +438,10 @@ impl HostLink {
     pub(crate) fn reaches_owner(&self) -> bool {
         let executor_alive = self.turns.strong_count() > 0;
         self.is_open()
-            || self
-                .sender
-                .turn
-                .owner
-                .as_ref()
-                .map_or(executor_alive, |owner| owner.reachable(executor_alive))
+            || self.sender.turn.owner.as_ref().map_or(
+                executor_alive,
+                crate::turns::room_owner::WorkerOwner::reachable,
+            )
     }
 
     /// Runs `verb` with `arguments` on the owner, the turn's work at least
@@ -523,9 +521,6 @@ impl HostLink {
         };
         let turns = self.turns.upgrade();
         if let Some(owner) = &self.sender.turn.owner {
-            if !owner.reachable(turns.is_some()) && !self.lacks_owner_port() {
-                return Err(RoomKitError::KitClosed);
-            }
             return owner.call(message, &self.sender.turn.error_classes).await;
         }
         let turns = turns.ok_or(RoomKitError::KitClosed)?;

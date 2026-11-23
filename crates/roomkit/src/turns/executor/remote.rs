@@ -26,8 +26,6 @@ pub(crate) struct WorkerTurn {
     memory: Arc<MemoryTurn>,
     frames: PipeReceiver<Frame>,
     _writes: Option<tokio::sync::oneshot::Sender<()>>,
-    #[cfg(feature = "redis")]
-    cut: tokio::sync::watch::Sender<Option<&'static str>>,
 }
 
 impl WorkerTurn {
@@ -63,8 +61,6 @@ impl WorkerTurn {
             ..memory
         };
         let memory = Arc::new(memory);
-        #[cfg(feature = "redis")]
-        let cut = running.cutter();
         let executor = Executor {
             running,
             stale: false,
@@ -100,35 +96,17 @@ impl WorkerTurn {
             memory,
             frames: received,
             _writes: writes,
-            #[cfg(feature = "redis")]
-            cut,
         })
     }
 
     /// Accept the owner's numbered control envelope.
-    #[cfg(any(test, feature = "redis"))]
+    #[cfg(test)]
     pub(crate) fn control(&self, envelope: String) {
         self.memory.controls.deliver_raw(envelope);
     }
 
-    /// A backend close cuts local work without consuming a sequence number of the owner.
-    #[cfg(feature = "redis")]
-    pub(crate) fn cut_for_shutdown(&self) {
-        self.cut.send_replace(Some("backend_closed"));
-    }
-
-    /// Forward a local control with the first stream reader's context, once its
-    /// pull has been issued. Remote Redis turns receive no process-local context.
-    #[cfg(feature = "redis")]
-    pub(crate) fn local_control(&self, envelope: String, owner: &MemoryTurn) {
-        if let Some(context) = crate::turns::lock(&owner.contexts).stream.clone() {
-            self.memory.first_stream_context(context);
-        }
-        self.control(envelope);
-    }
-
     /// The next numbered frame for the owner, through the terminal frame.
-    #[cfg(any(test, feature = "redis"))]
+    #[cfg(test)]
     pub(crate) async fn next_frame(&mut self) -> Option<String> {
         self.frames.next_raw().await
     }

@@ -158,17 +158,6 @@ impl<S: ConversationStore> super::native::Native for OwnerExecutor<S> {
             worker.served_by(backend);
         }
     }
-
-    #[cfg(feature = "redis")]
-    fn take_from(
-        &self,
-        request: crate::turns::CarriedRequest,
-        origin: crate::turns::executor::WorkerOrigin,
-    ) -> Result<crate::turns::WorkerTurn, RoomKitError> {
-        self.worker()
-            .ok_or(RoomKitError::KitClosed)?
-            .take_from(request, origin)
-    }
 }
 
 #[cfg(test)]

@@ -2,6 +2,8 @@
 mod coverage;
 pub(crate) use coverage::{Coverage, Serving};
 mod links;
+#[cfg(feature = "redis")]
+pub(super) use links::executor_end;
 mod placement;
 mod port;
 #[cfg(feature = "redis")]

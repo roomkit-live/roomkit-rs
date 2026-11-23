@@ -108,11 +108,6 @@ impl Running {
     pub(super) fn cutting(&self) -> watch::Receiver<Option<&'static str>> {
         self.cut.subscribe()
     }
-
-    #[cfg(feature = "redis")]
-    pub(super) fn cutter(&self) -> watch::Sender<Option<&'static str>> {
-        self.cut.clone()
-    }
 }
 
 impl Drop for Running {

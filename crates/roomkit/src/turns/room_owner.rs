@@ -44,8 +44,6 @@ pub(crate) enum WorkerOwner {
         port: OwnerPort,
         publications: Arc<tokio::sync::Mutex<()>>,
     },
-    #[cfg(feature = "redis")]
-    Redis(super::redis::PeerOwner),
 }
 
 impl WorkerOwner {
@@ -59,9 +57,8 @@ impl WorkerOwner {
         }
     }
 
-    pub(crate) fn reachable(&self, executor_alive: bool) -> bool {
-        !matches!(self, Self::Unreachable)
-            && (executor_alive || matches!(self, Self::Application { .. }))
+    pub(crate) fn reachable(&self) -> bool {
+        matches!(self, Self::Application { .. })
     }
 
     pub(crate) async fn call(
@@ -78,8 +75,6 @@ impl WorkerOwner {
                     None => Ok(reply.result),
                 }
             }
-            #[cfg(feature = "redis")]
-            Self::Redis(peer) => peer.call(message, error_classes).await,
         }
     }
 
@@ -105,8 +100,6 @@ impl WorkerOwner {
                     kit.spawn_publisher(send);
                 }
             }
-            #[cfg(feature = "redis")]
-            Self::Redis(peer) => peer.publish(message),
         }
     }
 }
