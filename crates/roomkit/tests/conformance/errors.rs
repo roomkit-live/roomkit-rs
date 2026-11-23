@@ -137,6 +137,8 @@ pub(crate) fn error_of(error: &RoomKitError) -> Option<Value> {
         RoomKitError::AddressLinked { .. } => named("address_linked"),
         RoomKitError::RoomClosed { .. } => named("room_closed"),
         RoomKitError::KitClosed => named("kit_closed"),
+        RoomKitError::ExceptionGroup { .. } => named("channel_close_failed"),
+        RoomKitError::ShutdownCancelled => named("shutdown_cancelled"),
         RoomKitError::ProcessTimeout { .. } => named("process_timeout"),
         RoomKitError::ReentryLoopCap(_) => named("reentry_loop_cap"),
         RoomKitError::TransitionRefused { .. } => named("transition_refused"),

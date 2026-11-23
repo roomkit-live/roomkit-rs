@@ -42,6 +42,9 @@ pub(crate) struct Observed {
     pub(crate) ai_events: Vec<Value>,
     pub(crate) hooks: BTreeMap<String, Vec<Value>>,
     pub(crate) hook_order: Vec<String>,
+    /// The scripted channels whose close ran, in order (README,
+    /// `channel_closes`).
+    pub(crate) channel_closes: Vec<String>,
     pub(crate) deliveries: BTreeMap<String, BTreeMap<String, Vec<Value>>>,
     /// Per room and scripted channel, the contexts its deliveries and its
     /// turns were handed.

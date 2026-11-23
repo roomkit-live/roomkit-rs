@@ -222,9 +222,7 @@ pub(crate) async fn run_with(
     let Some(store) = shared_store else {
         return vec!["setup: the kit took no store".to_owned()];
     };
-    if setup["kit"]["store_faults"] == Value::Bool(true) {
-        store.faults().declare();
-    }
+    declare_store(&store, &setup["kit"]);
     let snapshot_store = crate::observer_store(&store, &store_file).await;
     let mut run = Run::new(kit, store, snapshot_store, scenario);
     run.workers = workers;
@@ -272,9 +270,15 @@ pub(crate) async fn run_with(
     if records_ephemerals(scenario) || scenario["expect"].get("subscribers").is_some() {
         settle_ephemerals(&run).await;
     }
+    // The runner's own reads read what a store the kit closed holds.
+    run.store().faults().reopen();
     let mut observed = observe(&run, step_outcomes).await;
     for kit in run.open_kits() {
         kit.close().await.unwrap();
+    }
+    if run.store().faults().owned_by("integrator") {
+        // Its owner closes a store the kit left open.
+        run.store().close_owned().await;
     }
     run.mcp.close().await;
     run.observer_store().close().await;
@@ -282,6 +286,17 @@ pub(crate) async fn run_with(
     let mut found = lock(&run.problems).clone();
     found.extend(compare(&run, scenario, &observed));
     found
+}
+
+/// What the setup says of the kit's store: its faults declared
+/// (`kit.store_faults`), who owns it (`kit.store_owner`).
+fn declare_store(store: &crate::Store, kit: &Value) {
+    if kit["store_faults"] == Value::Bool(true) {
+        store.faults().declare();
+    }
+    if let Some(owner) = kit["store_owner"].as_str() {
+        store.faults().own(owner);
+    }
 }
 
 async fn subscribe_rooms(run: &Arc<Run>, scenario: &Value, setup: &Value) -> Result<(), String> {
@@ -433,6 +448,32 @@ async fn control_pending(run: &Arc<Run>, step: &Value, label: &str, path: &str) 
     }
 }
 
+/// Starts the kit's close on a runtime of its own, waits until it reaches
+/// `gate`, then drops that runtime, as a process's end cuts every task: the
+/// shutdown is cut itself (README, "Steps", `close_cut_at`).
+async fn close_cut_at(run: &Arc<Run>, gate: &str, path: &str) {
+    run.closed(&json!({ "call": "close" }));
+    let (kit, waiting, gate) = (run.kit().clone(), Arc::clone(run), gate.to_owned());
+    let reached = tokio::task::spawn_blocking(move || {
+        let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        else {
+            return false;
+        };
+        let reached = runtime.block_on(async move {
+            tokio::spawn(async move { drop(kit.close().await) });
+            waiting.gates.wait_for(&gate).await
+        });
+        drop(runtime);
+        reached
+    })
+    .await;
+    if !matches!(reached, Ok(true)) {
+        run.problem(format!("{path}: the close never reached its gate"));
+    }
+}
+
 async fn wait_at_gate(run: &Run, step: &Value, gate: &str, path: &str) {
     if !run.gates.wait_for(gate).await {
         run.problem(format!("{path}: no call reached the gate {gate}"));
@@ -466,6 +507,10 @@ async fn run_step(run: &Arc<Run>, step: &Value, path: &str) -> Vec<Value> {
         .or(step["close_while_pending"].as_str())
     {
         control_pending(run, step, label, path).await;
+        return outcomes;
+    }
+    if let Some(gate) = step["close_cut_at"].as_str() {
+        close_cut_at(run, gate, path).await;
         return outcomes;
     }
     if step.get("call").is_some() {

@@ -178,8 +178,62 @@ fn message_subject(message: &InboundMessage, room_id: &str) -> Value {
 }
 
 /// Starts the reaction's task, holds at its gate, waits its delay, runs its
-/// actions, then fails.
+/// actions, then fails. Cut, its future dropped, it makes its `on_cut`
+/// actions as its cleanup, on a task its guard starts in its context.
 pub(crate) async fn perform(
+    run: &Arc<Run>,
+    reaction: &Value,
+    scope: &Scope,
+) -> Result<(), ScriptedFailure> {
+    let on_cut = reaction
+        .get("on_cut")
+        .and_then(Value::as_array)
+        .map(|actions| OnCut::new(run, actions.clone(), scope.clone()));
+    let performed = perform_reaction(run, reaction, scope).await;
+    if let Some(on_cut) = on_cut {
+        on_cut.disarm();
+    }
+    performed
+}
+
+/// A reaction's `on_cut` cleanup: its actions, in the reaction's context,
+/// made on a task of their own if the reaction is dropped before its end.
+/// Rust runs no async cleanup in a dropped future, so the cleanup is built
+/// while the reaction runs and started as the guard drops.
+struct OnCut {
+    run: Arc<Run>,
+    cleanup: Option<std::pin::Pin<Box<dyn Future<Output = ()> + Send>>>,
+}
+
+impl OnCut {
+    fn new(run: &Arc<Run>, actions: Vec<Value>, scope: Scope) -> Self {
+        let acting = Arc::clone(run);
+        let cleanup = roomkit::keep_context(async move {
+            for action in actions {
+                acting.run_action(action, scope.clone()).await;
+            }
+        });
+        Self {
+            run: Arc::clone(run),
+            cleanup: Some(Box::pin(cleanup)),
+        }
+    }
+
+    /// The reaction ended uncut: no cleanup.
+    fn disarm(mut self) {
+        self.cleanup = None;
+    }
+}
+
+impl Drop for OnCut {
+    fn drop(&mut self) {
+        if let Some(cleanup) = self.cleanup.take() {
+            self.run.hold_spawned(tokio::spawn(cleanup));
+        }
+    }
+}
+
+async fn perform_reaction(
     run: &Arc<Run>,
     reaction: &Value,
     scope: &Scope,
@@ -319,6 +373,7 @@ pub(crate) struct ScriptedChannel {
     deliver_stream: Reactions,
     on_room_attached: Reactions,
     on_room_detached: Reactions,
+    close: Reactions,
     binding_update: Option<Value>,
     verbs: crate::channel_verbs::Verbs,
     /// What its own address methods answer: the defaults when `None`.
@@ -385,6 +440,7 @@ impl ScriptedChannel {
             deliver_stream: Reactions::new(spec.get("deliver_stream")),
             on_room_attached: Reactions::new(spec.get("on_room_attached")),
             on_room_detached: Reactions::new(spec.get("on_room_detached")),
+            close: Reactions::new(spec.get("close")),
             binding_update: spec.get("update_binding").cloned(),
             verbs: crate::channel_verbs::Verbs::new(spec["verbs"].clone()),
             addresses: spec.get("addresses").cloned(),
@@ -715,6 +771,26 @@ impl Channel for ScriptedChannel {
         let reactions = &self.on_room_attached;
         self.room_callback(reactions, &room_id, "on_room_attached", Some(&binding))
             .await
+    }
+
+    /// Its close, recorded under `channel_closes`, then its reaction
+    /// (README, `close`): its `fail` panics, Rust's close returning
+    /// nothing.
+    #[expect(
+        clippy::panic,
+        reason = "a channel's close fails by panicking: it returns nothing"
+    )]
+    async fn close(&self) {
+        let Some(run) = self.run.upgrade() else {
+            return;
+        };
+        run.record_channel_close(self.declaration.channel_id.as_str());
+        let Some(reaction) = self.close.pick(&json!({})) else {
+            return;
+        };
+        if let Err(ScriptedFailure(message)) = perform(&run, &reaction, &Scope::default()).await {
+            std::panic::panic_any(message);
+        }
     }
 
     async fn on_room_detached(&self, room_id: RoomId) -> Result<(), ChannelError> {

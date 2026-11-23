@@ -10,6 +10,12 @@
 //! holds at the gate once the operation answered, or in its place before it
 //! fails. Every runner's kit is built over this store; without a fault armed
 //! it is the wrapped store, operation for operation.
+//!
+//! With `kit.store_owner` it is the run's store as its owner closes it:
+//! `kit`, its close closes it and every operation made after fails with
+//! [`StoreError::Unavailable`], as a closed store refuses them;
+//! `integrator`, its close leaves it open, as a pool the integrator handed
+//! in.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -139,6 +145,11 @@ pub(crate) struct StoreFaults {
     /// Whether the scenario's setup declares them (`kit.store_faults`).
     declared: AtomicBool,
     armed: Mutex<Vec<Fault>>,
+    /// Who owns the store (`kit.store_owner`): `kit`, `integrator`, or
+    /// none.
+    owner: Mutex<Option<String>>,
+    /// Whether the kit's close closed a store the kit owns.
+    closed: AtomicBool,
 }
 
 impl StoreFaults {
@@ -146,6 +157,26 @@ impl StoreFaults {
     /// arm them.
     pub(crate) fn declare(&self) {
         self.declared.store(true, Ordering::SeqCst);
+    }
+
+    /// The setup names who owns the store (`kit.store_owner`).
+    pub(crate) fn own(&self, owner: &str) {
+        *self.owner.lock().unwrap_or_else(PoisonError::into_inner) = Some(owner.to_owned());
+    }
+
+    /// Whether `owner` owns the store.
+    pub(crate) fn owned_by(&self, owner: &str) -> bool {
+        self.owner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_deref()
+            == Some(owner)
+    }
+
+    /// The runner's own reads, once the steps ran, read what a store the
+    /// kit closed holds.
+    pub(crate) fn reopen(&self) {
+        self.closed.store(false, Ordering::SeqCst);
     }
 
     /// Arms the fault `step` names for the next call it matches: on
@@ -222,6 +253,11 @@ impl StoreFaults {
         room: Option<&RoomId>,
         work: impl Future<Output = Result<T, StoreError>>,
     ) -> Result<T, StoreError> {
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(StoreError::unavailable(StoreFault(format!(
+                "the store is closed: {operation} refused"
+            ))));
+        }
         let Some(fault) = self.take(operation, room) else {
             return work.await;
         };
@@ -261,6 +297,14 @@ impl<S> FaultingStore<S> {
     }
 }
 
+impl<S: ConversationStore> FaultingStore<S> {
+    /// Closes the store it wraps, as the owner of a store the kit left open
+    /// does once the run ended.
+    pub(crate) async fn close_owned(&self) {
+        self.inner.close().await;
+    }
+}
+
 impl<S> fmt::Debug for FaultingStore<S> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -288,7 +332,14 @@ impl<S: ConversationStore> ConversationStore for FaultingStore<S> {
     }
 
     async fn close(&self) {
+        if self.faults.owned_by("integrator") {
+            // A pool the integrator handed in: the kit's close leaves it open.
+            return;
+        }
         self.inner.close().await;
+        if self.faults.owned_by("kit") {
+            self.faults.closed.store(true, Ordering::SeqCst);
+        }
     }
 
     async fn create_room(&self, room: Room) -> Result<Room, StoreError> {

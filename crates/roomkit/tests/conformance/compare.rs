@@ -251,6 +251,19 @@ impl Comparison<'_> {
                 "hook_order",
             );
         }
+        if expect.get("channel_closes").is_some() {
+            let closes: Vec<Value> = self
+                .observed
+                .channel_closes
+                .iter()
+                .map(|id| Value::String(id.clone()))
+                .collect();
+            self.check(
+                &expect["channel_closes"],
+                Some(&Value::Array(closes)),
+                "channel_closes",
+            );
+        }
     }
 
     fn channel_calls(&mut self) {

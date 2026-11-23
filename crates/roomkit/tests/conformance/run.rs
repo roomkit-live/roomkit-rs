@@ -581,6 +581,20 @@ impl Run {
         observed.hook_order.push(format!("{channel_id}.{call}"));
     }
 
+    /// A scripted channel's close ran (README, `channel_closes`).
+    pub(crate) fn record_channel_close(&self, channel_id: &str) {
+        if self.recording.load(Ordering::SeqCst) {
+            lock(&self.observed)
+                .channel_closes
+                .push(channel_id.to_owned());
+        }
+    }
+
+    /// Holds `work`, started for the scenario, for the idle wait.
+    pub(crate) fn hold_spawned(&self, work: JoinHandle<()>) {
+        lock(&self.spawned).push(work);
+    }
+
     /// One item a streaming channel's `deliver_stream` read, as the scenario
     /// reads it: `{"text": ...}`, `{"row": event}`, `{"failed": true}`
     /// where the stream raised, or `{"cut": event}` for the end of a stream
@@ -900,7 +914,21 @@ impl Run {
     ) -> BoxFuture<'static, ()> {
         let run = Arc::clone(self);
         Box::pin(async move {
-            let outcome = run.invoke(action.clone(), scope).await;
+            let outcome = if action.get("own_task") == Some(&Value::Bool(true)) {
+                // On a task of its own, in the caller's context, which the
+                // action awaits: a cut of the caller drops that wait alone.
+                let (told, outcome) = tokio::sync::oneshot::channel();
+                let (task_run, task_action) = (Arc::clone(&run), action.clone());
+                run.hold_spawned(tokio::spawn(roomkit::keep_context(async move {
+                    drop(told.send(task_run.invoke(task_action, scope).await));
+                })));
+                match outcome.await {
+                    Ok(outcome) => outcome,
+                    Err(_) => return,
+                }
+            } else {
+                run.invoke(action.clone(), scope).await
+            };
             let label = action.get("as").and_then(Value::as_str);
             if let Some(label) = label {
                 lock(&run.observed)

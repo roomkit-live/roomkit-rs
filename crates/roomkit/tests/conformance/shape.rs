@@ -59,6 +59,7 @@ const KIT: &[&str] = &[
     "inbound_rate_limit",
     "persistence_policy",
     "store_faults",
+    "store_owner",
     "shared_realtime",
     "turn_backend_faults",
     "executor_catalogue",
@@ -115,6 +116,7 @@ const CHANNEL: &[&str] = &[
     "deliver_stream",
     "on_room_attached",
     "on_room_detached",
+    "close",
     "update_binding",
     "model",
     "acp",
@@ -386,6 +388,7 @@ const REACTION: &[&str] = &[
     "parsed",
     "refuse",
     "after_turn",
+    "on_cut",
     "spawn",
 ];
 /// A task the call starts and does not wait for (README, Reactions).
@@ -427,6 +430,7 @@ const EXPECT: &[&str] = &[
     "ai_events",
     "hooks",
     "hook_order",
+    "channel_closes",
     "deliveries",
     "contexts",
     "turns",
@@ -474,6 +478,7 @@ const STEPS: &[(&str, &[&str])] = &[
     ("await", &["await", "expect"]),
     ("cancel", &["cancel"]),
     ("close_while_pending", &["close_while_pending", "as"]),
+    ("close_cut_at", &["close_cut_at"]),
     ("concurrent", &["concurrent"]),
     ("wait_for", &["wait_for", "after", "pending"]),
     ("open", &["open"]),
@@ -505,6 +510,7 @@ const CHANNEL_CALL: &[&str] = &[
 fn base_arguments(call: &str) -> Option<&'static [&'static str]> {
     Some(match call {
         "close"
+        | "enter"
         | "kit_executor.close"
         | "kit_executor.closed"
         | "kit_executor.executor_id"
@@ -1061,6 +1067,7 @@ fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
         "deliver_stream",
         "on_room_attached",
         "on_room_detached",
+        "close",
     ] {
         for (index, reaction) in items(&channel[kind]) {
             self::reaction(reaction, &format!("{path}.{kind}[{index}]"), found);
@@ -1362,11 +1369,11 @@ fn reaction_with_return(reaction: &Value, path: &str, found: &mut Vec<String>, k
             found,
         );
     }
-    for member in ["do", "after_turn"] {
+    for member in ["do", "after_turn", "on_cut"] {
         for (index, action) in items(&reaction[member]) {
             call(
                 action,
-                &["as", "expect"],
+                &["as", "expect", "own_task"],
                 &format!("{path}.{member}[{index}]"),
                 found,
             );

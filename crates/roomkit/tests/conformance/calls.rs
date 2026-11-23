@@ -440,6 +440,12 @@ async fn other_call(
     if name == "close" {
         return close(run, name, spec).await;
     }
+    if name == "enter" {
+        // Python's `async with` on the kit; Rust's form is `start` (README,
+        // `enter`).
+        let outcome = run.kit().start().await;
+        return Ok(finish(run, name, outcome, |()| Value::Null));
+    }
     if crate::discussion_calls::arguments(name).is_some() {
         return crate::discussion_calls::call(run, name, spec).await;
     }
