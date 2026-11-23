@@ -1,10 +1,21 @@
 //! Dispatch a Redis request to the executor hosted in this process.
+use std::sync::Arc;
+
 use super::RedisTurnBackend;
-use super::routes::TurnRoute;
 use super::stream::Message;
+use super::worker_link::WorkerLink;
 use crate::RoomKitError;
+use crate::turns::CarriedRequest;
 use crate::turns::wire::{ChannelControl, ChannelControlEnvelope};
-use crate::turns::{CarriedRequest, WorkerTurn};
+
+/// Gives a turn up when the job that holds it ends or is aborted.
+struct Held(Arc<WorkerLink>);
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        self.0.close();
+    }
+}
 
 impl RedisTurnBackend {
     pub(super) fn handle(&self, msg: &Message) -> Result<(), RoomKitError> {
@@ -51,36 +62,33 @@ impl RedisTurnBackend {
         worker: super::process::Recipient,
     ) -> Result<(), RoomKitError> {
         let carried = CarriedRequest::from_wire(&msg.body).map_err(invalid)?;
-        let rest = crate::turns::wire::validate_rest(&carried.rest).map_err(invalid)?;
-        let Some(worker) = worker.for_channel(&rest.channel_id) else {
+        let request = crate::turns::executor::parse(carried).map_err(invalid)?;
+        let Some(worker) = worker.for_channel(&request.channel_id) else {
             return self.answer(msg, "refused".into());
         };
-        let id = rest.turn_id;
+        let id = request.turn_id.clone();
         let Some(route) = self.route_turn(&id, &msg.sender, true) else {
             return self.answer(msg, "refused".into());
         };
         let backend = self.clone();
         let message = msg.clone();
         let admitted = self.dispatch(async move {
-            let (written, accepted) = tokio::sync::oneshot::channel();
-            let turn = worker.native().take_from(
-                carried,
-                crate::turns::executor::WorkerOrigin {
-                    accepted: Some(accepted),
-                    owner: Some(crate::turns::room_owner::WorkerOwner::Redis(
-                        backend.remember_owner(&id, &message.sender),
-                    )),
-                    ..Default::default()
-                },
-            );
-            let reply = if turn.is_ok() { "taken" } else { "refused" };
+            // What the turn's work reaches its owner by once the turn ended: the
+            // executor asks the port this backend gave it when it served it.
+            drop(backend.remember_owner(&id, &message.sender));
+            let link = Arc::new(WorkerLink::new(request, &backend, &message.sender, route));
+            // A close owns the turn through its final write: this job lives as
+            // long as the turn's frames cross, and gives the turn up if aborted.
+            let held = Held(Arc::clone(&link));
+            let taken = worker.take(Arc::<WorkerLink>::clone(&link)).is_ok();
+            let reply = if taken { "taken" } else { "refused" };
             if let Err(error) = backend.answer(&message, reply.into()) {
                 tracing::warn!(%error, "Sending the turn handover result failed");
-            } else if let Ok(turn) = turn {
-                backend
-                    .forward_worker(&message.sender, &id, turn, route, written)
-                    .await;
+            } else if taken {
+                link.open();
+                link.ended().await;
             }
+            drop(held);
         });
         if !admitted {
             return self.answer(msg, "refused".into());
@@ -160,50 +168,6 @@ impl RedisTurnBackend {
             msg,
             serde_json::to_string(&result).map_err(|e| invalid(e.to_string()))?,
         )
-    }
-
-    async fn forward_worker(
-        &self,
-        peer: &str,
-        id: &str,
-        mut turn: WorkerTurn,
-        mut route: TurnRoute,
-        accepted: tokio::sync::oneshot::Sender<()>,
-    ) {
-        // The first receipt confirms accepted is in the owner's Redis inbox.
-        let mut accepted = Some(accepted);
-        let mut draining = self.0.draining.subscribe();
-        let mut cut = false;
-        let mut write = super::outbox::PendingWrite::default();
-        loop {
-            let result = tokio::select! {
-                () = async { drop(draining.wait_for(|started| *started).await); }, if !cut => {
-                    turn.cut_for_shutdown();
-                    cut = true;
-                    continue;
-                }
-                control = route.inbox.recv() => match control {
-                    Some(msg) if msg.kind == "control" => { turn.control(msg.body); continue; }
-                    _ => break,
-                },
-                raw = turn.next_frame(), if write.idle() => {
-                    let Some(body) = raw else { break };
-                    let Ok(body) = crate::turns::wire::peer_error_payload(body) else { break };
-                    let msg = Message::new("frame", self.node_id(), body, id, "");
-                    write.start(self, peer, &msg)
-                }
-                result = write.finished() => {
-                    if result.is_ok() && let Some(ready) = accepted.take() {
-                        let _ = ready.send(());
-                    }
-                    result
-                },
-            };
-            if let Err(error) = result {
-                tracing::warn!(%error, "Sending the turn frame failed");
-                break;
-            }
-        }
     }
 }
 

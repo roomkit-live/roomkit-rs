@@ -14,9 +14,9 @@ use crate::turns::TurnTimeouts;
 use crate::turns::wire::RoomCallResult;
 use crate::{TurnExecutor, TurnExecutorOptions};
 
-const LIMIT: Duration = Duration::from_secs(3);
+pub(super) const LIMIT: Duration = Duration::from_secs(3);
 
-fn pair() -> Option<(RedisTurnBackend, RedisTurnBackend)> {
+pub(super) fn pair() -> Option<(RedisTurnBackend, RedisTurnBackend)> {
     let Ok(url) = std::env::var("REDIS_URL") else {
         eprintln!("Set REDIS_URL to run the Redis shutdown tests");
         return None;
@@ -37,7 +37,7 @@ fn pair() -> Option<(RedisTurnBackend, RedisTurnBackend)> {
     ))
 }
 
-fn request(id: &str) -> String {
+pub(super) fn request(id: &str) -> String {
     let raw = include_str!("../../../tests/fixtures/turns/python-case1.jsonl");
     let mut fixture: Value = serde_json::from_str(raw.lines().next().unwrap()).unwrap();
     fixture["message"]["turn_id"] = json!(id);

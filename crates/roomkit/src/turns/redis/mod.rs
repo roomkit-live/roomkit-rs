@@ -19,6 +19,7 @@ mod routes;
 mod shutdown_tests;
 mod stream;
 mod transport;
+mod worker_link;
 use std::fmt;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
