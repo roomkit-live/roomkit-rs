@@ -167,6 +167,21 @@ pub(crate) async fn read<S: ConversationStore>(
     ChannelOutcome::Output(Box::new(output)).into()
 }
 
+/// The rows of `responder`'s response to `answers`, read from `turn`: each
+/// carries `correlation_id`, and its messages the turn's record as it stands.
+fn segments_of(
+    responder: &ChannelBinding,
+    answers: RoomEvent,
+    correlation_id: String,
+    turn: &OwnerTurn,
+) -> Segments {
+    let source = EventSource {
+        direction: EventDirection::Outbound,
+        ..EventSource::new(responder.channel_id.clone(), responder.channel_type.clone())
+    };
+    Segments::new(source, answers, correlation_id).reading(turn.record(), turn.remote_executor())
+}
+
 /// What a failure of `target`'s handling of `source`'s stream in `room_id`
 /// is reported as.
 fn handling_of<'a>(
@@ -213,10 +228,6 @@ pub(super) async fn read_kept<S: ConversationStore>(
     let channel = target
         .as_ref()
         .and_then(|target| Some((inner.channel(&target.binding.channel_id)?, target.clone())));
-    let source = EventSource {
-        direction: EventDirection::Outbound,
-        ..EventSource::new(responder.channel_id.clone(), responder.channel_type.clone())
-    };
     // Python's `_discussion_silence`: a stream of one of the agents of the
     // discussion the room holds.
     let hold = channel
@@ -225,11 +236,12 @@ pub(super) async fn read_kept<S: ConversationStore>(
         .and_then(|seam| seam.silence_for(&responder.channel_id))
         .map(Hold::new);
     let live = kept.turn.record();
+    let room_id = answers.room_id.clone();
+    let segments = segments_of(&responder, answers, correlation_id, &kept.turn);
     let mut producer = Producer {
-        room_id: answers.room_id.clone(),
+        room_id,
         failing,
-        segments: Segments::new(source, answers, correlation_id)
-            .reading(live.clone(), kept.turn.remote_executor()),
+        segments,
         stream: Some(kept.turn),
         cut: None,
         place: kept.place,
