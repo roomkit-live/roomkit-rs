@@ -13,6 +13,32 @@ pub trait TurnBackend: std::any::Any + Send + Sync {
         &self,
         request: TurnRequest,
     ) -> TurnFuture<'_, Result<Arc<dyn TurnLink>, RoomKitError>>;
+    /// Deliver a request to the one executor a caller names, Python's
+    /// `submit_to`: by its `executor_id`, and by its `node` when given (`None`:
+    /// the one process serving that id). It takes the turn as it takes one
+    /// `submit` places and from then holds the room's state for the channel;
+    /// no other executor is tried (RFC §10.6.7). The default refuses: this
+    /// transport submits to no executor a caller names.
+    ///
+    /// `no_executor` says the executor did not take the turn (not alive,
+    /// closed, served by several processes with no node named, or not meeting
+    /// what the room needs): nothing was handed, and the request is not marked
+    /// so. Any other reason comes after the hand-over, the turn's outcome
+    /// unknown: it is never handed to another executor.
+    fn submit_to(
+        &self,
+        request: TurnRequest,
+        executor: ExecutorInfo,
+    ) -> TurnFuture<'_, Result<Arc<dyn TurnLink>, RoomKitError>> {
+        Box::pin(async move {
+            Err(super::not_taken(
+                &executor,
+                request.channel_id.as_str(),
+                &request.room_hooks,
+                request.context.room.organization_id.as_deref(),
+            ))
+        })
+    }
     /// Register an executor until it or the backend closes.
     fn serve(&self, executor: Arc<dyn ServedExecutor>) -> TurnFuture<'_, Result<(), RoomKitError>>;
     /// Carry a channel notification or a call to the executor holding its state.

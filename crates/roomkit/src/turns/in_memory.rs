@@ -5,6 +5,7 @@ mod links;
 #[cfg(feature = "redis")]
 pub(super) use links::executor_end;
 mod placement;
+use placement::Claim;
 mod port;
 #[cfg(feature = "redis")]
 pub(super) use port::{local_call, local_publication};
@@ -164,7 +165,24 @@ impl TurnBackend for InMemoryTurnBackend {
                 &request.room_id,
                 &request.room_hooks,
                 request.context.room.organization_id.as_deref(),
-                true,
+                Claim::Holder,
+            )?;
+            links::submit(self, &worker, request)
+        })
+    }
+
+    fn submit_to(
+        &self,
+        request: TurnRequest,
+        executor: ExecutorInfo,
+    ) -> TurnFuture<'_, Result<Arc<dyn TurnLink>, RoomKitError>> {
+        Box::pin(async move {
+            let worker = self.select(
+                &request.channel_id,
+                &request.room_id,
+                &request.room_hooks,
+                request.context.room.organization_id.as_deref(),
+                Claim::Named(&executor),
             )?;
             links::submit(self, &worker, request)
         })

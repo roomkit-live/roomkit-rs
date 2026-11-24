@@ -583,7 +583,7 @@ after the turn by calling `reach_owner`.
 kit returns a set containing `"*"`. A standalone worker can serve rooms without
 an organization by leaving its declaration at `None`.
 
-A backend implements `submit`, `serve`, `control` and `close`. Clone the same
+A backend implements `submit`, `serve`, `control` and `close`. `submit_to` hands a turn to the one executor a host names; its default refuses with `no_executor`, nothing handed, and the in-memory and Redis backends override it. Clone the same
 handle for the kit, the standalone `TurnClient` and direct calls. Its default
 `claim_presence` remembers a change once per room and channel. Detach forgets
 the pair. Independent handles each own their default claims. A distributed

@@ -8,6 +8,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `TurnBackend::submit_to(request, executor)` submits a turn to the one
+  executor a host chose, where `submit` places it, as in Python (RFC §10.6.7,
+  RMK-2098): the executor is named by an `ExecutorInfo`, its `executor_id`
+  and, when several processes serve that id, its `node`. It takes the turn as
+  it would take one placed, then holds the room; no other is tried. One that
+  does not take it fails `no_executor` before anything is handed
+  (`TurnRequest::handed` stays false, read on a clone of the request); any
+  other reason comes after the hand-over, the turn never handed elsewhere.
+  `InMemoryTurnBackend` and `RedisTurnBackend` take it; a transport that keeps
+  the trait's default refuses (`examples/turns_submit_to_executor.rs`).
+
 - A streamed text names the row it follows, `metadata["follows_index"]`, as
   in Python (RFC §6.4, RMK-2096): the index of the row the turn stored
   before it, else of the room's latest row as the kit begins to read the

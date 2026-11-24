@@ -9,7 +9,7 @@ use super::Worker;
 use crate::RoomKitError;
 use crate::turns::pipe::{LinkFailure, PipeReceiver};
 use crate::turns::wire::{Control, Frame, RequestRest};
-use crate::turns::{CarriedRequest, MemoryTurn};
+use crate::turns::{CarriedRequest, ExecutorInfo, MemoryTurn};
 
 use super::RedisTurnBackend;
 use super::placement::Placed;
@@ -67,6 +67,50 @@ impl RedisTurnBackend {
             }
             refused.insert(target.member());
         }
+    }
+
+    /// Hand the turn to the executor `only` names and to no other: refused
+    /// before the hand-over when it does not take the turn or its process
+    /// refuses it, and holding the room once it took it.
+    async fn hand_to(
+        &self,
+        carried: CarriedRequest,
+        memory: &Arc<MemoryTurn>,
+        mut mark: impl FnMut(bool) + Send,
+        only: &ExecutorInfo,
+    ) -> Result<Delivered, RoomKitError> {
+        self.attend().await?;
+        let rest: RequestRest =
+            crate::turns::wire::validate_rest(&carried.rest).map_err(invalid)?;
+        let (channel, room) = (&rest.channel_id, rest.room_id.as_str());
+        let organization = rest.context.room.organization_id.as_deref();
+        let refused =
+            || crate::turns::not_taken(only, channel.as_str(), &rest.room_hooks, organization);
+        let placed = self
+            .named(channel, &rest.room_hooks, organization, only)
+            .await?;
+        let member = placed.member(self.node_id());
+        let target = match placed {
+            Placed::Here(worker) if worker.closed() => return Err(refused()),
+            Placed::Here(worker) => {
+                self.held_by(channel, room, &member).await?;
+                return Ok(Delivered::Here(worker, Box::new(carried)));
+            }
+            Placed::Elsewhere(target) => target,
+        };
+        let body = carried.to_wire().map_err(invalid)?;
+        let Some(delivered) = self
+            .hand_elsewhere(&target, memory, &mut mark, &body)
+            .await?
+        else {
+            return Err(refused());
+        };
+        if let Err(error) = self.held_by(channel, room, &member).await {
+            // Taken, and the room would not follow it: the turn is let go.
+            self.release_turn(&target.node, &memory.turn_id).await;
+            return Err(error);
+        }
+        Ok(delivered)
     }
 
     async fn hand_elsewhere(

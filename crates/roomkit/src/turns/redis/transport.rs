@@ -18,6 +18,14 @@ impl TurnBackend for RedisTurnBackend {
         Box::pin(self.submit(request))
     }
 
+    fn submit_to(
+        &self,
+        request: TurnRequest,
+        executor: ExecutorInfo,
+    ) -> TurnFuture<'_, Result<Arc<dyn TurnLink>, RoomKitError>> {
+        Box::pin(self.submit_to(request, executor))
+    }
+
     fn serve(&self, executor: Arc<dyn ServedExecutor>) -> TurnFuture<'_, Result<(), RoomKitError>> {
         Box::pin(self.serve_erased(executor))
     }

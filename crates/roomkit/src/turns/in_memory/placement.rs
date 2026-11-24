@@ -2,7 +2,19 @@
 use super::{InMemoryTurnBackend, Worker, closed};
 use crate::RoomKitError;
 use crate::model::{ChannelId, RoomId};
-use crate::turns::{ChannelControl, ChannelResult, TakesOptions, lock, no_executor};
+use crate::turns::{
+    ChannelControl, ChannelResult, ExecutorInfo, TakesOptions, lock, names, no_executor, not_taken,
+};
+
+/// What a selection is for: an event held, which leaves the room's holder as
+/// it is; a turn or a call placed, whose taker holds the room from now; or a
+/// turn submitted to the one executor its caller names, which holds it too.
+#[derive(Clone, Copy)]
+pub(super) enum Claim<'a> {
+    None,
+    Holder,
+    Named(&'a ExecutorInfo),
+}
 
 impl InMemoryTurnBackend {
     pub(super) fn select(
@@ -11,8 +23,13 @@ impl InMemoryTurnBackend {
         room: &RoomId,
         hooks: &[String],
         organization: Option<&str>,
-        claim: bool,
+        claim: Claim<'_>,
     ) -> Result<Worker, RoomKitError> {
+        // Every executor is of this process, which names no node.
+        let named = |e: &Worker| match claim {
+            Claim::Named(only) => names(only, e.executor_id(), None),
+            Claim::None | Claim::Holder => true,
+        };
         let options = TakesOptions {
             room_hooks: hooks.to_owned(),
             organization_id: organization.map(str::to_owned),
@@ -36,13 +53,15 @@ impl InMemoryTurnBackend {
             let pick = if let Some(own) = own {
                 let own_id = own.native().lifecycle();
                 workers.into_iter().find(|e| {
-                    e.native().lifecycle().ptr_eq(&own_id) && e.takes(channel, options.clone())
+                    e.native().lifecycle().ptr_eq(&own_id)
+                        && named(e)
+                        && e.takes(channel, options.clone())
                 })
             } else {
                 holder
                     .into_iter()
                     .chain(workers)
-                    .find(|e| e.takes(channel, options.clone()))
+                    .find(|e| named(e) && e.takes(channel, options.clone()))
             };
             let mut state = lock(&self.state);
             if state.closed {
@@ -51,8 +70,11 @@ impl InMemoryTurnBackend {
             if version != state.revision {
                 continue;
             }
-            let chosen = pick.ok_or_else(|| no_executor(channel.as_str(), hooks, organization))?;
-            if claim {
+            let chosen = pick.ok_or_else(|| match claim {
+                Claim::Named(only) => not_taken(only, channel.as_str(), hooks, organization),
+                Claim::None | Claim::Holder => no_executor(channel.as_str(), hooks, organization),
+            })?;
+            if !matches!(claim, Claim::None) {
                 state
                     .holders
                     .put(channel, room, std::sync::Arc::clone(&chosen));
@@ -74,7 +96,7 @@ impl InMemoryTurnBackend {
                     &call.room_id,
                     &[],
                     call.organization_id.as_deref(),
-                    true,
+                    Claim::Holder,
                 )?;
                 call.hand_over();
                 let answer = target
@@ -100,7 +122,7 @@ impl InMemoryTurnBackend {
                     room_id,
                     room_hooks,
                     organization_id.as_deref(),
-                    false,
+                    Claim::None,
                 )?;
                 target.control(crossed(&message)?).await?;
                 Ok(None)
@@ -171,12 +193,14 @@ pub(super) fn crossed<T: serde::Serialize + serde::de::DeserializeOwned>(
 
 #[cfg(test)]
 mod tests {
-    use super::InMemoryTurnBackend;
+    use super::{Claim, InMemoryTurnBackend};
     use crate::model::{ChannelId, RoomId};
     use crate::testing::{EchoAgent, EchoAgentOptions};
     use crate::turns::records::ROOMS_KEPT;
-    use crate::turns::{ChannelCall, ChannelControl, TurnBackend};
-    use crate::{TurnExecutor, TurnExecutorOptions};
+    use crate::turns::{
+        ChannelCall, ChannelControl, ExecutorInfo, ExecutorInfoOptions, TurnBackend,
+    };
+    use crate::{RoomKitError, TurnExecutor, TurnExecutorOptions};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -189,6 +213,76 @@ mod tests {
             .unwrap()
             .executor_id
             .unwrap()
+    }
+
+    fn worker(id: &str) -> Arc<TurnExecutor> {
+        Arc::new(
+            TurnExecutor::new(
+                |id| {
+                    std::future::ready(Ok(Some(EchoAgent::new(
+                        id,
+                        "hi",
+                        EchoAgentOptions::default(),
+                    ))))
+                },
+                TurnExecutorOptions {
+                    executor_id: Some(id.into()),
+                    hosts: Some(["agent".into()].into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        )
+    }
+
+    fn named(id: &str, node: Option<&str>) -> ExecutorInfo {
+        ExecutorInfo::new(
+            id,
+            ExecutorInfoOptions {
+                node: node.map(str::to_owned),
+                ..Default::default()
+            },
+        )
+    }
+
+    #[tokio::test]
+    async fn a_named_executor_takes_the_turn_whoever_holds_the_room_and_then_holds_it() {
+        let backend = InMemoryTurnBackend::new();
+        let second = worker("second");
+        backend.serve(worker("first")).await.unwrap();
+        backend
+            .serve(Arc::<TurnExecutor>::clone(&second))
+            .await
+            .unwrap();
+        let channel = ChannelId::new("agent").unwrap();
+        let room = RoomId::new("room").unwrap();
+        let taker = |claim| {
+            backend
+                .select(&channel, &room, &[], None, claim)
+                .map(|worker| worker.executor_id().to_owned())
+        };
+        assert_eq!(taker(Claim::Holder).unwrap(), "first");
+        // No worker of that id, a node this one process has none of, a room
+        // hook it does not define: refused, the room still on its holder.
+        for (only, hooks) in [
+            (named("ghost", None), &[][..]),
+            (named("second", Some("elsewhere")), &[][..]),
+            (named("second", None), &["audit".to_owned()][..]),
+        ] {
+            let refused = backend.select(&channel, &room, hooks, None, Claim::Named(&only));
+            assert!(
+                matches!(&refused, Err(RoomKitError::TurnLink { reason, .. }) if reason == "no_executor"),
+                "{:?}",
+                refused.err()
+            );
+            assert_eq!(taker(Claim::None).unwrap(), "first");
+        }
+        let second_named = named("second", None);
+        assert_eq!(taker(Claim::Named(&second_named)).unwrap(), "second");
+        assert_eq!(taker(Claim::Holder).unwrap(), "second");
+        // Closed, it takes no turn, named or not.
+        second.close().await;
+        assert!(taker(Claim::Named(&second_named)).is_err());
     }
 
     #[tokio::test]
@@ -224,11 +318,15 @@ mod tests {
         enabled.store(true, Ordering::Relaxed);
         for id in 0..ROOMS_KEPT - 2 {
             let room = RoomId::new(format!("other-{id}")).unwrap();
-            backend.select(&channel, &room, &[], None, true).unwrap();
+            backend
+                .select(&channel, &room, &[], None, Claim::Holder)
+                .unwrap();
         }
         assert_eq!(call(&backend, &channel, &active).await, "second");
         // A committed event only looks up the holder; the next new room evicts the quiet one.
-        backend.select(&channel, &quiet, &[], None, false).unwrap();
+        backend
+            .select(&channel, &quiet, &[], None, Claim::None)
+            .unwrap();
         assert_eq!(
             call(&backend, &channel, &RoomId::new("another").unwrap()).await,
             "first"

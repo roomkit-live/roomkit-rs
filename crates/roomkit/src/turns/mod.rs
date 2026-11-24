@@ -159,7 +159,9 @@ use crate::steering::SteeringDirective;
 use crate::tasks::{Marks, Unit};
 use crate::turn::TurnKit;
 
-fn no_executor(channel: &str, hooks: &[String], organization: Option<&str>) -> RoomKitError {
+/// What a refusal names beside the channel: the room's hooks and its
+/// organization, each when it applies.
+fn needs(hooks: &[String], organization: Option<&str>) -> String {
     let hooks = if hooks.is_empty() {
         String::new()
     } else {
@@ -173,13 +175,51 @@ fn no_executor(channel: &str, hooks: &[String], organization: Option<&str>) -> R
     let org = organization.map_or_else(String::new, |o| {
         format!(" in organization {}", crate::error::repr(o))
     });
+    hooks + &org
+}
+
+fn no_executor(channel: &str, hooks: &[String], organization: Option<&str>) -> RoomKitError {
     RoomKitError::TurnLink {
         reason: "no_executor".into(),
         message: Some(format!(
-            "No executor serves channel {}{hooks}{org}",
-            crate::error::repr(channel)
+            "No executor serves channel {}{}",
+            crate::error::repr(channel),
+            needs(hooks, organization)
         )),
     }
+}
+
+/// The refusal of a turn submitted to `executor` alone, which does not take
+/// it: nothing was handed to it, nor to any other (RFC §10.6.7).
+fn not_taken(
+    executor: &ExecutorInfo,
+    channel: &str,
+    hooks: &[String],
+    organization: Option<&str>,
+) -> RoomKitError {
+    let node = executor
+        .node
+        .as_ref()
+        .map_or_else(String::new, |node| format!(" at {node}"));
+    RoomKitError::TurnLink {
+        reason: "no_executor".into(),
+        message: Some(format!(
+            "Executor {}{node} does not take channel {}{}",
+            executor.executor_id,
+            crate::error::repr(channel),
+            needs(hooks, organization)
+        )),
+    }
+}
+
+/// Whether `executor` names the worker `executor_id` of `node`, a process
+/// its backend names; an executor named with no node is any process's.
+fn names(executor: &ExecutorInfo, executor_id: &str, node: Option<&str>) -> bool {
+    executor.executor_id == executor_id
+        && executor
+            .node
+            .as_deref()
+            .is_none_or(|named| Some(named) == node)
 }
 
 /// What a turn answered on the owner.

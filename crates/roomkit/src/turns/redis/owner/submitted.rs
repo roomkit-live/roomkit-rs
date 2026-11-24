@@ -3,7 +3,7 @@ use super::{Delivered, PendingHandover, RedisTurnBackend, invalid};
 use crate::RoomKitError;
 use crate::turns::redis::{routes, transport::RedisLink};
 use crate::turns::wire::Frame;
-use crate::turns::{CarriedRequest, TurnLink, TurnRequest};
+use crate::turns::{CarriedRequest, ExecutorInfo, TurnLink, TurnRequest};
 use std::sync::Arc;
 
 impl RedisTurnBackend {
@@ -12,15 +12,44 @@ impl RedisTurnBackend {
     /// # Errors
     /// Returns a placement or transport error if no executor accepts the request.
     pub async fn submit(&self, request: TurnRequest) -> Result<Arc<dyn TurnLink>, RoomKitError> {
+        self.deliver(request, None).await
+    }
+
+    /// Submit a turn to the one executor `executor` names, Python's
+    /// `submit_to`: by its `executor_id`, and by its `node` when given. That
+    /// executor takes it as it takes a turn `submit` places, and holds the
+    /// room once it did; no other is tried (RFC §10.6.7).
+    ///
+    /// # Errors
+    /// `no_executor` when the executor does not take the turn: nothing was
+    /// handed, and the request is not marked so. Any other error after the
+    /// hand-over leaves the turn's outcome unknown: it is handed to no other.
+    pub async fn submit_to(
+        &self,
+        request: TurnRequest,
+        executor: ExecutorInfo,
+    ) -> Result<Arc<dyn TurnLink>, RoomKitError> {
+        self.deliver(request, Some(executor)).await
+    }
+
+    /// Hand `request` to the executor `only` names, else to the one its
+    /// room's turns go to, and read its link back.
+    async fn deliver(
+        &self,
+        request: TurnRequest,
+        only: Option<ExecutorInfo>,
+    ) -> Result<Arc<dyn TurnLink>, RoomKitError> {
         self.ensure_open()?;
         let raw = serde_json::to_string(&request).map_err(|error| invalid(error.to_string()))?;
         let carried = CarriedRequest::from_wire(&raw).map_err(invalid)?;
         let (link, controls) = RedisLink::new(request, self.timeouts());
         let memory = &link.memory;
         let marker = link.request().handover.clone();
-        let delivery = self
-            .hand_over(carried, memory, |handed| marker.mark(handed))
-            .await?;
+        let mark = |handed| marker.mark(handed);
+        let delivery = match &only {
+            Some(only) => self.hand_to(carried, memory, mark, only).await?,
+            None => self.hand_over(carried, memory, mark).await?,
+        };
         match delivery {
             Delivered::Here(worker, request) => {
                 let (taken, admitted) = tokio::sync::oneshot::channel();

@@ -8,7 +8,7 @@ use super::Worker;
 use super::registry::{Target, quoted};
 use super::{RedisTurnBackend, redis_error};
 use crate::RoomKitError;
-use crate::turns::{TakesOptions, lock, no_executor};
+use crate::turns::{ExecutorInfo, TakesOptions, lock, names, no_executor, not_taken};
 
 pub(super) struct Reserved {
     lifecycle: std::sync::Weak<crate::turns::executor::Lifecycle>,
@@ -35,6 +35,28 @@ struct Candidates {
 }
 
 impl Candidates {
+    /// The one executor `only` names among those that take the turn; none
+    /// when none does, or when several processes serve its id and it names
+    /// no node.
+    fn named(self, only: &ExecutorInfo, backend: &RedisTurnBackend) -> Option<Placed> {
+        let node = backend.node_id();
+        let mut here = self
+            .here
+            .into_iter()
+            .map(|(_, worker)| worker)
+            .filter(|worker| names(only, worker.executor_id(), Some(node)));
+        let mut elsewhere = self
+            .elsewhere
+            .into_values()
+            .filter(|target| names(only, &target.executor_id, Some(&target.node)));
+        let chosen = match (here.next(), elsewhere.next()) {
+            (Some(worker), None) => backend.local_target(worker),
+            (None, Some(target)) => Placed::Elsewhere(target),
+            _ => return None,
+        };
+        (here.next().is_none() && elsewhere.next().is_none()).then_some(chosen)
+    }
+
     fn choose(
         mut self,
         held: Option<&str>,
@@ -150,17 +172,60 @@ impl RedisTurnBackend {
                 .ok_or_else(|| no_executor(channel.as_str(), hooks, organization))?
         };
         if spread {
-            let mut conn = self.connection().await?;
-            redis::cmd("SET")
-                .arg(holder)
-                .arg(chosen.member(self.node_id()))
-                .arg("EX")
-                .arg(7 * 24 * 3600)
-                .exec_async(&mut conn)
-                .await
-                .map_err(|error| redis_error(&error))?;
+            self.held_by(channel, room, &chosen.member(self.node_id()))
+                .await?;
         }
         Ok(chosen)
+    }
+
+    /// The executor `only` names, when it takes the room's turn of `channel`
+    /// as one placed would: the owner's own alone for a channel it holds
+    /// live. The room's holder is left as it was, until that executor took
+    /// the turn (`held_by`).
+    pub(super) async fn named(
+        &self,
+        channel: &ChannelId,
+        hooks: &[String],
+        organization: Option<&str>,
+        only: &ExecutorInfo,
+    ) -> Result<Placed, RoomKitError> {
+        let options = TakesOptions {
+            room_hooks: hooks.to_vec(),
+            organization_id: organization.map(str::to_owned),
+        };
+        let chosen = if let Some(own) = self.owning(channel) {
+            (names(only, own.executor_id(), Some(self.node_id())) && own.takes(channel, options))
+                .then(|| self.local_target(own))
+        } else {
+            self.candidates(channel, &options, &BTreeSet::new())
+                .await?
+                .named(only, self)
+        };
+        chosen.ok_or_else(|| not_taken(only, channel.as_str(), hooks, organization))
+    }
+
+    /// Record `member` as the executor holding the room's state of `channel`
+    /// from now.
+    pub(super) async fn held_by(
+        &self,
+        channel: &ChannelId,
+        room: &str,
+        member: &str,
+    ) -> Result<(), RoomKitError> {
+        let holder = self.key(&format!(
+            "holder:{}:{}",
+            quoted(channel.as_str()),
+            quoted(room)
+        ));
+        let mut conn = self.connection().await?;
+        redis::cmd("SET")
+            .arg(holder)
+            .arg(member)
+            .arg("EX")
+            .arg(7 * 24 * 3600)
+            .exec_async(&mut conn)
+            .await
+            .map_err(|error| redis_error(&error))
     }
 
     async fn candidates(
