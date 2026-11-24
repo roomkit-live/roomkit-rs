@@ -488,7 +488,10 @@ const STEPS: &[(&str, &[&str])] = &[
     ("acp_disconnect", &["acp_disconnect"]),
     ("restart_process", &["restart_process"]),
     ("under_lock", &["under_lock", "do"]),
-    ("store_fault", &["store_fault", "fail", "gate", "room_id"]),
+    (
+        "store_fault",
+        &["store_fault", "fail", "gate", "in_place", "room_id"],
+    ),
 ];
 
 /// Each call's arguments, beside `call` and `organization_id`.

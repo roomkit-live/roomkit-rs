@@ -8,7 +8,8 @@
 //! `room_id` when it names one, takes the fault. With `fail` that call fails
 //! with [`StoreError::Unavailable`] in place of the operation; with `gate` it
 //! holds at the gate once the operation answered, or in its place before it
-//! fails. Every runner's kit is built over this store; without a fault armed
+//! fails, or, with `in_place`, in its place before it runs on the store as it
+//! then stands, a store the kit closed meanwhile refusing it. Every runner's kit is built over this store; without a fault armed
 //! it is the wrapped store, operation for operation.
 //!
 //! With `kit.store_owner` it is the run's store as its owner closes it:
@@ -135,6 +136,7 @@ struct Fault {
     room_id: Option<String>,
     fail: Option<String>,
     gate: Option<String>,
+    in_place: bool,
     path: String,
     hold: Hold,
 }
@@ -213,6 +215,7 @@ impl StoreFaults {
             room_id,
             fail: step["fail"].as_str().map(str::to_owned),
             gate: step["gate"].as_str().map(str::to_owned),
+            in_place: step["in_place"].as_bool().unwrap_or(false),
             path: path.to_owned(),
             hold,
         });
@@ -245,6 +248,17 @@ impl StoreFaults {
         Some(armed.remove(position))
     }
 
+    /// Refuses `operation` once the kit closed the store it owns, as a
+    /// closed store refuses it.
+    fn refuse_once_closed(&self, operation: &str) -> Result<(), StoreError> {
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(StoreError::unavailable(StoreFault(format!(
+                "the store is closed: {operation} refused"
+            ))));
+        }
+        Ok(())
+    }
+
     /// `work`, the wrapped store's operation, as the fault its call takes
     /// makes it: held at its gate, then answered or failed.
     async fn run<T>(
@@ -253,11 +267,7 @@ impl StoreFaults {
         room: Option<&RoomId>,
         work: impl Future<Output = Result<T, StoreError>>,
     ) -> Result<T, StoreError> {
-        if self.closed.load(Ordering::SeqCst) {
-            return Err(StoreError::unavailable(StoreFault(format!(
-                "the store is closed: {operation} refused"
-            ))));
-        }
+        self.refuse_once_closed(operation)?;
         let Some(fault) = self.take(operation, room) else {
             return work.await;
         };
@@ -266,6 +276,15 @@ impl StoreFaults {
                 (fault.hold)(gate).await;
             }
             return Err(StoreError::unavailable(StoreFault(message)));
+        }
+        if fault.in_place
+            && let Some(gate) = fault.gate
+        {
+            // Held in the operation's place: it runs on the store as the
+            // gate finds it, refused once the kit closed it meanwhile.
+            (fault.hold)(gate).await;
+            self.refuse_once_closed(operation)?;
+            return work.await;
         }
         let answered = work.await;
         if let Some(gate) = fault.gate {
