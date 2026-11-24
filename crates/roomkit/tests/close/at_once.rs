@@ -294,7 +294,12 @@ async fn a_streaming_turn_is_cut_at_once_its_text_stored_cancelled() {
     let answers: Vec<(String, serde_json::Value)> = of(&kit, "agent")
         .await
         .iter()
-        .map(|event| (text_of(&event.content), json!(event.metadata)))
+        .map(|event| {
+            // The turn's record alone: the row the text follows aside (RFC §6.4).
+            let mut record = event.metadata.clone();
+            record.shift_remove("follows_index");
+            (text_of(&event.content), json!(record))
+        })
         .collect();
     let record = json!({ "loop_end_reason": "cancelled", "cancelled": true });
     assert_eq!(

@@ -46,6 +46,10 @@ const TURNS: &str = "turns";
 /// The mark of a text its reader stopped (RFC §12.2 step 13s).
 const CANCELLED: &str = "cancelled";
 
+/// The key of a text's metadata that names the row it follows: the index of
+/// the last row the room held when its writing began (RFC §6.4).
+const FOLLOWS_INDEX: &str = "follows_index";
+
 /// A call the response opened: its start, and whether its row was written.
 #[derive(Debug)]
 struct Open {
@@ -85,6 +89,9 @@ pub(super) struct Segments {
     last_message: Option<EventId>,
     /// The last row the store holds of the response.
     last_row: Option<EventId>,
+    /// The last row the room held when the text being read began: the
+    /// room's latest when the read began, then each row the turn stores.
+    follows: Option<u64>,
 }
 
 impl Segments {
@@ -105,7 +112,21 @@ impl Segments {
             open: Vec::new(),
             last_message: None,
             last_row: None,
+            follows: None,
         }
+    }
+
+    /// The response's first text follows `latest`, the last row the room
+    /// holds as its read begins.
+    pub(super) fn following(mut self, latest: Option<u64>) -> Self {
+        self.follows = latest;
+        self
+    }
+
+    /// The turn kept a record of its own at `index`, the instruction it
+    /// read: what it writes next follows it.
+    pub(super) fn kept(&mut self, index: u64) {
+        self.follows = Some(index);
     }
 
     /// The rows read `live`, the turn's record, as it stands when each
@@ -312,6 +333,7 @@ impl Segments {
     /// it carries it.
     pub(super) fn stored(&mut self, row: &RoomEvent) {
         self.last_row = Some(row.id.clone());
+        self.follows = Some(row.index);
         if row.r#type != EventType::Message {
             return;
         }
@@ -380,14 +402,26 @@ impl Segments {
         if cancelled {
             row.metadata.insert(CANCELLED.to_owned(), Value::Bool(true));
         }
+        self.name_followed(&mut row);
         Some(row)
+    }
+
+    /// Writes on `event`, a text of the response or the event it is
+    /// rendered under, the row it follows (RFC §6.4).
+    fn name_followed(&self, event: &mut RoomEvent) {
+        if let Some(follows) = self.follows {
+            event
+                .metadata
+                .insert(FOLLOWS_INDEX.to_owned(), Value::from(follows));
+        }
     }
 
     /// The empty event a streaming channel renders the response under
     /// (`deliver_stream`'s `event`), as Python's `_stream_placeholder`
     /// builds it: from the agent, one deeper than the event the response
-    /// answers and answering it, in its thread, with the response's id and
-    /// the visibility the trigger asks its responses for.
+    /// answers and answering it, in its thread, with the response's id, the
+    /// visibility the trigger asks its responses for, and the row the
+    /// response's first text follows.
     pub(super) fn placeholder(&self) -> RoomEvent {
         let mut event = RoomEvent::new(
             self.answers.room_id.clone(),
@@ -403,6 +437,7 @@ impl Segments {
         if let Some(visibility) = &self.answers.response_visibility {
             event.visibility = visibility.clone();
         }
+        self.name_followed(&mut event);
         event
     }
 

@@ -94,8 +94,9 @@ type Read = Option<Result<RemoteItem, ChannelError>>;
 /// Writes the agent's own copy of the instruction its turn read (RFC
 /// §10.1.1), a draft its id and instant are given to: a record of the room
 /// committed outside the pipeline, as `commit_event` writes one (RFC §10.5).
+/// The index the store gave it, when it was kept.
 type InstructionKeeper =
-    Box<dyn Fn(RoomEvent) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+    Box<dyn Fn(RoomEvent) -> Pin<Box<dyn Future<Output = Option<u64>> + Send>> + Send + Sync>;
 
 /// The reason a read the operation stops cuts its turn with (RFC §10.1
 /// "Explicit delivery cancellation").
@@ -169,18 +170,35 @@ pub(crate) async fn read<S: ConversationStore>(
 }
 
 /// The rows of `responder`'s response to `answers`, read from `turn`: each
-/// carries `correlation_id`, and its messages the turn's record as it stands.
+/// carries `correlation_id`, its messages the turn's record as it stands,
+/// and its first text follows `latest`, the last row the room holds.
 fn segments_of(
     responder: &ChannelBinding,
     answers: RoomEvent,
     correlation_id: String,
     turn: &OwnerTurn,
+    latest: Option<u64>,
 ) -> Segments {
     let source = EventSource {
         direction: EventDirection::Outbound,
         ..EventSource::new(responder.channel_id.clone(), responder.channel_type.clone())
     };
-    Segments::new(source, answers, correlation_id).reading(turn.record(), turn.remote_executor())
+    Segments::new(source, answers, correlation_id)
+        .reading(turn.record(), turn.remote_executor())
+        .following(latest)
+}
+
+/// The index of the last row the store holds of `room_id`; none when it
+/// holds no room or no row, or fails the read: a streamed text then names
+/// no row it follows (RFC §6.4).
+async fn latest_index<S: ConversationStore>(inner: &Inner<S>, room_id: &RoomId) -> Option<u64> {
+    match inner.store.get_room(room_id).await {
+        Ok(room) => room?.latest_index,
+        Err(error) => {
+            tracing::debug!(target: "roomkit::driver", room_id = %room_id, %error, "the room could not be read for its latest index");
+            None
+        }
+    }
 }
 
 /// What a failure of `target`'s handling of `source`'s stream in `room_id`
@@ -238,7 +256,8 @@ pub(super) async fn read_kept<S: ConversationStore>(
         .map(Hold::new);
     let live = kept.turn.record();
     let room_id = answers.room_id.clone();
-    let segments = segments_of(&responder, answers, correlation_id, &kept.turn);
+    let latest = latest_index(inner, &room_id).await;
+    let segments = segments_of(&responder, answers, correlation_id, &kept.turn, latest);
     let mut producer = Producer {
         room_id,
         failing,
@@ -404,11 +423,15 @@ fn instruction_keeper<S: ConversationStore>(inner: &Arc<Inner<S>>) -> Instructio
             let kept = kit
                 .commit_event(&room_id, record, crate::CommitEventOptions::default())
                 .await;
-            if let Err(error) = kept {
-                if inner.tasks.is_closing() {
-                    tracing::debug!(target: "roomkit::driver", room_id = %room_id, %error, "the instruction the turn read was not kept: the kit closed");
-                } else {
-                    tracing::warn!(target: "roomkit::driver", room_id = %room_id, %error, "the instruction the turn read could not be kept");
+            match kept {
+                Ok(kept) => Some(kept.index),
+                Err(error) => {
+                    if inner.tasks.is_closing() {
+                        tracing::debug!(target: "roomkit::driver", room_id = %room_id, %error, "the instruction the turn read was not kept: the kit closed");
+                    } else {
+                        tracing::warn!(target: "roomkit::driver", room_id = %room_id, %error, "the instruction the turn read could not be kept");
+                    }
+                    None
                 }
             }
         })
@@ -1081,10 +1104,13 @@ impl Producer {
 
     /// Keeps the agent's own copy of the instruction its turn read, before
     /// anything else of the turn, delivered to no channel and handed to no
-    /// reader (RFC §10.1.1); the turn began.
+    /// reader (RFC §10.1.1); the turn began, and what it writes next follows
+    /// the record (RFC §6.4).
     async fn keep_instruction(&mut self, marker: InstructionReadMarker) {
         self.segments.handed();
-        (self.keeper)(self.segments.instruction_read(marker)).await;
+        if let Some(index) = (self.keeper)(self.segments.instruction_read(marker)).await {
+            self.segments.kept(index);
+        }
     }
 
     /// [`take`](Self::take), past what holds a discussion's silence back.

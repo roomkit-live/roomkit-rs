@@ -6,6 +6,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- A streamed text names the row it follows, `metadata["follows_index"]`, as
+  in Python (RFC §6.4, RMK-2096): the index of the last row the room held
+  when its writing began, and the event `deliver_stream` is handed carries
+  it before the first word. The timeline stays in index order; a reader that
+  orders by `follows_index`, else `index`, then `index`, shows a text above a
+  record the room received while its generation was under way
+  (`examples/conversation_order.rs`).
+
 ### Changed
 
 - **BREAKING — a generation ends in one closed vocabulary, `FinishReason`**, where `finish_reason` was the provider's own word, as in Python (RFC §6.7, RMK-1987): `Stop`, `ToolCalls`, `Length`, `ContentFilter`, `Refusal`, `MalformedCall`, `UnexpectedCall` and `Error`, written as `stop`, `tool_calls`, `length`, `content_filter`, `refusal`, `malformed_call`, `unexpected_call` and `error`. `AiResponse::finish_reason` and `StreamDone::finish_reason` are `Option<FinishReason>`, as are the `finish_reason` of `is_truncation`, `call_cut`, `call_partial`, `call_garbled`, `AiToolCall::read`, `read_tool_calls` and `check_schema_answer`, and `ScriptedRound::with_finish_reason` takes one. The tool loop and the response-schema check read these words only: no vendor's word (`end_turn`, `MAX_TOKENS`, `MALFORMED_FUNCTION_CALL`...) is a truncation, a natural stop or a call that could not be parsed anymore. Migration: a provider maps its vendor's words onto `FinishReason` before it builds an `AiResponse` or a `StreamDone`, and a word it does not know onto `None`, which reads as a stream that ended without a reason: the response's last call, if its arguments did not arrive whole, is cut.

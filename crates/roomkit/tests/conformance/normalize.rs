@@ -280,7 +280,26 @@ impl Normalizer {
             };
             result.insert(self.key(key), normalized);
         }
+        self.follows_index(object, &mut result);
         Value::Object(result)
+    }
+
+    /// Reads the row a streamed text names (`metadata.follows_index`, RFC
+    /// §6.4) as an index of its room, in `read`, `event` once normalized.
+    fn follows_index(&self, event: &Map<String, Value>, read: &mut Map<String, Value>) {
+        let Some(room) = event.get("room_id").and_then(Value::as_str) else {
+            return;
+        };
+        let metadata = read.get_mut("metadata").and_then(Value::as_object_mut);
+        let Some(metadata) = metadata.filter(|_| event.contains_key("source")) else {
+            return;
+        };
+        if let Some(raw) = metadata.get("follows_index").and_then(Value::as_i64) {
+            metadata.insert(
+                "follows_index".to_owned(),
+                Value::from(self.index(room, raw)),
+            );
+        }
     }
 
     /// An object's key, an event of a timeline's id named as its event.

@@ -13,8 +13,9 @@ use super::support::{ReadingOn, Step, Streaming, Stuck, Timed, bind, kit_with, r
 use crate::ConversationStore;
 use crate::turns::observe::Carried;
 
-/// The turn's error, and the metadata of the agent's last message, for an
-/// agent of its own whose stream ends on `end`.
+/// The turn's error, and the record on the agent's last message (its
+/// metadata but the row it follows, RFC §6.4), for an agent of its own
+/// whose stream ends on `end`.
 async fn ending_on(end: LoopEndMarker) -> (Option<String>, Option<Value>) {
     let kit = kit_with(Streaming::ending(2, end)).await;
     let result = says(&kit, "Hi").await.unwrap();
@@ -28,7 +29,10 @@ async fn ending_on(end: LoopEndMarker) -> (Option<String>, Option<Value>) {
         .rfind(|event| {
             event.r#type == EventType::Message && event.source.channel_id.as_str() == "ai"
         })
-        .map(|event| Value::Object(event.metadata));
+        .map(|mut event| {
+            event.metadata.shift_remove("follows_index");
+            Value::Object(event.metadata)
+        });
     (result.error.map(|error| error.message), last)
 }
 
