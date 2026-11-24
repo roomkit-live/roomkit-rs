@@ -362,14 +362,18 @@ async fn a_failure_before_the_prompt_carries_its_python_class() {
 async fn a_turn_outside_a_kit_is_read_whole_as_one_message() {
     let (channel, mut agents, _closed) = channel();
     let (stream, record) = turn(&channel, "room-1");
-    let trigger = roomkit::model::RoomEvent::new(
-        RoomId::new("room-1").unwrap(),
-        roomkit::model::EventSource::new(
-            ChannelId::new("ws").unwrap(),
-            roomkit::model::ChannelType::WEBSOCKET,
-        ),
-        roomkit::model::TextContent::new("hello"),
-    );
+    let asked = roomkit::model::Timestamp::from_unix_millis(0).unwrap();
+    let trigger = roomkit::model::RoomEvent {
+        created_at: asked,
+        ..roomkit::model::RoomEvent::new(
+            RoomId::new("room-1").unwrap(),
+            roomkit::model::EventSource::new(
+                ChannelId::new("ws").unwrap(),
+                roomkit::model::ChannelType::WEBSOCKET,
+            ),
+            roomkit::model::TextContent::new("hello"),
+        )
+    };
     let reading = super::buffered(stream, &trigger, channel.source(), record);
     let agent_side = async {
         let mut agent = Agent::new(agents.recv().await.unwrap());
@@ -401,6 +405,8 @@ async fn a_turn_outside_a_kit_is_read_whole_as_one_message() {
         message.content,
         roomkit::model::TextContent::new("Hi.").into()
     );
+    // Its instant is its own, when it is written, never its trigger's (RFC §5.2).
+    assert_ne!(message.created_at, asked);
     assert_eq!(
         message.metadata.get("acp"),
         Some(&json!({ "protocol_version": 1, "prompt_returned": true }))

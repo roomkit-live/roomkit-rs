@@ -33,6 +33,7 @@ use roomkit::model::{
     TextContent,
 };
 use roomkit::{Channel, ChannelError, ClassedError, ResponseItem, TurnRecord, current_turn_host};
+use roomkit_core::ops::{Environment, SystemEnvironment};
 use roomkit_core::rules::edits::opens_no_turn;
 use roomkit_core::rules::instructions::is_standalone;
 use roomkit_core::rules::transcript::{is_blank, mark_instruction};
@@ -673,13 +674,15 @@ async fn buffered<S: futures_core::Stream<Item = Result<ResponseItem, ChannelErr
             }),
         };
     }
+    // Its id is a placeholder, the trigger's; its instant is its own, when
+    // it is written (RFC §5.2).
     let mut message = RoomEvent::at(
         trigger.id.clone(),
         trigger.room_id.clone(),
         EventType::Message,
         source,
         TextContent::new(said),
-        trigger.created_at,
+        SystemEnvironment.now(),
     );
     message.metadata = record.to_metadata();
     let error = failure.map(|failure| match failure.downcast_ref::<ClassedError>() {
