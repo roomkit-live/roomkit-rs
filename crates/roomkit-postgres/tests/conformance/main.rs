@@ -128,7 +128,11 @@ use crate::store_faults::FaultingStore;
 use crate::support::TempSchema;
 
 /// Shared text failures, with no store-specific exceptions.
-pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[];
+pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[(
+    "executors/an-agent-s-presence-is-published-at-once-on-a-transport-written-on-the-contract-alone",
+    "RK-10.6.7-031: the kit learns that an executor is served or closes from the two backends \
+     it knows by their type; behind any other transport it waits for its next look (RMK-2012)",
+)];
 
 /// A scenario that has not finished by then fails instead of hanging the
 /// suite.
