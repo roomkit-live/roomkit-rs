@@ -1,4 +1,4 @@
-//! Deliver a declaration-only channel's turn, and forward its numbered messages.
+//! Deliver a submitted turn, and forward its numbered messages.
 mod local;
 mod submitted;
 use std::collections::BTreeSet;
@@ -8,7 +8,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use super::Worker;
 use crate::RoomKitError;
 use crate::turns::pipe::{LinkFailure, PipeReceiver};
-use crate::turns::submission::Handover;
 use crate::turns::wire::{Control, Frame, RequestRest};
 use crate::turns::{CarriedRequest, MemoryTurn};
 
@@ -24,35 +23,6 @@ enum Delivered {
 }
 
 impl RedisTurnBackend {
-    pub(in crate::turns) async fn submit_remote(
-        &self,
-        carried: CarriedRequest,
-        memory: Arc<MemoryTurn>,
-        controls: PipeReceiver<Control>,
-        mut handover: Handover,
-    ) {
-        let result = self
-            .hand_over(carried, &memory, |handed| handover.handed = handed)
-            .await;
-        match result {
-            Ok(Delivered::Here(worker, request)) => {
-                self.submit_here(worker, *request, &memory, controls, move || {
-                    handover.handed = true;
-                    drop(handover);
-                });
-            }
-            Ok(Delivered::Elsewhere(peer, route)) => {
-                drop(handover);
-                self.forward_owner(peer, memory, controls, route, None)
-                    .await;
-            }
-            Err(error) => {
-                drop(handover);
-                refuse(&memory, &error);
-            }
-        }
-    }
-
     async fn hand_over(
         &self,
         carried: CarriedRequest,

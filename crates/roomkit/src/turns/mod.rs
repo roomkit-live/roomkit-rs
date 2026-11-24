@@ -303,16 +303,6 @@ impl Turns {
         self.application.as_ref().map(|app| &app.backend)
     }
 
-    /// Native Redis hands the already-carried request directly to its bridge.
-    /// Every configured backend uses the same owner admission before this choice.
-    fn application_driver(&self) -> Option<&application::Application> {
-        #[cfg(feature = "redis")]
-        if self.remote.is_some() {
-            return None;
-        }
-        self.application.as_ref()
-    }
-
     pub(crate) fn set_error_classes(&self, classes: ErrorClasses) {
         *self
             .error_classes
@@ -487,7 +477,9 @@ impl Turns {
                 strategy_turn,
                 channel_rows,
             };
-            let (mut turn, _following) = if let Some(app) = self.application_driver() {
+            // A configured backend takes every turn by its public submit, a
+            // live channel's too (RFC §10.6.7).
+            let (mut turn, _following) = if let Some(app) = &self.application {
                 marks
                     .scoped(self.start_application(app, kit, binding, input, submitted))
                     .await?

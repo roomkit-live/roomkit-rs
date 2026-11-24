@@ -26,14 +26,14 @@ pub(super) struct Input {
 }
 
 /// A placement can fail or be cancelled before the executor receives it.
-pub(super) struct Handover {
+struct Handover {
     owner: Weak<Turns>,
     room: RoomId,
     channel: ChannelId,
     turn: Arc<str>,
     previous: Option<PreviousTurn>,
-    pub(super) handed: bool,
-    pub(super) marker: super::Handover,
+    handed: bool,
+    marker: super::Handover,
 }
 
 impl Drop for Handover {
@@ -58,12 +58,6 @@ struct Prepared {
     handover: Handover,
 }
 
-enum Destination {
-    Local(Running),
-    #[cfg(feature = "redis")]
-    Remote(super::RedisTurnBackend),
-}
-
 type OpenOwner = (
     OwnerTurn,
     Arc<MemoryTurn>,
@@ -72,17 +66,14 @@ type OpenOwner = (
 );
 
 impl Turns {
-    fn destination(
+    /// The kit's own executor admits the turn of a kit with no turn backend.
+    fn admit_here(
         &self,
         turn_id: &Arc<str>,
         kit: &dyn TurnKit,
         binding: &ChannelBinding,
-    ) -> Result<Destination, ErrorRecord> {
+    ) -> Result<Running, ErrorRecord> {
         let channel = kit.channel(&binding.channel_id);
-        #[cfg(feature = "redis")]
-        if let Some(redis) = self.remote_for_channel(channel.as_deref()) {
-            return Ok(Destination::Remote(redis.clone()));
-        }
         if channel.is_some_and(|channel| channel.is_declaration_only()) {
             return Err(TurnError::new(
                 "no_executor",
@@ -92,7 +83,6 @@ impl Turns {
         }
         self.executor_lifecycle
             .admit(Arc::clone(turn_id))
-            .map(Destination::Local)
             .ok_or_else(|| {
                 TurnError::new("no_executor", "the kit's local executor has closed").to_record()
             })
@@ -199,7 +189,7 @@ impl Turns {
             return Err(closed());
         }
         let turn_id: Arc<str> = Arc::from(format!("turn-{}", Uuid::new_v4().simple()));
-        let destination = self.destination(&turn_id, &**kit, binding)?;
+        let running = self.admit_here(&turn_id, &**kit, binding)?;
         let observers = self.observers();
         let facts = owner::Facts::of(binding, &input.event, &input.context.room);
         let author = turn_author(&input.event, &input.context);
@@ -207,43 +197,22 @@ impl Turns {
             carried,
             stale,
             mut handover,
-        } = self.prepare_request(
-            &**kit,
-            binding,
-            input,
-            &turn_id,
-            matches!(destination, Destination::Local(_)),
-            &observers,
-        )?;
+        } = self.prepare_request(&**kit, binding, input, &turn_id, true, &observers)?;
         let (turn, memory, controls_read, pump) =
             self.open_owner(kit, turn_id, facts.clone(), observers);
         // Register a pending cut before an executor can take its first step.
         let following = submitted(turn.canceller());
-        let taken = kit.spawn(pump)
-            && match destination {
-                Destination::Local(running) => {
-                    handover.handed = executor::take(
-                        self,
-                        running,
-                        Arc::clone(&memory),
-                        controls_read,
-                        carried,
-                        stale,
-                        kit,
-                    );
-                    handover.handed
-                }
-                #[cfg(feature = "redis")]
-                Destination::Remote(backend) => {
-                    let link = Arc::clone(&memory);
-                    kit.spawn(Box::pin(async move {
-                        backend
-                            .submit_remote(carried, link, controls_read, handover)
-                            .await;
-                    }))
-                }
-            };
-        if !taken {
+        handover.handed = kit.spawn(pump)
+            && executor::take(
+                self,
+                running,
+                Arc::clone(&memory),
+                controls_read,
+                carried,
+                stale,
+                kit,
+            );
+        if !handover.handed {
             memory.shut();
             return Err(closed());
         }

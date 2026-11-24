@@ -17,6 +17,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   its executor is gone, as through any backend's port (RFC §10.6.3,
   RMK-2012): `TurnHost::reachable` stays true and a verb asks the owner,
   where it failed `KitClosed`.
+- A kit on the Redis turn backend submits every turn by the backend's
+  public `submit`, a channel it holds live too, as in Python (RFC §10.6.7,
+  RMK-2012): the turn of a live channel records its executor as the room's
+  holder in Redis, where it ran without touching Redis, and it fails when
+  Redis cannot be reached, where it answered.
 - The supervisor's default first-pass instruction gives a neutral example,
   `'analyse electric cars' → 'Electric cars'`, where it named a vendor, as
   in Python (RFC §19.7.3, RMK-1982).

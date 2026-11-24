@@ -107,6 +107,12 @@ async fn loop_back_carries_the_kits_own_turn_without_advertising_its_channel() {
     room_turn_on_local_node(true, true).await;
 }
 
+/// A channel the kit holds live is placed as any turn, as in Python.
+#[tokio::test]
+async fn the_kits_own_turn_records_its_executor_as_the_rooms_holder() {
+    room_turn_on_local_node(false, true).await;
+}
+
 async fn room_turn_on_local_node(loop_back: bool, own_channel: bool) {
     let Some((node, peer)) = nodes_with_loop_back(loop_back) else {
         return;
@@ -134,6 +140,18 @@ async fn room_turn_on_local_node(loop_back: bool, own_channel: bool) {
         .await
         .unwrap();
     assert_eq!(inbox, loop_back, "only the looped-back turn uses the inbox");
+    // Every owner reads who holds the room's state (RFC §10.6.7).
+    let holder: Option<String> = redis::cmd("GET")
+        .arg(node.key("holder:agent:r"))
+        .query_async(&mut connection)
+        .await
+        .unwrap();
+    let executor = if own_channel {
+        kit.turn_executor().executor_id().to_owned()
+    } else {
+        "in-process".to_owned()
+    };
+    assert_eq!(holder, Some(format!("{}:{executor}", node.node_id())));
     if own_channel {
         assert_eq!(
             peer.executors().await.unwrap(),

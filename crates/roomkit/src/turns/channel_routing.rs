@@ -13,7 +13,7 @@ use crate::channel::DynChannel;
 
 impl Turns {
     #[cfg(feature = "redis")]
-    pub(crate) fn remote_for_channel(
+    fn remote_for_channel(
         &self,
         channel: Option<&dyn DynChannel>,
     ) -> Option<&super::redis::RedisTurnBackend> {

@@ -1,4 +1,4 @@
-//! A direct caller submits on the same placement and numbered bridge as the room driver.
+//! Every owner submits here: the kit's room driver as any direct caller.
 use super::{Delivered, PendingHandover, RedisTurnBackend, invalid};
 use crate::RoomKitError;
 use crate::turns::redis::{routes, transport::RedisLink};
