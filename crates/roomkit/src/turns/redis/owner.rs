@@ -105,11 +105,11 @@ impl RedisTurnBackend {
         else {
             return Err(refused());
         };
-        if let Err(error) = self.held_by(channel, room, &member).await {
-            // Taken, and the room would not follow it: the turn is let go.
-            self.release_turn(&target.node, &memory.turn_id).await;
-            return Err(error);
-        }
+        // Taken: a record of the holder Redis refuses, or a submission dropped
+        // while it is written, lets the turn go on its executor.
+        let mut taken = PendingHandover::new(self, &target.node, &memory.turn_id);
+        self.held_by(channel, room, &member).await?;
+        taken.armed = false;
         Ok(delivered)
     }
 
