@@ -109,8 +109,7 @@ impl RedisTurnBackend {
         };
         self.start().await?;
         if !owned {
-            self.notify_coverage(super::CoverageNotice::ExecutorsChanged)
-                .await;
+            self.0.watchers.changed().await;
         }
         Ok(())
     }
@@ -133,10 +132,6 @@ impl RedisTurnBackend {
         if first_use || !self.0.heartbeat.initialized() {
             self.start().await?;
         }
-        if first_use {
-            self.notify_coverage(super::CoverageNotice::OwnerAttended)
-                .await;
-        }
         Ok(())
     }
 
@@ -158,8 +153,7 @@ impl RedisTurnBackend {
         }
         let mut conn = self.connection().await?;
         write_beat(self, &mut conn, &self.snapshot()).await?;
-        self.notify_coverage(super::CoverageNotice::ExecutorsChanged)
-            .await;
+        self.0.watchers.changed().await;
         Ok(())
     }
 

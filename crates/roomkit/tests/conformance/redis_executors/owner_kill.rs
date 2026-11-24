@@ -21,8 +21,8 @@ use std::sync::{Arc, Mutex};
 use roomkit::RoomKitError;
 use roomkit::turns::wire::{Control, Frame, TurnRequest};
 use roomkit::turns::{
-    ChannelControl, ChannelResult, ExecutorInfo, RoomOwner, ServedExecutor, TurnBackend,
-    TurnFuture, TurnLink, TurnTimeouts,
+    ChannelControl, ChannelResult, ExecutorInfo, ExecutorsListener, RoomOwner, ServedExecutor,
+    TurnBackend, TurnFuture, TurnLink, TurnTimeouts,
 };
 use tokio::task::JoinHandle;
 
@@ -136,6 +136,10 @@ impl TurnBackend for OwnerKill {
         online: Option<bool>,
     ) -> Option<TurnFuture<'a, Result<bool, RoomKitError>>> {
         self.inner.claim_presence(channel_id, room_id, online)
+    }
+
+    fn watch_executors(&self, listener: ExecutorsListener) {
+        self.inner.watch_executors(listener);
     }
 
     fn executors(&self) -> Option<TurnFuture<'_, Result<Vec<ExecutorInfo>, RoomKitError>>> {

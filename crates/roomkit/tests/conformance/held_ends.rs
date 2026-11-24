@@ -26,8 +26,8 @@ use std::sync::{Arc, Mutex};
 use roomkit::turns::TurnBackendHandle;
 use roomkit::turns::wire::{Control, Frame, TurnRequest};
 use roomkit::turns::{
-    ChannelControl, ChannelResult, ExecutorInfo, InMemoryTurnBackend, RoomOwner, ServedExecutor,
-    TurnBackend, TurnFuture, TurnLink,
+    ChannelControl, ChannelResult, ExecutorInfo, ExecutorsListener, InMemoryTurnBackend, RoomOwner,
+    ServedExecutor, TurnBackend, TurnFuture, TurnLink,
 };
 use roomkit::{RoomKitError, RoomKitOptions, TurnTimeouts};
 use serde_json::{Value, json};
@@ -165,6 +165,10 @@ impl TurnBackend for HeldEnds {
         online: Option<bool>,
     ) -> Option<TurnFuture<'a, Result<bool, RoomKitError>>> {
         TurnBackend::claim_presence(&self.inner, channel_id, room_id, online)
+    }
+
+    fn watch_executors(&self, listener: ExecutorsListener) {
+        self.inner.watch_executors(listener);
     }
 
     fn executors(&self) -> Option<TurnFuture<'_, Result<Vec<ExecutorInfo>, RoomKitError>>> {

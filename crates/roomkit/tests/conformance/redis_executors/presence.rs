@@ -7,8 +7,8 @@ use roomkit::realtime::{
     RealtimeFuture,
 };
 use roomkit::turns::{
-    ChannelControl, ChannelResult, ExecutorInfo, RoomOwner, ServedExecutor, TurnBackend,
-    TurnBackendHandle, TurnFuture, TurnLink, TurnRequest, TurnTimeouts,
+    ChannelControl, ChannelResult, ExecutorInfo, ExecutorsListener, RoomOwner, ServedExecutor,
+    TurnBackend, TurnBackendHandle, TurnFuture, TurnLink, TurnRequest, TurnTimeouts,
 };
 use roomkit::{RedisTurnBackend, RoomKitError};
 use serde_json::Value;
@@ -175,6 +175,9 @@ impl TurnBackend for PresenceBackend {
             }
             self.inner.claim_presence(channel, room, online).await
         }))
+    }
+    fn watch_executors(&self, listener: ExecutorsListener) {
+        TurnBackend::watch_executors(&self.inner, listener);
     }
     fn executors(&self) -> Option<TurnFuture<'_, Result<Vec<ExecutorInfo>, RoomKitError>>> {
         if self.catalogue {

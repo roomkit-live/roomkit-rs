@@ -1,6 +1,6 @@
 //! Explicit single-process turn transport (RFC §10.6.1, §10.6.7).
 mod coverage;
-pub(crate) use coverage::{Coverage, Serving};
+pub(crate) use coverage::Serving;
 mod links;
 #[cfg(feature = "redis")]
 pub(super) use links::executor_end;
@@ -40,7 +40,7 @@ struct State {
 pub struct InMemoryTurnBackend {
     state: Arc<Mutex<State>>,
     claims: Arc<LocalPresenceClaims>,
-    pub(crate) coverage: Arc<Coverage>,
+    watchers: Arc<super::ExecutorWatchers>,
 }
 
 impl fmt::Debug for InMemoryTurnBackend {
@@ -103,9 +103,9 @@ impl InMemoryTurnBackend {
             return;
         }
         if let Some(lifecycle) = identity.upgrade() {
-            lifecycle.memory_backends.listen(&self.coverage);
+            lifecycle.memory_backends.listen(&self.watchers);
         }
-        self.coverage.changed().await;
+        self.watchers.changed().await;
     }
 
     fn attend_owner(&self, owner: Arc<dyn RoomOwner>) {
@@ -193,6 +193,10 @@ impl TurnBackend for InMemoryTurnBackend {
             self.serve_worker(worker).await;
             Ok(())
         })
+    }
+
+    fn watch_executors(&self, listener: super::ExecutorsListener) {
+        self.watchers.watch(listener);
     }
 
     fn attend(&self, owner: Arc<dyn RoomOwner>) -> TurnFuture<'_, Result<(), RoomKitError>> {

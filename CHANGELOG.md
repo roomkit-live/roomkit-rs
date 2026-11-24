@@ -8,6 +8,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `TurnBackend::watch_executors(listener)` and `ExecutorWatchers`: a turn
+  backend tells its room owner of the executors it serves by the contract,
+  as Python's `watch_executors` and `executors_changed` (RFC §10.6.7,
+  RK-10.6.7-031, RMK-2012). The kit gives its listener to any backend,
+  where it knew the in-memory and the Redis backend by their type, and
+  starts its watch as it first uses its backend: an agent's presence is
+  published as an executor is served or closes behind a backend written
+  outside the crate too, where it waited for the kit's next look. A backend
+  keeps its listeners in an `ExecutorWatchers` and runs them by `changed`;
+  one that wraps another hands the listener on.
 - `TurnBackend::submit_to(request, executor)` submits a turn to the one
   executor a host chose, where `submit` places it, as in Python (RFC §10.6.7,
   RMK-2098): the executor is named by an `ExecutorInfo`, its `executor_id`

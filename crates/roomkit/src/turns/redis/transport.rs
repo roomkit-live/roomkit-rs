@@ -63,6 +63,10 @@ impl TurnBackend for RedisTurnBackend {
         Some(Box::pin(self.claim_presence(channel_id, room_id, online)))
     }
 
+    fn watch_executors(&self, listener: crate::turns::ExecutorsListener) {
+        self.0.watchers.watch(listener);
+    }
+
     fn executors(&self) -> Option<TurnFuture<'_, Result<Vec<ExecutorInfo>, RoomKitError>>> {
         Some(Box::pin(self.executors()))
     }

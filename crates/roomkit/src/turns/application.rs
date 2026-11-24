@@ -15,6 +15,9 @@ use tokio::sync::OnceCell;
 pub(crate) struct Application {
     pub(crate) backend: TurnBackendHandle,
     owner: OnceLock<Arc<dyn RoomOwner>>,
+    /// What the owner starts as it first uses its backend (Python's
+    /// `_on_first_use`).
+    first_use: OnceLock<Box<dyn Fn() + Send + Sync>>,
     attending: OnceCell<()>,
     serving: OnceCell<()>,
 }
@@ -30,6 +33,7 @@ impl Application {
         Self {
             backend,
             owner: OnceLock::new(),
+            first_use: OnceLock::new(),
             attending: OnceCell::new(),
             serving: OnceCell::new(),
         }
@@ -42,7 +46,12 @@ impl Application {
     pub(super) async fn ready(&self) -> Result<(), RoomKitError> {
         let owner = self.owner.get().ok_or_else(owner_closed)?;
         self.attending
-            .get_or_try_init(|| self.backend.attend(Arc::clone(owner)))
+            .get_or_try_init(|| async {
+                if let Some(first_use) = self.first_use.get() {
+                    first_use();
+                }
+                self.backend.attend(Arc::clone(owner)).await
+            })
             .await?;
         self.serving
             .get_or_try_init(|| async {
@@ -71,6 +80,15 @@ impl Turns {
             app.ready().await?;
         }
         Ok(())
+    }
+
+    /// Have `start` run as the owner first uses its backend, before it
+    /// attends it; nothing on a kit with no backend configured.
+    pub(crate) fn on_first_use(&self, start: impl Fn() + Send + Sync + 'static) {
+        if let Some(application) = &self.application {
+            // The kit sets it once, as it is built.
+            drop(application.first_use.set(Box::new(start)));
+        }
     }
 
     pub(crate) fn bind_application_owner<S: ConversationStore>(&self, kit: &RoomKit<S>) {

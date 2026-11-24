@@ -16,8 +16,8 @@ use std::sync::{Arc, Mutex};
 
 use roomkit::RoomKitError;
 use roomkit::turns::{
-    ChannelControl, ChannelResult, ExecutorInfo, RoomOwner, ServedExecutor, TurnBackend,
-    TurnBackendHandle, TurnFuture, TurnLink, TurnRequest, TurnTimeouts,
+    ChannelControl, ChannelResult, ExecutorInfo, ExecutorsListener, RoomOwner, ServedExecutor,
+    TurnBackend, TurnBackendHandle, TurnFuture, TurnLink, TurnRequest, TurnTimeouts,
 };
 use serde_json::{Value, json};
 
@@ -108,6 +108,10 @@ impl TurnBackend for Reserved {
         online: Option<bool>,
     ) -> Option<TurnFuture<'a, Result<bool, RoomKitError>>> {
         TurnBackend::claim_presence(&*self.inner, channel_id, room_id, online)
+    }
+
+    fn watch_executors(&self, listener: ExecutorsListener) {
+        self.inner.watch_executors(listener);
     }
 
     fn executors(&self) -> Option<TurnFuture<'_, Result<Vec<ExecutorInfo>, RoomKitError>>> {

@@ -74,6 +74,8 @@ pub use room_owner::RoomOwner;
 mod application;
 mod transport;
 pub use transport::TurnBackend;
+mod executor_watchers;
+pub use executor_watchers::{ExecutorWatchers, ExecutorsListener};
 mod in_memory;
 pub use in_memory::InMemoryTurnBackend;
 mod backend;

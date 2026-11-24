@@ -25,8 +25,9 @@ use roomkit::store::ListEventsOptions;
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::turns::wire::{Control, Frame, TurnRequest};
 use roomkit::turns::{
-    ChannelControl, ChannelResult, ExecutorInfo, ExecutorInfoOptions, InMemoryTurnBackend,
-    RoomOwner, ServedExecutor, TurnBackend, TurnBackendHandle, TurnFuture, TurnLink,
+    ChannelControl, ChannelResult, ExecutorInfo, ExecutorInfoOptions, ExecutorsListener,
+    InMemoryTurnBackend, RoomOwner, ServedExecutor, TurnBackend, TurnBackendHandle, TurnFuture,
+    TurnLink,
 };
 use roomkit::{
     AgentIdentity, AttachChannelOptions, ChannelDeclaration, ConversationStore, CreateRoomOptions,
@@ -208,6 +209,9 @@ impl TurnBackend for SlotBackend {
     }
     fn attend(&self, owner: Arc<dyn RoomOwner>) -> TurnFuture<'_, Result<(), RoomKitError>> {
         self.inner.attend(owner)
+    }
+    fn watch_executors(&self, listener: ExecutorsListener) {
+        self.inner.watch_executors(listener);
     }
     fn executors(&self) -> Option<TurnFuture<'_, Result<Vec<ExecutorInfo>, RoomKitError>>> {
         TurnBackend::executors(&self.inner)

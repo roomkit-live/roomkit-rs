@@ -1186,15 +1186,6 @@ members = [
 scope = "text"
 reason = "call_tool_result and MCP outputSchema validation are deferred beyond the first public release (RMK-1732)"
 
-[[missing]]
-python = "roomkit.TurnBackend"
-members = [
-    "executors_changed",
-    "watch_executors",
-]
-scope = "text"
-reason = "not yet in Rust: a backend telling its room owner of the executors it serves, public in Python since RMK-2012, whose lot ports it and takes this entry off"
-
 [[exception]]
 rust = "roomkit_ai::MockAiProvider"
 members = ["calls"]
@@ -1634,6 +1625,22 @@ reason = "Carries the received exception's wire record and native type through a
 rust = "roomkit::turns::TurnFuture"
 approved = "2026-11-18"
 reason = "A named boxed, Send future makes Python's async link operations callable through a Rust trait object."
+
+[[exception]]
+rust = "roomkit::turns::ExecutorWatchers"
+approved = "2026-11-24"
+reason = "language: a Rust trait keeps no state, so the listeners Python's TurnBackend keeps itself are the ExecutorWatchers a backend holds: watch keeps one, changed runs them (HITL a1536f80, RMK-2012)"
+
+[[exception]]
+python = "roomkit.TurnBackend"
+members = ["executors_changed"]
+approved = "2026-11-24"
+reason = "language: Python's TurnBackend runs the listeners it keeps; a Rust backend runs those of its ExecutorWatchers, by ExecutorWatchers::changed (HITL a1536f80, RMK-2012)"
+
+[[exception]]
+rust = "roomkit::turns::ExecutorsListener"
+approved = "2026-11-24"
+reason = "The listener Python types Callable[[], Awaitable[None]], named: a shared closure that answers None once its owner is gone, so the backend forgets it where Python's collector would (HITL a1536f80, RMK-2012)"
 
 [[exception]]
 rust = "roomkit::turns::TurnContext"

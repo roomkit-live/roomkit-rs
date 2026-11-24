@@ -40,42 +40,34 @@ impl Monitor {
 }
 
 impl<S: ConversationStore> RoomKit<S> {
+    /// The kit hears of the executors its backend serves by the contract's
+    /// listener, whatever the backend, and starts its watch at its first use
+    /// of the backend, as Python's (RFC §10.6.7).
     pub(in crate::kit) fn wire_presence_watch(&self) {
         let Some(backend) = self.inner.turns.configured_backend() else {
             return;
         };
-        let concrete: &dyn std::any::Any = &**backend;
-        if let Some(memory) = concrete.downcast_ref::<crate::InMemoryTurnBackend>() {
-            let weak = self.downgrade();
-            memory.coverage.subscribe(Arc::new(move || {
-                let kit = weak.upgrade()?;
-                Some(Box::pin(async move { kit.coverage_notified(true).await }))
-            }));
-        }
-        #[cfg(feature = "redis")]
-        if let Some(redis) = &self.inner.turns.remote {
-            let weak = self.downgrade();
-            redis.watch_coverage(Arc::new(move |notice| {
-                let kit = weak.upgrade()?;
-                Some(Box::pin(async move {
-                    kit.coverage_notified(
-                        notice == crate::turns::redis::CoverageNotice::ExecutorsChanged,
-                    )
-                    .await;
-                }))
-            }));
-        }
+        let weak = self.downgrade();
+        backend.watch_executors(Arc::new(move || {
+            let kit = weak.upgrade()?;
+            Some(Box::pin(async move { kit.executors_changed().await }))
+        }));
+        let weak = self.downgrade();
+        self.inner.turns.on_first_use(move || {
+            if let Some(kit) = weak.upgrade() {
+                kit.start_presence_watch();
+            }
+        });
     }
 
-    async fn coverage_notified(&self, changed: bool) {
+    async fn executors_changed(&self) {
         self.start_presence_watch();
-        if changed
-            && self
-                .inner
-                .agent_presence
-                .remote
-                .started
-                .load(Ordering::Acquire)
+        if self
+            .inner
+            .agent_presence
+            .remote
+            .started
+            .load(Ordering::Acquire)
         {
             self.check_agent_coverage().await;
         }

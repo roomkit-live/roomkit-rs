@@ -130,3 +130,147 @@ async fn a_recreated_room_publishes_presence_when_old_hooks_are_forgotten() {
     );
     assert_eq!(fresh[0].executors, [kit.turn_executor().executor_id()]);
 }
+
+/// A backend written outside the crate: each operation of the public
+/// contract handed to the in-memory backend. Its heartbeat interval outlasts
+/// the test, so the kit learns of an executor from its listener, never from
+/// its next look.
+struct OnTheContractAlone(roomkit::turns::InMemoryTurnBackend);
+
+impl roomkit::turns::TurnBackend for OnTheContractAlone {
+    fn submit(
+        &self,
+        request: roomkit::turns::TurnRequest,
+    ) -> roomkit::turns::TurnFuture<
+        '_,
+        Result<std::sync::Arc<dyn roomkit::turns::TurnLink>, roomkit::RoomKitError>,
+    > {
+        roomkit::turns::TurnBackend::submit(&self.0, request)
+    }
+    fn serve(
+        &self,
+        executor: std::sync::Arc<dyn roomkit::turns::ServedExecutor>,
+    ) -> roomkit::turns::TurnFuture<'_, Result<(), roomkit::RoomKitError>> {
+        roomkit::turns::TurnBackend::serve(&self.0, executor)
+    }
+    fn control(
+        &self,
+        message: roomkit::turns::ChannelControl,
+    ) -> roomkit::turns::TurnFuture<
+        '_,
+        Result<Option<roomkit::turns::ChannelResult>, roomkit::RoomKitError>,
+    > {
+        roomkit::turns::TurnBackend::control(&self.0, message)
+    }
+    fn attend(
+        &self,
+        owner: std::sync::Arc<dyn roomkit::turns::RoomOwner>,
+    ) -> roomkit::turns::TurnFuture<'_, Result<(), roomkit::RoomKitError>> {
+        roomkit::turns::TurnBackend::attend(&self.0, owner)
+    }
+    fn watch_executors(&self, listener: roomkit::turns::ExecutorsListener) {
+        roomkit::turns::TurnBackend::watch_executors(&self.0, listener);
+    }
+    fn executors(
+        &self,
+    ) -> Option<
+        roomkit::turns::TurnFuture<
+            '_,
+            Result<Vec<roomkit::turns::ExecutorInfo>, roomkit::RoomKitError>,
+        >,
+    > {
+        roomkit::turns::TurnBackend::executors(&self.0)
+    }
+    fn timeouts(&self) -> Option<roomkit::TurnTimeouts> {
+        Some(roomkit::TurnTimeouts {
+            heartbeat_interval: std::time::Duration::from_secs(60),
+            ..Default::default()
+        })
+    }
+    fn close(&self) -> roomkit::turns::TurnFuture<'_, Result<(), roomkit::RoomKitError>> {
+        roomkit::turns::TurnBackend::close(&self.0)
+    }
+}
+
+// Python: test_an_agent_s_presence_is_published_on_attach_and_as_its_coverage_changes,
+// its on-the-contract-alone case.
+#[tokio::test]
+async fn a_backend_on_the_contract_alone_has_presence_published_as_an_executor_is_served() {
+    use roomkit::realtime::{
+        EphemeralCallback, EphemeralEventType, InMemoryRealtime, RealtimeBackend,
+    };
+    use roomkit::turns::{InMemoryTurnBackend, TurnBackendHandle};
+    use roomkit::{ChannelDeclaration, RoomKitOptions, TurnExecutor, TurnExecutorOptions};
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::sync::Notify;
+
+    let realtime = Arc::new(InMemoryRealtime::new(
+        roomkit::realtime::InMemoryRealtimeOptions::default(),
+    ));
+    let backend = TurnBackendHandle::new(Arc::new(OnTheContractAlone(InMemoryTurnBackend::new())));
+    let kit = RoomKit::new(RoomKitOptions {
+        realtime: Some(Arc::<InMemoryRealtime>::clone(&realtime)),
+        turn_backend: Some(backend.clone()),
+        ..Default::default()
+    });
+    let room: roomkit::model::RoomId = "r1".parse().unwrap();
+    let agent: roomkit::model::ChannelId = "coder".parse().unwrap();
+    kit.register_channel(ChannelDeclaration {
+        identity: Some(roomkit::AgentIdentity::default()),
+        ..ChannelDeclaration::new(agent.clone())
+    })
+    .unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let online = Arc::new(Notify::new());
+    let reached = Arc::clone(&online);
+    let callback: EphemeralCallback = Arc::new(move |event| {
+        let reached = Arc::clone(&reached);
+        Box::pin(async move {
+            if event.r#type == EphemeralEventType::PresenceOnline {
+                reached.notify_one();
+            }
+        })
+    });
+    let _subscription = realtime.subscribe_to_room(&room, callback).await;
+    kit.attach_channel(
+        &room,
+        &agent,
+        AttachChannelOptions {
+            category: Some(roomkit::model::ChannelCategory::Intelligence),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let executor = TurnExecutor::new(
+        |id| async move {
+            Ok(Some(EchoAgent::new(
+                id,
+                "late",
+                EchoAgentOptions::default(),
+            )))
+        },
+        TurnExecutorOptions {
+            executor_id: Some("late".into()),
+            hosts: Some(std::collections::BTreeSet::from(["coder".into()])),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    backend.serve(Arc::new(executor.clone())).await.unwrap();
+    let published = tokio::time::timeout(Duration::from_secs(5), online.notified()).await;
+
+    kit.close().await.unwrap();
+    executor.close().await;
+    assert!(
+        published.is_ok(),
+        "serving an executor did not publish the agent online before the kit's next look"
+    );
+}

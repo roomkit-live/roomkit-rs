@@ -68,6 +68,14 @@ pub trait TurnBackend: std::any::Any + Send + Sync {
         None
     }
 
+    /// Have `listener` run when this process serves an executor or one it
+    /// serves closes; changes elsewhere are read at the owner's next look.
+    /// The kit gives its own, to publish its agents' presence at once (RFC
+    /// §10.6.7). The default keeps none, and the owner learns at its next
+    /// look: a backend keeps them in an [`ExecutorWatchers`](super::ExecutorWatchers),
+    /// and one that wraps another hands it the listener.
+    fn watch_executors(&self, _listener: super::ExecutorsListener) {}
+
     /// Refresh a cached catalogue before a turn would be skipped (§19.7.5).
     /// The default reads the same catalogue as `executors`.
     fn executors_now(&self) -> Option<TurnFuture<'_, Result<Vec<ExecutorInfo>, RoomKitError>>> {

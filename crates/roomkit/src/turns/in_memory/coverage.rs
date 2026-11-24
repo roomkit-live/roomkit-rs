@@ -1,41 +1,15 @@
 //! Process-local notifications awaited by serve and worker close (§10.6.7).
 use std::sync::{Arc, Mutex, Weak};
 
-use crate::channel::BoxFuture;
-use crate::turns::lock;
-
-type Watcher = Arc<dyn Fn() -> Option<BoxFuture<'static, ()>> + Send + Sync>;
-
-#[derive(Default)]
-pub(crate) struct Coverage(Mutex<Vec<Watcher>>);
-
-impl Coverage {
-    pub(crate) fn subscribe(&self, watcher: Watcher) {
-        lock(&self.0).push(watcher);
-    }
-
-    pub(super) async fn changed(&self) {
-        let mut pending = Vec::new();
-        lock(&self.0).retain(|watcher| {
-            if let Some(work) = watcher() {
-                pending.push(work);
-                return true;
-            }
-            false
-        });
-        for work in pending {
-            work.await;
-        }
-    }
-}
+use crate::turns::{ExecutorWatchers, lock};
 
 /// Closing an executor notifies each backend that serves it once. Neither
 /// direction keeps an owner or a backend alive.
 #[derive(Default, Debug)]
-pub(crate) struct Serving(Mutex<Vec<Weak<Coverage>>>);
+pub(crate) struct Serving(Mutex<Vec<Weak<ExecutorWatchers>>>);
 
 impl Serving {
-    pub(crate) fn listen(&self, backend: &Arc<Coverage>) {
+    pub(crate) fn listen(&self, backend: &Arc<ExecutorWatchers>) {
         let mut listeners = lock(&self.0);
         let key = Arc::downgrade(backend);
         listeners.retain(|entry| entry.strong_count() != 0);
