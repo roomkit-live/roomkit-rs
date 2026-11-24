@@ -27,6 +27,7 @@ pub(crate) fn fixture_arguments(call: &str) -> Option<&'static [&'static str]> {
         "owner.kill" => &[],
         "executor.pause" | "executor.resume" | "executor.start" | "executor.close"
         | "executor.kill" | "executor.calls" => &["executor"],
+        "executor.reserve" => &["executor", "process"],
         "turn_backend.fault" => &["operation", "enabled", "gate"],
         _ => return None,
     })
@@ -49,6 +50,22 @@ async fn change_workers(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Call
     }))
 }
 
+/// An executor reserved for the kit's turns, or none again (README:
+/// `executor.reserve`).
+fn reserve(run: &Arc<Run>, spec: &Value) -> Result<Called, Unreadable> {
+    if spec.get("executor").is_none() {
+        return Err("executor.reserve: executor is missing".into());
+    }
+    let executor = optional::<Option<String>>(spec, "executor")?.flatten();
+    let process: Option<String> = optional(spec, "process")?;
+    let workers = run
+        .workers
+        .as_ref()
+        .ok_or("this pass has no executor fixture")?;
+    let reserved = workers.reserve(executor.as_deref(), process.as_deref());
+    Ok(finish(run, "executor.reserve", reserved, |()| Value::Null))
+}
+
 /// Make the named-hook or executor registration call.
 pub(crate) async fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Called, Unreadable> {
     let kit = run.kit();
@@ -65,6 +82,7 @@ pub(crate) async fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Cal
         }
         "executor.pause" | "executor.resume" | "executor.start" | "executor.close"
         | "executor.kill" | "owner.kill" => change_workers(run, name, spec).await,
+        "executor.reserve" => reserve(run, spec),
         "kit_executor.executor_id" => Ok(finish(
             run,
             name,

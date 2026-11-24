@@ -8,6 +8,8 @@ mod own_process;
 mod owner_kill;
 #[path = "redis_executors/presence.rs"]
 mod presence;
+#[path = "redis_executors/reserved.rs"]
+mod reserved;
 #[path = "redis_executors/silent.rs"]
 mod silent;
 #[path = "redis_executors/site.rs"]
@@ -121,6 +123,8 @@ struct Workers {
     restarted: BTreeSet<String>,
     /// The kit's turn backend, when a step kills the kit as its turns' owner.
     owner_kill: Option<Arc<owner_kill::OwnerKill>>,
+    /// The kit's turn backend, when a step reserves an executor for its turns.
+    reserved: std::sync::OnceLock<Arc<reserved::Reserved>>,
 }
 
 impl Workers {
@@ -304,6 +308,32 @@ impl crate::run::WorkerControl for Workers {
     ) -> Result<(), RoomKitError> {
         self.presence.fault(operation, enabled, gate)
     }
+    fn reserve(&self, executor: Option<&str>, process: Option<&str>) -> Result<(), RoomKitError> {
+        let reserved = self.reserved.get().ok_or_else(|| {
+            RoomKitError::Value("executor.reserve: the kit's backend was not wrapped".into())
+        })?;
+        let Some(id) = executor else {
+            reserved.reserve(None);
+            return Ok(());
+        };
+        if !self.declarations.iter().any(|worker| worker.id == id) {
+            return Err(RoomKitError::Value(format!(
+                "no executor {id} in setup.executors"
+            )));
+        }
+        let node = process
+            .map(|name| self.topology.node(name, false))
+            .transpose()?
+            .map(|node| node.node_id().to_owned());
+        reserved.reserve(Some(roomkit::turns::ExecutorInfo::new(
+            id,
+            roomkit::turns::ExecutorInfoOptions {
+                node,
+                ..Default::default()
+            },
+        )));
+        Ok(())
+    }
     fn start_all(&self) -> BoxFuture<'_, Result<(), RoomKitError>> {
         Box::pin(async move {
             for worker in &self.declarations {
@@ -393,12 +423,22 @@ async fn exercise(url: &str, scenario: &Value) -> Result<Vec<String>, RoomKitErr
             .collect(),
         restarted: restarted(scenario),
         owner_kill,
+        reserved: std::sync::OnceLock::new(),
     });
     let mut main = workers.presence.connection(owner.clone());
     if let Some(killable) = &workers.owner_kill {
         // The kit's turns cross the wrapper alone.
         main.turns =
             roomkit::turns::TurnBackendHandle::new(Arc::<owner_kill::OwnerKill>::clone(killable));
+    }
+    if calls(scenario, "executor.reserve") {
+        let reserving = Arc::new(reserved::Reserved::new(
+            main.turns.clone(),
+            workers.slot.clone(),
+        ));
+        main.turns = roomkit::turns::TurnBackendHandle::new(Arc::<reserved::Reserved>::clone(
+            workers.reserved.get_or_init(|| reserving),
+        ));
     }
     let problems = crate::harness::run_with(
         scenario,
@@ -428,11 +468,16 @@ async fn exercise(url: &str, scenario: &Value) -> Result<Vec<String>, RoomKitErr
 
 /// Whether a step kills the run's kit as its turns' owner.
 fn kills_owner(scenario: &Value) -> bool {
+    calls(scenario, "owner.kill")
+}
+
+/// Whether a step of `scenario` makes the call `name`.
+fn calls(scenario: &Value, name: &str) -> bool {
     scenario["steps"]
         .as_array()
         .into_iter()
         .flatten()
-        .any(|step| step["call"] == "owner.kill")
+        .any(|step| step["call"] == name)
 }
 
 /// The executors a step kills and a later step starts again under the same id.

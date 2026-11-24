@@ -67,6 +67,16 @@ impl OwnerKill {
         lock(&self.drains).extend(drains);
     }
 
+    /// The owner's link to a turn `link` carries, which a kill cuts.
+    fn owned(&self, link: Arc<dyn TurnLink>) -> Arc<dyn TurnLink> {
+        lock(&self.links).push(Arc::clone(&link));
+        Arc::new(OwnerLink {
+            link,
+            killed: Arc::clone(&self.killed),
+            run: self.run.clone(),
+        })
+    }
+
     /// Stops reading for the dead owner and lets its links go: the run is over.
     pub(super) fn close(&self) {
         for drain in lock(&self.drains).drain(..) {
@@ -93,16 +103,15 @@ impl TurnBackend for OwnerKill {
         &self,
         request: TurnRequest,
     ) -> TurnFuture<'_, Result<Arc<dyn TurnLink>, RoomKitError>> {
-        Box::pin(async move {
-            let link = self.inner.submit(request).await?;
-            lock(&self.links).push(Arc::clone(&link));
-            let owned: Arc<dyn TurnLink> = Arc::new(OwnerLink {
-                link,
-                killed: Arc::clone(&self.killed),
-                run: self.run.clone(),
-            });
-            Ok(owned)
-        })
+        Box::pin(async move { Ok(self.owned(self.inner.submit(request).await?)) })
+    }
+
+    fn submit_to(
+        &self,
+        request: TurnRequest,
+        executor: ExecutorInfo,
+    ) -> TurnFuture<'_, Result<Arc<dyn TurnLink>, RoomKitError>> {
+        Box::pin(async move { Ok(self.owned(self.inner.submit_to(request, executor).await?)) })
     }
 
     fn serve(&self, executor: Arc<dyn ServedExecutor>) -> TurnFuture<'_, Result<(), RoomKitError>> {

@@ -454,6 +454,7 @@ const EXPECT: &[&str] = &[
     "external_handlers",
     "executors",
     "turn_ends",
+    "reserved_turns",
     "killed_owner_frames",
     "script_executors",
     "sandbox_executors",

@@ -129,6 +129,13 @@ pub(crate) trait WorkerControl: Send + Sync {
         gate: Option<String>,
     ) -> Result<(), roomkit::RoomKitError>;
     fn start_all(&self) -> BoxFuture<'_, Result<(), roomkit::RoomKitError>>;
+    /// Reserves `executor` for the kit's turns, named in `process` when one
+    /// is given, or none again.
+    fn reserve(
+        &self,
+        executor: Option<&str>,
+        process: Option<&str>,
+    ) -> Result<(), roomkit::RoomKitError>;
     fn change<'a>(
         &'a self,
         operation: &'a str,

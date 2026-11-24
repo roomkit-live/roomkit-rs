@@ -573,6 +573,7 @@ async fn lifecycle_call(
         "turn_backend.fault"
         | "executor.pause"
         | "executor.resume"
+        | "executor.reserve"
         | "executor.start"
         | "executor.calls"
         | "executor.kill"

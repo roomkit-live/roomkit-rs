@@ -59,6 +59,22 @@ pub(crate) fn compare(run: &Run, scenario: &Value, observed: &Observed) -> Vec<S
         let actual = Value::Array(observed.turn_ends.get(channel).cloned().unwrap_or_default());
         comparison.check(expected, Some(&actual), &format!("turn_ends.{channel}"));
     }
+    for (worker, expected) in scenario["expect"]["reserved_turns"]
+        .as_object()
+        .into_iter()
+        .flatten()
+    {
+        let actual = observed
+            .reserved_turns
+            .get(worker)
+            .cloned()
+            .unwrap_or_default();
+        comparison.check(
+            expected,
+            Some(&Value::Array(actual)),
+            &format!("reserved_turns.{worker}"),
+        );
+    }
     if let Some(expected) = scenario["expect"].get("killed_owner_frames") {
         let actual = Value::Array(
             observed
