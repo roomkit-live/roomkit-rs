@@ -16,6 +16,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::future::ready;
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use roomkit::model::{
@@ -79,6 +80,13 @@ impl Slots {
             .insert(worker.to_owned(), slots);
     }
 
+    fn journal(&self) -> Vec<String> {
+        self.journal
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     fn note(&self, line: String) {
         self.journal
             .lock()
@@ -92,6 +100,7 @@ struct SlotLink {
     link: Arc<dyn TurnLink>,
     slots: Arc<Slots>,
     worker: String,
+    released: AtomicBool,
 }
 
 impl TurnLink for SlotLink {
@@ -109,7 +118,9 @@ impl TurnLink for SlotLink {
     }
     fn release(&self) {
         self.link.release();
-        self.slots.give_back(&self.worker);
+        if !self.released.swap(true, Ordering::AcqRel) {
+            self.slots.give_back(&self.worker);
+        }
     }
     fn beat_heard(&self) -> bool {
         self.link.beat_heard()
@@ -145,6 +156,7 @@ impl TurnBackend for SlotBackend {
                             link,
                             slots: Arc::clone(&self.slots),
                             worker,
+                            released: AtomicBool::new(false),
                         });
                         return Ok(held);
                     }
@@ -228,26 +240,17 @@ async fn ask(
         .map(|event| text_of(&event.content)))
 }
 
-async fn run() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
-    let slots = Arc::new(Slots::default());
-    slots.add("small", 1);
-    let backend = TurnBackendHandle::new(Arc::new(SlotBackend {
-        inner: InMemoryTurnBackend::new(),
-        slots: Arc::clone(&slots),
-    }));
-    let small = worker(
-        "small",
-        &[("First.", "coder on small."), ("Third.", "coder on small.")],
-    )?;
-    let big = worker("big", &[("Second.", "coder on big.")])?;
-    backend.serve(Arc::<TurnExecutor>::clone(&small)).await?;
+/// A kit over `backend` holding `coder` by its declaration, in a room.
+async fn kit_in_a_room(
+    backend: TurnBackendHandle,
+    room: &RoomId,
+    chat: &ChannelId,
+    coder: &ChannelId,
+) -> Result<RoomKit, Box<dyn Error + Send + Sync>> {
     let kit = RoomKit::new(RoomKitOptions {
-        turn_backend: Some(backend.clone()),
+        turn_backend: Some(backend),
         ..Default::default()
     });
-    let chat: ChannelId = "chat".parse()?;
-    let coder: ChannelId = "coder".parse()?;
-    let room: RoomId = "room".parse()?;
     kit.register_channel(RecordingTransport::new(
         chat.clone(),
         ChannelType::WEBSOCKET,
@@ -262,43 +265,47 @@ async fn run() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
         ..Default::default()
     })
     .await?;
-    kit.attach_channel(&room, &chat, AttachChannelOptions::default())
+    kit.attach_channel(room, chat, AttachChannelOptions::default())
         .await?;
     let intelligence = AttachChannelOptions {
         category: Some(ChannelCategory::Intelligence),
         ..Default::default()
     };
-    kit.attach_channel(&room, &coder, intelligence).await?;
+    kit.attach_channel(room, coder, intelligence).await?;
+    Ok(kit)
+}
 
+/// The room's three turns, and what the host did for each.
+async fn turns(
+    kit: &RoomKit,
+    backend: &TurnBackendHandle,
+    slots: &Slots,
+    big: &Arc<TurnExecutor>,
+) -> Result<Checks, Box<dyn Error + Send + Sync>> {
+    let (room, chat, coder): (RoomId, ChannelId, ChannelId) =
+        ("room".parse()?, "chat".parse()?, "coder".parse()?);
     let mut checks = Checks::default();
-    let first = ask(&kit, &room, &chat, &coder, "First.").await?;
+    let first = ask(kit, &room, &chat, &coder, "First.").await?;
     checks.expect(
         "small alone runs the room's first turn",
         first.as_deref() == Some("coder on small."),
     );
-
-    backend.serve(Arc::<TurnExecutor>::clone(&big)).await?;
+    backend.serve(Arc::<TurnExecutor>::clone(big)).await?;
     slots.add("big", 4);
-    let second = ask(&kit, &room, &chat, &coder, "Second.").await?;
+    let second = ask(kit, &room, &chat, &coder, "Second.").await?;
     checks.expect(
         "the turn runs on big, reserved, though small held the room",
         second.as_deref() == Some("coder on big."),
     );
-
     big.close().await;
-    let third = ask(&kit, &room, &chat, &coder, "Third.").await?;
+    let third = ask(kit, &room, &chat, &coder, "Third.").await?;
     checks.expect(
         "big closed: refused before the hand-over, the turn runs on small",
         third.as_deref() == Some("coder on small."),
     );
-    let journal = slots
-        .journal
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clone();
     checks.expect(
         "the host reserved small, big, then big refused and small again",
-        journal
+        slots.journal()
             == [
                 "reserved small",
                 "reserved big",
@@ -306,6 +313,25 @@ async fn run() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
                 "reserved small",
             ],
     );
+    Ok(checks)
+}
+
+async fn run() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
+    let slots = Arc::new(Slots::default());
+    slots.add("small", 1);
+    let backend = TurnBackendHandle::new(Arc::new(SlotBackend {
+        inner: InMemoryTurnBackend::new(),
+        slots: Arc::clone(&slots),
+    }));
+    let small = worker(
+        "small",
+        &[("First.", "coder on small."), ("Third.", "coder on small.")],
+    )?;
+    let big = worker("big", &[("Second.", "coder on big.")])?;
+    backend.serve(Arc::<TurnExecutor>::clone(&small)).await?;
+    let (room, chat, coder) = ("room".parse()?, "chat".parse()?, "coder".parse()?);
+    let kit = kit_in_a_room(backend.clone(), &room, &chat, &coder).await?;
+    let checks = turns(&kit, &backend, &slots, &big).await?;
     kit.close().await?;
     small.close().await;
     Ok(checks.finish())

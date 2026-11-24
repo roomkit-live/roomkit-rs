@@ -570,16 +570,10 @@ async fn lifecycle_call(
         "register_hook" => finish(run, name, register_hook(run, &spec["hook"])?, |()| {
             Value::Null
         }),
-        "turn_backend.fault"
-        | "executor.pause"
-        | "executor.resume"
-        | "executor.reserve"
-        | "executor.start"
-        | "executor.calls"
-        | "executor.kill"
-        | "executor.close"
-        | "owner.kill"
-        | "kit_executor.close"
+        name if crate::kit_executor::fixture_arguments(name).is_some() => {
+            crate::kit_executor::call(run, name, spec).await?
+        }
+        "kit_executor.close"
         | "kit_executor.executor_id"
         | "executors"
         | "agent_presence"

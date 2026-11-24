@@ -128,6 +128,28 @@ struct Workers {
 }
 
 impl Workers {
+    /// The kit's connection to `owner`, its turns crossing the wrappers the
+    /// scenario's steps need: one a kill silences, and over it one that
+    /// submits them to a reserved executor.
+    fn kit_connection(
+        &self,
+        scenario: &Value,
+        owner: roomkit::RedisTurnBackend,
+    ) -> crate::run::OwnerConnection {
+        use roomkit::turns::TurnBackendHandle;
+        let mut main = self.presence.connection(owner);
+        if let Some(killable) = &self.owner_kill {
+            // The kit's turns cross the wrapper alone.
+            main.turns = TurnBackendHandle::new(Arc::<owner_kill::OwnerKill>::clone(killable));
+        }
+        if calls(scenario, "executor.reserve") {
+            let reserving = reserved::Reserved::new(main.turns.clone(), self.slot.clone());
+            let reserving = self.reserved.get_or_init(|| Arc::new(reserving));
+            main.turns = TurnBackendHandle::new(Arc::<reserved::Reserved>::clone(reserving));
+        }
+        main
+    }
+
     fn build(&self, worker: &Worker) -> Result<TurnExecutor, RoomKitError> {
         let declarations = Arc::clone(&self.channels);
         let observed = self.slot.clone();
@@ -425,21 +447,7 @@ async fn exercise(url: &str, scenario: &Value) -> Result<Vec<String>, RoomKitErr
         owner_kill,
         reserved: std::sync::OnceLock::new(),
     });
-    let mut main = workers.presence.connection(owner.clone());
-    if let Some(killable) = &workers.owner_kill {
-        // The kit's turns cross the wrapper alone.
-        main.turns =
-            roomkit::turns::TurnBackendHandle::new(Arc::<owner_kill::OwnerKill>::clone(killable));
-    }
-    if calls(scenario, "executor.reserve") {
-        let reserving = Arc::new(reserved::Reserved::new(
-            main.turns.clone(),
-            workers.slot.clone(),
-        ));
-        main.turns = roomkit::turns::TurnBackendHandle::new(Arc::<reserved::Reserved>::clone(
-            workers.reserved.get_or_init(|| reserving),
-        ));
-    }
+    let main = workers.kit_connection(scenario, owner.clone());
     let problems = crate::harness::run_with(
         scenario,
         workers.slot.clone(),

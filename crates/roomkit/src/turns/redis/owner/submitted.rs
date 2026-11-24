@@ -1,8 +1,10 @@
 //! Every owner submits here: the kit's room driver as any direct caller.
 use super::{Delivered, PendingHandover, RedisTurnBackend, invalid};
 use crate::RoomKitError;
+use crate::turns::pipe::PipeReceiver;
+use crate::turns::redis::routes::TurnRoute;
 use crate::turns::redis::{routes, transport::RedisLink};
-use crate::turns::wire::Frame;
+use crate::turns::wire::{Control, Frame};
 use crate::turns::{CarriedRequest, ExecutorInfo, TurnLink, TurnRequest};
 use std::sync::Arc;
 
@@ -64,22 +66,33 @@ impl RedisTurnBackend {
                     return Err(routes::closed());
                 }
             }
-            Delivered::Elsewhere(peer, route) => {
-                let mut pending = PendingHandover::new(self, &peer, &memory.turn_id);
-                let backend = self.clone();
-                let destination = peer.clone();
-                let read_end = Arc::clone(&link.read_end);
-                let memory = Arc::clone(memory);
-                if !self.dispatch(async move {
-                    backend
-                        .forward_owner(destination, memory, controls, route, Some(read_end))
-                        .await;
-                }) {
-                    return Err(routes::closed());
-                }
-                pending.armed = false;
-            }
+            Delivered::Elsewhere(peer, route) => self.forward(&peer, route, &link, controls)?,
         }
         Ok(Arc::new(link))
+    }
+
+    /// Carry the turn's messages between its owner's `link` and `peer`, the
+    /// process that took it; one it cannot carry is let go there.
+    fn forward(
+        &self,
+        peer: &str,
+        route: TurnRoute,
+        link: &RedisLink,
+        controls: PipeReceiver<Control>,
+    ) -> Result<(), RoomKitError> {
+        let mut pending = PendingHandover::new(self, peer, &link.memory.turn_id);
+        let backend = self.clone();
+        let destination = peer.to_owned();
+        let read_end = Arc::clone(&link.read_end);
+        let memory = Arc::clone(&link.memory);
+        if !self.dispatch(async move {
+            backend
+                .forward_owner(destination, memory, controls, route, Some(read_end))
+                .await;
+        }) {
+            return Err(routes::closed());
+        }
+        pending.armed = false;
+        Ok(())
     }
 }

@@ -66,6 +66,15 @@ fn reserve(run: &Arc<Run>, spec: &Value) -> Result<Called, Unreadable> {
     Ok(finish(run, "executor.reserve", reserved, |()| Value::Null))
 }
 
+/// A step the pass's executor fixture makes: an executor reserved for the
+/// kit's turns, else a lifecycle change.
+async fn fixture(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Called, Unreadable> {
+    if name == "executor.reserve" {
+        return reserve(run, spec);
+    }
+    change_workers(run, name, spec).await
+}
+
 /// Make the named-hook or executor registration call.
 pub(crate) async fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Called, Unreadable> {
     let kit = run.kit();
@@ -81,8 +90,7 @@ pub(crate) async fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Cal
             Ok(finish(run, name, Ok(calls), crate::calls::dump))
         }
         "executor.pause" | "executor.resume" | "executor.start" | "executor.close"
-        | "executor.kill" | "owner.kill" => change_workers(run, name, spec).await,
-        "executor.reserve" => reserve(run, spec),
+        | "executor.kill" | "owner.kill" | "executor.reserve" => fixture(run, name, spec).await,
         "kit_executor.executor_id" => Ok(finish(
             run,
             name,

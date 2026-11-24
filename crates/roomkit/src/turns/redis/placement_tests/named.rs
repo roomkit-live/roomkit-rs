@@ -1,31 +1,24 @@
 //! A turn submitted to the one executor its caller names (RFC §10.6.7).
-use std::sync::{Arc, Mutex};
+use std::collections::BTreeSet;
+use std::sync::Arc;
 use std::time::Duration;
 
 use super::super::placement::Placed;
 use super::super::{RedisTurnBackend, RedisTurnBackendOptions};
-use crate::model::{ChannelId, InboundMessage, RoomId, TextContent};
-use crate::store::ListEventsOptions;
-use crate::turns::{
-    ChannelControl, ChannelResult, ExecutorInfo, ExecutorInfoOptions, RoomOwner, ServedExecutor,
-    TurnBackend, TurnBackendHandle, TurnFuture, TurnLink, TurnRequest,
-};
+use crate::testing::{EchoAgent, EchoAgentOptions};
+use crate::turns::{ExecutorInfo, ExecutorInfoOptions, ServedExecutor, TurnRequest};
 use crate::{
-    ConversationStore, ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions, TurnTimeouts,
+    RoomKit, RoomKitError, RoomKitOptions, TurnExecutor, TurnExecutorOptions, TurnTimeouts,
 };
 
 /// One Redis node per name, as many processes: each serves a worker of its
 /// name, but `owner`, which serves none.
-fn processes<const N: usize>(
-    accept: Duration,
-) -> Option<(RedisTurnBackend, [RedisTurnBackend; N])> {
+fn processes<const N: usize>() -> Option<(RedisTurnBackend, [RedisTurnBackend; N])> {
     let url = std::env::var("REDIS_URL").ok()?;
     let options = RedisTurnBackendOptions {
         key_prefix: format!("roomkit:named:{}", uuid::Uuid::new_v4()),
         timeouts: TurnTimeouts {
             heartbeat_interval: Duration::from_millis(50),
-            heartbeat_timeout: Duration::from_secs(2),
-            accept,
             ..Default::default()
         },
         ..Default::default()
@@ -75,7 +68,7 @@ async fn close(nodes: impl IntoIterator<Item = &RedisTurnBackend>) {
 
 #[tokio::test]
 async fn a_named_executor_is_chosen_whoever_holds_the_room_and_holds_nothing_yet() {
-    let Some((owner, [a, b])) = processes(Duration::from_secs(10)) else {
+    let Some((owner, [a, b])) = processes() else {
         return;
     };
     a.serve(super::worker("a")).await.unwrap();
@@ -94,7 +87,7 @@ async fn a_named_executor_is_chosen_whoever_holds_the_room_and_holds_nothing_yet
 
 #[tokio::test]
 async fn an_executor_id_two_processes_serve_is_named_by_its_node() {
-    let Some((owner, [old, new])) = processes(Duration::from_secs(10)) else {
+    let Some((owner, [old, new])) = processes() else {
         return;
     };
     old.serve(super::worker("same")).await.unwrap();
@@ -115,7 +108,7 @@ async fn an_executor_id_two_processes_serve_is_named_by_its_node() {
 
 #[tokio::test]
 async fn an_executor_that_would_not_take_the_turn_placed_is_refused_named() {
-    let Some((owner, [a])) = processes(Duration::from_secs(10)) else {
+    let Some((owner, [a])) = processes() else {
         return;
     };
     a.serve(super::worker("a")).await.unwrap();
@@ -142,133 +135,153 @@ async fn an_executor_that_would_not_take_the_turn_placed_is_refused_named() {
     close([&owner, &a]).await;
 }
 
-/// A host's backend: every turn goes to the executor it reserved, and what
-/// each submission came to is kept.
-struct Reserving {
-    inner: RedisTurnBackend,
-    reserved: ExecutorInfo,
-    submitted: Mutex<Vec<(Option<String>, bool)>>,
-}
-
-impl TurnBackend for Reserving {
-    fn submit(
-        &self,
-        request: TurnRequest,
-    ) -> TurnFuture<'_, Result<Arc<dyn TurnLink>, RoomKitError>> {
-        Box::pin(async move {
-            // A clone shares the request's mark.
-            let witness = request.clone();
-            let link = self.inner.submit_to(request, self.reserved.clone()).await;
-            let reason = match &link {
-                Ok(_) => None,
-                Err(RoomKitError::TurnLink { reason, .. }) => Some(reason.clone()),
-                Err(other) => Some(other.to_string()),
-            };
-            self.submitted
-                .lock()
-                .unwrap()
-                .push((reason, witness.handed()));
-            link
-        })
-    }
-    fn serve(&self, executor: Arc<dyn ServedExecutor>) -> TurnFuture<'_, Result<(), RoomKitError>> {
-        TurnBackend::serve(&self.inner, executor)
-    }
-    fn control(
-        &self,
-        message: ChannelControl,
-    ) -> TurnFuture<'_, Result<Option<ChannelResult>, RoomKitError>> {
-        TurnBackend::control(&self.inner, message)
-    }
-    fn attend(&self, owner: Arc<dyn RoomOwner>) -> TurnFuture<'_, Result<(), RoomKitError>> {
-        TurnBackend::attend(&self.inner, owner)
-    }
-    fn close(&self) -> TurnFuture<'_, Result<(), RoomKitError>> {
-        TurnBackend::close(&self.inner)
-    }
-}
-
-/// Serves a worker `name` on `node` from a runtime of its own, which the
-/// returned sender stops as a killed process stops: no close, no last beat.
-async fn serve_apart(node: RedisTurnBackend, name: &'static str) -> std::sync::mpsc::Sender<()> {
-    let (ready, serving) = tokio::sync::oneshot::channel();
-    let (kill, killed) = std::sync::mpsc::channel::<()>();
-    std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        runtime.block_on(async move {
-            node.serve(super::worker(name)).await.unwrap();
-            ready.send(()).unwrap();
-            tokio::task::spawn_blocking(move || killed.recv())
-                .await
-                .unwrap()
-                .ok();
-            // Never closed: its handle goes with its runtime.
-            drop(node);
-        });
-        runtime.shutdown_background();
-    });
-    serving.await.unwrap();
-    kill
+/// A worker of the id `executor_id` declaring the one channel `channel`.
+fn hosting(executor_id: &str, channel: &str) -> TurnExecutor {
+    TurnExecutor::new(
+        |id| async move { Ok(Some(EchoAgent::new(id, "hi", EchoAgentOptions::default()))) },
+        TurnExecutorOptions {
+            executor_id: Some(executor_id.into()),
+            hosts: Some(BTreeSet::from([channel.to_owned()])),
+            ..Default::default()
+        },
+    )
+    .unwrap()
 }
 
 #[tokio::test]
-async fn a_hand_over_never_answered_is_lost_handed_and_given_to_no_other() {
-    let Some((owner, [a, b])) = processes(Duration::from_millis(300)) else {
+async fn an_executor_id_names_the_one_process_that_would_take_the_turn() {
+    let Some((owner, [coder, other])) = processes() else {
         return;
     };
-    a.serve(super::worker("a")).await.unwrap();
-    let reserved = named("b", Some(&b));
-    let kill = serve_apart(b, "b").await;
-    let backend = Arc::new(Reserving {
-        inner: owner.clone(),
-        reserved,
-        submitted: Mutex::default(),
-    });
-    let kit = RoomKit::new(RoomKitOptions {
-        turn_backend: Some(TurnBackendHandle::new(Arc::<Reserving>::clone(&backend))),
-        ..Default::default()
-    });
-    let room: RoomId = "r".parse().unwrap();
-    let agent: ChannelId = "agent".parse().unwrap();
-    let text: ChannelId = "text".parse().unwrap();
-    super::register_channels(&kit, &text, &agent, false);
-    super::attach_agents_room(&kit, &room, &text, &agent).await;
-    // Its process dies: it reads no request and beats no more, while the
-    // registry still counts it alive within the heartbeat timeout.
-    kill.send(()).unwrap();
-    let result = kit
-        .process_inbound(
-            InboundMessage::new(text.clone(), "person", TextContent::new("Hi")),
-            ProcessInboundOptions {
-                room_id: Some(room.clone()),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
+    coder.serve(hosting("same", "agent")).await.unwrap();
+    other.serve(hosting("same", "another")).await.unwrap();
 
-    assert!(
-        result
-            .error
-            .as_ref()
-            .is_some_and(|error| error.message.contains("did not answer the turn")),
-        "{:?}",
-        result.error
-    );
-    assert_eq!(
-        *backend.submitted.lock().unwrap(),
-        [(Some("executor_lost".to_owned()), true)]
-    );
-    // a declares the channel and was given nothing.
-    let rows = kit
-        .store()
-        .list_events(&room, ListEventsOptions::default())
+    // Two processes serve the id; one alone would take a turn of `agent`.
+    let chosen = target(&owner, &[], &named("same", None)).await.unwrap();
+    assert_eq!(chosen.0, coder.node_id());
+    close([&owner, &coder, &other]).await;
+}
+
+#[tokio::test]
+async fn a_channel_the_owner_holds_live_is_named_on_its_own_executor_alone() {
+    let Some((node, [remote])) = processes() else {
+        return;
+    };
+    let kit = RoomKit::new(RoomKitOptions::default());
+    kit.register_channel(EchoAgent::new(
+        "agent".parse().unwrap(),
+        "live",
+        EchoAgentOptions::default(),
+    ))
+    .unwrap();
+    remote.serve(super::worker("remote")).await.unwrap();
+    let own: Arc<dyn ServedExecutor> = Arc::new(kit.turn_executor());
+    node.serve_erased(Arc::clone(&own)).await.unwrap();
+    node.reserve_owner(&own);
+
+    // Another executor declares the channel too: the live channel's turn is
+    // submitted to the owner's own, and to no other.
+    refused(target(&node, &[], &named("remote", Some(&remote))).await);
+    let chosen = target(&node, &[], &named(own.executor_id(), None))
         .await
         .unwrap();
-    assert!(rows.iter().all(|row| row.source.channel_id != agent));
+    assert_eq!(
+        chosen,
+        (node.node_id().to_owned(), own.executor_id().to_owned())
+    );
+    // Named for a turn it does not take, it refuses by its name.
+    let hooked = ["audit".to_owned()];
+    let message = refused(target(&node, &hooked, &named(own.executor_id(), None)).await);
+    assert_eq!(
+        message,
+        format!(
+            "Executor {} does not take channel 'agent' with room hooks ['audit']",
+            own.executor_id()
+        )
+    );
     kit.close().await.unwrap();
-    a.close().await.unwrap();
+    close([&node, &remote]).await;
+}
+
+/// The member holding the room `r1` for the channel `ai`, as Redis keeps it.
+async fn holder(node: &RedisTurnBackend) -> Option<String> {
+    let mut connection = node.connection().await.unwrap();
+    redis::cmd("GET")
+        .arg(node.key("holder:ai:r1"))
+        .query_async(&mut connection)
+        .await
+        .unwrap()
+}
+
+/// Declares in Redis a worker `ghost` of `node`'s process, alive, declaring
+/// what its worker `real` declares: one the registry lists and the process
+/// does not serve, as a view older than its close would.
+async fn declare_ghost(node: &RedisTurnBackend, real: &str) {
+    let mut connection = node.connection().await.unwrap();
+    let member = format!("{}:{real}", node.node_id());
+    let declared: String = redis::cmd("HGET")
+        .arg(node.key("executors"))
+        .arg(&member)
+        .query_async(&mut connection)
+        .await
+        .unwrap();
+    let beat: f64 = redis::cmd("ZSCORE")
+        .arg(node.key("alive"))
+        .arg(&member)
+        .query_async(&mut connection)
+        .await
+        .unwrap();
+    let mut declared: serde_json::Value = serde_json::from_str(&declared).unwrap();
+    declared["executor_id"] = "ghost".into();
+    let ghost = format!("{}:ghost", node.node_id());
+    redis::cmd("HSET")
+        .arg(node.key("executors"))
+        .arg(&ghost)
+        .arg(declared.to_string())
+        .exec_async(&mut connection)
+        .await
+        .unwrap();
+    redis::cmd("ZADD")
+        .arg(node.key("alive"))
+        .arg(beat)
+        .arg(&ghost)
+        .exec_async(&mut connection)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_process_that_refuses_the_hand_over_fails_it_unhanded_and_the_holder_stays() {
+    let Some((owner, [a, b])) = processes() else {
+        return;
+    };
+    a.serve(hosting("a", "ai")).await.unwrap();
+    b.serve(hosting("b", "ai")).await.unwrap();
+    let request = |id: &str| -> TurnRequest {
+        serde_json::from_str(&super::super::shutdown_tests::request(id)).unwrap()
+    };
+    // a takes the room's first turn and holds it.
+    let first = owner
+        .submit_to(request("first"), named("a", Some(&a)))
+        .await
+        .unwrap();
+    let held = holder(&owner).await;
+    assert_eq!(held, Some(format!("{}:a", a.node_id())));
+    declare_ghost(&b, "b").await;
+
+    // The registry lists ghost in b's process, which refuses its request.
+    let second = request("second");
+    let witness = second.clone();
+    let refusal = owner
+        .submit_to(second, named("ghost", Some(&b)))
+        .await
+        .err();
+    assert!(
+        matches!(&refusal, Some(RoomKitError::TurnLink { reason, .. }) if reason == "no_executor"),
+        "{refusal:?}"
+    );
+    assert!(!witness.handed());
+    assert_eq!(holder(&owner).await, held);
+    first.release();
+    close([&owner, &a, &b]).await;
 }

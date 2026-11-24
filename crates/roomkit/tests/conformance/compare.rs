@@ -43,38 +43,9 @@ pub(crate) fn compare(run: &Run, scenario: &Value, observed: &Observed) -> Vec<S
     comparison.channel_calls();
     comparison.side_effects();
     comparison.models();
-    for (worker, expected) in scenario["expect"]["executors"]
-        .as_object()
-        .into_iter()
-        .flatten()
-    {
-        let actual = Value::Array(observed.executors.get(worker).cloned().unwrap_or_default());
-        comparison.check(expected, Some(&actual), &format!("executors.{worker}"));
-    }
-    for (channel, expected) in scenario["expect"]["turn_ends"]
-        .as_object()
-        .into_iter()
-        .flatten()
-    {
-        let actual = Value::Array(observed.turn_ends.get(channel).cloned().unwrap_or_default());
-        comparison.check(expected, Some(&actual), &format!("turn_ends.{channel}"));
-    }
-    for (worker, expected) in scenario["expect"]["reserved_turns"]
-        .as_object()
-        .into_iter()
-        .flatten()
-    {
-        let actual = observed
-            .reserved_turns
-            .get(worker)
-            .cloned()
-            .unwrap_or_default();
-        comparison.check(
-            expected,
-            Some(&Value::Array(actual)),
-            &format!("reserved_turns.{worker}"),
-        );
-    }
+    comparison.per_name("executors", &observed.executors);
+    comparison.per_name("turn_ends", &observed.turn_ends);
+    comparison.per_name("reserved_turns", &observed.reserved_turns);
     if let Some(expected) = scenario["expect"].get("killed_owner_frames") {
         let actual = Value::Array(
             observed
@@ -166,6 +137,18 @@ impl Comparison<'_> {
                 })
                 .collect(),
         )
+    }
+
+    /// What the run recorded per name under `kind` (an executor's calls, a
+    /// channel's turn ends, the turns submitted to a reserved executor),
+    /// against what the scenario expects of each name it lists: a name with
+    /// nothing recorded reads as an empty list.
+    fn per_name(&mut self, kind: &str, recorded: &std::collections::BTreeMap<String, Vec<Value>>) {
+        let expect = self.expect;
+        for (name, expected) in expect[kind].as_object().into_iter().flatten() {
+            let actual = Value::Array(recorded.get(name).cloned().unwrap_or_default());
+            self.check(expected, Some(&actual), &format!("{kind}.{name}"));
+        }
     }
 
     fn check(&mut self, expected: &Value, actual: Option<&Value>, path: &str) {

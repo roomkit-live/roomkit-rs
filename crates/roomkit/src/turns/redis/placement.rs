@@ -36,8 +36,8 @@ struct Candidates {
 
 impl Candidates {
     /// The one executor `only` names among those that take the turn; none
-    /// when none does, or when several processes serve its id and it names
-    /// no node.
+    /// when it names none of them, or several of them, in several processes,
+    /// and no node.
     fn named(self, only: &ExecutorInfo, backend: &RedisTurnBackend) -> Option<Placed> {
         let node = backend.node_id();
         let mut here = self
