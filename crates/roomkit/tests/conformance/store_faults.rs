@@ -9,8 +9,9 @@
 //! with [`StoreError::Unavailable`] in place of the operation; with `gate` it
 //! holds at the gate once the operation answered, or in its place before it
 //! fails, or, with `in_place`, in its place before it runs on the store as it
-//! then stands, a store the kit closed meanwhile refusing it. Every runner's kit is built over this store; without a fault armed
-//! it is the wrapped store, operation for operation.
+//! then stands, a store the kit closed meanwhile refusing it. Every runner's
+//! kit is built over this store; without a fault armed it is the wrapped
+//! store, operation for operation.
 //!
 //! With `kit.store_owner` it is the run's store as its owner closes it:
 //! `kit`, its close closes it and every operation made after fails with
