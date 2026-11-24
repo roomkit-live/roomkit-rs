@@ -46,6 +46,7 @@ use roomkit_core::ops::{
     ChannelOutcome, Entry, Notice, Outcome, ROW_HIDDEN, ROW_WITHHELD, StreamFailure, StreamTarget,
 };
 use roomkit_core::rules::hook_registry::HookTrigger;
+use roomkit_core::rules::instructions::InstructionReadMarker;
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -1078,6 +1079,14 @@ impl Producer {
         }
     }
 
+    /// Keeps the agent's own copy of the instruction its turn read, before
+    /// anything else of the turn, delivered to no channel and handed to no
+    /// reader (RFC §10.1.1); the turn began.
+    async fn keep_instruction(&mut self, marker: InstructionReadMarker) {
+        self.segments.handed();
+        (self.keeper)(self.segments.instruction_read(marker)).await;
+    }
+
     /// [`take`](Self::take), past what holds a discussion's silence back.
     async fn take_read(&mut self, read: Read) {
         match read {
@@ -1117,12 +1126,8 @@ impl Producer {
                 Reads::Nobody | Reads::Lost => self.segments.handed(),
             },
             Some(Ok(RemoteItem::Item(ResponseItem::Usage(marker)))) => self.take_usage(marker),
-            // The agent's own copy of the instruction its turn read, kept
-            // before anything else of the turn, delivered to no channel and
-            // handed to no reader (RFC §10.1.1); the turn began.
             Some(Ok(RemoteItem::Item(ResponseItem::InstructionRead(marker)))) => {
-                self.segments.handed();
-                (self.keeper)(self.segments.instruction_read(marker)).await;
+                self.keep_instruction(marker).await;
             }
             Some(Ok(RemoteItem::Item(ResponseItem::ToolCallStart(start)))) => {
                 self.segments.call_started();
