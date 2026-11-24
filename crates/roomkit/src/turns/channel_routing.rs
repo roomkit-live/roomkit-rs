@@ -1,6 +1,6 @@
 //! The owner's route for channel control outside a turn (RFC §10.6.3).
-//! Live channels stay on the kit's executor. A declaration reaches the
-//! executors hosting it when the kit uses a distributed backend.
+//! A kit with a turn backend sends every control by its `control`: the
+//! backend places a live channel's on the kit's own executor (RFC §10.6.7).
 
 use std::sync::Arc;
 
@@ -12,36 +12,13 @@ use crate::RoomKitError;
 use crate::channel::DynChannel;
 
 impl Turns {
-    #[cfg(feature = "redis")]
-    fn remote_for_channel(
-        &self,
-        channel: Option<&dyn DynChannel>,
-    ) -> Option<&super::redis::RedisTurnBackend> {
-        self.remote.as_ref().filter(|backend| {
-            channel.is_some_and(|channel| {
-                backend.loops_back()
-                    || channel.is_declaration_only()
-                    || self.executor_lifecycle.is_closed()
-                    || !backend.owns_lifecycle(&Arc::downgrade(&self.executor_lifecycle))
-            })
-        })
-    }
-
-    /// A different kit may supply the live channel even when both kits share
-    /// the Redis process. Its worker needs the submitting room's private rows.
+    /// A declaration's executor reads the room's rows with the turn; the
+    /// kit's own executor reads the store itself (RFC §10.6.3).
     pub(super) fn sends_channel_rows(&self, channel: Option<&dyn DynChannel>) -> bool {
-        #[cfg(feature = "redis")]
-        if self.remote.is_some() {
-            return self.remote_for_channel(channel).is_some();
-        }
         self.application.is_some() && channel.is_some_and(DynChannel::is_declaration_only)
     }
 
     pub(crate) fn carries_controls(&self, channel: Option<&dyn DynChannel>) -> bool {
-        #[cfg(feature = "redis")]
-        if self.remote.is_some() {
-            return self.remote_for_channel(channel).is_some();
-        }
         let _ = channel;
         self.application.is_some()
     }

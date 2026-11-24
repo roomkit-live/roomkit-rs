@@ -11,8 +11,8 @@ use crate::store::ListEventsOptions;
 use crate::testing::{EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions};
 use crate::{
     AgentIdentity, AttachChannelOptions, ChannelDeclaration, ConversationStore, CreateRoomOptions,
-    ProcessInboundOptions, RoomKit, RoomKitOptions, TurnExecutor, TurnExecutorOptions,
-    TurnTimeouts,
+    DetachChannelOptions, ProcessInboundOptions, RoomKit, RoomKitOptions, TurnExecutor,
+    TurnExecutorOptions, TurnTimeouts,
 };
 
 fn nodes() -> Option<(RedisTurnBackend, RedisTurnBackend)> {
@@ -107,7 +107,8 @@ async fn loop_back_carries_the_kits_own_turn_without_advertising_its_channel() {
     room_turn_on_local_node(true, true).await;
 }
 
-/// A channel the kit holds live is placed as any turn, as in Python.
+/// A channel the kit holds live is placed as any turn, and its detach
+/// forgets the room's holder as any, as in Python.
 #[tokio::test]
 async fn the_kits_own_turn_records_its_executor_as_the_rooms_holder() {
     room_turn_on_local_node(false, true).await;
@@ -158,6 +159,16 @@ async fn room_turn_on_local_node(loop_back: bool, own_channel: bool) {
             Vec::<crate::turns::ExecutorInfo>::new()
         );
     }
+    // A detach leaves nobody holding the room's state (RFC §10.6.7).
+    kit.detach_channel(&room, &agent, DetachChannelOptions::default())
+        .await
+        .unwrap();
+    let holder: Option<String> = redis::cmd("GET")
+        .arg(node.key("holder:agent:r"))
+        .query_async(&mut connection)
+        .await
+        .unwrap();
+    assert_eq!(holder, None);
     peer.close().await.unwrap();
     kit.close().await.unwrap();
 }

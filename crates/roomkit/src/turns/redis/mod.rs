@@ -155,10 +155,6 @@ impl RedisTurnBackend {
         })))
     }
 
-    pub(in crate::turns) fn loops_back(&self) -> bool {
-        self.0.loop_back
-    }
-
     /// This process's node identifier.
     pub fn node_id(&self) -> &str {
         &self.0.id

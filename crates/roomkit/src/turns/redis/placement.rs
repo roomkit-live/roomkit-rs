@@ -90,10 +90,7 @@ impl RedisTurnBackend {
         self.owns_lifecycle(&worker.native().lifecycle())
     }
 
-    pub(in crate::turns) fn owns_lifecycle(
-        &self,
-        worker: &std::sync::Weak<crate::turns::executor::Lifecycle>,
-    ) -> bool {
+    fn owns_lifecycle(&self, worker: &std::sync::Weak<crate::turns::executor::Lifecycle>) -> bool {
         self.0
             .owner_worker
             .get()

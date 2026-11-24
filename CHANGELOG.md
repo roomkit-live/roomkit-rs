@@ -37,6 +37,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   beat thread every `heartbeat_interval`, as in Python (RFC §10.6.8,
   RMK-2012), where each `submit` and each `control` wrote one more: a turn
   of a kit's live channel costs one Redis command, where it cost two.
+- A kit on the Redis turn backend sends every channel control by the
+  backend's public `control`, a live channel's too, and joins the room's
+  rows to a turn for a declaration alone, as on any backend and as in
+  Python (RFC §10.6.3, §10.6.7, RMK-2012): detaching a live channel
+  forgets the room's holder in Redis and fails when Redis cannot be
+  reached, and a kit sharing another kit's backend no longer joins its
+  room's rows to a turn the other kit's executor takes.
 - The supervisor's default first-pass instruction gives a neutral example,
   `'analyse electric cars' → 'Electric cars'`, where it named a vendor, as
   in Python (RFC §19.7.3, RMK-1982).
