@@ -1186,6 +1186,15 @@ members = [
 scope = "text"
 reason = "call_tool_result and MCP outputSchema validation are deferred beyond the first public release (RMK-1732)"
 
+[[missing]]
+python = "roomkit.TurnBackend"
+members = [
+    "executors_changed",
+    "watch_executors",
+]
+scope = "text"
+reason = "not yet in Rust: a backend telling its room owner of the executors it serves, public in Python since RMK-2012, whose lot ports it and takes this entry off"
+
 [[exception]]
 rust = "roomkit_ai::MockAiProvider"
 members = ["calls"]
@@ -1630,12 +1639,6 @@ reason = "A named boxed, Send future makes Python's async link operations callab
 rust = "roomkit::turns::TurnContext"
 approved = "2026-11-18"
 reason = "The executor link carries the execution context that Python exposes as contextvars.Context. A separate worker starts with a fresh context."
-
-[[exception]]
-rust = "roomkit::turns::TurnBackend"
-members = ["executors_now"]
-approved = "2026-11-18"
-reason = "Python's _executors_now refreshes a cached catalogue before placement skips a turn. A transport that uses its current catalogue inherits the ordinary read (HITL 708b5c5d)."
 
 # Each JSON shape is extracted from the pinned Python source. The Rust frame
 # tests exercise the discriminator, flattening and restricted publication union.
