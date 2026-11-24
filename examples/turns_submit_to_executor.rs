@@ -16,7 +16,6 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::future::ready;
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use roomkit::model::{
@@ -95,12 +94,34 @@ impl Slots {
     }
 }
 
-/// A turn's link that gives its worker's slot back once the turn is let go.
-struct SlotLink {
-    link: Arc<dyn TurnLink>,
+/// A slot held on a worker, given back when dropped: once its turn's link is
+/// let go, or when the turn's submission fails or is dropped.
+struct Slot {
     slots: Arc<Slots>,
     worker: String,
-    released: AtomicBool,
+}
+
+impl Slot {
+    /// Takes a slot of the worker with the most free ones.
+    fn reserve(slots: &Arc<Slots>) -> Option<Self> {
+        let worker = slots.reserve()?;
+        Some(Self {
+            slots: Arc::clone(slots),
+            worker,
+        })
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.slots.give_back(&self.worker);
+    }
+}
+
+/// A turn's link that holds its worker's slot until the turn is let go.
+struct SlotLink {
+    link: Arc<dyn TurnLink>,
+    slot: Mutex<Option<Slot>>,
 }
 
 impl TurnLink for SlotLink {
@@ -118,9 +139,12 @@ impl TurnLink for SlotLink {
     }
     fn release(&self) {
         self.link.release();
-        if !self.released.swap(true, Ordering::AcqRel) {
-            self.slots.give_back(&self.worker);
-        }
+        drop(
+            self.slot
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take(),
+        );
     }
     fn beat_heard(&self) -> bool {
         self.link.beat_heard()
@@ -141,23 +165,20 @@ impl TurnBackend for SlotBackend {
     ) -> TurnFuture<'_, Result<Arc<dyn TurnLink>, RoomKitError>> {
         Box::pin(async move {
             loop {
-                let Some(worker) = self.slots.reserve() else {
+                let Some(slot) = Slot::reserve(&self.slots) else {
                     return Err(RoomKitError::TurnLink {
                         reason: "no_executor".into(),
                         message: Some("No worker has a free slot".into()),
                     });
                 };
-                let executor = ExecutorInfo::new(worker.as_str(), ExecutorInfoOptions::default());
+                let worker = slot.worker.as_str();
+                let executor = ExecutorInfo::new(worker, ExecutorInfoOptions::default());
                 // A clone shares the request's mark: `handed` reads this attempt.
                 match self.inner.submit_to(request.clone(), executor).await {
                     Ok(link) => {
                         self.slots.note(format!("reserved {worker}"));
-                        let held: Arc<dyn TurnLink> = Arc::new(SlotLink {
-                            link,
-                            slots: Arc::clone(&self.slots),
-                            worker,
-                            released: AtomicBool::new(false),
-                        });
+                        let slot = Mutex::new(Some(slot));
+                        let held: Arc<dyn TurnLink> = Arc::new(SlotLink { link, slot });
                         return Ok(held);
                     }
                     Err(RoomKitError::TurnLink { reason, .. })
@@ -165,13 +186,10 @@ impl TurnBackend for SlotBackend {
                     {
                         self.slots
                             .note(format!("{worker} refused before the hand-over"));
-                        self.slots.forget(&worker);
+                        self.slots.forget(worker);
                     }
-                    Err(error) => {
-                        // Handed: the worker may have begun it. Never elsewhere.
-                        self.slots.give_back(&worker);
-                        return Err(error);
-                    }
+                    // Handed: the worker may have begun it. Never elsewhere.
+                    Err(error) => return Err(error),
                 }
             }
         })
