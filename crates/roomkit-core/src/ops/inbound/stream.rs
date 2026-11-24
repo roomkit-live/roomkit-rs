@@ -388,7 +388,11 @@ impl StreamRead {
         streamed: bool,
     ) -> (CommitPass, Option<ChannelId>) {
         let job = &self.job;
-        let row = stamp::stamp_response(event, &job.responder, &job.answers, cx.env.new_event_id());
+        let mut row =
+            stamp::stamp_response(event, &job.responder, &job.answers, cx.env.new_event_id());
+        // A row is its reader's draft, its instant the pipeline's to give
+        // as its id is: when it is written, never its trigger's (RFC §5.2).
+        row.created_at = cx.env.now();
         let bindings = self
             .context
             .as_ref()
