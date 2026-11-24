@@ -46,8 +46,9 @@ const TURNS: &str = "turns";
 /// The mark of a text its reader stopped (RFC §12.2 step 13s).
 const CANCELLED: &str = "cancelled";
 
-/// The key of a text's metadata that names the row it follows: the index of
-/// the last row the room held when its writing began (RFC §6.4).
+/// The key of a text's metadata that names the row it follows: the row the
+/// turn stored before it, else the room's last row as the read began (RFC
+/// §6.4).
 const FOLLOWS_INDEX: &str = "follows_index";
 
 /// A call the response opened: its start, and whether its row was written.
@@ -89,8 +90,8 @@ pub(super) struct Segments {
     last_message: Option<EventId>,
     /// The last row the store holds of the response.
     last_row: Option<EventId>,
-    /// The last row the room held when the text being read began: the
-    /// room's latest when the read began, then each row the turn stores.
+    /// The row the text being read follows: the room's latest when the read
+    /// began, then each row the turn stores.
     follows: Option<u64>,
 }
 

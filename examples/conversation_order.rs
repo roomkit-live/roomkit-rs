@@ -6,9 +6,10 @@
 //! application stores it in the room and hands it to the running turn, which
 //! then gives the value. The room's timeline keeps the order the rows were
 //! stored in, the answer before the wait. Each streamed text also names the
-//! row the room held when its writing began (`metadata["follows_index"]`),
-//! and the event a streaming channel is handed with the stream names it
-//! before the first word. A screen that places each text after the row it
+//! row it follows (`metadata["follows_index"]`): the row its turn stored
+//! before it, else the room's last row as the turn's read began, which the
+//! event a streaming channel is handed with the stream names before the
+//! first word. A screen that places each text after the row it
 //! follows shows the wait, the answer, the value, while the turn runs and
 //! when the conversation is opened again. The Python implementation's
 //! `examples/conversation_order.py`.
@@ -208,16 +209,13 @@ fn answer(room: &RoomId, screen: &ChannelId) -> RoomEvent {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<ExitCode, Box<dyn Error>> {
-    let (generating, mut started) = watch::channel(false);
-    let (first_word, waiting) = watch::channel(false);
-    let asker = Asker {
-        generating,
-        first_word: waiting,
-    };
+/// A session: the person's channel, the screen and the agent on `asker`,
+/// in one room.
+async fn session(
+    asker: Asker,
+    screen: &Screen,
+) -> Result<(RoomKit, RoomId, ChannelId), Box<dyn Error>> {
     let (room, api) = (RoomId::new("session")?, ChannelId::new("api")?);
-    let screen = Screen::default();
     let kit = RoomKit::new(RoomKitOptions::default());
     kit.register_channel(recording("ws", ChannelType::WEBSOCKET)?)?;
     kit.register_channel(screen.clone())?;
@@ -236,14 +234,70 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         kit.attach_channel(&room, &channel, AttachChannelOptions::default())
             .await?;
     }
+    Ok((kit, room, api))
+}
 
+/// The person asks: the turn's call, running until the turn is over.
+fn ask(kit: &RoomKit, room: &RoomId) -> Result<Asking, Box<dyn Error>> {
     let question = InboundMessage::new(ChannelId::new("ws")?, "dev", TextContent::new(ASK));
     let options = ProcessInboundOptions {
         room_id: Some(room.clone()),
         ..Default::default()
     };
     let asking = kit.clone();
-    let turn = tokio::spawn(async move { asking.process_inbound(question, options).await });
+    Ok(tokio::spawn(async move {
+        asking.process_inbound(question, options).await
+    }))
+}
+
+/// The call of a turn under way.
+type Asking = tokio::task::JoinHandle<Result<roomkit::InboundResult, roomkit::RoomKitError>>;
+
+/// The conversation a person reads: as the room stored it, by index, and as
+/// it reads opened again, each text after the row it follows.
+fn opened_again(timeline: &[RoomEvent]) -> (Vec<String>, Vec<String>) {
+    let conversation: Vec<&RoomEvent> = timeline
+        .iter()
+        .filter(|event| event.visibility != Visibility::Internal)
+        .collect();
+    let by_index = conversation
+        .iter()
+        .map(|event| text_of(&event.content))
+        .collect();
+    let read_back = read(conversation.iter().map(|event| place(event)).collect());
+    (by_index, read_back)
+}
+
+/// Checks what the run showed.
+fn checked(reached: usize, by_index: &[String], live: &[String], read_back: &[String]) -> ExitCode {
+    let mut checks = Checks::default();
+    checks.expect("the answer reached the running turn", reached == 1);
+    checks.expect(
+        "the room stores the answer before the wait, the order they were written in",
+        by_index == [ASK, REPLY, WAIT, VALUE],
+    );
+    checks.expect(
+        "the screen shows the wait above the answer while the turn runs",
+        live == [ASK, WAIT, REPLY, VALUE],
+    );
+    checks.expect(
+        "opened again, the conversation reads the same",
+        read_back == live,
+    );
+    checks.finish()
+}
+
+#[tokio::main]
+async fn main() -> Result<ExitCode, Box<dyn Error>> {
+    let (generating, mut started) = watch::channel(false);
+    let (first_word, waiting) = watch::channel(false);
+    let asker = Asker {
+        generating,
+        first_word: waiting,
+    };
+    let screen = Screen::default();
+    let (kit, room, api) = session(asker, &screen).await?;
+    let turn = ask(&kit, &room)?;
     started.wait_for(|started| *started).await?;
 
     // The other session answers while the model call is under way: the
@@ -264,33 +318,10 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         .get_timeline(&room, GetTimelineOptions::default())
         .await?;
     kit.close().await?;
-    let conversation: Vec<&RoomEvent> = timeline
-        .iter()
-        .filter(|event| event.visibility != Visibility::Internal)
-        .collect();
-    let by_index: Vec<String> = conversation
-        .iter()
-        .map(|event| text_of(&event.content))
-        .collect();
-    let read_back = read(conversation.iter().map(|event| place(event)).collect());
+    let (by_index, read_back) = opened_again(&timeline);
     let live = screen.view().read();
     println!("Stored, by index: {by_index:?}");
     println!("Live, at the end: {live:?}");
     println!("Opened again:     {read_back:?}");
-
-    let mut checks = Checks::default();
-    checks.expect("the answer reached the running turn", reached == 1);
-    checks.expect(
-        "the room stores the answer before the wait, the order they were written in",
-        by_index == [ASK, REPLY, WAIT, VALUE],
-    );
-    checks.expect(
-        "the screen shows the wait above the answer while the turn runs",
-        live == [ASK, WAIT, REPLY, VALUE],
-    );
-    checks.expect(
-        "opened again, the conversation reads the same",
-        read_back == live,
-    );
-    Ok(checks.finish())
+    Ok(checked(reached, &by_index, &live, &read_back))
 }

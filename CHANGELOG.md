@@ -9,9 +9,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - A streamed text names the row it follows, `metadata["follows_index"]`, as
-  in Python (RFC §6.4, RMK-2096): the index of the last row the room held
-  when its writing began, and the event `deliver_stream` is handed carries
-  it before the first word. The timeline stays in index order; a reader that
+  in Python (RFC §6.4, RMK-2096): the index of the row the turn stored
+  before it, else of the room's latest row as the kit begins to read the
+  response, which the event `deliver_stream` is handed carries too, before
+  the first word. The timeline stays in index order; a reader that
   orders by `follows_index`, else `index`, then `index`, shows a text above a
   record the room received while its generation was under way
   (`examples/conversation_order.rs`).

@@ -188,14 +188,22 @@ fn segments_of(
         .following(latest)
 }
 
-/// The index of the last row the store holds of `room_id`; none when it
-/// holds no room or no row, or fails the read: a streamed text then names
-/// no row it follows (RFC §6.4).
-async fn latest_index<S: ConversationStore>(inner: &Inner<S>, room_id: &RoomId) -> Option<u64> {
+/// The row the first text of a response read in `room_id` follows: the last
+/// row the store holds of the room as the read begins (RFC §6.4). None for
+/// a first pass, which stores none of its text, when the store holds no
+/// room or no row, or fails the read: the text then names no row.
+async fn first_row_followed<S: ConversationStore>(
+    inner: &Inner<S>,
+    room_id: &RoomId,
+    first_pass: bool,
+) -> Option<u64> {
+    if first_pass {
+        return None;
+    }
     match inner.store.get_room(room_id).await {
         Ok(room) => room?.latest_index,
         Err(error) => {
-            tracing::debug!(target: "roomkit::driver", room_id = %room_id, %error, "the room could not be read for its latest index");
+            tracing::warn!(target: "roomkit::driver", room_id = %room_id, %error, "the room could not be read for its latest index: its response's first text names no row it follows");
             None
         }
     }
@@ -256,7 +264,7 @@ pub(super) async fn read_kept<S: ConversationStore>(
         .map(Hold::new);
     let live = kept.turn.record();
     let room_id = answers.room_id.clone();
-    let latest = latest_index(inner, &room_id).await;
+    let latest = first_row_followed(inner, &room_id, first_pass).await;
     let segments = segments_of(&responder, answers, correlation_id, &kept.turn, latest);
     let mut producer = Producer {
         room_id,

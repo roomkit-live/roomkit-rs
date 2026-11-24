@@ -590,6 +590,12 @@ pub trait Channel: Send + Sync + 'static {
     /// A channel past the stream already is dropped where it waits, with no
     /// async cleanup: one that must release what it holds does so in a `Drop`.
     ///
+    /// `event` is the empty event the response is rendered under. Its
+    /// `metadata["follows_index"]` names the last row the room held as the
+    /// response's read began, so a channel places the text under way before
+    /// its first word; each text row of the stream names the row it follows
+    /// the same way (RFC §6.4).
+    ///
     /// The default is Python's: it reads the text to the stream's end, then
     /// makes one [`deliver`](Channel::deliver) call with `event` holding the
     /// text joined; a response that fails delivers the text it read, if
