@@ -155,7 +155,11 @@ pub(crate) async fn process_kit(
 
 /// Scenario id → the rule this implementation breaks (roomkit-specs
 /// `conformance/README.md`, "Known failures").
-pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[];
+pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[(
+    "executors/an-agent-s-presence-is-published-at-once-on-a-transport-written-on-the-contract-alone",
+    "RK-10.6.7-031: the kit learns that an executor is served or closes from the two backends \
+     it knows by their type; behind any other transport it waits for its next look (RMK-2012)",
+)];
 
 /// A scenario that has not finished by then fails instead of hanging the
 /// suite.

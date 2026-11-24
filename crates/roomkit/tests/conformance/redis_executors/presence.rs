@@ -47,6 +47,9 @@ pub(super) struct Presence {
     bus: Option<Arc<InMemoryRealtime>>,
     faults: Option<Arc<Faults>>,
     catalogue: bool,
+    /// The kit is given a transport written on the public contract alone
+    /// (README, `kit.turn_backend_contract_only`).
+    contract_only: bool,
 }
 
 impl Presence {
@@ -60,11 +63,12 @@ impl Presence {
                 })
             }),
             catalogue: kit["executor_catalogue"] != false,
+            contract_only: kit["turn_backend_contract_only"] == true,
         }
     }
 
     pub(super) fn connection(&self, node: RedisTurnBackend) -> OwnerConnection {
-        let turns = if self.catalogue && self.faults.is_none() {
+        let turns = if self.catalogue && self.faults.is_none() && !self.contract_only {
             TurnBackendHandle::new(Arc::new(node))
         } else {
             TurnBackendHandle::new(Arc::new(PresenceBackend {
@@ -123,6 +127,8 @@ impl Presence {
     }
 }
 
+/// The runner's own transport: each operation of the public contract handed
+/// to the Redis backend, a claim failing while its fault is armed.
 struct PresenceBackend {
     inner: RedisTurnBackend,
     faults: Option<Arc<Faults>>,

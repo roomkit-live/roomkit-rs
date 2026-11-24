@@ -63,6 +63,7 @@ const KIT: &[&str] = &[
     "shared_realtime",
     "turn_backend_faults",
     "executor_catalogue",
+    "turn_backend_contract_only",
 ];
 const RATE_LIMIT: &[&str] = &["max_per_second", "max_per_minute", "max_per_hour"];
 const PERSISTENCE_POLICY: &[&str] = &["persist_types", "exclude_types"];
