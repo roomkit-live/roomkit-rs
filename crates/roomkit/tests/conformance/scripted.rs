@@ -227,8 +227,12 @@ impl OnCut {
 
 impl Drop for OnCut {
     fn drop(&mut self) {
-        if let Some(cleanup) = self.cleanup.take() {
-            self.run.hold_spawned(tokio::spawn(cleanup));
+        // A guard dropped outside any runtime (the run's own teardown) has
+        // nowhere to run its cleanup: the cut it answers never came.
+        if let (Some(cleanup), Ok(runtime)) =
+            (self.cleanup.take(), tokio::runtime::Handle::try_current())
+        {
+            self.run.hold_spawned(runtime.spawn(cleanup));
         }
     }
 }
