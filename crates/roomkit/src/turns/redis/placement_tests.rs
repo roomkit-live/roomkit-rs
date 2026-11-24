@@ -232,6 +232,7 @@ async fn assert_room_reply(kit: &RoomKit, room: &RoomId, tx: &ChannelId, agent: 
     assert!(matches!(&replies[0].content, EventContent::Text(text) if text.body == "in-process"));
 }
 
+mod beats;
 mod collision;
 mod owner;
 

@@ -33,6 +33,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   RMK-2012): the turn of a live channel records its executor as the room's
   holder in Redis, where it ran without touching Redis, and it fails when
   Redis cannot be reached, where it answered.
+- The Redis turn backend writes its beat at its first use, then from its
+  beat thread every `heartbeat_interval`, as in Python (RFC §10.6.8,
+  RMK-2012), where each `submit` and each `control` wrote one more: a turn
+  of a kit's live channel costs one Redis command, where it cost two.
 - The supervisor's default first-pass instruction gives a neutral example,
   `'analyse electric cars' → 'Electric cars'`, where it named a vendor, as
   in Python (RFC §19.7.3, RMK-1982).

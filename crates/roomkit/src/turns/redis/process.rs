@@ -128,7 +128,11 @@ impl RedisTurnBackend {
             }
             first
         };
-        self.start().await?;
+        // The beat thread refreshes the record from then on (RFC §10.6.8);
+        // a first beat that failed is written again by the next call.
+        if first_use || !self.0.heartbeat.initialized() {
+            self.start().await?;
+        }
         if first_use {
             self.notify_coverage(super::CoverageNotice::OwnerAttended)
                 .await;
