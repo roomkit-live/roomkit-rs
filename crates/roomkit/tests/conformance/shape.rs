@@ -517,10 +517,7 @@ fn base_arguments(call: &str) -> Option<&'static [&'static str]> {
         | "kit_executor.close"
         | "kit_executor.closed"
         | "kit_executor.executor_id"
-        | "executors"
-        | "owner.kill" => &[],
-        "executor.pause" | "executor.resume" | "executor.start" | "executor.close"
-        | "executor.kill" | "executor.calls" => &["executor"],
+        | "executors" => &[],
         "process_inbound" => &["message", "room_id", "defer_delivery"],
         "delivery.cancel" => &["of", "reason", "timeout_ms"],
         "delivery.wait" => &["of"],
@@ -569,7 +566,6 @@ fn base_arguments(call: &str) -> Option<&'static [&'static str]> {
         "add_room_hook" | "hook_engine.add_room_hook" | "kit_executor.add_owner_room_hook" => {
             &["room_id", "hook"]
         }
-        "turn_backend.fault" => &["operation", "enabled", "gate"],
         "subscribe_room" => &["room_id", "subscriber", "types", "gate"],
         "channel.publish" => &["executor", "channel_id", "room_id", "kind", "data", "gate"],
         "publish_typing" => &["room_id", "user_id", "is_typing"],
@@ -594,7 +590,8 @@ fn base_arguments(call: &str) -> Option<&'static [&'static str]> {
         "agent.direct_prompt" => &["room_id", "channel_id", "event"],
         "acp.cancel" => &["channel_id", "room_id"],
         other => {
-            return crate::mcp_host::arguments(other)
+            return crate::kit_executor::fixture_arguments(other)
+                .or_else(|| crate::mcp_host::arguments(other))
                 .or_else(|| binding_arguments(other))
                 .or_else(|| crate::room_queries::arguments(other))
                 .or_else(|| crate::extra_tools::arguments(other))

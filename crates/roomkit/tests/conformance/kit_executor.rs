@@ -20,6 +20,18 @@ use serde_json::Value;
 use crate::calls::{Called, Unreadable, field, finish, optional};
 use crate::run::Run;
 
+/// The arguments of each call the pass's executor fixture makes, beside
+/// `call`: none for a call that is not its own.
+pub(crate) fn fixture_arguments(call: &str) -> Option<&'static [&'static str]> {
+    Some(match call {
+        "owner.kill" => &[],
+        "executor.pause" | "executor.resume" | "executor.start" | "executor.close"
+        | "executor.kill" | "executor.calls" => &["executor"],
+        "turn_backend.fault" => &["operation", "enabled", "gate"],
+        _ => return None,
+    })
+}
+
 /// An executor's lifecycle change, or the kit killed as its turns' owner,
 /// which the pass's executor fixture makes.
 async fn change_workers(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Called, Unreadable> {
