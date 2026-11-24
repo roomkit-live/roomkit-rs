@@ -18,8 +18,8 @@ use pretty_assertions::assert_eq;
 use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventContent, EventType, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId,
-    TextContent, ToolCallContent, ToolCallOutcome, ToolCallStatus,
+    EventContent, EventSource, EventType, HookResult, InboundMessage, RoomContext, RoomEvent,
+    RoomId, TextContent, Timestamp, ToolCallContent, ToolCallOutcome, ToolCallStatus,
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
@@ -1375,4 +1375,35 @@ async fn a_duplicate_closed_after_its_holder_keeps_its_own_arguments() {
         [serde_json::json!("first"), serde_json::json!("second")]
     );
     room.kit.close().await.unwrap();
+}
+
+/// A turn run outside a kit returns its rows buffered (RFC §6.4): each
+/// carries the instant it was written, never its trigger's (RFC §5.2).
+// Python: a response event is built at the instant it is written
+// (models/event.py, `created_at`'s default).
+#[tokio::test]
+async fn a_buffered_turn_s_rows_carry_their_own_instant() {
+    let model = ScriptedProvider::new([ScriptedRound::answering("Hello.")]);
+    let agent = AiChannel::new(channel("agent"), model, AiChannelOptions::default()).unwrap();
+    let asked = Timestamp::from_unix_millis(0).unwrap();
+    let event = RoomEvent {
+        created_at: asked,
+        ..RoomEvent::new(
+            room_id(),
+            EventSource::new(channel("sms"), ChannelType::SMS),
+            TextContent::new("Hi"),
+        )
+    };
+    let binding = ChannelBinding {
+        category: ChannelCategory::Intelligence,
+        ..ChannelBinding::new(channel("agent"), room_id(), ChannelType::AI)
+    };
+    let context = RoomContext::new(roomkit::model::Room::new(room_id()));
+    let output = agent.on_event(event, binding, context).await.unwrap();
+    let written_later: Vec<bool> = output
+        .response_events
+        .iter()
+        .map(|row| row.created_at != asked)
+        .collect();
+    assert_eq!(written_later, [true]);
 }

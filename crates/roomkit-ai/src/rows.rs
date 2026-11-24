@@ -14,6 +14,7 @@ use roomkit::model::{
     RoomEvent, TextContent, ToolCall, ToolCallContent, ToolCallOutcome, ToolCallStatus,
 };
 use roomkit::{ChannelError, ClassedError, ResponseItem, ResponseStream, Scoped, TurnRecord};
+use roomkit_core::ops::{Environment, SystemEnvironment};
 use roomkit_core::rules::transcript::is_blank;
 use serde_json::Value;
 
@@ -116,16 +117,16 @@ impl Rows<'_> {
     }
 
     fn push(&mut self, event_type: EventType, content: EventContent) {
-        // The pipeline gives each response its own id, depth and instant,
-        // and makes it answer the event that asked: what is written here
-        // is a placeholder.
+        // The pipeline gives each response its own id and depth, and makes
+        // it answer the event that asked: the id written here is a
+        // placeholder. Its instant is its own, when it is written (RFC §5.2).
         let row = RoomEvent::at(
             self.trigger.id.clone(),
             self.trigger.room_id.clone(),
             event_type,
             self.source.clone(),
             content,
-            self.trigger.created_at,
+            SystemEnvironment.now(),
         );
         self.events.push(row);
     }

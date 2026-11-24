@@ -42,9 +42,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- Each row of a streamed response carries the instant it was written, as in
+- Each row of an agent's response carries the instant it was written, as in
   Python (RFC §5.2, RMK-2096), where every row carried the `created_at` of
-  the event the response answers.
+  the event the response answers: a streamed response's rows, and the rows a
+  turn run outside a kit returns.
 - Two voices a channel's diarization labels on one sender's stream
   (`metadata.speaker_label` in its `speaker_epoch`) are two speakers, as in
   Python (RFC §6.4, §12.2.3, RMK-2026): the model reads each of their turns
