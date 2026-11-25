@@ -240,8 +240,6 @@ pub(crate) enum Answer {
 pub(crate) struct Turns {
     client: Option<Arc<client::Services>>,
     pub(crate) application: Option<application::Application>,
-    #[cfg(feature = "redis")]
-    pub(crate) remote: Option<RedisTurnBackend>,
     worker_owner: Mutex<Option<room_owner::OwnerPort>>,
     error_classes: RwLock<ErrorClasses>,
     timeouts: RwLock<TurnTimeouts>,
@@ -277,8 +275,6 @@ pub(crate) struct Turns {
 impl Default for Turns {
     fn default() -> Self {
         Self {
-            #[cfg(feature = "redis")]
-            remote: None,
             application: None,
             client: None,
             worker_owner: Mutex::default(),
@@ -324,13 +320,6 @@ impl Turns {
         if let Some(backend) = backend {
             if let Some(timeouts) = backend.timeouts() {
                 turns.set_timeouts(timeouts);
-            }
-            #[cfg(feature = "redis")]
-            {
-                let concrete: &dyn std::any::Any = &*backend;
-                if let Some(redis) = concrete.downcast_ref::<RedisTurnBackend>() {
-                    turns.remote = Some(redis.clone());
-                }
             }
             turns.application = Some(application::Application::new(backend));
         }
