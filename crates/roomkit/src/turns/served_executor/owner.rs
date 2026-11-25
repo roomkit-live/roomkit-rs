@@ -129,6 +129,12 @@ impl<S: ConversationStore> ServedExecutor for OwnerExecutor<S> {
             worker.reach_owner(owner);
         }
     }
+
+    fn watch_closed(&self, listener: crate::turns::ExecutorsListener) {
+        if let Some(worker) = self.worker() {
+            worker.watch_closed(listener);
+        }
+    }
 }
 
 impl<S: ConversationStore> crate::turns::LocalHosts for WeakRoomKit<S> {
@@ -150,13 +156,6 @@ impl<S: ConversationStore> super::native::Native for OwnerExecutor<S> {
 
     fn lifecycle(&self) -> Weak<crate::turns::executor::Lifecycle> {
         Weak::clone(&self.lifecycle)
-    }
-
-    #[cfg(feature = "redis")]
-    fn served_by(&self, backend: &crate::RedisTurnBackend) {
-        if let Some(worker) = self.worker() {
-            worker.served_by(backend);
-        }
     }
 }
 

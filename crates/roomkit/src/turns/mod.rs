@@ -242,8 +242,6 @@ pub(crate) struct Turns {
     pub(crate) application: Option<application::Application>,
     #[cfg(feature = "redis")]
     pub(crate) remote: Option<RedisTurnBackend>,
-    #[cfg(feature = "redis")]
-    pub(crate) serving_backends: redis::ServingBackends,
     worker_owner: Mutex<Option<room_owner::OwnerPort>>,
     error_classes: RwLock<ErrorClasses>,
     timeouts: RwLock<TurnTimeouts>,
@@ -283,8 +281,6 @@ impl Default for Turns {
             remote: None,
             application: None,
             client: None,
-            #[cfg(feature = "redis")]
-            serving_backends: redis::ServingBackends::default(),
             worker_owner: Mutex::default(),
             error_classes: RwLock::default(),
             timeouts: RwLock::new(TurnTimeouts::default()),

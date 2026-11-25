@@ -69,6 +69,10 @@ pub trait ServedExecutor: private::Sealed + Send + Sync + 'static {
     fn timeouts(&self) -> TurnTimeouts;
     /// Give new turns the port they use to reach their owner after their link ends.
     fn reach_owner(&self, owner: Arc<dyn super::RoomOwner>);
+    /// Have `listener` run once this executor closed: the backend serving it
+    /// then tells its room owner (RFC §10.6.7). A listener given again is
+    /// kept once.
+    fn watch_closed(&self, listener: super::ExecutorsListener);
     /// Admit the request on the backend's executor link.
     ///
     /// # Errors
@@ -117,6 +121,9 @@ impl<S: ConversationStore> ServedExecutor for TurnExecutor<S> {
     }
     fn reach_owner(&self, owner: Arc<dyn super::RoomOwner>) {
         self.reach_owner(owner);
+    }
+    fn watch_closed(&self, listener: super::ExecutorsListener) {
+        self.watch_closed(listener);
     }
     fn take(&self, link: Arc<dyn ExecutorLink>) -> Result<(), RoomKitError> {
         self.take(link)

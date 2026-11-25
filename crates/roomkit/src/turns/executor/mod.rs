@@ -22,6 +22,7 @@
 //! - A stream advances only within what the owner granted, and never past
 //!   an item that is no delta until a later pull (`pulls`).
 
+mod closed_listeners;
 mod inputs;
 mod lifecycle;
 mod link;

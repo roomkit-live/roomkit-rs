@@ -1,7 +1,6 @@
 //! Redis Streams transport for text turns between processes (RFC §10.6).
 mod after_turn;
 mod changes;
-pub(crate) use changes::ServingBackends;
 mod control;
 mod dispatch;
 mod jobs;
@@ -88,6 +87,8 @@ struct Node {
     draining: tokio::sync::watch::Sender<bool>,
     jobs_changed: tokio::sync::Notify,
     watchers: crate::turns::ExecutorWatchers,
+    /// What each executor served here runs once it closed.
+    closed_listener: OnceLock<crate::turns::ExecutorsListener>,
     stop: tokio::sync::watch::Sender<bool>,
     closing: tokio::sync::Mutex<bool>,
     timeouts: TurnTimeouts,
@@ -141,6 +142,7 @@ impl RedisTurnBackend {
             routes: Mutex::default(),
             serving: Mutex::default(),
             watchers: crate::turns::ExecutorWatchers::new(),
+            closed_listener: OnceLock::new(),
             reader: OnceCell::new(),
             heartbeat: OnceCell::new(),
             draining: tokio::sync::watch::channel(false).0,

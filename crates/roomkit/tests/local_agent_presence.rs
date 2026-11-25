@@ -274,3 +274,202 @@ async fn a_backend_on_the_contract_alone_has_presence_published_as_an_executor_i
         "serving an executor did not publish the agent online before the kit's next look"
     );
 }
+
+/// A backend written outside the crate that serves its executors itself,
+/// by the public names alone: it lists them, the owner's own aside, and
+/// tells its owner once it serves one and when one closes. It carries no
+/// turn, and its heartbeat interval outlasts the test.
+#[derive(Default)]
+struct ServingItsOwnExecutors {
+    served: std::sync::Mutex<Vec<std::sync::Arc<dyn roomkit::turns::ServedExecutor>>>,
+    owner: std::sync::Mutex<Option<std::sync::Arc<dyn roomkit::turns::RoomOwner>>>,
+    watchers: std::sync::Arc<roomkit::turns::ExecutorWatchers>,
+}
+
+impl roomkit::turns::TurnBackend for ServingItsOwnExecutors {
+    fn submit(
+        &self,
+        _request: roomkit::turns::TurnRequest,
+    ) -> roomkit::turns::TurnFuture<
+        '_,
+        Result<std::sync::Arc<dyn roomkit::turns::TurnLink>, roomkit::RoomKitError>,
+    > {
+        Box::pin(async {
+            Err(roomkit::RoomKitError::Value(
+                "this backend carries no turn".into(),
+            ))
+        })
+    }
+    fn serve(
+        &self,
+        executor: std::sync::Arc<dyn roomkit::turns::ServedExecutor>,
+    ) -> roomkit::turns::TurnFuture<'_, Result<(), roomkit::RoomKitError>> {
+        Box::pin(async move {
+            let watchers = std::sync::Arc::downgrade(&self.watchers);
+            executor.watch_closed(std::sync::Arc::new(move || {
+                let watchers = watchers.upgrade()?;
+                let told: roomkit::turns::TurnFuture<'static, ()> =
+                    Box::pin(async move { watchers.changed().await });
+                Some(told)
+            }));
+            held(&self.served).push(executor);
+            self.watchers.changed().await;
+            Ok(())
+        })
+    }
+    fn control(
+        &self,
+        _message: roomkit::turns::ChannelControl,
+    ) -> roomkit::turns::TurnFuture<
+        '_,
+        Result<Option<roomkit::turns::ChannelResult>, roomkit::RoomKitError>,
+    > {
+        Box::pin(async { Ok(None) })
+    }
+    fn attend(
+        &self,
+        owner: std::sync::Arc<dyn roomkit::turns::RoomOwner>,
+    ) -> roomkit::turns::TurnFuture<'_, Result<(), roomkit::RoomKitError>> {
+        *held(&self.owner) = Some(owner);
+        Box::pin(async { Ok(()) })
+    }
+    fn watch_executors(&self, listener: roomkit::turns::ExecutorsListener) {
+        self.watchers.watch(listener);
+    }
+    fn executors(
+        &self,
+    ) -> Option<
+        roomkit::turns::TurnFuture<
+            '_,
+            Result<Vec<roomkit::turns::ExecutorInfo>, roomkit::RoomKitError>,
+        >,
+    > {
+        let own = held(&self.owner).as_ref().and_then(|owner| {
+            owner
+                .executor()
+                .map(|executor| executor.executor_id().to_owned())
+        });
+        let listed = held(&self.served)
+            .iter()
+            .filter(|executor| !executor.closed() && Some(executor.executor_id()) != own.as_deref())
+            .map(|executor| {
+                roomkit::turns::ExecutorInfo::new(
+                    executor.executor_id(),
+                    roomkit::turns::ExecutorInfoOptions {
+                        hosts: executor.hosted(),
+                        organizations: executor.organizations(),
+                        room_hooks: executor.room_hooks(),
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect();
+        Some(Box::pin(async move { Ok(listed) }))
+    }
+    fn timeouts(&self) -> Option<roomkit::TurnTimeouts> {
+        Some(roomkit::TurnTimeouts {
+            heartbeat_interval: std::time::Duration::from_secs(60),
+            ..Default::default()
+        })
+    }
+    fn close(&self) -> roomkit::turns::TurnFuture<'_, Result<(), roomkit::RoomKitError>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+/// What `mutex` holds, a panic of another holder aside.
+fn held<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+// Python: test_an_agent_s_presence_is_published_on_attach_and_as_its_coverage_changes,
+// its serving-its-own-executors case.
+#[tokio::test]
+async fn a_backend_serving_its_own_executors_has_presence_published_as_one_closes() {
+    use roomkit::realtime::{
+        EphemeralCallback, EphemeralEventType, InMemoryRealtime, RealtimeBackend,
+    };
+    use roomkit::turns::TurnBackendHandle;
+    use roomkit::{ChannelDeclaration, RoomKitOptions, TurnExecutor, TurnExecutorOptions};
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::sync::Notify;
+
+    let realtime = Arc::new(InMemoryRealtime::new(
+        roomkit::realtime::InMemoryRealtimeOptions::default(),
+    ));
+    let backend = TurnBackendHandle::new(Arc::new(ServingItsOwnExecutors::default()));
+    let kit = RoomKit::new(RoomKitOptions {
+        realtime: Some(Arc::<InMemoryRealtime>::clone(&realtime)),
+        turn_backend: Some(backend.clone()),
+        ..Default::default()
+    });
+    let room: roomkit::model::RoomId = "r1".parse().unwrap();
+    let agent: roomkit::model::ChannelId = "coder".parse().unwrap();
+    kit.register_channel(ChannelDeclaration {
+        identity: Some(roomkit::AgentIdentity::default()),
+        ..ChannelDeclaration::new(agent.clone())
+    })
+    .unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let (online, offline) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    let (went_online, went_offline) = (Arc::clone(&online), Arc::clone(&offline));
+    let callback: EphemeralCallback = Arc::new(move |event| {
+        let (went_online, went_offline) = (Arc::clone(&went_online), Arc::clone(&went_offline));
+        Box::pin(async move {
+            if event.r#type == EphemeralEventType::PresenceOnline {
+                went_online.notify_one();
+            } else if event.r#type == EphemeralEventType::PresenceOffline {
+                went_offline.notify_one();
+            }
+        })
+    });
+    let _subscription = realtime.subscribe_to_room(&room, callback).await;
+    let executor = TurnExecutor::new(
+        |id| async move {
+            Ok(Some(EchoAgent::new(
+                id,
+                "host",
+                EchoAgentOptions::default(),
+            )))
+        },
+        TurnExecutorOptions {
+            executor_id: Some("host".into()),
+            hosts: Some(std::collections::BTreeSet::from(["coder".into()])),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    backend.serve(Arc::new(executor.clone())).await.unwrap();
+    kit.attach_channel(
+        &room,
+        &agent,
+        AttachChannelOptions {
+            category: Some(roomkit::model::ChannelCategory::Intelligence),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let served = tokio::time::timeout(Duration::from_secs(5), online.notified()).await;
+
+    executor.close().await;
+    let closed = tokio::time::timeout(Duration::from_secs(5), offline.notified()).await;
+
+    kit.close().await.unwrap();
+    assert!(
+        served.is_ok(),
+        "the agent of a served executor was not published online at its attach"
+    );
+    assert!(
+        closed.is_ok(),
+        "an executor's close did not publish the agent offline before the kit's next look"
+    );
+}

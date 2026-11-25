@@ -6,7 +6,9 @@ use super::{TurnFuture, lock};
 
 /// What a room owner has run when the executors of its backend's process
 /// change: the listener of Python's `TurnBackend.watch_executors`. It
-/// answers `None` once its owner is gone, and the backend forgets it.
+/// answers `None` once its owner is gone, and the backend forgets it. A
+/// backend gives one to each executor it serves too, to learn of its close
+/// (`ServedExecutor::watch_closed`, Python's `TurnExecutor.watch_closed`).
 pub type ExecutorsListener = Arc<dyn Fn() -> Option<TurnFuture<'static, ()>> + Send + Sync>;
 
 /// The listeners of [`TurnBackend::watch_executors`](super::TurnBackend::watch_executors)

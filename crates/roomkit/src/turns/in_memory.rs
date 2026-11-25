@@ -1,6 +1,4 @@
 //! Explicit single-process turn transport (RFC §10.6.1, §10.6.7).
-mod coverage;
-pub(crate) use coverage::Serving;
 mod links;
 #[cfg(feature = "redis")]
 pub(super) use links::executor_end;
@@ -41,6 +39,8 @@ pub struct InMemoryTurnBackend {
     state: Arc<Mutex<State>>,
     claims: Arc<LocalPresenceClaims>,
     watchers: Arc<super::ExecutorWatchers>,
+    /// What each executor served here runs once it closed.
+    closed_listener: Arc<std::sync::OnceLock<super::ExecutorsListener>>,
 }
 
 impl fmt::Debug for InMemoryTurnBackend {
@@ -84,6 +84,7 @@ impl InMemoryTurnBackend {
     async fn serve_worker(&self, worker: Worker) {
         worker.reach_owner(Arc::new(port::OwnerPort(Arc::downgrade(&self.state))));
         let identity = worker.native().lifecycle();
+        let served = Arc::clone(&worker);
         let owner = {
             let mut state = lock(&self.state);
             if !state
@@ -102,10 +103,23 @@ impl InMemoryTurnBackend {
         {
             return;
         }
-        if let Some(lifecycle) = identity.upgrade() {
-            lifecycle.memory_backends.listen(&self.watchers);
-        }
+        served.watch_closed(self.closed_listener());
         self.watchers.changed().await;
+    }
+
+    /// The one listener this backend gives the executors it serves: an
+    /// executor that closed is one the owner looks at again. It keeps the
+    /// backend's watchers weakly.
+    fn closed_listener(&self) -> super::ExecutorsListener {
+        Arc::clone(self.closed_listener.get_or_init(|| {
+            let watchers = Arc::downgrade(&self.watchers);
+            Arc::new(move || {
+                let watchers = watchers.upgrade()?;
+                let told: TurnFuture<'static, ()> =
+                    Box::pin(async move { watchers.changed().await });
+                Some(told)
+            })
+        }))
     }
 
     fn attend_owner(&self, owner: Arc<dyn RoomOwner>) {

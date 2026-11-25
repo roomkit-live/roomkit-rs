@@ -79,7 +79,7 @@ impl RedisTurnBackend {
             executor.reach_owner(Arc::new(self.local_owner()));
             let owned = self.0.owner_worker.get().is_some() && self.is_own(&executor);
             if !owned {
-                executor.native().served_by(self);
+                executor.watch_closed(self.closed_listener());
             }
             let id = executor.executor_id();
             let Serving {

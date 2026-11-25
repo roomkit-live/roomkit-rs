@@ -1,8 +1,6 @@
 //! The transport can keep the native admission and shutdown path after erasing the store.
 use std::sync::Weak;
 
-#[cfg(feature = "redis")]
-use crate::RedisTurnBackend;
 use crate::turns::executor::Lifecycle;
 use crate::{ConversationStore, TurnExecutor};
 
@@ -17,8 +15,6 @@ pub(crate) trait Native {
     #[cfg(feature = "redis")]
     fn look_up(&self) -> crate::turns::redis::WorkerLookup;
     fn lifecycle(&self) -> Weak<Lifecycle>;
-    #[cfg(feature = "redis")]
-    fn served_by(&self, backend: &RedisTurnBackend);
 }
 
 impl<S: ConversationStore> Native for TurnExecutor<S> {
@@ -31,10 +27,6 @@ impl<S: ConversationStore> Native for TurnExecutor<S> {
     }
     fn lifecycle(&self) -> Weak<Lifecycle> {
         self.lifecycle()
-    }
-    #[cfg(feature = "redis")]
-    fn served_by(&self, backend: &RedisTurnBackend) {
-        self.served_by(backend);
     }
 }
 

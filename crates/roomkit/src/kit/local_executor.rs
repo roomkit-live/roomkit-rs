@@ -89,11 +89,6 @@ impl<S: ConversationStore> TurnExecutor<S> {
         Arc::downgrade(&self.kit.inner.turns.executor_lifecycle)
     }
 
-    #[cfg(feature = "redis")]
-    pub(crate) fn serving_backends(&self) -> &crate::turns::redis::ServingBackends {
-        &self.kit.inner.turns.serving_backends
-    }
-
     /// The id this executor answers with, Python's `executor_id`.
     pub fn executor_id(&self) -> &str {
         self.standalone.as_ref().map_or_else(
@@ -196,11 +191,22 @@ impl<S: ConversationStore> TurnExecutor<S> {
             .inner
             .turns
             .executor_lifecycle
-            .memory_backends
+            .closed_listeners
             .closed()
             .await;
-        #[cfg(feature = "redis")]
-        self.tell_redis_closed().await;
+    }
+
+    /// Have `listener` run once this executor closed: a backend serving it
+    /// learns it no longer covers its channels, and tells its room owner
+    /// (Python's `TurnExecutor.watch_closed`, RFC §10.6.7). A listener given
+    /// again is kept once; one that answers `None` has nothing to run.
+    pub fn watch_closed(&self, listener: crate::turns::ExecutorsListener) {
+        self.kit
+            .inner
+            .turns
+            .executor_lifecycle
+            .closed_listeners
+            .watch(listener);
     }
 
     /// Whether this executor has closed.

@@ -8,6 +8,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `TurnExecutor::watch_closed(listener)` and `ServedExecutor::watch_closed`: an
+  executor tells the backends serving it that it closed by a public
+  operation, as Python's `TurnExecutor.watch_closed` (RFC §10.6.7,
+  RMK-2012). A backend written outside the crate could tell its room owner
+  that an executor was served, not that one closed by itself: the in-memory
+  and the Redis backend learned it through private lists of the executor,
+  which are gone. Both now give the executor one listener of their own.
 - `TurnBackend::watch_executors(listener)` and `ExecutorWatchers`: a turn
   backend tells its room owner of the executors it serves by the contract,
   as Python's `watch_executors` and `executors_changed` (RFC §10.6.7,
