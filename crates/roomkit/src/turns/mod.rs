@@ -47,10 +47,14 @@ pub use plan_event::PlanUpdatedEvent;
 pub use plan_task::PlanTaskHandle;
 mod public_options;
 pub use public_options::{HookOptions, RoomHookOptions, TakesOptions};
+pub(crate) mod distributed;
+pub use distributed::{
+    Beat, BeatWriter, Beats, BrokerMessage, DistributedTurnBackend, DistributedTurnBackendOptions,
+    InMemoryTurnBroker, InMemoryTurnRegistry, InboxEntry, RegistryView, TurnBroker, TurnInbox,
+    TurnRegistry,
+};
 #[cfg(feature = "redis")]
-pub(crate) mod redis;
-#[cfg(feature = "redis")]
-pub use redis::{RedisTurnBackend, RedisTurnBackendOptions};
+pub use distributed::{RedisTurnBackend, RedisTurnBackendOptions};
 mod backend_handle;
 pub use backend_handle::TurnBackendHandle;
 mod local_presence_claims;
@@ -111,7 +115,6 @@ mod records;
 mod rooms;
 pub(crate) use channel_calls::Handover;
 pub use channel_calls::{ChannelCall, ChannelResult};
-#[cfg(feature = "redis")]
 pub(crate) use error::rebuild_kit_error;
 pub(crate) use rooms::{state_key, stored_state};
 pub(crate) mod served;

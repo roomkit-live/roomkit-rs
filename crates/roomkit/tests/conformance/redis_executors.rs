@@ -325,7 +325,11 @@ impl crate::run::WorkerControl for Workers {
                 .get(id)
                 .map(|site| site.hosting.clone())
                 .ok_or_else(|| RoomKitError::Value(format!("executor {id} is not running")))?;
-            roomkit::testing::settle_redis_publications(&hosting, self.topology.owner()).await
+            roomkit::testing::settle_distributed_publications(
+                hosting.node(),
+                self.topology.owner().node(),
+            )
+            .await
         })
     }
 

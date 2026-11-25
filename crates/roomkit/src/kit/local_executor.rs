@@ -71,8 +71,7 @@ impl<S: ConversationStore> TurnExecutor<S> {
         }
     }
 
-    #[cfg(feature = "redis")]
-    pub(crate) fn look_up(&self) -> crate::turns::redis::WorkerLookup {
+    pub(crate) fn look_up(&self) -> crate::turns::distributed::WorkerLookup {
         let kit = self.kit.downgrade();
         let standalone = self.standalone.as_ref().map(Arc::downgrade);
         Box::new(move || {

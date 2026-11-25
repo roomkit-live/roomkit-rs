@@ -8,6 +8,18 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `DistributedTurnBackend`: the turn backend across processes, over two
+  ports a service implements (RFC §10.6.7, §10.6.8, RMK-2012). `TurnBroker`
+  carries the messages between processes, an inbox a node (`TurnInbox`,
+  `InboxEntry`, `BrokerMessage`); `TurnRegistry` keeps what they share, their
+  beats, a room's holder and the presence last published (`BeatWriter`,
+  `Beat`, `RegistryView`, `Beats`). A service that gives both, as Redis or
+  NATS, runs the backend alone; a message broker, as Kafka or RabbitMQ, gives
+  the first and takes its registry elsewhere. `InMemoryTurnBroker` and
+  `InMemoryTurnRegistry` keep both in one process, for tests and for nodes
+  that share a process. `RedisTurnBackend` is now such a backend assembled on
+  Redis, with the constructor and the operations it had; the `redis` feature
+  gates that assembly alone, and the backend's logic builds without it.
 - `ExecutorInfo::of(executor, options)` and `ServedExecutor::same_as(other)`: a
   turn backend lists an executor it serves, and tells the owner's own
   executor from the others, by public names (RFC §10.6.7, RMK-2012). `of`

@@ -1771,3 +1771,71 @@ rust = "roomkit::turns::ToolHooks::run_tool_call_chain"
 params = ["carrying"]
 approved = "2026-11-18"
 reason = "None requests a fresh room context. The tool_methods integration tests cover explicit None and supplied values."
+
+# The distributed turn backend's ports, Rust first (HITL 8afa1a82): Python keeps
+# its Redis backend whole for now.
+
+[[exception]]
+rust = "roomkit::turns::DistributedTurnBackend"
+approved = "2026-11-25"
+reason = "the backend across processes, over a broker and a registry: Python's RedisTurnBackend without Redis. Rust first: the backend across processes takes its services by two ports, where Python keeps its Redis backend whole (HITL 8afa1a82, RMK-2012)"
+
+[[exception]]
+rust = "roomkit::turns::DistributedTurnBackendOptions"
+approved = "2026-11-25"
+reason = "what DistributedTurnBackend::new takes beside its two services: the time bounds, and Python's private _loop_back. Rust first: the backend across processes takes its services by two ports, where Python keeps its Redis backend whole (HITL 8afa1a82, RMK-2012)"
+
+[[exception]]
+rust = "roomkit::turns::TurnBroker"
+approved = "2026-11-25"
+reason = "the port of the messages between processes: an inbox a node. Rust first: the backend across processes takes its services by two ports, where Python keeps its Redis backend whole (HITL 8afa1a82, RMK-2012)"
+
+[[exception]]
+rust = "roomkit::turns::TurnInbox"
+approved = "2026-11-25"
+reason = "a reader of one node's inbox, which TurnBroker::inbox opens. Rust first: the backend across processes takes its services by two ports, where Python keeps its Redis backend whole (HITL 8afa1a82, RMK-2012)"
+
+[[exception]]
+rust = "roomkit::turns::InboxEntry"
+approved = "2026-11-25"
+reason = "an entry a TurnInbox reads: its id and its message. Rust first: the backend across processes takes its services by two ports, where Python keeps its Redis backend whole (HITL 8afa1a82, RMK-2012)"
+
+[[exception]]
+rust = "roomkit::turns::BrokerMessage"
+approved = "2026-11-25"
+reason = "a message a TurnBroker carries. Rust first: the backend across processes takes its services by two ports, where Python keeps its Redis backend whole (HITL 8afa1a82, RMK-2012)"
+
+[[exception]]
+rust = "roomkit::turns::TurnRegistry"
+approved = "2026-11-25"
+reason = "the port of what the processes share: beats, a room's holder, the presence last published. Rust first: the backend across processes takes its services by two ports, where Python keeps its Redis backend whole (HITL 8afa1a82, RMK-2012)"
+
+[[exception]]
+rust = "roomkit::turns::BeatWriter"
+approved = "2026-11-25"
+reason = "a writer of beats on a connection of its own, which TurnRegistry::beater opens for the heartbeat. Rust first: the backend across processes takes its services by two ports, where Python keeps its Redis backend whole (HITL 8afa1a82, RMK-2012)"
+
+[[exception]]
+rust = "roomkit::turns::Beat"
+approved = "2026-11-25"
+reason = "a node's beat, as a TurnRegistry writes it. Rust first: the backend across processes takes its services by two ports, where Python keeps its Redis backend whole (HITL 8afa1a82, RMK-2012)"
+
+[[exception]]
+rust = "roomkit::turns::RegistryView"
+approved = "2026-11-25"
+reason = "the executors and the owners beating, as a TurnRegistry answers them. Rust first: the backend across processes takes its services by two ports, where Python keeps its Redis backend whole (HITL 8afa1a82, RMK-2012)"
+
+[[exception]]
+rust = "roomkit::turns::Beats"
+approved = "2026-11-25"
+reason = "what TurnRegistry::beats reads: last beats and running turns. Rust first: the backend across processes takes its services by two ports, where Python keeps its Redis backend whole (HITL 8afa1a82, RMK-2012)"
+
+[[exception]]
+rust = "roomkit::turns::InMemoryTurnBroker"
+approved = "2026-11-25"
+reason = "a TurnBroker of this process, as InMemoryStore is a store's: for tests and one-process nodes. Rust first: the backend across processes takes its services by two ports, where Python keeps its Redis backend whole (HITL 8afa1a82, RMK-2012)"
+
+[[exception]]
+rust = "roomkit::turns::InMemoryTurnRegistry"
+approved = "2026-11-25"
+reason = "a TurnRegistry of this process, as InMemoryStore is a store's: for tests and one-process nodes. Rust first: the backend across processes takes its services by two ports, where Python keeps its Redis backend whole (HITL 8afa1a82, RMK-2012)"

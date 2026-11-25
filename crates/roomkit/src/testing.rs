@@ -75,11 +75,10 @@ pub async fn idle<S>(kit: &RoomKit<S>) {
 }
 
 /// Wait for publications already queued by a worker to be handled by the room owner.
-#[cfg(feature = "redis")]
 #[doc(hidden)]
-pub async fn settle_redis_publications(
-    worker: &crate::RedisTurnBackend,
-    owner: &crate::RedisTurnBackend,
+pub async fn settle_distributed_publications(
+    worker: &crate::turns::DistributedTurnBackend,
+    owner: &crate::turns::DistributedTurnBackend,
 ) -> Result<(), crate::RoomKitError> {
     owner.publications_handled_from(worker).await
 }

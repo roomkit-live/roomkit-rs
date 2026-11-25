@@ -12,8 +12,7 @@ pub(crate) struct Key(());
 
 pub(crate) trait Native {
     fn local_hosts(&self) -> std::sync::Arc<dyn crate::turns::LocalHosts>;
-    #[cfg(feature = "redis")]
-    fn look_up(&self) -> crate::turns::redis::WorkerLookup;
+    fn look_up(&self) -> crate::turns::distributed::WorkerLookup;
     fn lifecycle(&self) -> Weak<Lifecycle>;
 }
 
@@ -21,8 +20,7 @@ impl<S: ConversationStore> Native for TurnExecutor<S> {
     fn local_hosts(&self) -> std::sync::Arc<dyn crate::turns::LocalHosts> {
         self.local_hosts()
     }
-    #[cfg(feature = "redis")]
-    fn look_up(&self) -> crate::turns::redis::WorkerLookup {
+    fn look_up(&self) -> crate::turns::distributed::WorkerLookup {
         self.look_up()
     }
     fn lifecycle(&self) -> Weak<Lifecycle> {

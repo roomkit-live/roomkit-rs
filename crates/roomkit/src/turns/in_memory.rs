@@ -1,11 +1,9 @@
 //! Explicit single-process turn transport (RFC §10.6.1, §10.6.7).
 mod links;
-#[cfg(feature = "redis")]
 pub(super) use links::executor_end;
 mod placement;
 use placement::Claim;
 mod port;
-#[cfg(feature = "redis")]
 pub(super) use port::{local_call, local_publication};
 
 use std::collections::BTreeMap;

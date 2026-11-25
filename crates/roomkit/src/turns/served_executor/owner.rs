@@ -17,23 +17,17 @@ struct OwnerExecutor<S> {
     id: String,
     timeouts: TurnTimeouts,
     lifecycle: Weak<crate::turns::executor::Lifecycle>,
-    #[cfg(feature = "redis")]
     identity: Weak<Self>,
 }
 
 pub(crate) fn owner_executor<S: ConversationStore>(kit: &RoomKit<S>) -> Arc<dyn ServedExecutor> {
     let executor = kit.turn_executor();
-    Arc::new_cyclic(|identity| {
-        #[cfg(not(feature = "redis"))]
-        let _ = identity;
-        OwnerExecutor {
-            kit: Arc::new(kit.downgrade()),
-            id: executor.executor_id().to_owned(),
-            timeouts: executor.timeouts(),
-            lifecycle: executor.lifecycle(),
-            #[cfg(feature = "redis")]
-            identity: Weak::clone(identity),
-        }
+    Arc::new_cyclic(|identity| OwnerExecutor {
+        kit: Arc::new(kit.downgrade()),
+        id: executor.executor_id().to_owned(),
+        timeouts: executor.timeouts(),
+        lifecycle: executor.lifecycle(),
+        identity: Weak::clone(identity),
     })
 }
 
@@ -152,8 +146,7 @@ impl<S: ConversationStore> super::native::Native for OwnerExecutor<S> {
         Arc::<WeakRoomKit<S>>::clone(&self.kit)
     }
 
-    #[cfg(feature = "redis")]
-    fn look_up(&self) -> crate::turns::redis::WorkerLookup {
+    fn look_up(&self) -> crate::turns::distributed::WorkerLookup {
         let identity = Weak::clone(&self.identity);
         Box::new(move || Some(identity.upgrade()?))
     }
@@ -186,7 +179,6 @@ mod tests {
         ))
         .unwrap();
         assert!(view.declares(&agent));
-        #[cfg(feature = "redis")]
         let selection = {
             let native = view.native();
             let recovered = native.look_up()().unwrap();
@@ -201,7 +193,6 @@ mod tests {
         drop(kit);
         assert!(weak.upgrade().is_none());
         assert!(view.closed() && !view.hosts_channel(&agent));
-        #[cfg(feature = "redis")]
         assert!(!selection.hosts_name(agent.as_str()));
         drop(view);
         assert!(held.upgrade().is_none());

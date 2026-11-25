@@ -187,7 +187,6 @@ impl<M: Serialize> Pipe<M> {
 impl<M> Pipe<M> {
     /// Queue an already numbered envelope received by the transport. The final
     /// consumer validates its size, turn identity and sequence when reading.
-    #[cfg(any(test, feature = "redis"))]
     pub(crate) fn deliver_raw(&self, envelope: String) {
         if self.is_open() {
             drop(self.queue.send(Packet::Message(envelope)));
@@ -214,7 +213,6 @@ impl<M> Pipe<M> {
 
 impl<M> PipeReceiver<M> {
     /// Take an outgoing envelope without renumbering it at the transport boundary.
-    #[cfg(any(test, feature = "redis"))]
     pub(crate) async fn next_raw(&mut self) -> Option<String> {
         match self.queue.recv().await? {
             Packet::Message(raw) => Some(raw),

@@ -1,13 +1,11 @@
 //! Qualify Rust's native short error kinds only at a distributed boundary.
 //! Python's error registry keys classes by `module:qualified_name`.
 
-#[cfg(any(test, feature = "redis"))]
 use serde_json::{Map, Value};
 
 /// Prepare the JSON written by the SDK's serializer for the other process.
 /// Only protocol error fields carry error records. Application JSON, even a
 /// verb result that contains its own `error` member, stays intact.
-#[cfg(any(test, feature = "redis"))]
 pub(crate) fn peer_error_payload(raw: String) -> Result<String, String> {
     if !raw.contains("\"error\"") || !raw.contains("\"kind\"") {
         return Ok(raw);
@@ -37,7 +35,6 @@ pub(crate) fn peer_error_payload(raw: String) -> Result<String, String> {
     serde_json::to_string(&root).map_err(|e| e.to_string())
 }
 
-#[cfg(any(test, feature = "redis"))]
 fn qualify(error: &mut Map<String, Value>) -> bool {
     let mut changed = false;
     if let Some(short) = error.get("kind").and_then(Value::as_str)
@@ -161,7 +158,6 @@ pub(crate) fn native_class<'a>(
     Some((package, name))
 }
 
-#[cfg(any(test, feature = "redis"))]
 fn ancestors(package: &str, name: &str) -> Vec<&'static str> {
     match (package, name) {
         (
