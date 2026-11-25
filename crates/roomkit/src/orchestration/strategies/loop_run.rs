@@ -21,7 +21,7 @@ use crate::orchestration::worker_run::{
 use crate::orchestration::{StatusLevel, get_conversation_state, save_conversation_state};
 use crate::store::ConversationStore;
 use crate::tasks::handback::worker_block;
-use crate::tasks::{DelegatedTaskResult, task_cut_reason, task_work};
+use crate::tasks::{DelegatedTaskResult, failed_task_words, task_cut_reason, task_work};
 
 /// How a loop stopped (RFC §19.7.4).
 const APPROVED: &str = "approved";
@@ -180,12 +180,10 @@ fn producer_turn(result: Option<&DelegatedTaskResult>, producer: &ChannelId) -> 
         .unwrap_or_default()
 }
 
-/// A producer's failed task, named without its error (RFC §23.3 step 8).
+/// A producer's failed task, named with why and without its error (RFC
+/// §23.3 step 8).
 fn failed_task_text(result: Option<&DelegatedTaskResult>) -> String {
-    match result.and_then(task_cut_reason) {
-        Some(reason) => format!("the producer's task failed (cut short: {reason})"),
-        None => "the producer's task failed".to_owned(),
-    }
+    format!("the producer's task {}", failed_task_words(result))
 }
 
 /// The loop shared by every mode: produce, review, revise, until approved,

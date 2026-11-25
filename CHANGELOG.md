@@ -40,6 +40,29 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- A delegated task that did not complete tells its requester why, as in
+  Python (RFC §23.3 step 6 and step 8, §23.4, RMK-2125), where it said only
+  that it failed: one code of a closed list, with the runtime's words for it.
+  A worker whose turn was cut short names how (`max_rounds`, `timeout`,
+  `budget_exceeded`, `truncated`, `empty_response`, `unfinished`,
+  `force_stopped`, `cancelled`, an ACP agent's `max_tokens`,
+  `max_turn_requests`, `refusal` or `interrupted`), a task cancelled from
+  outside `cancelled`, one that failed with no error (its worker answered
+  nothing) `empty_response`, and any other failure `error`, whose detail
+  stays on the task's result and on `ON_TASK_COMPLETED`: no provider's
+  message and no reason off the list reaches a model. A relayed hand-back
+  reads `failed: it reached its limit of tool rounds before giving an answer
+  (max_rounds)`, a posted one says it in words; the hand-back's metadata,
+  `ON_TASK_COMPLETED` and the task's status entry carry `task_end_reason`
+  (the entry's detail is unchanged); `task_status`, `room_tasks` and a
+  `delegate_task` call that ran its task inline answer with `end_reason` and
+  `end_reason_text`, read from the entry only when the list names the reason,
+  and the tasks of a turn's notes say it too. A strategy reads the same of a
+  worker's task that failed, a Loop included, which gave the turn's reason as
+  recorded; a worker past the strategy's own bound still reads `The task
+  timed out after 30s.`, and a run's failed entry names `task_end_reason`
+  too: its task's, `timeout`, `cancelled` or `error`. See
+  `examples/task_end_reason.rs`.
 - **BREAKING — a generation ends in one closed vocabulary, `FinishReason`**, where `finish_reason` was the provider's own word, as in Python (RFC §6.7, RMK-1987): `Stop`, `ToolCalls`, `Length`, `ContentFilter`, `Refusal`, `MalformedCall`, `UnexpectedCall` and `Error`, written as `stop`, `tool_calls`, `length`, `content_filter`, `refusal`, `malformed_call`, `unexpected_call` and `error`. `AiResponse::finish_reason` and `StreamDone::finish_reason` are `Option<FinishReason>`, as are the `finish_reason` of `is_truncation`, `call_cut`, `call_partial`, `call_garbled`, `AiToolCall::read`, `read_tool_calls` and `check_schema_answer`, and `ScriptedRound::with_finish_reason` takes one. The tool loop and the response-schema check read these words only: no vendor's word (`end_turn`, `MAX_TOKENS`, `MALFORMED_FUNCTION_CALL`...) is a truncation, a natural stop or a call that could not be parsed anymore. Migration: a provider maps its vendor's words onto `FinishReason` before it builds an `AiResponse` or a `StreamDone`, and a word it does not know onto `None`, which reads as a stream that ended without a reason: the response's last call, if its arguments did not arrive whole, is cut.
 - An executor reads a turn that came by Redis through the public
   `ExecutorLink`, as it reads any transport's (RFC §10.6.3, RMK-2012): a

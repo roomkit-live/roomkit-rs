@@ -20,6 +20,7 @@
 //! | [`hook_chain`] | §9.3, §9.4: how a chain of SYNC hook outcomes decides |
 //! | [`lifecycle`] | §5.1: which status each room transition leaves from, and what it writes |
 //! | [`timers`] | §5.1: which timer transition falls due, and when |
+//! | [`task_end`] | §23.3 step 6, §23.4: the closed list of why a delegated task did not complete, and the runtime's words for each reason |
 //! | [`edits`] | §10.1 step 8a, §10.3, §6.4: whether an edit or a delete may change its target, what the commit writes on it, and which events, a change among them, open no agent turn |
 //! | [`idempotency`] | §13.4: a blank idempotency key is no key |
 //! | `host` | §10.5: who a post of the host's own voice may speak as |
@@ -62,6 +63,7 @@ pub mod regeneration;
 #[doc(hidden)]
 pub mod roles;
 pub mod routing;
+pub mod task_end;
 pub(crate) mod threads;
 pub mod timers;
 pub mod tool_intent;

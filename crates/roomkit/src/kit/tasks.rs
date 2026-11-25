@@ -38,7 +38,8 @@ use crate::tasks::handback::{CALLER_HANDS_BACK, MAX_RESULT_CHARS, bounded_to, ha
 use crate::tasks::text::{bounded_text, identifier, one_line, quoted};
 use crate::tasks::{
     DelegatedTask, DelegatedTaskOptions, DelegatedTaskResult, OnCompleteCallback, ResultTool,
-    SubmitOptions, TaskReach, TaskRunner, task_work,
+    SubmitOptions, TaskReach, TaskRunner, end_reason_metadata, failed_task_words, task_end_words,
+    task_work,
 };
 use crate::{AttachChannelOptions, CreateRoomOptions, GetRoomOptions, SendEventOptions, driver};
 
@@ -818,6 +819,8 @@ impl<S: ConversationStore> RoomKit<S> {
         if let Some(reason) = result.metadata.get(LOOP_END_REASON) {
             metadata.insert(LOOP_END_REASON.to_owned(), reason.clone());
         }
+        // Why the task did not complete, as a model reads it (RFC §23.3).
+        metadata.extend(end_reason_metadata(Some(result)));
         let body = result
             .output
             .clone()
@@ -865,7 +868,8 @@ impl<S: ConversationStore> RoomKit<S> {
     }
 
     /// Posts a task's end on the bus: `completed` with its result, or
-    /// `failed` saying it failed or was cancelled, never the error's text.
+    /// `failed` saying it failed or was cancelled, never the error's text,
+    /// with why under `task_end_reason`.
     fn post_task_ended(&self, result: &DelegatedTaskResult) {
         let completed = result.status == TaskStatus::Completed;
         let detail = if completed {
@@ -880,6 +884,7 @@ impl<S: ConversationStore> RoomKit<S> {
         metadata.insert("task_id".to_owned(), json!(result.task_id));
         metadata.insert("child_room_id".to_owned(), json!(result.child_room_id));
         metadata.insert("task_status".to_owned(), json!(result.status));
+        metadata.extend(end_reason_metadata(Some(result)));
         metadata.insert(
             "duration_ms".to_owned(),
             json!(round_half_even(result.duration_ms)),
@@ -1078,24 +1083,27 @@ fn hand_back_metadata(result: &DelegatedTaskResult, task: &str) -> Metadata {
         "task".to_owned(),
         json!(bounded_text(&one_line(task), TASK_NAME_CHARS)),
     );
+    metadata.extend(end_reason_metadata(Some(result)));
     metadata
 }
 
 /// What the notified agent is told of a finished background task: its
-/// outcome, what was asked, then the worker's output set apart as data
-/// (RFC §23.3 step 8, §6.4).
+/// outcome, with why for one that failed, what was asked, then the worker's
+/// output set apart as data (RFC §23.3 step 8, §6.4).
 fn delegation_result_text(
     result: &DelegatedTaskResult,
     task: &str,
     worker: &str,
     max_result_chars: std::num::NonZeroUsize,
 ) -> String {
+    // A failed task's error is for the logs and `ON_TASK_COMPLETED`, never
+    // for a model (RFC §9.3), which reads why from the closed list.
     let outcome = if result.status == TaskStatus::Completed {
-        "completed"
+        "completed".to_owned()
     } else if result.status == TaskStatus::Cancelled {
-        "cancelled"
+        "cancelled".to_owned()
     } else {
-        "failed"
+        failed_task_words(Some(result))
     };
     let asked = if task.trim().is_empty() {
         String::new()
@@ -1114,8 +1122,8 @@ fn delegation_result_text(
 }
 
 /// What a posted result says (RFC §23.3 step 8): the task, then the
-/// worker's output; that it failed or was cancelled; `None` for a
-/// completed task with nothing to say.
+/// worker's output; that it was cancelled, or that it failed and why,
+/// without its error; `None` for a completed task with nothing to say.
 fn posted_text(result: &DelegatedTaskResult, task: &str) -> Option<String> {
     let named = if task.trim().is_empty() {
         String::new()
@@ -1129,7 +1137,10 @@ fn posted_text(result: &DelegatedTaskResult, task: &str) -> Option<String> {
     if result.status == TaskStatus::Cancelled {
         return Some(format!("The task{named} was cancelled."));
     }
-    Some(format!("The task{named} failed."))
+    Some(format!(
+        "The task{named} failed: {}.",
+        task_end_words(result)
+    ))
 }
 
 /// `value` rounded half to even, as Python's `round`.

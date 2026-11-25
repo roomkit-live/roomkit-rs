@@ -18,12 +18,13 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use roomkit_core::model::{ChannelCategory, ChannelId, Metadata, RoomId, TaskStatus};
+use roomkit_core::rules::task_end::{ERROR, end_reason_fields};
 use serde_json::{Value, json};
 use tokio::sync::{Mutex as TaskMutex, OwnedMutexGuard};
 
 use super::brief::{context_block, previous_tasks_block, task_brief};
 use super::cache::{CompletedTaskCache, Kept};
-use super::delegated::task_work;
+use super::delegated::{DelegatedTaskResult, task_end_reason, task_work};
 use super::handback::{MAX_RESULT_CHARS, bounded_to};
 use super::json::dumps_object;
 use super::lines::truthy;
@@ -684,8 +685,9 @@ async fn remember_when_completed(
 }
 
 /// What a call whose task ran inline answers: its `receipt`, its `status`
-/// how the task ended and its `result` the task's work, bounded as a
-/// relayed result is (RFC §23.3 step 8). Python's `_call_answer`.
+/// how the task ended, why when it did not complete, and its `result` the
+/// task's work, bounded as a relayed result is (RFC §23.3 step 8). Python's
+/// `_call_answer`.
 fn ended_answer(mut receipt: Metadata, task: &DelegatedTask, limit: NonZeroUsize) -> Metadata {
     let ended = task.result();
     let status = ended
@@ -693,8 +695,26 @@ fn ended_answer(mut receipt: Metadata, task: &DelegatedTask, limit: NonZeroUsize
         .map_or(TaskStatus::Failed, |ended| ended.status);
     let work = ended.as_ref().map_or("", task_work);
     receipt.insert("status".to_owned(), json!(status));
+    receipt.extend(why_not_completed(ended.as_ref()));
     receipt.insert("result".to_owned(), json!(bounded_to(work, limit)));
     receipt
+}
+
+/// Why an inline task did not complete, by its code and in the runtime's
+/// words, as `task_status` says it; nothing for one that completed. A task
+/// that left no result failed on an error (RFC §23.4). Python's
+/// `_why_not_completed`.
+fn why_not_completed(ended: Option<&DelegatedTaskResult>) -> Metadata {
+    let reason = match ended {
+        Some(ended) => task_end_reason(ended),
+        None => Some(ERROR),
+    };
+    let fields = reason.and_then(end_reason_fields);
+    fields
+        .into_iter()
+        .flatten()
+        .map(|(key, value)| (key.to_owned(), json!(value)))
+        .collect()
 }
 
 /// Whether one of `share_channels` is bound in the room as an intelligence

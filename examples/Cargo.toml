@@ -52,6 +52,10 @@ name = "turns_submit_to_executor"
 path = "turns_submit_to_executor.rs"
 
 [[example]]
+name = "task_end_reason"
+path = "task_end_reason.rs"
+
+[[example]]
 name = "ai_turn_context"
 path = "ai_turn_context.rs"
 

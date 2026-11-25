@@ -14,6 +14,7 @@ use std::time::Duration;
 use crate::text_errors::general;
 
 use roomkit_core::model::{ChannelId, EventContent, Metadata, RoomEvent, RoomId, TaskStatus};
+use roomkit_core::rules::task_end::ERROR;
 use serde_json::{Value, json};
 
 use crate::error::RoomKitError;
@@ -23,7 +24,8 @@ use crate::orchestration::lifecycle::post_agent_lifecycle;
 use crate::store::ConversationStore;
 use crate::tasks::lines::RUN_ENTRY;
 use crate::tasks::{
-    DelegatedTask, DelegatedTaskResult, OnCompleteCallback, WaitOptions, task_work,
+    DelegatedTask, DelegatedTaskResult, OnCompleteCallback, WaitOptions, failed_task_words,
+    task_end_reason, task_work,
 };
 
 /// The text a strategy's tasks carry for `event`: a plain text's body,
@@ -39,9 +41,10 @@ pub(crate) fn task_input(event: &RoomEvent) -> &str {
 }
 
 /// The text a strategy reads of a delegated task's result: its work; a
-/// failed task reads as failed, never with its error, which is for the
-/// logs and hooks, not for a model (RFC §9.3), nor with the narration a
-/// worker cut short keeps (RFC §23.3). Python's `task_output`.
+/// failed task reads as failed, with why from the closed list a model may
+/// read, never with its error, which is for the logs and hooks, not for a
+/// model (RFC §9.3), nor with the narration a worker cut short keeps (RFC
+/// §23.3). Python's `task_output`.
 pub(crate) fn task_output(result: Option<&DelegatedTaskResult>) -> String {
     let Some(result) = result else {
         return String::new();
@@ -59,7 +62,7 @@ pub(crate) fn task_output(result: Option<&DelegatedTaskResult>) -> String {
         .is_some_and(|error| !error.is_empty())
         || result.status == TaskStatus::Failed;
     if failed {
-        "The task failed.".to_owned()
+        format!("The task {}.", failed_task_words(Some(result)))
     } else {
         String::new()
     }
@@ -75,12 +78,36 @@ pub(crate) struct WorkerOutcome {
     pub(crate) completed: bool,
     /// The delegated task; `None` when it timed out.
     pub(crate) task: Option<DelegatedTask>,
+    /// Whether the strategy's bound cut the delegation.
+    pub(crate) timed_out: bool,
 }
 
 impl WorkerOutcome {
+    /// The outcome of a delegation the strategy's bound, `bound`, cut: read
+    /// as timed out, by that bound. Python's `_timed_out`.
+    fn timed_out(bound: Duration, task: Option<DelegatedTask>) -> Self {
+        Self {
+            output: timed_out_text(bound),
+            completed: false,
+            task,
+            timed_out: true,
+        }
+    }
+
     /// The task's result; `None` when it timed out.
     pub(crate) fn result(&self) -> Option<DelegatedTaskResult> {
         self.task.as_ref().and_then(DelegatedTask::result)
+    }
+
+    /// Why the delegation did not complete, of the closed list a model may
+    /// read (RFC §19.7.3): `timeout` when the strategy's bound cut it,
+    /// whatever its task then ended with, else its task's end reason.
+    /// Python's `end_reason`.
+    fn end_reason(&self) -> Option<&'static str> {
+        if self.timed_out {
+            return Some("timeout");
+        }
+        self.result().as_ref().and_then(task_end_reason)
     }
 }
 
@@ -98,6 +125,10 @@ pub(crate) fn completed_or_failed(outcome: &WorkerOutcome) -> WorkerEnd {
         metadata: Metadata::new(),
     }
 }
+
+/// A run cut by its caller: its terminal entry's detail, and its end
+/// reason.
+const CANCELLED: &str = "cancelled";
 
 /// What a worker past its bound reads as (Python's `f"The task timed out
 /// after {timeout:g}s."`).
@@ -206,7 +237,7 @@ pub(crate) async fn run_worker<S: ConversationStore>(
         run: Arc::default(),
         cut_entries: CUT_ENTRIES.try_with(Arc::clone).ok(),
     };
-    posts.post(StatusLevel::Pending, task, None, Metadata::new());
+    posts.post(StatusLevel::Pending, task, None, Metadata::new(), None);
     // The run learns its task once it ends, before a cut reaches the run:
     // its terminal entry then names it.
     delegation.on_complete = Some(posts.task_ended_then(delegation.on_complete.take()));
@@ -233,11 +264,13 @@ pub(crate) async fn run_worker<S: ConversationStore>(
     let task = match delegated {
         Ok(task) => task,
         Err(error) => {
+            let raised = error.to_string();
             posts.post(
                 StatusLevel::Failed,
-                &error.to_string(),
+                &raised,
                 None,
                 Metadata::new(),
+                Some(ERROR),
             );
             return Err(error);
         }
@@ -247,6 +280,7 @@ pub(crate) async fn run_worker<S: ConversationStore>(
         output: task_output(result.as_ref()),
         completed: result.is_some_and(|result| result.status == TaskStatus::Completed),
         task: Some(task),
+        timed_out: false,
     };
     posts.ended(&outcome);
     Ok(outcome)
@@ -274,7 +308,13 @@ pub(crate) async fn follow_worker<S: ConversationStore>(
         })),
         cut_entries: None,
     };
-    posts.post(StatusLevel::Pending, &task.task, None, Metadata::new());
+    posts.post(
+        StatusLevel::Pending,
+        &task.task,
+        None,
+        Metadata::new(),
+        None,
+    );
     let mut cut = CutPost {
         posts: &posts,
         armed: true,
@@ -292,16 +332,13 @@ pub(crate) async fn follow_worker<S: ConversationStore>(
                 output: task_output(result.as_ref()),
                 completed: result.is_some_and(|result| result.status == TaskStatus::Completed),
                 task: Some(task),
+                timed_out: false,
             }
         }
         Err(bound) => {
             // The runner ends it cancelled; the outcome is the bound's.
             kit.task_runner().cancel(&task.id).await;
-            WorkerOutcome {
-                output: timed_out_text(bound),
-                completed: false,
-                task: Some(task),
-            }
+            WorkerOutcome::timed_out(bound, Some(task))
         }
     };
     cut.armed = false;
@@ -388,11 +425,7 @@ impl<S: ConversationStore> Posts<S> {
             drop(task.wait(WaitOptions::default()).await);
         }
         cut.armed = false;
-        let outcome = WorkerOutcome {
-            output: timed_out_text(bound),
-            completed: false,
-            task: None,
-        };
+        let outcome = WorkerOutcome::timed_out(bound, None);
         self.ended(&outcome);
         outcome
     }
@@ -404,7 +437,11 @@ impl<S: ConversationStore> Posts<S> {
             return;
         };
         let end = (status.ended)(outcome);
-        self.post(end.level, &end.detail, outcome.task.as_ref(), end.metadata);
+        let reason = (end.level == StatusLevel::Failed)
+            .then(|| outcome.end_reason())
+            .flatten();
+        let task = outcome.task.as_ref();
+        self.post(end.level, &end.detail, task, end.metadata, reason);
     }
 
     /// The run's terminal entry once it was cut: it names the task, the cut
@@ -412,22 +449,26 @@ impl<S: ConversationStore> Posts<S> {
     fn cancelled(&self, task_id: &str) {
         self.post_named(
             StatusLevel::Failed,
-            "cancelled",
+            CANCELLED,
             Some(task_id.to_owned()),
             Metadata::new(),
+            Some(CANCELLED),
         );
     }
 
+    /// Posts an entry of the run; a failed terminal one names why under
+    /// `task_end_reason` (`reason`), as a task's own entry does.
     fn post(
         &self,
         level: StatusLevel,
         detail: &str,
         task: Option<&DelegatedTask>,
         added: Metadata,
+        reason: Option<&'static str>,
     ) {
         let known = self.run().task_id.clone();
         let task_id = task.map(|task| task.id.clone()).or(known);
-        self.post_named(level, detail, task_id, added);
+        self.post_named(level, detail, task_id, added, reason);
     }
 
     fn post_named(
@@ -436,6 +477,7 @@ impl<S: ConversationStore> Posts<S> {
         detail: &str,
         task_id: Option<String>,
         added: Metadata,
+        reason: Option<&'static str>,
     ) {
         let Some(status) = &self.status else {
             return;
@@ -443,6 +485,9 @@ impl<S: ConversationStore> Posts<S> {
         let mut metadata = status.metadata.clone();
         metadata.extend(added);
         metadata.insert(RUN_ENTRY.to_owned(), json!(true));
+        if let Some(reason) = reason {
+            metadata.insert("task_end_reason".to_owned(), json!(reason));
+        }
         if let Some(task_id) = task_id {
             metadata.insert("task_id".to_owned(), Value::String(task_id));
         }
@@ -474,8 +519,9 @@ impl<S: ConversationStore> Drop for CutPost<'_, S> {
         match known {
             Some(task_id) => self.posts.cancelled(&task_id),
             None if !deferred => {
+                let cut = Metadata::new();
                 self.posts
-                    .post(StatusLevel::Failed, "cancelled", None, Metadata::new());
+                    .post(StatusLevel::Failed, CANCELLED, None, cut, Some(CANCELLED));
             }
             None => {
                 if let Some(cut_entries) = &self.posts.cut_entries {

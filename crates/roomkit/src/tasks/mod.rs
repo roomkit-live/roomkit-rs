@@ -60,7 +60,10 @@ pub(crate) use self::cut::{TaskCut, TaskCuts};
 pub use self::delegate::delegate_tool_definition;
 pub use self::delegate::{DelegateHandler, DelegateHandlerOptions};
 pub use self::delegated::{DelegatedTask, DelegatedTaskOptions, DelegatedTaskResult, WaitOptions};
-pub(crate) use self::delegated::{task_cut_reason, task_work};
+pub(crate) use self::delegated::{
+    end_reason_metadata, failed_task_words, task_cut_reason, task_end_reason, task_end_words,
+    task_work,
+};
 pub(crate) use self::held::{Claim, HeldTasks, spawn_apart, until_ended};
 pub(crate) use self::hosted::HostTasks;
 pub use self::lines::room_tasks;

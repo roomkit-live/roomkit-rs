@@ -9,6 +9,7 @@ use roomkit::TurnHost;
 use roomkit::model::{Metadata, Timestamp};
 use roomkit_core::ops::{Environment, SystemEnvironment};
 use roomkit_core::rules::discussion::agent_handle;
+use roomkit_core::rules::task_end::{failed_words, task_end};
 use roomkit_core::rules::transcript::{identifier, quoted};
 use serde_json::Value;
 
@@ -106,12 +107,7 @@ fn task_line(task: &Metadata, now: Timestamp, metadata: &Metadata) -> String {
         line = format!("{line}, asked {}", quoted(asked, TEXT_LIMIT));
     }
     if !running(task) {
-        let status = task.get("status").map(python_str).unwrap_or_default();
-        let ending = ENDINGS
-            .into_iter()
-            .find(|ending| *ending == status)
-            .unwrap_or("ended");
-        return format!("{line}: {ending}{}", ago(task.get("ended"), now));
+        return format!("{line}: {}{}", ending(task), ago(task.get("ended"), now));
     }
     let mut state = match age(task.get("since"), now) {
         Some(age) => format!("running for {}", span(age)),
@@ -126,6 +122,25 @@ fn task_line(task: &Metadata, now: Timestamp, metadata: &Metadata) -> String {
         state = format!("{state}; at {}{at}", quoted(progress, TEXT_LIMIT));
     }
     format!("{line}: {state}; no result yet")
+}
+
+/// How `task` ended, in the block's own words: one of its endings, a
+/// failed one with why when its line names a reason of the closed list
+/// (RFC §23.4). Python's `_ending`.
+fn ending(task: &Metadata) -> String {
+    let status = task.get("status").map(python_str).unwrap_or_default();
+    let ending = ENDINGS
+        .into_iter()
+        .find(|ending| *ending == status)
+        .unwrap_or("ended");
+    let reason = task
+        .get("end_reason")
+        .and_then(Value::as_str)
+        .and_then(task_end);
+    match reason {
+        Some((code, _words)) if ending == "failed" => failed_words(code),
+        _ => ending.to_owned(),
+    }
 }
 
 /// A status as Python's `str()` reads it.
