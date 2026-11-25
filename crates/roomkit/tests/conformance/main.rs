@@ -218,3 +218,27 @@ fn every_scenario_gives_what_the_rfc_says() {
 fn every_scenario_gives_the_same_on_several_workers() {
     scenarios::every_scenario_gives_what_the_rfc_says(&scenarios::FOUR_WORKERS, KNOWN_FAILURES);
 }
+
+/// Every scenario with executors gives the same when its kit takes its turns
+/// through a transport written on the public contract alone (roomkit-specs
+/// `conformance/README.md`, "On a transport written on the contract alone").
+/// The pass runs across the Redis turn executor and writes no result file.
+#[cfg(feature = "redis")]
+#[test]
+fn every_scenario_with_executors_gives_the_same_on_the_contract_alone() {
+    let filter = std::env::var("ROOMKIT_CONFORMANCE_FILTER").ok();
+    let run = scenarios::run_on_the_contract_alone(
+        &suite().join("scenarios"),
+        filter.as_deref(),
+        &scenarios::FOUR_WORKERS,
+        KNOWN_FAILURES,
+        redis_executors::run_on_the_contract_alone,
+    );
+    println!(
+        "four workers, on the contract alone: {} scenarios, {} failing: {:?}",
+        run.cases.len(),
+        run.failing.len(),
+        run.failing
+    );
+    assert!(run.report.is_empty(), "\n{}", run.report.join("\n"));
+}

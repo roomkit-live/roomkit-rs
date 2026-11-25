@@ -106,6 +106,13 @@ REDIS_URL=redis://127.0.0.1:6379 ROOMKIT_CONFORMANCE_JUNIT=target/conformance \
 roomkit-specs records these files as execution receipts, from a clean commit
 (`conformance/TRACEABILITY.md`, "Execution receipts").
 
+The core's runner, built with the `redis` feature, runs those scenarios a
+second time on four workers, the kit served by the runner's own transport,
+written on the public contract alone (roomkit-specs `conformance/README.md`,
+"On a transport written on the contract alone"): the test
+`every_scenario_with_executors_gives_the_same_on_the_contract_alone`. That
+pass writes no file.
+
 ## Examples
 
 - An example is one file, `examples/<name>.rs`, declared in

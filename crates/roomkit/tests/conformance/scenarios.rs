@@ -158,13 +158,7 @@ pub(crate) fn run(
             continue;
         }
         let scenario = load(path, &id);
-        let missing: Vec<_> = scenario["requires_features"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .filter(|name| !PROVIDED_FEATURES.contains(name))
-            .collect();
+        let missing = missing_features(&scenario);
         let case = if !missing.is_empty() {
             Case {
                 id,
@@ -190,6 +184,50 @@ pub(crate) fn run(
         if !paths.iter().any(|path| scenario_id(root, path) == *listed) {
             run.report
                 .push(format!("known failure {listed} names no scenario"));
+        }
+    }
+    run
+}
+
+/// The features `scenario` requires that this runner does not provide.
+fn missing_features(scenario: &Value) -> Vec<&str> {
+    scenario["requires_features"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|name| !PROVIDED_FEATURES.contains(name))
+        .collect()
+}
+
+/// Every scenario with executors under `root` whose id contains `filter`,
+/// run a second time by `again`, its kit served by a transport written on
+/// the public contract alone (roomkit-specs `conformance/README.md`, "On a
+/// transport written on the contract alone"), on the runtime `pass` builds
+/// and against `known`, the known failures of its first run. A scenario
+/// `again` declines is no case of the pass.
+pub(crate) fn run_on_the_contract_alone(
+    root: &Path,
+    filter: Option<&str>,
+    pass: &Pass,
+    known: &[(&str, &str)],
+    again: ExecutorPass,
+) -> Run {
+    let mut paths = Vec::new();
+    scenarios(root, &mut paths);
+    let mut run = Run::default();
+    for path in &paths {
+        let id = scenario_id(root, path);
+        if filter.is_some_and(|needle| !id.contains(needle)) {
+            continue;
+        }
+        let scenario = load(path, &id);
+        if scenario["setup"].get("executors").is_none() || !missing_features(&scenario).is_empty() {
+            continue;
+        }
+        if let Some(problems) = again(&scenario, pass.build) {
+            let case = judge(id, &problems, known, &mut run);
+            run.cases.push(case);
         }
     }
     run

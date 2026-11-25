@@ -153,6 +153,25 @@ fn a_distributed_scenario_outside_executors_reports_its_observed_failure() {
     assert!(run.report[0].contains("unexpected operation"));
 }
 
+/// The pass on the contract alone runs the scenarios with executors alone,
+/// and one its second run declines is no case of it.
+#[test]
+fn the_pass_on_the_contract_alone_runs_the_scenarios_with_executors_alone() {
+    let declined = json!({"turn_backend_faults": true});
+    let root = suite_of(&[
+        reads_room("area/no-executor", "r2"),
+        json!({"id": "area/runs-again", "setup": {"executors": []}}),
+        json!({"id": "area/declined", "setup": {"executors": [], "kit": declined}}),
+    ]);
+    let run = scenarios::run_on_the_contract_alone(&root, None, &ONE_THREAD, &[], |scenario, _| {
+        (scenario["setup"]["kit"]["turn_backend_faults"] != true)
+            .then(|| vec![format!("ran {}", scenario["id"])])
+    });
+    std::fs::remove_dir_all(root).unwrap();
+    assert_eq!(run.failing, ["area/runs-again"]);
+    assert_eq!(run.cases.len(), 1);
+}
+
 /// A pass that runs the scenarios with executors, across the Redis turn
 /// executor, writes a file and a class of its own,
 /// `<backend>+redis-executors`; a pass that skips them writes the backend's.

@@ -50,6 +50,36 @@ pub(super) fn run(
     }))
 }
 
+/// `scenario` run a second time, its kit served by the runner's own
+/// transport, written on the public contract alone (roomkit-specs
+/// `conformance/README.md`, "On a transport written on the contract alone").
+/// None for a scenario whose kit the runner serves by a transport of its own
+/// already, and without a Redis server.
+pub(super) fn run_on_the_contract_alone(
+    scenario: &Value,
+    runtime: fn() -> tokio::runtime::Runtime,
+) -> Option<Vec<String>> {
+    if on_a_transport_of_the_runner(scenario) {
+        return None;
+    }
+    let mut again = scenario.clone();
+    again["setup"]["kit"]["turn_backend_contract_only"] = Value::Bool(true);
+    run(&again, runtime)
+}
+
+/// Whether the runner serves the scenario's kit by a transport of its own:
+/// the one a setting of its kit asks for, or the one a step that kills the
+/// owner or reserves an executor has the kit's turns cross
+/// (`Workers::kit_connection`).
+fn on_a_transport_of_the_runner(scenario: &Value) -> bool {
+    let kit = &scenario["setup"]["kit"];
+    kit["turn_backend_contract_only"] == true
+        || kit["turn_backend_faults"] == true
+        || kit["executor_catalogue"] == false
+        || kills_owner(scenario)
+        || calls(scenario, "executor.reserve")
+}
+
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Worker {
@@ -538,4 +568,24 @@ fn pausing_a_silent_executor_is_refused_before_another_peer_can_advertise() {
     if let Some(problems) = run(&scenario, crate::scenarios::ONE_THREAD.build) {
         assert!(problems.is_empty(), "{problems:?}");
     }
+}
+
+/// A scenario whose kit the runner already serves by a transport of its own
+/// is not run a second time on the contract alone.
+#[test]
+fn a_kit_on_a_transport_of_the_runner_is_not_run_again() {
+    use serde_json::json;
+    for scenario in [
+        json!({"setup": {"kit": {"turn_backend_contract_only": true}, "executors": []}}),
+        json!({"setup": {"kit": {"turn_backend_faults": true}, "executors": []}}),
+        json!({"setup": {"kit": {"executor_catalogue": false}, "executors": []}}),
+        json!({"setup": {"executors": []}, "steps": [{"call": "owner.kill"}]}),
+        json!({"setup": {"executors": []}, "steps": [{"call": "executor.reserve"}]}),
+    ] {
+        assert!(on_a_transport_of_the_runner(&scenario), "{scenario}");
+        let again = run_on_the_contract_alone(&scenario, crate::scenarios::ONE_THREAD.build);
+        assert!(again.is_none(), "{scenario}");
+    }
+    let plain = json!({"setup": {"executors": []}});
+    assert!(!on_a_transport_of_the_runner(&plain));
 }
