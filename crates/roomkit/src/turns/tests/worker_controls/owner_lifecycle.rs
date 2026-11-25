@@ -2,30 +2,36 @@
 
 use super::{Events, Observed};
 use crate::turns::tests::{support, worker};
+use crate::turns::{
+    DistributedTurnBackend, DistributedTurnBackendOptions, InMemoryTurnBroker, InMemoryTurnRegistry,
+};
 use crate::{
     AttachChannelOptions, ChannelCallOptions, ChannelDeclaration, CreateRoomOptions,
-    DetachChannelOptions, GetRoomOptions, RedisTurnBackend, RedisTurnBackendOptions, RoomKit,
-    RoomKitError, RoomKitOptions, TurnExecutor, TurnExecutorOptions,
+    DetachChannelOptions, GetRoomOptions, RoomKit, RoomKitError, RoomKitOptions, TurnExecutor,
+    TurnExecutorOptions,
 };
 use serde_json::json;
 use std::sync::Arc;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires REDIS_URL pointing to a test Redis server"]
 async fn the_owner_routes_all_five_controls_to_the_organization_worker() {
-    let url = std::env::var("REDIS_URL").unwrap();
-    let options = RedisTurnBackendOptions {
-        key_prefix: format!("roomkit:test:control:{}", uuid::Uuid::new_v4().simple()),
-        ..Default::default()
+    let (broker, registry) = (
+        Arc::new(InMemoryTurnBroker::new()),
+        Arc::new(InMemoryTurnRegistry::new()),
+    );
+    let node = || {
+        DistributedTurnBackend::new(
+            Arc::<InMemoryTurnBroker>::clone(&broker),
+            Arc::<InMemoryTurnRegistry>::clone(&registry),
+            DistributedTurnBackendOptions::default(),
+        )
     };
-    let hosting = RedisTurnBackend::new(Some(&url), options.clone()).unwrap();
+    let hosting = node();
     let events = Events::default();
     let executor = worker_observing(&events);
     hosting.serve(executor.clone()).await.unwrap();
     let kit = RoomKit::new(RoomKitOptions {
-        turn_backend: Some(crate::turns::TurnBackendHandle::new(Arc::new(
-            RedisTurnBackend::new(Some(&url), options).unwrap(),
-        ))),
+        turn_backend: Some(crate::turns::TurnBackendHandle::new(Arc::new(node()))),
         ..Default::default()
     });
     let agent = support::channel("ai");

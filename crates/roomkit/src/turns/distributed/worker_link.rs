@@ -14,7 +14,6 @@ use crate::turns::wire::{Control, ControlEnvelope, Envelope, Frame};
 use crate::turns::{ExecutorLink, TurnFuture, TurnRequest};
 
 #[cfg(test)]
-#[cfg(feature = "redis")]
 mod tests;
 
 /// Where the link stands between its owner's node and its executor.

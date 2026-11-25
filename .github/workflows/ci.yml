@@ -65,10 +65,6 @@ jobs:
       - run: make fmt-check
       - run: make clippy
       - run: make test
-      - name: Redis transport failures and channel controls
-        run: >-
-          cargo test --locked -p roomkit --features redis --lib -- --ignored
-          turns::distributed:: turns::tests::worker_controls::owner_lifecycle
       # The core's tests without its default-off features: the
       # system-environment constructors must stay optional.
       - run: make test-core

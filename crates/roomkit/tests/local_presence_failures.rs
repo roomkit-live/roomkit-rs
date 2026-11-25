@@ -249,24 +249,30 @@ mod attach;
 #[path = "local_presence_failures/lifecycle.rs"]
 mod lifecycle;
 
-#[cfg(feature = "redis")]
 #[tokio::test]
-async fn a_redis_owner_retries_a_reserved_failure_and_releases_only_unpublished_claims_on_close() {
-    use roomkit::{RedisTurnBackend, RedisTurnBackendOptions, TurnTimeouts};
-    let Ok(url) = std::env::var("REDIS_URL") else {
-        return;
+async fn an_owner_across_processes_retries_a_reserved_failure_and_releases_only_unpublished_claims_on_close()
+ {
+    use roomkit::TurnTimeouts;
+    use roomkit::turns::{
+        DistributedTurnBackend, DistributedTurnBackendOptions, InMemoryTurnBroker,
+        InMemoryTurnRegistry,
     };
     for delivered in [true, false] {
-        let options = RedisTurnBackendOptions {
-            key_prefix: format!("roomkit:test:presence-retry:{}", uuid::Uuid::new_v4()),
-            timeouts: TurnTimeouts {
-                heartbeat_interval: Duration::from_millis(20),
+        let broker = Arc::new(InMemoryTurnBroker::new());
+        let registry = Arc::new(InMemoryTurnRegistry::new());
+        let node = || {
+            let options = DistributedTurnBackendOptions {
+                timeouts: TurnTimeouts {
+                    heartbeat_interval: Duration::from_millis(20),
+                    ..Default::default()
+                },
                 ..Default::default()
-            },
-            ..Default::default()
+            };
+            let broker = Arc::<InMemoryTurnBroker>::clone(&broker);
+            let registry = Arc::<InMemoryTurnRegistry>::clone(&registry);
+            DistributedTurnBackend::new(broker, registry, options)
         };
-        let owner = RedisTurnBackend::new(Some(&url), options.clone()).unwrap();
-        let peer = RedisTurnBackend::new(Some(&url), options).unwrap();
+        let (owner, peer) = (node(), node());
         let failures = if delivered { 2 } else { usize::MAX };
         let realtime = Arc::new(Backend::new(failures, EphemeralEventType::PresenceOnline));
         let kit = RoomKit::new(RoomKitOptions {

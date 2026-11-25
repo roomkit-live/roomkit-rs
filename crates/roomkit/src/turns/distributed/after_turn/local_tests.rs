@@ -1,7 +1,8 @@
 //! A turn's late calls and publications meet the local owner in its own task context.
+use crate::turns::distributed::test_support::Services;
 use crate::turns::wire::{Frame, HostResult};
 use crate::turns::{RoomCall, RoomOwner, RoomPublication, TurnBackend, TurnContext, TurnFuture};
-use crate::{RedisTurnBackend, RedisTurnBackendOptions, RoomKitError, current_turn_id};
+use crate::{RoomKitError, current_turn_id};
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -31,17 +32,7 @@ impl RoomOwner for Owner {
 
 #[tokio::test]
 async fn a_local_owner_receives_late_work_apart_from_the_worker_and_returns_its_error() {
-    let Ok(url) = std::env::var("REDIS_URL") else {
-        return;
-    };
-    let backend = RedisTurnBackend::new(
-        Some(&url),
-        RedisTurnBackendOptions {
-            key_prefix: format!("test:owner-context:{}", uuid::Uuid::new_v4()),
-            ..Default::default()
-        },
-    )
-    .unwrap();
+    let backend = Services::default().default_node();
     TurnBackend::attend(&backend, Arc::new(Owner))
         .await
         .unwrap();

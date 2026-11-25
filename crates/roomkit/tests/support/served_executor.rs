@@ -1,4 +1,4 @@
-//! The same Redis worker contract over a kit with a concrete durable store.
+//! The same worker contract across processes over a kit with a concrete durable store.
 use std::future::ready;
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,11 +11,14 @@ use roomkit::store::ListEventsOptions;
 use roomkit::testing::{
     EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
 };
-use roomkit::turns::TurnBackend;
+use roomkit::turns::{
+    DistributedTurnBackend, DistributedTurnBackendOptions, InMemoryTurnBroker,
+    InMemoryTurnRegistry, TurnBackend,
+};
 use roomkit::{
     AgentIdentity, AttachChannelOptions, Channel, ChannelDeclaration, ChannelError,
-    ConversationStore, CreateRoomOptions, ProcessInboundOptions, RedisTurnBackend,
-    RedisTurnBackendOptions, RoomKit, RoomKitOptions, TurnTimeouts, WeakRoomKit,
+    ConversationStore, CreateRoomOptions, ProcessInboundOptions, RoomKit, RoomKitOptions,
+    TurnTimeouts, WeakRoomKit,
 };
 
 struct StoreReader<S> {
@@ -72,11 +75,12 @@ impl<S: ConversationStore> Channel for StoreReader<S> {
     }
 }
 
-fn backend(url: &str) -> RedisTurnBackend {
-    RedisTurnBackend::new(
-        Some(url),
-        RedisTurnBackendOptions {
-            key_prefix: format!("roomkit:served-store:{}", uuid::Uuid::new_v4()),
+/// A node of a distributed backend, on a broker and a registry of this process.
+fn backend() -> DistributedTurnBackend {
+    DistributedTurnBackend::new(
+        Arc::new(InMemoryTurnBroker::new()),
+        Arc::new(InMemoryTurnRegistry::new()),
+        DistributedTurnBackendOptions {
             timeouts: TurnTimeouts {
                 heartbeat_interval: Duration::from_millis(50),
                 ..Default::default()
@@ -84,11 +88,10 @@ fn backend(url: &str) -> RedisTurnBackend {
             ..Default::default()
         },
     )
-    .unwrap()
 }
 
-pub(crate) async fn exercise<S: ConversationStore>(url: &str, worker: RoomKit<S>) {
-    let node = backend(url);
+pub(crate) async fn exercise<S: ConversationStore>(worker: RoomKit<S>) {
+    let node = backend();
     let agent = ChannelId::new("agent").unwrap();
     // Only this worker's store contains the answer. Its real channel is reachable
     // through its kit's executor, while the owner holds the declaration alone.

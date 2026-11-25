@@ -5,9 +5,7 @@ use std::sync::Arc;
 
 #[tokio::test]
 async fn loop_back_keeps_a_same_id_workers_declaration() {
-    let Some((node, peer)) = nodes_with_loop_back(true) else {
-        return;
-    };
+    let (node, peer) = nodes_with_loop_back(true);
     let (kit, _, _, _) = setup(&node).await;
     let id = kit.turn_executor().executor_id().to_owned();
     node.serve(replacement(&id, true)).await.unwrap();
@@ -31,9 +29,7 @@ async fn loop_back_keeps_a_same_id_workers_declaration() {
 #[tokio::test]
 async fn loop_back_routes_same_id_workers_by_channel() {
     for shared in [true, false] {
-        let Some((node, peer)) = nodes_with_loop_back(true) else {
-            return;
-        };
+        let (node, peer) = nodes_with_loop_back(true);
         let (kit, text, home, agent) = setup(&node).await;
         let id = kit.turn_executor().executor_id().to_owned();
         node.serve(replacement(&id, shared)).await.unwrap();
@@ -67,7 +63,7 @@ pub(super) fn replacement(id: &str, shared: bool) -> TurnExecutor {
     .unwrap()
 }
 
-async fn setup(node: &RedisTurnBackend) -> (RoomKit, ChannelId, ChannelId, ChannelId) {
+async fn setup(node: &DistributedTurnBackend) -> (RoomKit, ChannelId, ChannelId, ChannelId) {
     let kit = RoomKit::new(RoomKitOptions {
         turn_backend: Some(crate::turns::TurnBackendHandle::new(Arc::new(node.clone()))),
         ..Default::default()

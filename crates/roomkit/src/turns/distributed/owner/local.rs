@@ -148,5 +148,4 @@ impl ExecutorLink for LocalLink {
 }
 
 #[cfg(test)]
-#[cfg(feature = "redis")]
 mod context_tests;

@@ -3,9 +3,7 @@ use super::*;
 
 #[tokio::test]
 async fn a_channel_call_to_an_absent_worker_returns_its_terminal_reason() {
-    let Some((worker, owner)) = pair() else {
-        return;
-    };
+    let (worker, owner) = pair();
     worker.attend().await.unwrap();
     let raw = json!({"message":{"type":"channel_call", "call_id":"q", "channel_id":"ai", "room_id":"r", "verb":"ping"}}).to_string();
     let response = owner
@@ -38,9 +36,7 @@ async fn a_channel_call_to_an_absent_worker_returns_its_terminal_reason() {
 #[tokio::test]
 async fn a_captured_host_reports_the_closing_owners_refusal() {
     use crate::turns::wire::{OwnerMessage, OwnerMessageEnvelope};
-    let Some((owner, worker)) = pair() else {
-        return;
-    };
+    let (owner, worker) = pair();
     owner.attend().await.unwrap();
     // The call names its turn: its owner is the one that turn came from.
     let port = worker.remember_owner("old", owner.node_id());
@@ -81,9 +77,7 @@ async fn a_captured_host_reports_the_closing_owners_refusal() {
 
 #[tokio::test]
 async fn unreadable_channel_and_room_calls_return_a_validation_error() {
-    let Some((receiver, sender)) = pair() else {
-        return;
-    };
+    let (receiver, sender) = pair();
     let executor = TurnExecutor::new(
         |_| std::future::ready(Ok(None::<EchoAgent>)),
         TurnExecutorOptions {

@@ -243,7 +243,7 @@ impl TurnBackend for RedisTurnBackend {
     }
 }
 
-/// What the tests of the Redis side read of it: its connections and keys.
+/// What the tests of the Redis side read of it: its connections.
 #[cfg(test)]
 impl RedisTurnBackend {
     pub(super) fn redis(&self) -> &RedisBroker {
@@ -252,14 +252,6 @@ impl RedisTurnBackend {
 
     pub(super) async fn connection(&self) -> Result<ConnectionManager, RoomKitError> {
         self.redis.connection().await
-    }
-
-    pub(super) fn key(&self, suffix: &str) -> String {
-        self.redis.key(suffix)
-    }
-
-    pub(super) fn ttl_ms(&self) -> u64 {
-        self.redis.ttl_ms()
     }
 
     pub(super) async fn inbox_connection(

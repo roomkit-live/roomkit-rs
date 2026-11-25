@@ -1,4 +1,4 @@
-//! A separate Redis peer observes the closing node through real inbox entries.
+//! A separate peer observes the closing node through what its inbox received.
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,7 +8,8 @@ use tokio::sync::{Notify, oneshot};
 use tokio::time::timeout;
 
 use super::stream::Message;
-use super::{RedisTurnBackend, RedisTurnBackendOptions};
+use super::test_support::Services;
+use super::{DistributedTurnBackend, DistributedTurnBackendOptions};
 use crate::testing::{EchoAgent, EchoAgentOptions};
 use crate::turns::TurnTimeouts;
 use crate::turns::wire::RoomCallResult;
@@ -16,13 +17,15 @@ use crate::{TurnExecutor, TurnExecutorOptions};
 
 pub(super) const LIMIT: Duration = Duration::from_secs(3);
 
-pub(super) fn pair() -> Option<(RedisTurnBackend, RedisTurnBackend)> {
-    let Ok(url) = std::env::var("REDIS_URL") else {
-        eprintln!("Set REDIS_URL to run the Redis shutdown tests");
-        return None;
-    };
-    let options = RedisTurnBackendOptions {
-        key_prefix: format!("roomkit:shutdown:{}", uuid::Uuid::new_v4()),
+pub(super) fn pair() -> (DistributedTurnBackend, DistributedTurnBackend) {
+    let (_, node, peer) = served_pair();
+    (node, peer)
+}
+
+/// Two nodes of one deployment, with the services they share.
+fn served_pair() -> (Services, DistributedTurnBackend, DistributedTurnBackend) {
+    let services = Services::default();
+    let options = DistributedTurnBackendOptions {
         timeouts: TurnTimeouts {
             cancel: Duration::from_secs(1),
             heartbeat_interval: Duration::from_millis(100),
@@ -31,10 +34,8 @@ pub(super) fn pair() -> Option<(RedisTurnBackend, RedisTurnBackend)> {
         },
         ..Default::default()
     };
-    Some((
-        RedisTurnBackend::new(Some(&url), options.clone()).unwrap(),
-        RedisTurnBackend::new(Some(&url), options).unwrap(),
-    ))
+    let (node, peer) = (services.node(options.clone()), services.node(options));
+    (services, node, peer)
 }
 
 pub(super) fn request(id: &str) -> String {
@@ -47,7 +48,7 @@ pub(super) fn request(id: &str) -> String {
 
 #[tokio::test]
 async fn closing_a_worker_writes_its_numbered_end_to_the_owner_before_returning() {
-    let Some((host, owner)) = pair() else { return };
+    let (services, host, owner) = served_pair();
     let release = Arc::new(Notify::new());
     let worker = TurnExecutor::new(
         {
@@ -95,29 +96,13 @@ async fn closing_a_worker_writes_its_numbered_end_to_the_owner_before_returning(
         )
         .await
         .unwrap();
-    // Keep the final frame in Redis so an immediate XRANGE after close proves
-    // it is already written, independently of the owner's task scheduling.
-    let reader = owner.0.reader.get().unwrap();
-    reader.abort();
-    timeout(LIMIT, async {
-        while !reader.is_finished() {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
     timeout(LIMIT, host.close()).await.unwrap().unwrap();
-    let inbox: redis::streams::StreamRangeReply = redis::cmd("XRANGE")
-        .arg(owner.key(&format!("inbox:{}", owner.node_id())))
-        .arg("-")
-        .arg("+")
-        .query_async(&mut owner.connection().await.unwrap())
-        .await
-        .unwrap();
-    let frames: Vec<Value> = inbox
-        .ids
+    // What the owner's inbox received is read as soon as the close returned:
+    // the final frame is already written, whenever the owner reads it.
+    let frames: Vec<Value> = services
+        .broker
+        .posted(owner.node_id())
         .iter()
-        .filter_map(super::redis_broker::message)
         .filter(|msg| msg.kind == "frame" && msg.target == "turn")
         .map(|msg| serde_json::from_str(&msg.body).unwrap())
         .collect();
@@ -172,7 +157,7 @@ impl crate::turns::RoomOwner for WaitingOwner {
 
 #[tokio::test]
 async fn a_closing_owner_answers_admitted_calls_and_refuses_new_work_without_applying_it() {
-    let Some((host, peer)) = pair() else { return };
+    let (host, peer) = pair();
     let entered = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     crate::turns::TurnBackend::attend(
@@ -232,17 +217,13 @@ async fn a_closing_owner_answers_admitted_calls_and_refuses_new_work_without_app
 
 #[tokio::test]
 async fn close_cancels_a_handler_still_blocked_at_the_deadline() {
-    let backend = RedisTurnBackend::new(
-        None,
-        RedisTurnBackendOptions {
-            timeouts: TurnTimeouts {
-                cancel: Duration::from_millis(30),
-                ..Default::default()
-            },
+    let backend = Services::default().node(DistributedTurnBackendOptions {
+        timeouts: TurnTimeouts {
+            cancel: Duration::from_millis(30),
             ..Default::default()
         },
-    )
-    .unwrap();
+        ..Default::default()
+    });
     let (cancelled, released) = oneshot::channel::<()>();
     assert!(backend.dispatch(async move {
         let _alive = cancelled;
@@ -259,7 +240,7 @@ async fn close_cancels_a_handler_still_blocked_at_the_deadline() {
 
 #[tokio::test]
 async fn an_outgoing_question_cannot_register_after_close_while_the_reader_starts() {
-    let backend = RedisTurnBackend::new(None, RedisTurnBackendOptions::default()).unwrap();
+    let backend = Services::default().default_node();
     let (ready_tx, ready_rx) = oneshot::channel();
     let (go, release) = oneshot::channel();
     let initializing = tokio::spawn({
@@ -288,9 +269,7 @@ async fn an_outgoing_question_cannot_register_after_close_while_the_reader_start
 
 #[tokio::test]
 async fn an_undeclared_worker_stays_alive_while_a_channel_call_returns_its_result() {
-    let Some((host, owner)) = pair() else {
-        return;
-    };
+    let (host, owner) = pair();
     let entered = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let executor = TurnExecutor::new(

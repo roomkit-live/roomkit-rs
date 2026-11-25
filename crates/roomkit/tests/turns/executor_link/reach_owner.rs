@@ -249,23 +249,18 @@ async fn ended_turn_publications_reach_their_owner_in_order_and_keep_their_scope
     assert!(events.try_recv().is_err());
 }
 
-#[cfg(feature = "redis")]
 #[tokio::test]
-async fn a_redis_served_worker_reaches_its_owner_after_an_application_link_ends() {
-    use roomkit::turns::TurnBackend;
-    use roomkit::{RedisTurnBackend, RedisTurnBackendOptions};
-
-    let Ok(url) = std::env::var("REDIS_URL") else {
-        return;
+async fn a_worker_served_across_processes_reaches_its_owner_after_an_application_link_ends() {
+    use roomkit::turns::{
+        DistributedTurnBackend, DistributedTurnBackendOptions, InMemoryTurnBroker,
+        InMemoryTurnRegistry, TurnBackend,
     };
-    let node = RedisTurnBackend::new(
-        Some(&url),
-        RedisTurnBackendOptions {
-            key_prefix: format!("roomkit:served-port:{}", uuid::Uuid::new_v4()),
-            ..Default::default()
-        },
-    )
-    .unwrap();
+
+    let node = DistributedTurnBackend::new(
+        Arc::new(InMemoryTurnBroker::new()),
+        Arc::new(InMemoryTurnRegistry::new()),
+        DistributedTurnBackendOptions::default(),
+    );
     let (attended, mut events) = owner("attended");
     TurnBackend::attend(&node, attended).await.unwrap();
     let (worker, mut hosts) = worker();

@@ -1,4 +1,4 @@
-//! An ordinary kit's first channel control announces its executor to Redis.
+//! An ordinary kit's first channel control announces its executor to the registry.
 use std::sync::Arc;
 
 use roomkit::model::{
@@ -72,10 +72,7 @@ async fn assert_chosen(backend: &TurnBackendHandle, expected: &str) {
 
 #[tokio::test]
 async fn a_kits_first_attach_reserves_its_live_channel_even_with_other_workers() {
-    if std::env::var_os("REDIS_URL").is_none() {
-        return;
-    }
-    let backend = super::backend(&format!("roomkit:owner-attach:{}", Uuid::new_v4()));
+    let backend = super::deployment()();
     let peer = TurnExecutor::new(
         |id| async move {
             Ok(Some(EchoAgent::new(

@@ -277,19 +277,22 @@ async fn a_transport_that_keeps_the_default_refuses_a_named_submission_unhanded(
     first.close().await;
 }
 
-/// Across Redis, where each backend stands for a process (`REDIS_URL`).
-#[cfg(feature = "redis")]
-mod across_redis {
+/// Across the nodes of one distributed backend, where each stands for a
+/// process.
+mod across_processes {
     use super::{Reserving, kit_in_a_room, say, worker};
-    use roomkit::turns::TurnBackend;
-    use roomkit::{RedisTurnBackend, RedisTurnBackendOptions, TurnExecutor, TurnTimeouts};
+    use roomkit::turns::{
+        DistributedTurnBackend, DistributedTurnBackendOptions, InMemoryTurnBroker,
+        InMemoryTurnRegistry, TurnBackend,
+    };
+    use roomkit::{TurnExecutor, TurnTimeouts};
     use std::sync::Arc;
     use std::time::Duration;
 
-    fn processes<const N: usize>() -> Option<[RedisTurnBackend; N]> {
-        let url = std::env::var("REDIS_URL").ok()?;
-        let options = RedisTurnBackendOptions {
-            key_prefix: format!("roomkit:named:{}", uuid::Uuid::new_v4()),
+    fn processes<const N: usize>() -> [DistributedTurnBackend; N] {
+        let broker = Arc::new(InMemoryTurnBroker::new());
+        let registry = Arc::new(InMemoryTurnRegistry::new());
+        let options = DistributedTurnBackendOptions {
             timeouts: TurnTimeouts {
                 heartbeat_interval: Duration::from_millis(50),
                 heartbeat_timeout: Duration::from_secs(2),
@@ -298,15 +301,17 @@ mod across_redis {
             },
             ..Default::default()
         };
-        Some(std::array::from_fn(|_| {
-            RedisTurnBackend::new(Some(&url), options.clone()).unwrap()
-        }))
+        std::array::from_fn(|_| {
+            let broker = Arc::<InMemoryTurnBroker>::clone(&broker);
+            let registry = Arc::<InMemoryTurnRegistry>::clone(&registry);
+            DistributedTurnBackend::new(broker, registry, options.clone())
+        })
     }
 
     /// Serves a worker `name` on `node` from a runtime of its own, which the
     /// returned sender stops as a killed process stops: no close, no last beat.
     async fn serve_apart(
-        node: RedisTurnBackend,
+        node: DistributedTurnBackend,
         name: &'static str,
     ) -> std::sync::mpsc::Sender<()> {
         let (ready, serving) = tokio::sync::oneshot::channel();
@@ -334,9 +339,7 @@ mod across_redis {
 
     #[tokio::test]
     async fn a_hand_over_never_answered_is_lost_handed_and_given_to_no_other() {
-        let Some([owner, a, b]) = processes() else {
-            return;
-        };
+        let [owner, a, b] = processes();
         let first = worker("a");
         TurnBackend::serve(&a, Arc::<TurnExecutor>::clone(&first))
             .await
@@ -363,9 +366,7 @@ mod across_redis {
 
     #[tokio::test]
     async fn an_executor_of_the_owners_own_process_is_named_as_any_other() {
-        let Some([owner, a]) = processes() else {
-            return;
-        };
+        let [owner, a] = processes();
         let (first, here) = (worker("a"), worker("here"));
         TurnBackend::serve(&a, Arc::<TurnExecutor>::clone(&first))
             .await

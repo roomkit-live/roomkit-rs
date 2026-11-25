@@ -13,14 +13,13 @@ mod busy;
 mod cuts;
 mod delegation;
 mod depth;
+mod distributed_transport;
 mod executor_link;
 mod host;
 mod inventory_wire;
 mod memory_transport;
 mod named_hooks;
 mod public_wire;
-#[cfg(feature = "redis")]
-mod redis_transport;
 mod result_tool;
 mod steering;
 mod steering_async;

@@ -2,44 +2,28 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::super::{RedisTurnBackend, RedisTurnBackendOptions};
+use super::super::test_support::Services;
+use super::super::{DistributedTurnBackend, DistributedTurnBackendOptions};
 use crate::model::{ChannelBinding, ChannelId, ChannelType, InboundMessage, RoomId, TextContent};
 use crate::turns::{ChannelControl, TurnBackend, TurnBackendHandle};
 use crate::{ProcessInboundOptions, RoomKit, RoomKitOptions, TurnTimeouts};
 
-/// The instant of this owner's last beat, in milliseconds of Redis's clock.
-async fn last_beat(node: &RedisTurnBackend) -> i64 {
-    let mut connection = node.connection().await.unwrap();
-    redis::cmd("ZSCORE")
-        .arg(node.key("owners"))
-        .arg(node.node_id())
-        .query_async(&mut connection)
-        .await
-        .unwrap()
+/// The instant of this owner's last beat, in milliseconds of the registry's clock.
+async fn last_beat(node: &DistributedTurnBackend) -> i64 {
+    node.registry().view(i64::MAX).await.unwrap().owners[node.node_id()]
 }
 
-/// Returns once Redis's clock passed `instant`: a beat written from now on carries a later one.
-async fn clock_passes(node: &RedisTurnBackend, instant: i64) {
-    let mut connection = node.connection().await.unwrap();
-    loop {
-        let (seconds, micros): (i64, i64) = redis::cmd("TIME")
-            .query_async(&mut connection)
-            .await
-            .unwrap();
-        if seconds * 1000 + micros / 1000 > instant {
-            return;
-        }
+/// Returns once the registry's clock passed `instant`: a beat written from now on carries a later one.
+async fn clock_passes(node: &DistributedTurnBackend, instant: i64) {
+    while node.registry().view(i64::MAX).await.unwrap().now <= instant {
+        tokio::time::sleep(Duration::from_millis(1)).await;
     }
 }
 
 /// The beat thread alone refreshes the process's record, as in Python.
 #[tokio::test]
 async fn a_turn_and_a_control_write_no_beat() {
-    let Ok(url) = std::env::var("REDIS_URL") else {
-        return;
-    };
-    let options = RedisTurnBackendOptions {
-        key_prefix: format!("roomkit:beats:{}", uuid::Uuid::new_v4()),
+    let options = DistributedTurnBackendOptions {
         // The beat thread stays silent for the whole test.
         timeouts: TurnTimeouts {
             heartbeat_interval: Duration::from_secs(60),
@@ -47,7 +31,7 @@ async fn a_turn_and_a_control_write_no_beat() {
         },
         ..Default::default()
     };
-    let node = RedisTurnBackend::new(Some(&url), options).unwrap();
+    let node = Services::default().node(options);
     let kit = RoomKit::new(RoomKitOptions {
         turn_backend: Some(TurnBackendHandle::new(Arc::new(node.clone()))),
         ..Default::default()

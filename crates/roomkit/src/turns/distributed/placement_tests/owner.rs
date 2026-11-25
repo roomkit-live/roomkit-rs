@@ -93,9 +93,7 @@ fn changes(agent: &ChannelId, room: &RoomId) -> [ChannelControl; 2] {
 
 #[tokio::test]
 async fn the_attended_executor_alone_receives_its_live_channels_work() {
-    let Some((node, remote)) = super::nodes() else {
-        return;
-    };
+    let (node, remote) = super::nodes();
     let (owner, here) = kit();
     let (other, there) = kit();
     let agent = "agent".parse().unwrap();
@@ -133,9 +131,7 @@ async fn the_attended_executor_alone_receives_its_live_channels_work() {
 
 #[tokio::test]
 async fn a_looped_back_verb_stays_with_the_kit_after_its_executor_id_is_reused() {
-    let Some((node, _)) = super::nodes_with_loop_back(true) else {
-        return;
-    };
+    let (node, _) = super::nodes_with_loop_back(true);
     let (owner, notices) = kit();
     let own: Arc<dyn ServedExecutor> = Arc::new(owner.turn_executor());
     node.reserve_owner(&own);

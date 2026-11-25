@@ -1,15 +1,15 @@
-//! An application directly uses the Redis transport through the public turn contract.
+//! An application directly uses the distributed transport through the public turn contract.
 use std::sync::Arc;
 use std::time::Duration;
 
 use roomkit::testing::{EchoAgent, EchoAgentOptions};
 use roomkit::turns::wire::{Control, Frame};
-use roomkit::turns::{TurnBackendHandle, TurnRequest};
-use roomkit::{
-    RedisTurnBackend, RedisTurnBackendOptions, RoomKitError, TurnExecutor, TurnExecutorOptions,
+use roomkit::turns::{
+    DistributedTurnBackend, DistributedTurnBackendOptions, InMemoryTurnBroker,
+    InMemoryTurnRegistry, TurnBackendHandle, TurnRequest,
 };
+use roomkit::{RoomKitError, TurnExecutor, TurnExecutorOptions};
 use serde_json::Value;
-use uuid::Uuid;
 
 fn request() -> TurnRequest {
     let fixture = include_str!("../fixtures/turns/python-case1.jsonl");
@@ -17,17 +17,17 @@ fn request() -> TurnRequest {
     serde_json::from_value(row["message"].clone()).unwrap()
 }
 
-fn backend(prefix: &str) -> TurnBackendHandle {
-    TurnBackendHandle::new(Arc::new(
-        RedisTurnBackend::new(
-            Some(&std::env::var("REDIS_URL").unwrap()),
-            RedisTurnBackendOptions {
-                key_prefix: prefix.to_owned(),
-                ..Default::default()
-            },
-        )
-        .unwrap(),
-    ))
+/// The nodes of one deployment, on a broker and a registry of this process.
+fn deployment() -> impl Fn() -> TurnBackendHandle {
+    let broker = Arc::new(InMemoryTurnBroker::new());
+    let registry = Arc::new(InMemoryTurnRegistry::new());
+    move || {
+        TurnBackendHandle::new(Arc::new(DistributedTurnBackend::new(
+            Arc::<InMemoryTurnBroker>::clone(&broker),
+            Arc::<InMemoryTurnRegistry>::clone(&registry),
+            DistributedTurnBackendOptions::default(),
+        )))
+    }
 }
 
 async fn submit_and_read(owner: &TurnBackendHandle, worker_node: &TurnBackendHandle) {
@@ -102,13 +102,12 @@ async fn submit_and_read(owner: &TurnBackendHandle, worker_node: &TurnBackendHan
 }
 
 #[tokio::test]
-#[ignore = "requires REDIS_URL"]
-async fn the_public_redis_backend_carries_an_admitted_turn_locally_and_across_nodes() {
+async fn the_public_backend_carries_an_admitted_turn_locally_and_across_nodes() {
     tokio::time::timeout(Duration::from_secs(15), async {
         for remote in [false, true] {
-            let prefix = format!("test:roomkit:public-link:{}", Uuid::new_v4());
-            let owner = backend(&prefix);
-            let worker = if remote {backend(&prefix)} else {owner.clone()};
+            let node = deployment();
+            let owner = node();
+            let worker = if remote { node() } else { owner.clone() };
             let missing = request();
             assert!(matches!(owner.submit(missing.clone()).await, Err(RoomKitError::TurnLink {reason, ..}) if reason == "no_executor"));
             assert!(!missing.handed());

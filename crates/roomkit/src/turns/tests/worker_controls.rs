@@ -325,7 +325,6 @@ async fn a_release_lets_the_next_build_run_before_the_old_turn_finishes() {
     );
 }
 
-#[cfg(feature = "redis")]
 mod owner_lifecycle;
 
 fn closing_worker(owns_channels: bool, builds: Arc<AtomicUsize>, events: Events) -> TurnExecutor {

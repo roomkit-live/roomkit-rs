@@ -199,5 +199,4 @@ impl Retry {
 }
 
 #[cfg(test)]
-#[cfg(feature = "redis")]
 mod tests;

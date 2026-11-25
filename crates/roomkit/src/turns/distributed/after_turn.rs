@@ -149,5 +149,4 @@ fn invalid(error: &serde_json::Error) -> RoomKitError {
 }
 
 #[cfg(test)]
-#[cfg(feature = "redis")]
 mod local_tests;

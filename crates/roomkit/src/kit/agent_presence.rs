@@ -188,35 +188,100 @@ impl<S: ConversationStore> RoomKit<S> {
     }
 }
 
-#[cfg(all(test, feature = "redis"))]
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        ChannelDeclaration, RedisTurnBackend, RedisTurnBackendOptions, RoomKitOptions, TurnTimeouts,
+    use crate::turns::{
+        Beat, BeatWriter, Beats, DistributedTurnBackend, DistributedTurnBackendOptions,
+        InMemoryTurnBroker, RegistryView, TurnFuture, TurnRegistry,
     };
-    use std::time::Duration;
-    use tokio::net::TcpListener;
+    use crate::{ChannelDeclaration, RoomKitOptions};
+    use std::sync::Arc;
+
+    /// A registry no call reaches: each one fails.
+    struct Unreachable;
+
+    fn unreachable<'a, T: Send + 'a>() -> TurnFuture<'a, Result<T, RoomKitError>> {
+        Box::pin(async { Err(RoomKitError::Runtime("the registry is unreachable".into())) })
+    }
+
+    impl TurnRegistry for Unreachable {
+        fn connect(&self) -> TurnFuture<'_, Result<(), RoomKitError>> {
+            unreachable()
+        }
+
+        fn connected(&self) -> bool {
+            false
+        }
+
+        fn beat<'a>(&'a self, _: &'a Beat) -> TurnFuture<'a, Result<(), RoomKitError>> {
+            unreachable()
+        }
+
+        fn beater(&self) -> TurnFuture<'_, Result<Box<dyn BeatWriter>, RoomKitError>> {
+            unreachable()
+        }
+
+        fn view(&self, _: i64) -> TurnFuture<'_, Result<RegistryView, RoomKitError>> {
+            unreachable()
+        }
+
+        fn forget_owner<'a>(&'a self, _: &'a str) -> TurnFuture<'a, Result<(), RoomKitError>> {
+            unreachable()
+        }
+
+        fn beats<'a>(
+            &'a self,
+            _: &'a [&'a str],
+            _: &'a [(&'a str, Vec<&'a str>)],
+        ) -> TurnFuture<'a, Result<Beats, RoomKitError>> {
+            unreachable()
+        }
+
+        fn holder<'a>(
+            &'a self,
+            _: &'a str,
+            _: &'a str,
+        ) -> TurnFuture<'a, Result<Option<String>, RoomKitError>> {
+            unreachable()
+        }
+
+        fn hold<'a>(
+            &'a self,
+            _: &'a str,
+            _: &'a str,
+            _: &'a str,
+        ) -> TurnFuture<'a, Result<(), RoomKitError>> {
+            unreachable()
+        }
+
+        fn forget_holder<'a>(
+            &'a self,
+            _: &'a str,
+            _: &'a str,
+        ) -> TurnFuture<'a, Result<(), RoomKitError>> {
+            unreachable()
+        }
+
+        fn claim_presence<'a>(
+            &'a self,
+            _: &'a str,
+            _: &'a str,
+            _: Option<bool>,
+        ) -> TurnFuture<'a, Result<bool, RoomKitError>> {
+            unreachable()
+        }
+    }
 
     #[tokio::test]
     async fn an_unreadable_registry_cannot_confirm_any_absent_agent() {
-        // The listener owns its port but never answers Redis's handshake.
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("redis://{}", listener.local_addr().unwrap());
-        let backend = RedisTurnBackend::new(
-            Some(&url),
-            RedisTurnBackendOptions {
-                timeouts: TurnTimeouts {
-                    heartbeat_timeout: Duration::from_millis(40),
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-        )
-        .unwrap();
+        let backend = DistributedTurnBackend::new(
+            Arc::new(InMemoryTurnBroker::new()),
+            Arc::new(Unreachable),
+            DistributedTurnBackendOptions::default(),
+        );
         let kit = RoomKit::new(RoomKitOptions {
-            turn_backend: Some(crate::turns::TurnBackendHandle::new(std::sync::Arc::new(
-                backend,
-            ))),
+            turn_backend: Some(crate::turns::TurnBackendHandle::new(Arc::new(backend))),
             ..Default::default()
         });
         let candidates = ["ana", "bob"].map(|name| ChannelId::new(name).unwrap());

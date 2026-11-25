@@ -12,14 +12,13 @@ use crate::model::{
 };
 use crate::stream::ResponseItem;
 use crate::turns::context::{TurnContext, TurnScope};
+use crate::turns::distributed::DistributedTurnBackendOptions;
+use crate::turns::distributed::test_support::Services;
 use crate::turns::observe::{Carried, Observers};
 use crate::turns::pipe::pipe;
 use crate::turns::wire::{Control, Frame, Item};
 use crate::turns::{CarriedRequest, MemoryTurn};
-use crate::{
-    Channel, ChannelError, RedisTurnBackend, RedisTurnBackendOptions, TurnExecutor,
-    TurnExecutorOptions, TurnTimeouts,
-};
+use crate::{Channel, ChannelError, TurnExecutor, TurnExecutorOptions, TurnTimeouts};
 use futures_core::Stream;
 
 struct Reader(bool, Arc<AtomicBool>);
@@ -109,7 +108,7 @@ fn link() -> (
 
 #[tokio::test]
 async fn local_turn_inherits_submission_context_then_its_first_readers_context() {
-    let backend = RedisTurnBackend::new(None, RedisTurnBackendOptions::default()).unwrap();
+    let backend = Services::default().default_node();
     let worker = TurnExecutor::new(
         |id| async move { Ok(Some(Probe(id, Arc::default()))) },
         TurnExecutorOptions::default(),
@@ -156,21 +155,13 @@ async fn local_turn_inherits_submission_context_then_its_first_readers_context()
 
 #[tokio::test]
 async fn a_backend_closed_after_placement_refuses_the_local_turn_before_handover() {
-    let Ok(url) = std::env::var("REDIS_URL") else {
-        return;
-    };
-    let backend = RedisTurnBackend::new(
-        Some(&url),
-        RedisTurnBackendOptions {
-            key_prefix: format!("roomkit:placement:{}", uuid::Uuid::new_v4()),
-            timeouts: TurnTimeouts {
-                heartbeat_interval: Duration::from_millis(20),
-                ..Default::default()
-            },
+    let backend = Services::default().node(DistributedTurnBackendOptions {
+        timeouts: TurnTimeouts {
+            heartbeat_interval: Duration::from_millis(20),
             ..Default::default()
         },
-    )
-    .unwrap();
+        ..Default::default()
+    });
     let worker = TurnExecutor::new(
         |id| async move { Ok(Some(Probe(id, Arc::default()))) },
         TurnExecutorOptions {
@@ -204,7 +195,7 @@ async fn a_backend_closed_after_placement_refuses_the_local_turn_before_handover
 
 #[tokio::test]
 async fn closing_after_admission_releases_the_reader_and_finishes_the_local_worker() {
-    let backend = RedisTurnBackend::new(None, RedisTurnBackendOptions::default()).unwrap();
+    let backend = Services::default().default_node();
     let dropped = Arc::new(AtomicBool::new(false));
     let hook = Arc::clone(&dropped);
     let worker = TurnExecutor::new(

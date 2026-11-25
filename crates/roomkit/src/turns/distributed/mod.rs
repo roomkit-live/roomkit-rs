@@ -7,8 +7,6 @@ mod broker_tests;
 mod changes;
 mod control;
 mod dispatch;
-#[cfg(test)]
-mod in_process_tests;
 mod jobs;
 mod liveness;
 mod memory;
@@ -16,7 +14,6 @@ mod outbox;
 mod owner;
 mod placement;
 #[cfg(test)]
-#[cfg(feature = "redis")]
 mod placement_tests;
 mod process;
 #[cfg(feature = "redis")]
@@ -26,7 +23,6 @@ mod redis_broker;
 mod registry;
 mod routes;
 #[cfg(test)]
-#[cfg(feature = "redis")]
 mod shutdown_tests;
 mod stream;
 #[cfg(test)]

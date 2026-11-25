@@ -1,33 +1,33 @@
 //! A turn submitted to the one executor its caller names (RFC §10.6.7).
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
 use super::super::placement::Placed;
-use super::super::{RedisTurnBackend, RedisTurnBackendOptions};
+use super::super::test_support::Services;
+use super::super::{Beat, DistributedTurnBackend, DistributedTurnBackendOptions};
 use crate::testing::{EchoAgent, EchoAgentOptions};
 use crate::turns::{ExecutorInfo, ExecutorInfoOptions, ServedExecutor, TurnRequest};
 use crate::{
     RoomKit, RoomKitError, RoomKitOptions, TurnExecutor, TurnExecutorOptions, TurnTimeouts,
 };
 
-/// One Redis node per name, as many processes: each serves a worker of its
+/// One node per name, as many processes: each serves a worker of its
 /// name, but `owner`, which serves none.
-fn processes<const N: usize>() -> Option<(RedisTurnBackend, [RedisTurnBackend; N])> {
-    let url = std::env::var("REDIS_URL").ok()?;
-    let options = RedisTurnBackendOptions {
-        key_prefix: format!("roomkit:named:{}", uuid::Uuid::new_v4()),
+fn processes<const N: usize>() -> (DistributedTurnBackend, [DistributedTurnBackend; N]) {
+    let services = Services::default();
+    let options = DistributedTurnBackendOptions {
         timeouts: TurnTimeouts {
             heartbeat_interval: Duration::from_millis(50),
             ..Default::default()
         },
         ..Default::default()
     };
-    let node = || RedisTurnBackend::new(Some(&url), options.clone()).unwrap();
-    Some((node(), std::array::from_fn(|_| node())))
+    let node = || services.node(options.clone());
+    (node(), std::array::from_fn(|_| node()))
 }
 
-fn named(executor_id: &str, node: Option<&RedisTurnBackend>) -> ExecutorInfo {
+fn named(executor_id: &str, node: Option<&DistributedTurnBackend>) -> ExecutorInfo {
     ExecutorInfo::new(
         executor_id,
         ExecutorInfoOptions {
@@ -38,7 +38,7 @@ fn named(executor_id: &str, node: Option<&RedisTurnBackend>) -> ExecutorInfo {
 }
 
 async fn target(
-    owner: &RedisTurnBackend,
+    owner: &DistributedTurnBackend,
     hooks: &[String],
     only: &ExecutorInfo,
 ) -> Result<(String, String), RoomKitError> {
@@ -60,7 +60,7 @@ fn refused(result: Result<(String, String), RoomKitError>) -> String {
     }
 }
 
-async fn close(nodes: impl IntoIterator<Item = &RedisTurnBackend>) {
+async fn close(nodes: impl IntoIterator<Item = &DistributedTurnBackend>) {
     for node in nodes {
         node.close().await.unwrap();
     }
@@ -68,9 +68,7 @@ async fn close(nodes: impl IntoIterator<Item = &RedisTurnBackend>) {
 
 #[tokio::test]
 async fn a_named_executor_is_chosen_whoever_holds_the_room_and_holds_nothing_yet() {
-    let Some((owner, [a, b])) = processes() else {
-        return;
-    };
+    let (owner, [a, b]) = processes();
     a.serve(super::worker("a")).await.unwrap();
     b.serve(super::worker("b")).await.unwrap();
     let holder = super::choose(&owner, "room").await;
@@ -87,9 +85,7 @@ async fn a_named_executor_is_chosen_whoever_holds_the_room_and_holds_nothing_yet
 
 #[tokio::test]
 async fn an_executor_id_two_processes_serve_is_named_by_its_node() {
-    let Some((owner, [old, new])) = processes() else {
-        return;
-    };
+    let (owner, [old, new]) = processes();
     old.serve(super::worker("same")).await.unwrap();
     new.serve(super::worker("same")).await.unwrap();
 
@@ -108,9 +104,7 @@ async fn an_executor_id_two_processes_serve_is_named_by_its_node() {
 
 #[tokio::test]
 async fn an_executor_that_would_not_take_the_turn_placed_is_refused_named() {
-    let Some((owner, [a])) = processes() else {
-        return;
-    };
+    let (owner, [a]) = processes();
     a.serve(super::worker("a")).await.unwrap();
     owner.serve(super::worker("here")).await.unwrap();
 
@@ -150,9 +144,7 @@ fn hosting(executor_id: &str, channel: &str) -> TurnExecutor {
 
 #[tokio::test]
 async fn an_executor_id_names_the_one_process_that_would_take_the_turn() {
-    let Some((owner, [coder, other])) = processes() else {
-        return;
-    };
+    let (owner, [coder, other]) = processes();
     coder.serve(hosting("same", "agent")).await.unwrap();
     other.serve(hosting("same", "another")).await.unwrap();
 
@@ -164,9 +156,7 @@ async fn an_executor_id_names_the_one_process_that_would_take_the_turn() {
 
 #[tokio::test]
 async fn a_channel_the_owner_holds_live_is_named_on_its_own_executor_alone() {
-    let Some((node, [remote])) = processes() else {
-        return;
-    };
+    let (node, [remote]) = processes();
     let kit = RoomKit::new(RoomKitOptions::default());
     kit.register_channel(EchoAgent::new(
         "agent".parse().unwrap(),
@@ -203,58 +193,38 @@ async fn a_channel_the_owner_holds_live_is_named_on_its_own_executor_alone() {
     close([&node, &remote]).await;
 }
 
-/// The member holding the room `r1` for the channel `ai`, as Redis keeps it.
-async fn holder(node: &RedisTurnBackend) -> Option<String> {
-    let mut connection = node.connection().await.unwrap();
-    redis::cmd("GET")
-        .arg(node.key("holder:ai:r1"))
-        .query_async(&mut connection)
-        .await
-        .unwrap()
+/// The member holding the room `r1` for the channel `ai`, as the registry keeps it.
+async fn holder(node: &DistributedTurnBackend) -> Option<String> {
+    node.registry().holder("ai", "r1").await.unwrap()
 }
 
-/// Declares in Redis a worker `ghost` of `node`'s process, alive, declaring
-/// what its worker `real` declares: one the registry lists and the process
-/// does not serve, as a view older than its close would.
-async fn declare_ghost(node: &RedisTurnBackend, real: &str) {
-    let mut connection = node.connection().await.unwrap();
-    let member = format!("{}:{real}", node.node_id());
-    let declared: String = redis::cmd("HGET")
-        .arg(node.key("executors"))
-        .arg(&member)
-        .query_async(&mut connection)
-        .await
-        .unwrap();
-    let beat: f64 = redis::cmd("ZSCORE")
-        .arg(node.key("alive"))
-        .arg(&member)
-        .query_async(&mut connection)
-        .await
-        .unwrap();
-    let mut declared: serde_json::Value = serde_json::from_str(&declared).unwrap();
+/// Declares in the registry a worker `ghost` of `node`'s process, alive,
+/// declaring what its worker `real` declares: one the registry lists and
+/// the process does not serve, as a view older than its close would.
+async fn declare_ghost(node: &DistributedTurnBackend, real: &str) {
+    let registry = node.registry();
+    let view = registry.view(i64::MAX).await.unwrap();
+    let (_, declared) = &view.executors[&format!("{}:{real}", node.node_id())];
+    let mut declared: serde_json::Value =
+        serde_json::from_str(declared.as_deref().unwrap()).unwrap();
     declared["executor_id"] = "ghost".into();
     let ghost = format!("{}:ghost", node.node_id());
-    redis::cmd("HSET")
-        .arg(node.key("executors"))
-        .arg(&ghost)
-        .arg(declared.to_string())
-        .exec_async(&mut connection)
-        .await
-        .unwrap();
-    redis::cmd("ZADD")
-        .arg(node.key("alive"))
-        .arg(beat)
-        .arg(&ghost)
-        .exec_async(&mut connection)
-        .await
-        .unwrap();
+    let beat = Beat {
+        // Written by another than the process: its own beats stay as they are.
+        node: "a-view-older-than-the-close".into(),
+        generation: 0,
+        declared: BTreeMap::from([(ghost, declared.to_string())]),
+        undeclared: Vec::new(),
+        gone: Vec::new(),
+        running: Vec::new(),
+        owner: false,
+    };
+    registry.beat(&beat).await.unwrap();
 }
 
 #[tokio::test]
 async fn a_process_that_refuses_the_hand_over_fails_it_unhanded_and_the_holder_stays() {
-    let Some((owner, [a, b])) = processes() else {
-        return;
-    };
+    let (owner, [a, b]) = processes();
     a.serve(hosting("a", "ai")).await.unwrap();
     b.serve(hosting("b", "ai")).await.unwrap();
     let request = |id: &str| -> TurnRequest {

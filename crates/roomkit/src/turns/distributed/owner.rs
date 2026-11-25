@@ -304,5 +304,4 @@ impl DistributedTurnBackend {
 }
 
 #[cfg(test)]
-#[cfg(feature = "redis")]
 mod control_failure;

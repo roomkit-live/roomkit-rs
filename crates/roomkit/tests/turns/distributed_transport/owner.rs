@@ -1,5 +1,5 @@
 //! Work outliving its link reaches the first attending owner.
-use super::{backend, request};
+use super::{deployment, request};
 use crate::executor_link::reach_owner::worker;
 use roomkit::RoomKitError;
 use roomkit::turns::wire::{Frame, HostResult};
@@ -8,7 +8,6 @@ use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use uuid::Uuid;
 
 struct Recorder(&'static str, mpsc::UnboundedSender<RoomPublication>);
 impl RoomOwner for Recorder {
@@ -37,12 +36,10 @@ impl RoomOwner for Recorder {
 }
 
 #[tokio::test]
-#[ignore = "requires REDIS_URL"]
-async fn a_retained_worker_host_reaches_the_first_attending_owner_through_the_public_redis_backend()
-{
-    let prefix = format!("test:roomkit:public-owner:{}", Uuid::new_v4());
-    let owner = backend(&prefix);
-    let worker_node = backend(&prefix);
+async fn a_retained_worker_host_reaches_the_first_attending_owner_through_the_public_backend() {
+    let node = deployment();
+    let owner = node();
+    let worker_node = node();
     let (events, mut received) = mpsc::unbounded_channel();
     let (other, mut ignored) = mpsc::unbounded_channel();
     let (worker, mut captured) = worker();
@@ -73,18 +70,13 @@ async fn a_retained_worker_host_reaches_the_first_attending_owner_through_the_pu
 /// port the backend gave the executor carries the verb, as any backend's
 /// does (RFC §10.6.3).
 #[tokio::test]
-#[ignore = "requires REDIS_URL"]
-async fn a_host_reaches_its_owner_through_the_public_redis_backend_once_its_executor_is_gone() {
+async fn a_host_reaches_its_owner_through_the_public_backend_once_its_executor_is_gone() {
     let mut reached = Vec::new();
     tokio::time::timeout(Duration::from_secs(20), async {
         for remote in [false, true] {
-            let prefix = format!("test:roomkit:public-gone:{}", Uuid::new_v4());
-            let owner = backend(&prefix);
-            let worker_node = if remote {
-                backend(&prefix)
-            } else {
-                owner.clone()
-            };
+            let node = deployment();
+            let owner = node();
+            let worker_node = if remote { node() } else { owner.clone() };
             let (events, _received) = mpsc::unbounded_channel();
             let recorder = Arc::new(Recorder("owner", events));
             owner.attend(recorder).await.unwrap();

@@ -83,7 +83,7 @@ impl Channel for Sending {
 /// (RFC §10.6.8), and a verb still waiting for its owner's answer fails so.
 #[tokio::test]
 async fn an_unreadable_control_cuts_the_turn_as_its_owner_lost() {
-    let Some((host, owner)) = pair() else { return };
+    let (host, owner) = pair();
     let (came_to, mut verbs) = mpsc::unbounded_channel();
     let worker = TurnExecutor::new(
         move |_| {

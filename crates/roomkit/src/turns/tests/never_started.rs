@@ -217,25 +217,22 @@ async fn a_local_executor_closed_before_its_first_poll_builds_no_turn_work() {
 
 /// Python's owner._unleave: a placement that reached no worker cannot displace
 /// the room's previous turn or the permissions of the work it started (§10.6.2).
-#[cfg(feature = "redis")]
 #[tokio::test]
-#[ignore = "requires REDIS_URL"]
-async fn a_turn_no_redis_worker_can_take_leaves_the_previous_turn_in_place() {
+async fn a_turn_no_worker_of_another_node_can_take_leaves_the_previous_turn_in_place() {
     use crate::turns::wire::PreviousTurn;
+    use crate::turns::{
+        DistributedTurnBackend, DistributedTurnBackendOptions, InMemoryTurnBroker,
+        InMemoryTurnRegistry,
+    };
     use crate::{
-        AttachChannelOptions, ChannelDeclaration, CreateRoomOptions, RedisTurnBackend,
-        RedisTurnBackendOptions, RoomKit, RoomKitOptions,
+        AttachChannelOptions, ChannelDeclaration, CreateRoomOptions, RoomKit, RoomKitOptions,
     };
 
-    let url = std::env::var("REDIS_URL").unwrap();
-    let backend = RedisTurnBackend::new(
-        Some(&url),
-        RedisTurnBackendOptions {
-            key_prefix: format!("roomkit:test:unplaced:{}", uuid::Uuid::new_v4()),
-            ..RedisTurnBackendOptions::default()
-        },
-    )
-    .unwrap();
+    let backend = DistributedTurnBackend::new(
+        Arc::new(InMemoryTurnBroker::new()),
+        Arc::new(InMemoryTurnRegistry::new()),
+        DistributedTurnBackendOptions::default(),
+    );
     let kit = RoomKit::new(RoomKitOptions {
         turn_backend: Some(crate::turns::TurnBackendHandle::new(Arc::new(backend))),
         ..RoomKitOptions::default()
