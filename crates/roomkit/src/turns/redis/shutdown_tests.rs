@@ -117,7 +117,7 @@ async fn closing_a_worker_writes_its_numbered_end_to_the_owner_before_returning(
     let frames: Vec<Value> = inbox
         .ids
         .iter()
-        .filter_map(Message::read)
+        .filter_map(super::redis_broker::message)
         .filter(|msg| msg.kind == "frame" && msg.target == "turn")
         .map(|msg| serde_json::from_str(&msg.body).unwrap())
         .collect();

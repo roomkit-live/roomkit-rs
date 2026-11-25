@@ -3,9 +3,9 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+use super::RedisTurnBackend;
 use super::Worker;
 use super::registry::{Beat, Declaration, write_beat};
-use super::{RedisTurnBackend, redis_error};
 use crate::RoomKitError;
 use crate::turns::lock;
 
@@ -151,8 +151,8 @@ impl RedisTurnBackend {
             }
             serving.generation = serving.generation.saturating_add(1);
         }
-        let mut conn = self.connection().await?;
-        write_beat(self, &mut conn, &self.snapshot()).await?;
+        self.broker().connect().await?;
+        write_beat(self, &self.snapshot()).await?;
         self.0.watchers.changed().await;
         Ok(())
     }
@@ -168,8 +168,8 @@ impl RedisTurnBackend {
 
     async fn announce(&self) -> Result<(), RoomKitError> {
         self.listen().await;
-        let mut conn = self.connection().await?;
-        write_beat(self, &mut conn, &self.snapshot()).await?;
+        self.broker().connect().await?;
+        write_beat(self, &self.snapshot()).await?;
         self.0
             .heartbeat
             .get_or_try_init(|| async {
@@ -200,13 +200,16 @@ impl RedisTurnBackend {
                                 };
                                 let backend = Self(owner);
                                 let result = async {
-                                    let connection = match &mut conn {
-                                        Some(connection) => connection,
+                                    let beater = match &mut conn {
+                                        Some(beater) => beater,
                                         slot @ None => {
-                                            slot.insert(backend.beat_connection().await?)
+                                            slot.insert(backend.broker().beater().await?)
                                         }
                                     };
-                                    write_beat(&backend, connection, &backend.snapshot()).await
+                                    let beat = backend.snapshot();
+                                    beater.beat(&beat).await?;
+                                    backend.beat_written(beat.generation);
+                                    Ok::<_, RoomKitError>(())
                                 };
                                 let result = tokio::select! {
                                     _ = stop.changed() => break,
@@ -224,18 +227,6 @@ impl RedisTurnBackend {
             })
             .await?;
         Ok(())
-    }
-
-    async fn beat_connection(&self) -> Result<redis::aio::MultiplexedConnection, RoomKitError> {
-        let bound = (self.timeouts().heartbeat_timeout / 2).max(Duration::from_millis(1));
-        let cfg = redis::AsyncConnectionConfig::new()
-            .set_connection_timeout(Some(bound))
-            .set_response_timeout(Some(bound));
-        self.0
-            .address
-            .get_multiplexed_async_connection_with_config(&cfg)
-            .await
-            .map_err(|error| redis_error(&error))
     }
 
     fn snapshot(&self) -> Beat {
@@ -334,10 +325,9 @@ impl RedisTurnBackend {
     }
 
     async fn publish_shutdown(&self, finished: bool) -> Result<(), RoomKitError> {
-        let Some(conn) = self.0.data.get() else {
+        if !self.broker().connected() {
             return Ok(());
-        };
-        let mut conn = conn.clone();
+        }
         let mut beat = self.snapshot();
         if finished {
             beat.generation = beat.generation.saturating_add(1);
@@ -346,14 +336,9 @@ impl RedisTurnBackend {
             beat.running.clear();
         }
         let publish = async {
-            write_beat(self, &mut conn, &beat).await?;
+            write_beat(self, &beat).await?;
             if finished {
-                redis::cmd("ZREM")
-                    .arg(self.key("owners"))
-                    .arg(self.node_id())
-                    .exec_async(&mut conn)
-                    .await
-                    .map_err(|error| redis_error(&error))?;
+                self.broker().forget_owner(self.node_id()).await?;
             }
             Ok(())
         };

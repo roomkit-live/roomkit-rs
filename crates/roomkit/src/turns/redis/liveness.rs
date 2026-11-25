@@ -7,7 +7,7 @@ use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 
 use super::registry::Target;
-use super::{Node, RedisTurnBackend, redis_error};
+use super::{Node, RedisTurnBackend};
 use crate::RoomKitError;
 use crate::turns::{MemoryTurn, lock};
 
@@ -42,22 +42,14 @@ impl RedisTurnBackend {
             .map(|watch| watch.member.as_str())
             .collect();
         let members: Vec<_> = members.into_iter().collect();
-        let mut pipe = redis::pipe();
-        pipe.atomic()
-            .cmd("ZMSCORE")
-            .arg(self.key("alive"))
-            .arg(&members);
-        for (node, turns) in &nodes {
-            let ids: Vec<_> = turns.iter().map(|watch| &*watch.turn.turn_id).collect();
-            pipe.cmd("SMISMEMBER")
-                .arg(self.key(&format!("running:{node}")))
-                .arg(&ids);
-        }
-        let mut client = self.connection().await?;
-        let rows: Vec<Vec<Option<i64>>> = pipe
-            .query_async(&mut client)
-            .await
-            .map_err(|error| redis_error(&error))?;
+        let running: Vec<(&str, Vec<&str>)> = nodes
+            .iter()
+            .map(|(node, turns)| {
+                let ids = turns.iter().map(|watch| &*watch.turn.turn_id).collect();
+                (node.as_str(), ids)
+            })
+            .collect();
+        let rows = self.broker().beats(&members, &running).await?;
         let mut rows = rows.into_iter();
         let scores = members
             .into_iter()

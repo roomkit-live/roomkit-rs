@@ -300,16 +300,19 @@ pub(super) fn closed() -> RoomKitError {
 
 async fn receive(node: Weak<Node>, mut stop: watch::Receiver<bool>) {
     let mut last = "0-0".to_owned();
-    let mut connection = None;
+    let mut inbox = None;
     while !*stop.borrow() {
         let Some(owner) = node.upgrade() else { break };
         let backend = RedisTurnBackend(owner);
         let read = async {
-            let connection = match &mut connection {
-                Some(connection) => connection,
-                slot @ None => slot.insert(backend.inbox_connection().await?),
+            let inbox = match &mut inbox {
+                Some(inbox) => inbox,
+                slot @ None => {
+                    let block = backend.read_block();
+                    slot.insert(backend.broker().inbox(backend.node_id(), block).await?)
+                }
             };
-            backend.read(connection, &last).await
+            inbox.read(&last).await
         };
         let entries = tokio::select! {
             () = async { let _ = stop.changed().await; } => break,
@@ -319,7 +322,7 @@ async fn receive(node: Weak<Node>, mut stop: watch::Receiver<bool>) {
             Ok(entries) => {
                 let mut ids = Vec::with_capacity(entries.len());
                 for entry in entries {
-                    if let Some(msg) = Message::read(&entry) {
+                    if let Some(msg) = entry.message {
                         if let Err(error) = backend.route(msg) {
                             tracing::warn!(%error, "Turn inbox routing failed");
                         }
@@ -337,7 +340,7 @@ async fn receive(node: Weak<Node>, mut stop: watch::Receiver<bool>) {
             }
             Err(error) => {
                 tracing::warn!(%error, "Turn inbox read failed");
-                connection = None;
+                inbox = None;
                 let delay = backend.read_block().min(Duration::from_secs(1));
                 drop(backend);
                 tokio::select! { _ = stop.changed() => break, () = tokio::time::sleep(delay) => {} }

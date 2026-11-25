@@ -1,5 +1,6 @@
 //! Redis Streams transport for text turns between processes (RFC §10.6).
 mod after_turn;
+mod broker;
 mod changes;
 mod control;
 mod dispatch;
@@ -11,6 +12,7 @@ mod placement;
 #[cfg(test)]
 mod placement_tests;
 mod process;
+mod redis_broker;
 mod registry;
 mod routes;
 #[cfg(test)]
@@ -20,9 +22,8 @@ mod transport;
 mod worker_link;
 use std::fmt;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
 
-use redis::aio::{ConnectionManager, ConnectionManagerConfig};
+use redis::aio::ConnectionManager;
 use tokio::sync::OnceCell;
 use uuid::Uuid;
 
@@ -77,7 +78,8 @@ pub struct RedisTurnBackend(Arc<Node>);
 struct Node {
     outbox: Mutex<outbox::Outbox>,
     id: String,
-    prefix: String,
+    /// The service the backend's messages and registry are kept by.
+    broker: Arc<redis_broker::RedisBroker>,
     owner: Mutex<Option<Arc<dyn super::RoomOwner>>>,
     owner_worker: OnceLock<placement::Reserved>,
     routes: Mutex<routes::Routes>,
@@ -94,15 +96,13 @@ struct Node {
     timeouts: TurnTimeouts,
     choice: Mutex<usize>,
     loop_back: bool,
-    address: redis::Client,
-    data: OnceCell<ConnectionManager>,
 }
 
 impl fmt::Debug for RedisTurnBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RedisTurnBackend")
             .field("node_id", &self.0.id)
-            .field("key_prefix", &self.0.prefix)
+            .field("key_prefix", &self.0.broker.prefix)
             .finish_non_exhaustive()
     }
 }
@@ -128,6 +128,12 @@ impl RedisTurnBackend {
             _loop_back: loop_back,
             ..
         } = options;
+        let broker = redis_broker::RedisBroker::new(
+            client,
+            options.client,
+            options.key_prefix,
+            options.timeouts,
+        );
         Ok(Self(Arc::new(Node {
             outbox: Mutex::default(),
             id: Uuid::new_v4()
@@ -136,7 +142,7 @@ impl RedisTurnBackend {
                 .chars()
                 .take(12)
                 .collect(),
-            prefix: options.key_prefix,
+            broker: Arc::new(broker),
             owner: Mutex::default(),
             owner_worker: OnceLock::new(),
             routes: Mutex::default(),
@@ -152,8 +158,6 @@ impl RedisTurnBackend {
             timeouts: options.timeouts,
             choice: Mutex::new(0),
             loop_back,
-            address: client,
-            data: OnceCell::new_with(options.client),
         })))
     }
 
@@ -183,35 +187,40 @@ impl RedisTurnBackend {
         Ok(())
     }
 
-    async fn connection(&self) -> Result<ConnectionManager, RoomKitError> {
-        let node = &*self.0;
-        let bound = (node.timeouts.heartbeat_timeout / 2).max(Duration::from_millis(1));
-        node.data
-            .get_or_try_init(|| async {
-                let config = ConnectionManagerConfig::new()
-                    .set_connection_timeout(Some(bound))
-                    .set_response_timeout(Some(bound))
-                    .set_number_of_retries(0);
-                ConnectionManager::new_with_config(node.address.clone(), config)
-                    .await
-                    .map_err(|error| redis_error(&error))
-            })
-            .await
-            .cloned()
-    }
-
-    fn key(&self, suffix: &str) -> String {
-        format!("{}:{suffix}", self.0.prefix)
+    /// The service the backend reaches by its port alone.
+    fn broker(&self) -> &dyn broker::TurnBroker {
+        &*self.0.broker
     }
 }
 
-fn redis_error(error: &redis::RedisError) -> RoomKitError {
-    RoomKitError::Runtime(error.to_string())
+/// What the tests of the Redis side read of it: its connections and keys.
+#[cfg(test)]
+impl RedisTurnBackend {
+    async fn connection(&self) -> Result<ConnectionManager, RoomKitError> {
+        self.0.broker.connection().await
+    }
+
+    fn key(&self, suffix: &str) -> String {
+        self.0.broker.key(suffix)
+    }
+
+    fn ttl_ms(&self) -> u64 {
+        self.0.broker.ttl_ms()
+    }
+
+    async fn inbox_connection(&self) -> Result<redis::aio::MultiplexedConnection, RoomKitError> {
+        self.0.broker.inbox_connection(self.read_block()).await
+    }
+
+    async fn beat_connection(&self) -> Result<redis::aio::MultiplexedConnection, RoomKitError> {
+        self.0.broker.beat_connection().await
+    }
 }
 
 #[cfg(test)]
 mod constructor_tests {
     use super::*;
+    use redis::aio::ConnectionManagerConfig;
 
     #[tokio::test]
     async fn only_an_absent_url_is_refused_with_an_injected_client() {
@@ -231,11 +240,17 @@ mod constructor_tests {
         );
         for url in [None, Some("")] {
             let backend = RedisTurnBackend::new(url, RedisTurnBackendOptions::default()).unwrap();
-            assert_eq!(backend.0.address.get_connection_info().addr(), &default);
-            assert!(backend.0.data.get().is_none());
+            assert_eq!(
+                backend.0.broker.address.get_connection_info().addr(),
+                &default
+            );
+            assert!(backend.0.broker.data.get().is_none());
         }
         let backend = RedisTurnBackend::new(Some(""), injected).unwrap();
-        assert_eq!(backend.0.address.get_connection_info().addr(), &default);
-        assert!(backend.0.data.get().is_some());
+        assert_eq!(
+            backend.0.broker.address.get_connection_info().addr(),
+            &default
+        );
+        assert!(backend.0.broker.data.get().is_some());
     }
 }

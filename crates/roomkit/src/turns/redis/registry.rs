@@ -5,7 +5,7 @@ use roomkit_core::model::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{RedisTurnBackend, redis_error};
+use super::RedisTurnBackend;
 use crate::RoomKitError;
 use crate::turns::{ExecutorInfo, ExecutorInfoOptions};
 
@@ -19,7 +19,7 @@ pub(super) struct Declaration {
 }
 
 #[derive(Deserialize)]
-struct View {
+pub(super) struct View {
     now: i64,
     owners: Value,
     executors: Value,
@@ -121,18 +121,7 @@ pub(super) async fn owner_alive(
 }
 
 async fn view(backend: &RedisTurnBackend, timeout: i64) -> Result<View, RoomKitError> {
-    let mut connection = backend.connection().await?;
-    let body: String = redis::cmd("EVAL")
-        .arg(include_str!("view.lua"))
-        .arg(3)
-        .arg(backend.key("alive"))
-        .arg(backend.key("executors"))
-        .arg(backend.key("owners"))
-        .arg(timeout.saturating_mul(10))
-        .query_async(&mut connection)
-        .await
-        .map_err(|error| redis_error(&error))?;
-    serde_json::from_str(&body).map_err(|e| RoomKitError::Runtime(e.to_string()))
+    backend.broker().view(timeout.saturating_mul(10)).await
 }
 
 /// The Python and Rust workers publish the same heartbeat, including the node's
@@ -150,41 +139,11 @@ pub(super) struct Beat {
 
 pub(super) async fn write_beat(
     backend: &RedisTurnBackend,
-    connection: &mut impl redis::aio::ConnectionLike,
     beat: &Beat,
 ) -> Result<(), RoomKitError> {
-    let suffix = |key| backend.key(&format!("{key}:{}", beat.node));
-    let payload = serde_json::to_string(beat).map_err(|e| RoomKitError::Runtime(e.to_string()))?;
-    redis::cmd("EVAL")
-        .arg(include_str!("beat.lua"))
-        .arg(6)
-        .arg(backend.key("alive"))
-        .arg(backend.key("executors"))
-        .arg(backend.key("owners"))
-        .arg(suffix("inbox"))
-        .arg(suffix("running"))
-        .arg(suffix("generation"))
-        .arg(backend.ttl_ms())
-        .arg(payload)
-        .exec_async(connection)
-        .await
-        .map_err(|error| redis_error(&error))?;
+    backend.broker().beat(beat).await?;
     backend.beat_written(beat.generation);
     Ok(())
-}
-
-/// Python's urllib quote(safe="") applied to one key component.
-pub(super) fn quoted(input: &str) -> String {
-    use std::fmt::Write;
-    let mut encoded = String::new();
-    for byte in input.bytes() {
-        if byte.is_ascii_alphanumeric() || b"-_.~".contains(&byte) {
-            encoded.push(char::from(byte));
-        } else {
-            let _ = write!(encoded, "%{byte:02X}");
-        }
-    }
-    encoded
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -213,22 +172,9 @@ impl RedisTurnBackend {
     ) -> Result<bool, RoomKitError> {
         self.ensure_open()?;
         self.listen().await;
-        let key = self.key(&format!(
-            "presence:{}:{}",
-            quoted(room_id),
-            quoted(channel_id)
-        ));
-        let state = online.map_or("", |value| if value { "online" } else { "offline" });
-        let mut connection = self.connection().await?;
-        redis::cmd("EVAL")
-            .arg(include_str!("claim_presence.lua"))
-            .arg(1)
-            .arg(key)
-            .arg(state)
-            .arg(7 * 24 * 60 * 60 * 1000)
-            .query_async(&mut connection)
+        self.broker()
+            .claim_presence(channel_id, room_id, online)
             .await
-            .map_err(|error| redis_error(&error))
     }
 
     pub(super) async fn forget_holder(
@@ -236,12 +182,6 @@ impl RedisTurnBackend {
         channel: &str,
         room: &str,
     ) -> Result<(), RoomKitError> {
-        let holder = self.key(&format!("holder:{}:{}", quoted(channel), quoted(room)));
-        let mut conn = self.connection().await?;
-        redis::cmd("DEL")
-            .arg(holder)
-            .exec_async(&mut conn)
-            .await
-            .map_err(|error| redis_error(&error))
+        self.broker().forget_holder(channel, room).await
     }
 }

@@ -4,9 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use roomkit_core::model::ChannelId;
 
+use super::RedisTurnBackend;
 use super::Worker;
-use super::registry::{Target, quoted};
-use super::{RedisTurnBackend, redis_error};
+use super::registry::Target;
 use crate::RoomKitError;
 use crate::turns::{ExecutorInfo, TakesOptions, lock, names, no_executor, not_taken};
 
@@ -148,11 +148,6 @@ impl RedisTurnBackend {
             room_hooks: hooks.to_vec(),
             organization_id: organization.map(str::to_owned),
         };
-        let holder = self.key(&format!(
-            "holder:{}:{}",
-            quoted(channel.as_str()),
-            quoted(room)
-        ));
         let chosen = if let Some(own) = self.owning(channel) {
             let member = format!("{}:{}", self.node_id(), own.executor_id());
             if refused.contains(&member) || !own.takes(channel, options) {
@@ -161,12 +156,7 @@ impl RedisTurnBackend {
             self.local_target(own)
         } else {
             let candidates = self.candidates(channel, &options, refused).await?;
-            let mut conn = self.connection().await?;
-            let held: Option<String> = redis::cmd("GET")
-                .arg(&holder)
-                .query_async(&mut conn)
-                .await
-                .map_err(|error| redis_error(&error))?;
+            let held = self.broker().holder(channel.as_str(), room).await?;
             candidates
                 .choose(held.as_deref(), self, spread)
                 .ok_or_else(|| no_executor(channel.as_str(), hooks, organization))?
@@ -212,20 +202,7 @@ impl RedisTurnBackend {
         room: &str,
         member: &str,
     ) -> Result<(), RoomKitError> {
-        let holder = self.key(&format!(
-            "holder:{}:{}",
-            quoted(channel.as_str()),
-            quoted(room)
-        ));
-        let mut conn = self.connection().await?;
-        redis::cmd("SET")
-            .arg(holder)
-            .arg(member)
-            .arg("EX")
-            .arg(7 * 24 * 3600)
-            .exec_async(&mut conn)
-            .await
-            .map_err(|error| redis_error(&error))
+        self.broker().hold(channel.as_str(), room, member).await
     }
 
     async fn candidates(
