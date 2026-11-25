@@ -245,6 +245,7 @@ async fn assert_room_reply(kit: &RoomKit, room: &RoomId, tx: &ChannelId, agent: 
 
 mod beats;
 mod collision;
+mod in_process;
 mod named;
 mod owner;
 

@@ -151,7 +151,7 @@ impl RedisTurnBackend {
             }
             serving.generation = serving.generation.saturating_add(1);
         }
-        self.broker().connect().await?;
+        self.registry().connect().await?;
         write_beat(self, &self.snapshot()).await?;
         self.0.watchers.changed().await;
         Ok(())
@@ -168,7 +168,7 @@ impl RedisTurnBackend {
 
     async fn announce(&self) -> Result<(), RoomKitError> {
         self.listen().await;
-        self.broker().connect().await?;
+        self.registry().connect().await?;
         write_beat(self, &self.snapshot()).await?;
         self.0
             .heartbeat
@@ -203,7 +203,7 @@ impl RedisTurnBackend {
                                     let beater = match &mut conn {
                                         Some(beater) => beater,
                                         slot @ None => {
-                                            slot.insert(backend.broker().beater().await?)
+                                            slot.insert(backend.registry().beater().await?)
                                         }
                                     };
                                     let beat = backend.snapshot();
@@ -325,7 +325,7 @@ impl RedisTurnBackend {
     }
 
     async fn publish_shutdown(&self, finished: bool) -> Result<(), RoomKitError> {
-        if !self.broker().connected() {
+        if !self.registry().connected() {
             return Ok(());
         }
         let mut beat = self.snapshot();
@@ -338,7 +338,7 @@ impl RedisTurnBackend {
         let publish = async {
             write_beat(self, &beat).await?;
             if finished {
-                self.broker().forget_owner(self.node_id()).await?;
+                self.registry().forget_owner(self.node_id()).await?;
             }
             Ok(())
         };

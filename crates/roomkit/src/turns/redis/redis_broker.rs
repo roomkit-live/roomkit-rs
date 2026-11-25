@@ -1,14 +1,17 @@
 //! The backend's service on Redis: a stream per node's inbox, the beats
 //! and the registry in sorted sets and hashes written by scripts, at Redis
 //! server time in milliseconds.
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use redis::aio::{ConnectionManager, ConnectionManagerConfig, MultiplexedConnection};
 use redis::streams::{StreamId, StreamReadReply};
+use serde::Deserialize;
+use serde_json::Value;
 use tokio::sync::OnceCell;
 
-use super::broker::{Beater, Entry, Inbox, TurnBroker};
-use super::registry::{Beat, View};
+use super::broker::{Beater, Beats, Entry, Inbox, TurnBroker, TurnRegistry, View};
+use super::registry::Beat;
 use super::stream::Message;
 use crate::RoomKitError;
 use crate::turns::{TurnFuture, TurnTimeouts};
@@ -122,14 +125,6 @@ async fn write_beat(
 }
 
 impl TurnBroker for RedisBroker {
-    fn connect(&self) -> TurnFuture<'_, Result<(), RoomKitError>> {
-        Box::pin(async move { self.connection().await.map(drop) })
-    }
-
-    fn connected(&self) -> bool {
-        self.data.get().is_some()
-    }
-
     fn post<'a>(
         &'a self,
         node: &'a str,
@@ -196,6 +191,16 @@ impl TurnBroker for RedisBroker {
                 .map_err(|error| redis_error(&error))
         })
     }
+}
+
+impl TurnRegistry for RedisBroker {
+    fn connect(&self) -> TurnFuture<'_, Result<(), RoomKitError>> {
+        Box::pin(async move { self.connection().await.map(drop) })
+    }
+
+    fn connected(&self) -> bool {
+        self.data.get().is_some()
+    }
 
     fn beat<'a>(&'a self, beat: &'a Beat) -> TurnFuture<'a, Result<(), RoomKitError>> {
         Box::pin(async move {
@@ -228,7 +233,13 @@ impl TurnBroker for RedisBroker {
                 .query_async(&mut connection)
                 .await
                 .map_err(|error| redis_error(&error))?;
-            serde_json::from_str(&body).map_err(|e| RoomKitError::Runtime(e.to_string()))
+            let view: ScriptView =
+                serde_json::from_str(&body).map_err(|e| RoomKitError::Runtime(e.to_string()))?;
+            Ok(View {
+                now: view.now,
+                executors: executors(view.executors),
+                owners: serde_json::from_value(view.owners).unwrap_or_default(),
+            })
         })
     }
 
@@ -248,7 +259,7 @@ impl TurnBroker for RedisBroker {
         &'a self,
         members: &'a [&'a str],
         running: &'a [(&'a str, Vec<&'a str>)],
-    ) -> TurnFuture<'a, Result<Vec<Vec<Option<i64>>>, RoomKitError>> {
+    ) -> TurnFuture<'a, Result<Beats, RoomKitError>> {
         Box::pin(async move {
             let mut pipe = redis::pipe();
             pipe.atomic()
@@ -261,9 +272,17 @@ impl TurnBroker for RedisBroker {
                     .arg(ids);
             }
             let mut client = self.connection().await?;
-            pipe.query_async(&mut client)
+            let rows: Vec<Vec<Option<i64>>> = pipe
+                .query_async(&mut client)
                 .await
-                .map_err(|error| redis_error(&error))
+                .map_err(|error| redis_error(&error))?;
+            let mut rows = rows.into_iter();
+            Ok(Beats {
+                last: rows.next().unwrap_or_default(),
+                running: rows
+                    .map(|row| row.into_iter().map(|runs| runs == Some(1)).collect())
+                    .collect(),
+            })
         })
     }
 
@@ -353,6 +372,7 @@ impl Inbox for RedisInbox {
     fn read<'a>(&'a mut self, last: &'a str) -> TurnFuture<'a, Result<Vec<Entry>, RoomKitError>> {
         Box::pin(async move {
             let block = u64::try_from(self.block.as_millis()).unwrap_or(1000);
+            let last = if last.is_empty() { "0-0" } else { last };
             let batch: Option<StreamReadReply> = redis::cmd("XREAD")
                 .arg("COUNT")
                 .arg(256)
@@ -375,6 +395,26 @@ impl Inbox for RedisInbox {
                 .collect())
         })
     }
+}
+
+/// What `view.lua` answers.
+#[derive(Deserialize)]
+struct ScriptView {
+    now: i64,
+    owners: Value,
+    executors: Value,
+}
+
+/// Each executor's last beat and declaration, none when the script's table
+/// does not read as one: Redis Lua encodes an empty table as either [] or {}.
+fn executors(table: Value) -> BTreeMap<String, (i64, Option<String>)> {
+    let Ok(entries) = serde_json::from_value::<BTreeMap<String, (i64, Value)>>(table) else {
+        return BTreeMap::new();
+    };
+    entries
+        .into_iter()
+        .map(|(member, (beat, declared))| (member, (beat, declared.as_str().map(str::to_owned))))
+        .collect()
 }
 
 pub(super) fn message(entry: &StreamId) -> Option<Message> {

@@ -156,7 +156,7 @@ impl RedisTurnBackend {
             self.local_target(own)
         } else {
             let candidates = self.candidates(channel, &options, refused).await?;
-            let held = self.broker().holder(channel.as_str(), room).await?;
+            let held = self.registry().holder(channel.as_str(), room).await?;
             candidates
                 .choose(held.as_deref(), self, spread)
                 .ok_or_else(|| no_executor(channel.as_str(), hooks, organization))?
@@ -202,7 +202,7 @@ impl RedisTurnBackend {
         room: &str,
         member: &str,
     ) -> Result<(), RoomKitError> {
-        self.broker().hold(channel.as_str(), room, member).await
+        self.registry().hold(channel.as_str(), room, member).await
     }
 
     async fn candidates(

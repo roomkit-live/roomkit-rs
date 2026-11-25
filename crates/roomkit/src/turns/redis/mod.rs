@@ -1,11 +1,15 @@
 //! Redis Streams transport for text turns between processes (RFC §10.6).
 mod after_turn;
 mod broker;
+#[cfg(test)]
+mod broker_tests;
 mod changes;
 mod control;
 mod dispatch;
 mod jobs;
 mod liveness;
+#[cfg(test)]
+mod memory_broker;
 mod outbox;
 mod owner;
 mod placement;
@@ -78,8 +82,14 @@ pub struct RedisTurnBackend(Arc<Node>);
 struct Node {
     outbox: Mutex<outbox::Outbox>,
     id: String,
-    /// The service the backend's messages and registry are kept by.
-    broker: Arc<redis_broker::RedisBroker>,
+    /// What carries the backend's messages between processes.
+    broker: Arc<dyn broker::TurnBroker>,
+    /// What the processes share: beats, holders, presence.
+    registry: Arc<dyn broker::TurnRegistry>,
+    /// The namespace of a node on Redis, which its tests read too.
+    key_prefix: Option<String>,
+    #[cfg(test)]
+    redis: Option<Arc<redis_broker::RedisBroker>>,
     owner: Mutex<Option<Arc<dyn super::RoomOwner>>>,
     owner_worker: OnceLock<placement::Reserved>,
     routes: Mutex<routes::Routes>,
@@ -100,10 +110,12 @@ struct Node {
 
 impl fmt::Debug for RedisTurnBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RedisTurnBackend")
-            .field("node_id", &self.0.id)
-            .field("key_prefix", &self.0.broker.prefix)
-            .finish_non_exhaustive()
+        let mut shown = f.debug_struct("RedisTurnBackend");
+        shown.field("node_id", &self.0.id);
+        if let Some(prefix) = &self.0.key_prefix {
+            shown.field("key_prefix", prefix);
+        }
+        shown.finish_non_exhaustive()
     }
 }
 
@@ -128,13 +140,36 @@ impl RedisTurnBackend {
             _loop_back: loop_back,
             ..
         } = options;
-        let broker = redis_broker::RedisBroker::new(
+        let key_prefix = options.key_prefix.clone();
+        let redis = Arc::new(redis_broker::RedisBroker::new(
             client,
             options.client,
             options.key_prefix,
             options.timeouts,
-        );
-        Ok(Self(Arc::new(Node {
+        ));
+        let broker: Arc<dyn broker::TurnBroker> = Arc::<redis_broker::RedisBroker>::clone(&redis);
+        let registry: Arc<dyn broker::TurnRegistry> =
+            Arc::<redis_broker::RedisBroker>::clone(&redis);
+        let mut node = Node::over(broker, registry, options.timeouts, loop_back);
+        node.key_prefix = Some(key_prefix);
+        #[cfg(test)]
+        {
+            node.redis = Some(redis);
+        }
+        Ok(Self(Arc::new(node)))
+    }
+}
+
+impl Node {
+    /// A node whose messages `broker` carries and whose registry
+    /// `registry` keeps.
+    fn over(
+        broker: Arc<dyn broker::TurnBroker>,
+        registry: Arc<dyn broker::TurnRegistry>,
+        timeouts: TurnTimeouts,
+        loop_back: bool,
+    ) -> Self {
+        Self {
             outbox: Mutex::default(),
             id: Uuid::new_v4()
                 .simple()
@@ -142,7 +177,11 @@ impl RedisTurnBackend {
                 .chars()
                 .take(12)
                 .collect(),
-            broker: Arc::new(broker),
+            broker,
+            registry,
+            key_prefix: None,
+            #[cfg(test)]
+            redis: None,
             owner: Mutex::default(),
             owner_worker: OnceLock::new(),
             routes: Mutex::default(),
@@ -155,12 +194,14 @@ impl RedisTurnBackend {
             jobs_changed: tokio::sync::Notify::new(),
             stop: tokio::sync::watch::channel(false).0,
             closing: tokio::sync::Mutex::new(false),
-            timeouts: options.timeouts,
+            timeouts,
             choice: Mutex::new(0),
             loop_back,
-        })))
+        }
     }
+}
 
+impl RedisTurnBackend {
     /// This process's node identifier.
     pub fn node_id(&self) -> &str {
         &self.0.id
@@ -187,33 +228,57 @@ impl RedisTurnBackend {
         Ok(())
     }
 
-    /// The service the backend reaches by its port alone.
+    /// What carries the backend's messages, reached by its port alone.
     fn broker(&self) -> &dyn broker::TurnBroker {
         &*self.0.broker
+    }
+
+    /// What the processes share, reached by its port alone.
+    fn registry(&self) -> &dyn broker::TurnRegistry {
+        &*self.0.registry
     }
 }
 
 /// What the tests of the Redis side read of it: its connections and keys.
 #[cfg(test)]
 impl RedisTurnBackend {
+    /// A node of this process alone: its messages and its registry kept
+    /// by `broker`, which the nodes of one test share.
+    fn in_process(
+        broker: &memory_broker::MemoryBroker,
+        timeouts: TurnTimeouts,
+        loop_back: bool,
+    ) -> Self {
+        Self(Arc::new(Node::over(
+            Arc::new(broker.clone()),
+            Arc::new(broker.clone()),
+            timeouts,
+            loop_back,
+        )))
+    }
+
+    fn redis(&self) -> &redis_broker::RedisBroker {
+        self.0.redis.as_deref().expect("a node on Redis")
+    }
+
     async fn connection(&self) -> Result<ConnectionManager, RoomKitError> {
-        self.0.broker.connection().await
+        self.redis().connection().await
     }
 
     fn key(&self, suffix: &str) -> String {
-        self.0.broker.key(suffix)
+        self.redis().key(suffix)
     }
 
     fn ttl_ms(&self) -> u64 {
-        self.0.broker.ttl_ms()
+        self.redis().ttl_ms()
     }
 
     async fn inbox_connection(&self) -> Result<redis::aio::MultiplexedConnection, RoomKitError> {
-        self.0.broker.inbox_connection(self.read_block()).await
+        self.redis().inbox_connection(self.read_block()).await
     }
 
     async fn beat_connection(&self) -> Result<redis::aio::MultiplexedConnection, RoomKitError> {
-        self.0.broker.beat_connection().await
+        self.redis().beat_connection().await
     }
 }
 
@@ -241,16 +306,16 @@ mod constructor_tests {
         for url in [None, Some("")] {
             let backend = RedisTurnBackend::new(url, RedisTurnBackendOptions::default()).unwrap();
             assert_eq!(
-                backend.0.broker.address.get_connection_info().addr(),
+                backend.redis().address.get_connection_info().addr(),
                 &default
             );
-            assert!(backend.0.broker.data.get().is_none());
+            assert!(backend.redis().data.get().is_none());
         }
         let backend = RedisTurnBackend::new(Some(""), injected).unwrap();
         assert_eq!(
-            backend.0.broker.address.get_connection_info().addr(),
+            backend.redis().address.get_connection_info().addr(),
             &default
         );
-        assert!(backend.0.broker.data.get().is_some());
+        assert!(backend.redis().data.get().is_some());
     }
 }

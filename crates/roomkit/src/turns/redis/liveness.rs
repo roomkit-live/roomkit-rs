@@ -30,7 +30,8 @@ impl RedisTurnBackend {
     }
 
     /// One score per watched executor and one membership query per node, regardless of its
-    /// other concurrent turns. Redis applies the worker's beat and our snapshot atomically.
+    /// other concurrent turns. The registry applies the worker's beat and reads our snapshot
+    /// of that worker as one.
     async fn read_process_beats(
         &self,
         nodes: Observed,
@@ -49,16 +50,15 @@ impl RedisTurnBackend {
                 (node.as_str(), ids)
             })
             .collect();
-        let rows = self.broker().beats(&members, &running).await?;
-        let mut rows = rows.into_iter();
+        let beats = self.registry().beats(&members, &running).await?;
         let scores = members
             .into_iter()
-            .zip(rows.next().unwrap_or_default())
+            .zip(beats.last)
             .filter_map(|(name, score)| score.map(|score| (name.to_owned(), score)))
             .collect::<BTreeMap<_, _>>();
-        for (turns, present) in nodes.into_values().zip(rows) {
+        for (turns, present) in nodes.into_values().zip(beats.running) {
             for (watch, active) in turns.into_iter().zip(present) {
-                if active == Some(1)
+                if active
                     && let Some((old, new)) =
                         previous.get(&watch.member).zip(scores.get(&watch.member))
                     && new > old

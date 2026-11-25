@@ -299,7 +299,7 @@ pub(super) fn closed() -> RoomKitError {
 }
 
 async fn receive(node: Weak<Node>, mut stop: watch::Receiver<bool>) {
-    let mut last = "0-0".to_owned();
+    let mut last = String::new();
     let mut inbox = None;
     while !*stop.borrow() {
         let Some(owner) = node.upgrade() else { break };

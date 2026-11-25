@@ -3,9 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use roomkit_core::model::Timestamp;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use super::RedisTurnBackend;
+use super::broker::View;
 use crate::RoomKitError;
 use crate::turns::{ExecutorInfo, ExecutorInfoOptions};
 
@@ -18,42 +18,31 @@ pub(super) struct Declaration {
     pub(super) organizations: Option<BTreeSet<String>>,
 }
 
-#[derive(Deserialize)]
-pub(super) struct View {
-    now: i64,
-    owners: Value,
-    executors: Value,
-}
-
-impl View {
-    fn declared(self, timeout_ms: i64) -> Vec<ExecutorInfo> {
-        // Redis Lua encodes an empty table as either [] or {}.
-        let Ok(entries) = serde_json::from_value::<BTreeMap<String, (i64, Value)>>(self.executors)
-        else {
-            return Vec::new();
-        };
-        entries
-            .into_iter()
-            .filter_map(|(member, (beat, body))| {
-                let raw = body.as_str()?;
-                let Ok(declaration) = serde_json::from_str::<Declaration>(raw) else {
-                    tracing::warn!(%member, "The executor declaration is malformed");
-                    return None;
-                };
-                Some(ExecutorInfo::new(
-                    declaration.executor_id,
-                    ExecutorInfoOptions {
-                        node: Some(declaration.node),
-                        hosts: Some(declaration.channels),
-                        organizations: declaration.organizations,
-                        room_hooks: declaration.room_hooks,
-                        last_beat: Timestamp::from_unix_millis(beat).ok(),
-                        online: self.now.saturating_sub(beat) < timeout_ms,
-                    },
-                ))
-            })
-            .collect()
-    }
+/// The executors `view` holds a declaration of, online while they beat
+/// within `timeout_ms`.
+fn declared(view: View, timeout_ms: i64) -> Vec<ExecutorInfo> {
+    let now = view.now;
+    view.executors
+        .into_iter()
+        .filter_map(|(member, (beat, declared))| {
+            let raw = declared?;
+            let Ok(declaration) = serde_json::from_str::<Declaration>(&raw) else {
+                tracing::warn!(%member, "The executor declaration is malformed");
+                return None;
+            };
+            Some(ExecutorInfo::new(
+                declaration.executor_id,
+                ExecutorInfoOptions {
+                    node: Some(declaration.node),
+                    hosts: Some(declaration.channels),
+                    organizations: declaration.organizations,
+                    room_hooks: declaration.room_hooks,
+                    last_beat: Timestamp::from_unix_millis(beat).ok(),
+                    online: now.saturating_sub(beat) < timeout_ms,
+                },
+            ))
+        })
+        .collect()
 }
 
 pub(super) async fn executors(
@@ -78,8 +67,7 @@ pub(super) async fn executors(
 /// Other nodes' declarations. Local workers are read from the backend in serving order.
 pub(super) async fn peers(backend: &RedisTurnBackend) -> Result<Vec<ExecutorInfo>, RoomKitError> {
     let (view, timeout) = read_view(backend).await?;
-    Ok(view
-        .declared(timeout)
+    Ok(declared(view, timeout)
         .into_iter()
         .filter(|info| info.node.as_deref() != Some(backend.node_id()))
         .collect())
@@ -94,9 +82,7 @@ pub(super) async fn member_alive(
     Ok(view
         .executors
         .get(member)
-        .and_then(|row| row.get(0))
-        .and_then(Value::as_i64)
-        .is_some_and(|last| view.now.saturating_sub(last) < timeout))
+        .is_some_and(|(last, _)| view.now.saturating_sub(*last) < timeout))
 }
 
 async fn read_view(backend: &RedisTurnBackend) -> Result<(View, i64), RoomKitError> {
@@ -116,12 +102,11 @@ pub(super) async fn owner_alive(
     Ok(current
         .owners
         .get(peer)
-        .and_then(Value::as_i64)
-        .is_some_and(|beat| current.now.saturating_sub(beat) < timeout))
+        .is_some_and(|beat| current.now.saturating_sub(*beat) < timeout))
 }
 
 async fn view(backend: &RedisTurnBackend, timeout: i64) -> Result<View, RoomKitError> {
-    backend.broker().view(timeout.saturating_mul(10)).await
+    backend.registry().view(timeout.saturating_mul(10)).await
 }
 
 /// The Python and Rust workers publish the same heartbeat, including the node's
@@ -141,7 +126,7 @@ pub(super) async fn write_beat(
     backend: &RedisTurnBackend,
     beat: &Beat,
 ) -> Result<(), RoomKitError> {
-    backend.broker().beat(beat).await?;
+    backend.registry().beat(beat).await?;
     backend.beat_written(beat.generation);
     Ok(())
 }
@@ -172,7 +157,7 @@ impl RedisTurnBackend {
     ) -> Result<bool, RoomKitError> {
         self.ensure_open()?;
         self.listen().await;
-        self.broker()
+        self.registry()
             .claim_presence(channel_id, room_id, online)
             .await
     }
@@ -182,6 +167,6 @@ impl RedisTurnBackend {
         channel: &str,
         room: &str,
     ) -> Result<(), RoomKitError> {
-        self.broker().forget_holder(channel, room).await
+        self.registry().forget_holder(channel, room).await
     }
 }
