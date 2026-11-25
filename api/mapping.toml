@@ -1839,3 +1839,13 @@ reason = "a TurnBroker of this process, as InMemoryStore is a store's: for tests
 rust = "roomkit::turns::InMemoryTurnRegistry"
 approved = "2026-11-25"
 reason = "a TurnRegistry of this process, as InMemoryStore is a store's: for tests and one-process nodes. Rust first: the backend across processes takes its services by two ports, where Python keeps its Redis backend whole (HITL 8afa1a82, RMK-2012)"
+
+[[exception]]
+rust = "roomkit::testing::check_turn_broker"
+approved = "2026-11-25"
+reason = "the contract of TurnBroker as a check a service's own tests call: an inbox read in order until acknowledged, a waiting read. Rust first, with the port it checks: Python gets it with its ports (HITL 702a2e92, RMK-2012)"
+
+[[exception]]
+rust = "roomkit::testing::check_turn_registry"
+approved = "2026-11-25"
+reason = "the contract of TurnRegistry as a check a service's own tests call: beats and their view, a room's holder, a presence claimed once. Rust first, with the port it checks: Python gets it with its ports (HITL 702a2e92, RMK-2012)"

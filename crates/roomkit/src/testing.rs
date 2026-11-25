@@ -7,6 +7,8 @@
 //! sans-IO core takes them as an input instead, which
 //! [`kit_with_environment`] gives (step 5, decision 5).
 
+mod turn_ports;
+
 use std::future::{Future, ready};
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -19,6 +21,7 @@ use roomkit_core::rules::addresses::{NormalizeOptions, addressing_of};
 use roomkit_core::rules::transcoding::text_of;
 
 pub use roomkit_core::ops::{Environment, SequentialEnvironment};
+pub use turn_ports::{check_turn_broker, check_turn_registry};
 
 use crate::channel::{Channel, ChannelError};
 use crate::store::ConversationStore;

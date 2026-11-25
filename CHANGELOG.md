@@ -8,6 +8,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `testing::check_turn_broker` and `testing::check_turn_registry`: the
+  contract of the distributed turn backend's two ports, as checks a service
+  that implements them calls from its own tests (RMK-2012). The core runs
+  them on its in-memory broker and registry.
 - `DistributedTurnBackend`: the turn backend across processes, over two
   ports a service implements (RFC §10.6.7, §10.6.8, RMK-2012). `TurnBroker`
   carries the messages between processes, an inbox a node (`TurnInbox`,
