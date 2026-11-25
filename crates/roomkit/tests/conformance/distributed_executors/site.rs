@@ -1,12 +1,13 @@
 //! A worker the scenario kills has its own Tokio runtime. Dropping that runtime
 //! stops its Redis stream and active work without sending a graceful close.
-use roomkit::{RedisTurnBackend, RoomKitError, TurnExecutor};
+use roomkit::turns::DistributedTurnBackend;
+use roomkit::{RoomKitError, TurnExecutor};
 use tokio::sync::oneshot;
 
 use super::topology::Topology;
 
 pub(super) struct Site {
-    pub(super) hosting: RedisTurnBackend,
+    pub(super) hosting: DistributedTurnBackend,
     pub(super) executor: TurnExecutor,
     mode: Mode,
 }
@@ -46,8 +47,7 @@ impl Site {
     ) -> Result<Self, RoomKitError> {
         let hosting = topology.worker(worker.kit.as_deref())?;
         let silent = super::silent::Silent::start(
-            &topology.url,
-            &topology.options.key_prefix,
+            &topology.fresh()?,
             hosting.node_id(),
             executor.clone(),
             worker,
@@ -140,7 +140,7 @@ struct Runtime {
 
 impl Runtime {
     async fn start(
-        hosting: RedisTurnBackend,
+        hosting: DistributedTurnBackend,
         executor: TurnExecutor,
     ) -> Result<Self, RoomKitError> {
         let (ready, serving) = oneshot::channel();

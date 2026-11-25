@@ -59,11 +59,13 @@ mod sandbox;
 mod scenarios;
 
 #[cfg(feature = "redis")]
-mod redis_executors;
+mod across_redis;
+mod distributed_executors;
+const EXECUTOR_PASS: Option<scenarios::ExecutorPass> = Some(distributed_executors::run);
 #[cfg(feature = "redis")]
-const EXECUTOR_PASS: Option<scenarios::ExecutorPass> = Some(redis_executors::run);
+const REDIS_NODE: Option<scenarios::RedisNode> = Some(across_redis::node);
 #[cfg(not(feature = "redis"))]
-const EXECUTOR_PASS: Option<scenarios::ExecutorPass> = None;
+const REDIS_NODE: Option<scenarios::RedisNode> = None;
 
 mod scripted;
 mod served_call_tests;
@@ -222,8 +224,7 @@ fn every_scenario_gives_the_same_on_several_workers() {
 /// Every scenario with executors gives the same when its kit takes its turns
 /// through a transport written on the public contract alone (roomkit-specs
 /// `conformance/README.md`, "On a transport written on the contract alone").
-/// The pass runs across the Redis turn executor and writes no result file.
-#[cfg(feature = "redis")]
+/// The pass writes no result file.
 #[test]
 fn every_scenario_with_executors_gives_the_same_on_the_contract_alone() {
     let filter = std::env::var("ROOMKIT_CONFORMANCE_FILTER").ok();
@@ -232,7 +233,7 @@ fn every_scenario_with_executors_gives_the_same_on_the_contract_alone() {
         filter.as_deref(),
         &scenarios::FOUR_WORKERS,
         KNOWN_FAILURES,
-        redis_executors::run_on_the_contract_alone,
+        distributed_executors::run_on_the_contract_alone,
     );
     println!(
         "four workers, on the contract alone: {} scenarios, {} failing: {:?}",

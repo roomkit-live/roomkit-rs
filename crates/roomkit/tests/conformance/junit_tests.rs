@@ -89,7 +89,7 @@ fn each_scenario_is_written_with_its_outcome(pass: &Pass) {
     assert_eq!(
         cases[0],
         format!(
-            r#"{}><skipped message="§10.6.7: this pass has no Redis turn executor"/></testcase>"#,
+            r#"{}><skipped message="§10.6.7: this pass has no turn executor beside the kit"/></testcase>"#,
             case("another-area/runs-apart")
         )
     );
@@ -172,21 +172,20 @@ fn the_pass_on_the_contract_alone_runs_the_scenarios_with_executors_alone() {
     assert_eq!(run.cases.len(), 1);
 }
 
-/// A pass that runs the scenarios with executors, across the Redis turn
-/// executor, writes a file and a class of its own,
-/// `<backend>+redis-executors`; a pass that skips them writes the backend's.
+/// A pass that serves its executors across Redis writes a file and a class
+/// of its own, `<backend>+redis-executors`; one that has no executor beside
+/// the kit skips their scenarios and writes the backend's.
 #[test]
 fn a_pass_running_the_executor_scenarios_is_named_apart() {
     let runs: scenarios::ExecutorPass = |_, _| Some(Vec::new());
     let apart = format!("{}+redis-executors", crate::BACKEND);
-    let skipped =
-        r#"><skipped message="§10.6.7: this pass has no Redis turn executor"/></testcase>"#;
-    for (executors, backend, outcome) in [
-        (None, crate::BACKEND, skipped),
-        (Some(runs), apart.as_str(), "/>"),
+    let skipped = r#"><skipped message="§10.6.7: this pass has no turn executor beside the kit"/></testcase>"#;
+    for (executors, across_redis, backend, outcome) in [
+        (None, false, crate::BACKEND, skipped),
+        (Some(runs), true, apart.as_str(), "/>"),
     ] {
         let root = suite_of(&[json!({"id": "area/runs-apart", "setup": {"executors": []}})]);
-        let named = scenarios::result_backend(crate::BACKEND, executors);
+        let named = scenarios::result_backend(crate::BACKEND, across_redis);
         let file =
             junit::claim_in(Some("results".into()), &root, &named, ONE_THREAD.runtime).unwrap();
         let run = scenarios::run(&root, None, &ONE_THREAD, &[], executors);

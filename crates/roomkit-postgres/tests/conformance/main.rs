@@ -11,6 +11,8 @@
 
 #[path = "../../../roomkit/tests/conformance/acp_agents.rs"]
 mod acp_agents;
+#[path = "../../../roomkit/tests/conformance/across_redis.rs"]
+mod across_redis;
 #[path = "../../../roomkit/tests/conformance/agents.rs"]
 mod agents;
 #[path = "../../../roomkit/tests/conformance/ai_hooks.rs"]
@@ -33,6 +35,8 @@ mod continuation;
 mod delegate_calls;
 #[path = "../../../roomkit/tests/conformance/discussion_calls.rs"]
 mod discussion_calls;
+#[path = "../../../roomkit/tests/conformance/distributed_executors.rs"]
+mod distributed_executors;
 #[path = "../../../roomkit/tests/conformance/errors.rs"]
 mod errors;
 #[path = "../../../roomkit/tests/conformance/extra_tools.rs"]
@@ -69,8 +73,6 @@ mod member_calls;
 mod memory;
 #[path = "../../../roomkit/tests/conformance/normalize.rs"]
 mod normalize;
-#[path = "../../../roomkit/tests/conformance/redis_executors.rs"]
-mod redis_executors;
 #[path = "../../../roomkit/tests/conformance/report_claims.rs"]
 mod report_claims;
 #[path = "../../../roomkit/tests/conformance/room_calls.rs"]
@@ -86,7 +88,8 @@ mod sandbox;
 #[path = "../../../roomkit/tests/conformance/scenarios.rs"]
 mod scenarios;
 
-const EXECUTOR_PASS: Option<scenarios::ExecutorPass> = Some(redis_executors::run);
+const EXECUTOR_PASS: Option<scenarios::ExecutorPass> = Some(distributed_executors::run);
+const REDIS_NODE: Option<scenarios::RedisNode> = Some(across_redis::node);
 
 #[path = "../../../roomkit/tests/conformance/scripted.rs"]
 mod scripted;

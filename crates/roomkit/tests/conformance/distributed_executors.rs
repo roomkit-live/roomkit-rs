@@ -1,20 +1,21 @@
 //! RFC §6.4 and §10.6. The normal runner places declared channels on workers
-//! with independent Redis nodes and compares the complete scenario expectations.
-#[path = "redis_executors/channel.rs"]
+//! with independent nodes of a distributed turn backend, across Redis or in
+//! this process, and compares the complete scenario expectations.
+#[path = "distributed_executors/channel.rs"]
 mod channel;
-#[path = "redis_executors/own_process.rs"]
+#[path = "distributed_executors/own_process.rs"]
 mod own_process;
-#[path = "redis_executors/owner_kill.rs"]
+#[path = "distributed_executors/owner_kill.rs"]
 mod owner_kill;
-#[path = "redis_executors/presence.rs"]
+#[path = "distributed_executors/presence.rs"]
 mod presence;
-#[path = "redis_executors/reserved.rs"]
+#[path = "distributed_executors/reserved.rs"]
 mod reserved;
-#[path = "redis_executors/silent.rs"]
+#[path = "distributed_executors/silent.rs"]
 mod silent;
-#[path = "redis_executors/site.rs"]
+#[path = "distributed_executors/site.rs"]
 mod site;
-#[path = "redis_executors/topology.rs"]
+#[path = "distributed_executors/topology.rs"]
 mod topology;
 
 use futures_core::future::BoxFuture;
@@ -29,17 +30,20 @@ use serde_json::Value;
 use crate::identity::RunSlot;
 use channel::WorkerChannel;
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "an executor pass may decline a scenario: this one takes each"
+)]
 pub(super) fn run(
     scenario: &Value,
     runtime: fn() -> tokio::runtime::Runtime,
 ) -> Option<Vec<String>> {
-    let url = crate::scenarios::redis_url()?;
     let unknown = crate::shape::unknown_members(scenario);
     if !unknown.is_empty() {
         return Some(unknown);
     }
     Some(runtime().block_on(async {
-        match tokio::time::timeout(crate::SCENARIO_BOUND, exercise(&url, scenario)).await {
+        match tokio::time::timeout(crate::SCENARIO_BOUND, exercise(scenario)).await {
             Ok(Ok(problems)) => problems,
             Ok(Err(error)) => vec![error.to_string()],
             Err(_) => vec![format!(
@@ -164,7 +168,7 @@ impl Workers {
     fn kit_connection(
         &self,
         scenario: &Value,
-        owner: roomkit::RedisTurnBackend,
+        owner: roomkit::turns::DistributedTurnBackend,
     ) -> crate::run::OwnerConnection {
         use roomkit::turns::TurnBackendHandle;
         let mut main = self.presence.connection(owner);
@@ -325,11 +329,7 @@ impl crate::run::WorkerControl for Workers {
                 .get(id)
                 .map(|site| site.hosting.clone())
                 .ok_or_else(|| RoomKitError::Value(format!("executor {id} is not running")))?;
-            roomkit::testing::settle_distributed_publications(
-                hosting.node(),
-                self.topology.owner().node(),
-            )
-            .await
+            roomkit::testing::settle_distributed_publications(&hosting, self.topology.owner()).await
         })
     }
 
@@ -437,7 +437,7 @@ impl crate::run::WorkerControl for Workers {
     }
 }
 
-async fn exercise(url: &str, scenario: &Value) -> Result<Vec<String>, RoomKitError> {
+async fn exercise(scenario: &Value) -> Result<Vec<String>, RoomKitError> {
     #[derive(Deserialize)]
     struct Setup {
         executors: Vec<Worker>,
@@ -454,7 +454,7 @@ async fn exercise(url: &str, scenario: &Value) -> Result<Vec<String>, RoomKitErr
             "owner.kill takes no presence fixture of the kit".into(),
         ));
     }
-    let topology = topology::Topology::new(url, scenario)?;
+    let topology = topology::Topology::new(scenario)?;
     let slot = RunSlot::default();
     let owner = topology.owner().clone();
     let owner_kill = kills_owner(scenario).then(|| {

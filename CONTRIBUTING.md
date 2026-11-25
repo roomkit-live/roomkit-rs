@@ -89,14 +89,14 @@ ROOMKIT_CONFORMANCE_JUNIT=target/conformance cargo test -p roomkit --test confor
 ROOMKIT_CONFORMANCE_JUNIT=target/conformance cargo test -p roomkit-sqlite --test conformance
 ```
 
-The scenarios with `setup.executors` run only across the Redis turn executor:
-a runner built with the `redis` feature (the SQLite and PostgreSQL runners
-always are) runs them when `REDIS_URL` names a Redis server, and skips them
-otherwise. Every other scenario runs in process either way. A pass that runs
-them names its backend `<backend>+redis-executors`, in its file and its class
-(`memory+redis-executors-current_thread.xml`, class
+The scenarios with `setup.executors` run on a distributed turn backend: its
+nodes on the broker and the registry of this process by default, across Redis
+when `REDIS_URL` names a server and the runner is built with the `redis`
+feature (the SQLite and PostgreSQL runners always are). A pass that serves
+them across Redis names its backend `<backend>+redis-executors`, in its file
+and its class (`memory+redis-executors-current_thread.xml`, class
 `conformance.memory+redis-executors.current_thread`), so that it is never read
-as the pass that skips them.
+as the core's own pass.
 
 ```sh
 REDIS_URL=redis://127.0.0.1:6379 ROOMKIT_CONFORMANCE_JUNIT=target/conformance \
@@ -106,10 +106,10 @@ REDIS_URL=redis://127.0.0.1:6379 ROOMKIT_CONFORMANCE_JUNIT=target/conformance \
 roomkit-specs records these files as execution receipts, from a clean commit
 (`conformance/TRACEABILITY.md`, "Execution receipts").
 
-The core's runner, built with the `redis` feature, runs those scenarios a
-second time on four workers, the kit served by the runner's own transport,
-written on the public contract alone (roomkit-specs `conformance/README.md`,
-"On a transport written on the contract alone"): the test
+The core's runner runs those scenarios a second time on four workers, the kit
+served by the runner's own transport, written on the public contract alone
+(roomkit-specs `conformance/README.md`, "On a transport written on the
+contract alone"): the test
 `every_scenario_with_executors_gives_the_same_on_the_contract_alone`. That
 pass writes no file.
 

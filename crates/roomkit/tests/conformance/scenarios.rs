@@ -79,9 +79,22 @@ fn four_workers() -> tokio::runtime::Runtime {
 /// Optional features supported by the shared Rust runner on every backend.
 const PROVIDED_FEATURES: &[&str] = &[];
 
-const NO_EXECUTOR: &str = "§10.6.7: this pass has no Redis turn executor";
+const NO_EXECUTOR: &str = "§10.6.7: this pass has no turn executor beside the kit";
 
 pub(crate) type ExecutorPass = fn(&Value, fn() -> tokio::runtime::Runtime) -> Option<Vec<String>>;
+
+/// A node of a scenario's distributed turn backend, with the broker and
+/// the registry it runs on.
+pub(crate) struct Node {
+    pub(crate) backend: roomkit::turns::DistributedTurnBackend,
+    pub(crate) broker: std::sync::Arc<dyn roomkit::turns::TurnBroker>,
+    pub(crate) registry: std::sync::Arc<dyn roomkit::turns::TurnRegistry>,
+}
+
+/// What makes a node across a Redis server, from its URL, a key prefix and
+/// the scenario's bounds: a runner built with the Redis assembly has one.
+pub(crate) type RedisNode =
+    fn(&str, &str, roomkit::TurnTimeouts) -> Result<Node, roomkit::RoomKitError>;
 
 /// The Redis server the scenarios with executors run across, as `REDIS_URL`
 /// names it.
@@ -89,20 +102,21 @@ pub(crate) fn redis_url() -> Option<String> {
     std::env::var("REDIS_URL").ok()
 }
 
-/// The pass over the scenarios with executors this run makes: the runner's
-/// own, when it has one and `REDIS_URL` names its Redis server.
-fn executor_pass() -> Option<ExecutorPass> {
-    crate::EXECUTOR_PASS.filter(|_| redis_url().is_some())
+/// Whether this run's executors are served across Redis: `REDIS_URL` names a
+/// server and the runner has its Redis assembly. They are served by the
+/// broker and the registry of this process otherwise.
+pub(crate) fn across_redis() -> bool {
+    crate::REDIS_NODE.is_some() && redis_url().is_some()
 }
 
-/// The backend's name in the result file of a pass that makes `executors`:
-/// `<backend>+redis-executors` when it runs the scenarios with executors,
-/// across the Redis turn executor, so that roomkit-specs records it apart
-/// from the pass that skips them; `backend` otherwise.
-pub(crate) fn result_backend(backend: &str, executors: Option<ExecutorPass>) -> String {
-    match executors {
-        Some(_) => format!("{backend}+redis-executors"),
-        None => backend.to_owned(),
+/// The backend's name in the result file of a pass: `<backend>+redis-executors`
+/// when it serves its executors across Redis, so that roomkit-specs records
+/// it apart from the core's own pass; `backend` otherwise.
+pub(crate) fn result_backend(backend: &str, across_redis: bool) -> String {
+    if across_redis {
+        format!("{backend}+redis-executors")
+    } else {
+        backend.to_owned()
     }
 }
 
@@ -276,8 +290,8 @@ fn judge(id: String, problems: &[String], known: &[(&str, &str)], run: &mut Run)
 )]
 pub(crate) fn every_scenario_gives_what_the_rfc_says(pass: &Pass, known: &[(&str, &str)]) {
     let filter = std::env::var("ROOMKIT_CONFORMANCE_FILTER").ok();
-    let executors = executor_pass();
-    let backend = result_backend(crate::BACKEND, executors);
+    let executors = crate::EXECUTOR_PASS;
+    let backend = result_backend(crate::BACKEND, across_redis());
     let output = junit::claim(&backend, pass.runtime);
     let run = run(
         &suite().join("scenarios"),

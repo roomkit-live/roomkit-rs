@@ -2,15 +2,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
+use roomkit::RoomKitError;
 use roomkit::realtime::{
     EphemeralCallback, EphemeralEvent, EphemeralEventType, InMemoryRealtime, RealtimeBackend,
     RealtimeFuture,
 };
+use roomkit::turns::DistributedTurnBackend;
 use roomkit::turns::{
     ChannelControl, ChannelResult, ExecutorInfo, ExecutorsListener, RoomOwner, ServedExecutor,
     TurnBackend, TurnBackendHandle, TurnFuture, TurnLink, TurnRequest, TurnTimeouts,
 };
-use roomkit::{RedisTurnBackend, RoomKitError};
 use serde_json::Value;
 
 use crate::run::{OwnerConnection, lock};
@@ -67,7 +68,7 @@ impl Presence {
         }
     }
 
-    pub(super) fn connection(&self, node: RedisTurnBackend) -> OwnerConnection {
+    pub(super) fn connection(&self, node: DistributedTurnBackend) -> OwnerConnection {
         let turns = if self.catalogue && self.faults.is_none() && !self.contract_only {
             TurnBackendHandle::new(Arc::new(node))
         } else {
@@ -130,7 +131,7 @@ impl Presence {
 /// The runner's own transport: each operation of the public contract handed
 /// to the Redis backend, a claim failing while its fault is armed.
 struct PresenceBackend {
-    inner: RedisTurnBackend,
+    inner: DistributedTurnBackend,
     faults: Option<Arc<Faults>>,
     catalogue: bool,
 }

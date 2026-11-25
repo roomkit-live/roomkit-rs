@@ -8,7 +8,7 @@ use std::sync::Arc;
 use redis::aio::ConnectionManager;
 
 use super::redis_broker::RedisBroker;
-use super::{DistributedTurnBackend, DistributedTurnBackendOptions};
+use super::{DistributedTurnBackend, DistributedTurnBackendOptions, TurnBroker, TurnRegistry};
 use crate::RoomKitError;
 use crate::turns::{
     ChannelControl, ChannelResult, ExecutorInfo, ExecutorsListener, RoomOwner, ServedExecutor,
@@ -119,6 +119,15 @@ impl RedisTurnBackend {
     #[doc(hidden)]
     pub fn node(&self) -> &DistributedTurnBackend {
         &self.node
+    }
+
+    /// The broker and the registry this backend runs on, both Redis.
+    #[doc(hidden)]
+    pub fn services(&self) -> (Arc<dyn TurnBroker>, Arc<dyn TurnRegistry>) {
+        (
+            Arc::<RedisBroker>::clone(&self.redis),
+            Arc::<RedisBroker>::clone(&self.redis),
+        )
     }
 
     /// This process's node identifier.
