@@ -59,6 +59,10 @@ impl<S: ConversationStore> ServedExecutor for OwnerExecutor<S> {
         &self.id
     }
 
+    fn same_as(&self, other: &dyn ServedExecutor) -> bool {
+        self.lifecycle.ptr_eq(&other.native().lifecycle())
+    }
+
     fn closed(&self) -> bool {
         self.worker().is_none_or(|worker| worker.closed())
     }

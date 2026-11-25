@@ -14,8 +14,8 @@ use std::sync::{Arc, Mutex, Weak};
 
 use super::records::RoomRecords;
 use super::{
-    ChannelControl, ChannelResult, ExecutorInfo, ExecutorInfoOptions, LocalPresenceClaims,
-    MemoryTurn, RoomOwner, ServedExecutor, TurnBackend, TurnFuture, TurnLink, TurnRequest, lock,
+    ChannelControl, ChannelResult, ExecutorInfo, LocalPresenceClaims, MemoryTurn, RoomOwner,
+    ServedExecutor, TurnBackend, TurnFuture, TurnLink, TurnRequest, lock,
 };
 use crate::RoomKitError;
 
@@ -83,15 +83,10 @@ impl InMemoryTurnBackend {
 
     async fn serve_worker(&self, worker: Worker) {
         worker.reach_owner(Arc::new(port::OwnerPort(Arc::downgrade(&self.state))));
-        let identity = worker.native().lifecycle();
         let served = Arc::clone(&worker);
         let owner = {
             let mut state = lock(&self.state);
-            if !state
-                .workers
-                .iter()
-                .any(|prior| prior.native().lifecycle().ptr_eq(&identity))
-            {
+            if !state.workers.iter().any(|prior| prior.same_as(&*worker)) {
                 state.workers.push(worker);
                 state.revision = state.revision.wrapping_add(1);
             }
@@ -99,7 +94,7 @@ impl InMemoryTurnBackend {
         };
         if owner
             .and_then(|port| port.executor())
-            .is_some_and(|own| own.native().lifecycle().ptr_eq(&identity))
+            .is_some_and(|own| own.same_as(&*served))
         {
             return;
         }
@@ -141,29 +136,11 @@ impl InMemoryTurnBackend {
             let state = lock(&self.state);
             (state.workers.clone(), state.owner.clone())
         };
-        let own = owner
-            .and_then(|owner| owner.executor())
-            .map(|e| e.native().lifecycle());
+        let own = owner.and_then(|owner| owner.executor());
         workers
             .into_iter()
-            .filter(|e| {
-                !e.closed()
-                    && own
-                        .as_ref()
-                        .is_none_or(|id| !id.ptr_eq(&e.native().lifecycle()))
-            })
-            .map(|e| {
-                ExecutorInfo::new(
-                    e.executor_id(),
-                    ExecutorInfoOptions {
-                        hosts: e.hosted(),
-                        organizations: e.organizations(),
-                        room_hooks: e.room_hooks(),
-                        ..Default::default()
-                    },
-                )
-                .with_local_hosts(e.native().local_hosts())
-            })
+            .filter(|e| !e.closed() && own.as_ref().is_none_or(|own| !own.same_as(&**e)))
+            .map(|e| ExecutorInfo::of(&*e, super::ExecutorInfoOfOptions::default()))
             .collect()
     }
 }

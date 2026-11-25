@@ -57,7 +57,7 @@ mod local_presence_claims;
 mod presence;
 use local_presence_claims::LocalPresenceClaims;
 pub(crate) use presence::LocalHosts;
-pub use presence::{AgentPresence, ExecutorInfo, ExecutorInfoOptions};
+pub use presence::{AgentPresence, ExecutorInfo, ExecutorInfoOfOptions, ExecutorInfoOptions};
 
 /// The innermost turn whose work is running, including a call served by its
 /// room owner. Its ID can be passed to [`crate::RoomKit::steer`] to address

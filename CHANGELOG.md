@@ -8,6 +8,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `ExecutorInfo::of(executor, options)` and `ServedExecutor::same_as(other)`: a
+  turn backend lists an executor it serves, and tells the owner's own
+  executor from the others, by public names (RFC §10.6.7, RMK-2012). `of`
+  is Python's `ExecutorInfo.of`: the entry covers what the executor hosts,
+  one that chooses its channels by a predicate included, where a backend
+  written outside the crate could only fill the entry's fields and listed
+  such an executor as covering nothing. `same_as` is Python's
+  `executor is other`: two handles of one executor are the same. The
+  in-memory backend goes by both.
 - `TurnExecutor::watch_closed(listener)` and `ServedExecutor::watch_closed`: an
   executor tells the backends serving it that it closed by a public
   operation, as Python's `TurnExecutor.watch_closed` (RFC §10.6.7,

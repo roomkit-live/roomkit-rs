@@ -344,23 +344,18 @@ impl roomkit::turns::TurnBackend for ServingItsOwnExecutors {
             Result<Vec<roomkit::turns::ExecutorInfo>, roomkit::RoomKitError>,
         >,
     > {
-        let own = held(&self.owner).as_ref().and_then(|owner| {
-            owner
-                .executor()
-                .map(|executor| executor.executor_id().to_owned())
-        });
+        let own = held(&self.owner)
+            .as_ref()
+            .and_then(|owner| owner.executor());
         let listed = held(&self.served)
             .iter()
-            .filter(|executor| !executor.closed() && Some(executor.executor_id()) != own.as_deref())
+            .filter(|executor| {
+                !executor.closed() && own.as_ref().is_none_or(|own| !own.same_as(&***executor))
+            })
             .map(|executor| {
-                roomkit::turns::ExecutorInfo::new(
-                    executor.executor_id(),
-                    roomkit::turns::ExecutorInfoOptions {
-                        hosts: executor.hosted(),
-                        organizations: executor.organizations(),
-                        room_hooks: executor.room_hooks(),
-                        ..Default::default()
-                    },
+                roomkit::turns::ExecutorInfo::of(
+                    &**executor,
+                    roomkit::turns::ExecutorInfoOfOptions::default(),
                 )
             })
             .collect();
@@ -472,4 +467,85 @@ async fn a_backend_serving_its_own_executors_has_presence_published_as_one_close
         closed.is_ok(),
         "an executor's close did not publish the agent offline before the kit's next look"
     );
+}
+
+// Python: test_an_executor_that_hosts_by_a_predicate_covers_its_agent, its
+// serving-its-own-executors case.
+#[tokio::test]
+async fn a_backend_serving_its_own_executors_lists_one_that_hosts_by_a_predicate() {
+    use roomkit::turns::TurnBackendHandle;
+    use roomkit::{ChannelDeclaration, RoomKitOptions, TurnExecutor, TurnExecutorOptions};
+    use std::sync::Arc;
+
+    let backend = TurnBackendHandle::new(Arc::new(ServingItsOwnExecutors::default()));
+    let kit = RoomKit::new(RoomKitOptions {
+        turn_backend: Some(backend.clone()),
+        ..Default::default()
+    });
+    let room: roomkit::model::RoomId = "r1".parse().unwrap();
+    let agent: roomkit::model::ChannelId = "coder".parse().unwrap();
+    kit.register_channel(ChannelDeclaration {
+        identity: Some(roomkit::AgentIdentity::default()),
+        ..ChannelDeclaration::new(agent.clone())
+    })
+    .unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let executor = TurnExecutor::new_with_host_predicate(
+        |id| async move {
+            Ok(Some(EchoAgent::new(
+                id,
+                "host",
+                EchoAgentOptions::default(),
+            )))
+        },
+        |channel| channel.as_str() == "coder",
+        TurnExecutorOptions {
+            executor_id: Some("host".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    backend.serve(Arc::new(executor.clone())).await.unwrap();
+    kit.attach_channel(
+        &room,
+        &agent,
+        AttachChannelOptions {
+            category: Some(roomkit::model::ChannelCategory::Intelligence),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let presence = kit
+        .agent_presence(&room, AgentPresenceOptions::default())
+        .await
+        .unwrap();
+
+    kit.close().await.unwrap();
+    executor.close().await;
+    assert_eq!(presence.len(), 1);
+    assert!(presence[0].online, "a predicate's executor covers nothing");
+    assert_eq!(presence[0].executors, ["host"]);
+}
+
+// Python compares the objects (`executor is other`).
+#[tokio::test]
+async fn two_handles_of_one_executor_are_the_same() {
+    use roomkit::turns::ServedExecutor;
+    use std::sync::Arc;
+
+    let kit = RoomKit::new(roomkit::RoomKitOptions::default());
+    let other = RoomKit::new(roomkit::RoomKitOptions::default());
+    let first: Arc<dyn ServedExecutor> = Arc::new(kit.turn_executor());
+    let second: Arc<dyn ServedExecutor> = Arc::new(kit.turn_executor());
+    let stranger: Arc<dyn ServedExecutor> = Arc::new(other.turn_executor());
+
+    assert!(first.same_as(&*second));
+    assert!(!first.same_as(&*stranger));
 }

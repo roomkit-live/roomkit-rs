@@ -71,10 +71,7 @@ impl InMemoryTurnBackend {
                 .and_then(|p| p.executor())
                 .filter(|e| e.hosts_channel(channel));
             let pick = if let Some(own) = own {
-                let own_id = own.native().lifecycle();
-                workers
-                    .into_iter()
-                    .find(|e| e.native().lifecycle().ptr_eq(&own_id) && takes(e))
+                workers.into_iter().find(|e| e.same_as(&*own) && takes(e))
             } else {
                 holder.into_iter().chain(workers).find(takes)
             };
@@ -179,12 +176,9 @@ impl InMemoryTurnBackend {
         };
         let own = owner
             .and_then(|p| p.executor())
-            .filter(|e| e.hosts_channel(channel))
-            .map(|e| e.native().lifecycle());
+            .filter(|e| e.hosts_channel(channel));
         for worker in workers {
-            if own
-                .as_ref()
-                .is_none_or(|id| id.ptr_eq(&worker.native().lifecycle()))
+            if own.as_ref().is_none_or(|own| own.same_as(&*worker))
                 && worker.declares(channel)
                 && (matches!(message, ChannelControl::ChannelReleased { .. })
                     || worker.serves(organization))

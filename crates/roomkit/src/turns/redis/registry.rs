@@ -5,7 +5,6 @@ use roomkit_core::model::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::Worker;
 use super::{RedisTurnBackend, redis_error};
 use crate::RoomKitError;
 use crate::turns::{ExecutorInfo, ExecutorInfoOptions};
@@ -65,7 +64,12 @@ pub(super) async fn executors(
         .workers
         .iter()
         .filter(|worker| !worker.closed() && !backend.is_own(worker))
-        .map(|worker| local_info(worker, backend.node_id()))
+        // A worker served here is listed with its live declaration, one
+        // whose host selection cannot be announced to other nodes included.
+        .map(|worker| {
+            let node = Some(backend.node_id().to_owned());
+            ExecutorInfo::of(&**worker, crate::turns::ExecutorInfoOfOptions { node })
+        })
         .collect();
     rows.extend(elsewhere);
     Ok(rows)
@@ -79,22 +83,6 @@ pub(super) async fn peers(backend: &RedisTurnBackend) -> Result<Vec<ExecutorInfo
         .into_iter()
         .filter(|info| info.node.as_deref() != Some(backend.node_id()))
         .collect())
-}
-
-/// Locally served workers have live declarations, including workers whose
-/// dynamic host selection cannot be announced to other Redis nodes.
-fn local_info(worker: &Worker, node: &str) -> ExecutorInfo {
-    ExecutorInfo::new(
-        worker.executor_id(),
-        ExecutorInfoOptions {
-            node: Some(node.to_owned()),
-            hosts: worker.hosted(),
-            organizations: worker.organizations(),
-            room_hooks: worker.room_hooks(),
-            ..ExecutorInfoOptions::default()
-        },
-    )
-    .with_local_hosts(worker.native().local_hosts())
 }
 
 /// A draining executor still answers work it accepted after its declaration was withdrawn.

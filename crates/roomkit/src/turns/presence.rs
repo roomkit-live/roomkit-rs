@@ -10,6 +10,13 @@ use serde::{Deserialize, Serialize};
 use crate::RoomKitError;
 use crate::error::repr;
 
+/// What [`ExecutorInfo::of`] takes beside the executor.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ExecutorInfoOfOptions {
+    /// Python `node=None`: the process as the backend names it.
+    pub node: Option<String>,
+}
+
 /// The optional fields of Python's `ExecutorInfo`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExecutorInfoOptions {
@@ -110,9 +117,25 @@ impl ExecutorInfo {
         }
     }
 
-    pub(crate) fn with_local_hosts(mut self, hosts: Arc<dyn LocalHosts>) -> Self {
-        self.local = Some(BoundDeclaration(hosts));
-        self
+    /// The info of `executor`, served in this process, as a backend lists
+    /// it ([`TurnBackend::executors`](super::TurnBackend::executors)): it
+    /// covers the channels the executor hosts as the executor tells them,
+    /// one that chooses them by a predicate included, which `hosts` cannot
+    /// name (Python's `ExecutorInfo.of`).
+    pub fn of(executor: &dyn super::ServedExecutor, options: ExecutorInfoOfOptions) -> Self {
+        let mut info = Self::new(
+            executor.executor_id(),
+            ExecutorInfoOptions {
+                node: options.node,
+                hosts: executor.hosted(),
+                organizations: executor.organizations(),
+                room_hooks: executor.room_hooks(),
+                online: !executor.closed(),
+                ..ExecutorInfoOptions::default()
+            },
+        );
+        info.local = Some(BoundDeclaration(executor.native().local_hosts()));
+        info
     }
 
     /// Whether this online executor covers the channel and the room's

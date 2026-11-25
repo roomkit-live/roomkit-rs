@@ -47,6 +47,11 @@ impl<S: ConversationStore> private::Sealed for TurnExecutor<S> {
 pub trait ServedExecutor: private::Sealed + Send + Sync + 'static {
     /// Identifier sent in the turn's acceptance frame.
     fn executor_id(&self) -> &str;
+    /// Whether `other` is this executor: two handles of one executor are
+    /// the same, as Python's `executor is other`. A backend tells the
+    /// owner's own executor ([`RoomOwner::executor`](super::RoomOwner::executor))
+    /// from the others it serves by it.
+    fn same_as(&self, other: &dyn ServedExecutor) -> bool;
     /// Whether this executor has stopped accepting turns.
     fn closed(&self) -> bool;
     /// Refuse new turns and finish closing this executor's work.
@@ -88,6 +93,9 @@ pub trait ServedExecutor: private::Sealed + Send + Sync + 'static {
 impl<S: ConversationStore> ServedExecutor for TurnExecutor<S> {
     fn executor_id(&self) -> &str {
         self.executor_id()
+    }
+    fn same_as(&self, other: &dyn ServedExecutor) -> bool {
+        self.lifecycle().ptr_eq(&other.native().lifecycle())
     }
     fn closed(&self) -> bool {
         self.closed()

@@ -1822,6 +1822,12 @@ fn local_presence_defaults() {
     assert!(info.last_beat.is_none());
     // roomkit.turns.ExecutorInfo.__init__(online) = True
     assert!(info.online);
+    // roomkit.ExecutorInfo.of(node) = None
+    assert!(
+        roomkit::turns::ExecutorInfoOfOptions::default()
+            .node
+            .is_none()
+    );
     // roomkit.RoomKit.agent_presence(organization_id) = None
     assert!(
         roomkit::AgentPresenceOptions::default()
