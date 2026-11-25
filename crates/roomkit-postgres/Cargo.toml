@@ -26,9 +26,6 @@ tracing.workspace = true
 whoami.workspace = true
 
 [dev-dependencies]
-# Shared executor scenarios run the room owner on this store and workers on Redis.
-redis.workspace = true
-roomkit = { workspace = true, features = ["redis"] }
 agent-client-protocol-schema.workspace = true
 # The conformance runner's paced model, which the suite includes from
 # roomkit.

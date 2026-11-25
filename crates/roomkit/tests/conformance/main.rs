@@ -58,14 +58,8 @@ mod run;
 mod sandbox;
 mod scenarios;
 
-#[cfg(feature = "redis")]
-mod across_redis;
 mod distributed_executors;
 const EXECUTOR_PASS: Option<scenarios::ExecutorPass> = Some(distributed_executors::run);
-#[cfg(feature = "redis")]
-const REDIS_NODE: Option<scenarios::RedisNode> = Some(across_redis::node);
-#[cfg(not(feature = "redis"))]
-const REDIS_NODE: Option<scenarios::RedisNode> = None;
 
 mod scripted;
 mod served_call_tests;

@@ -47,7 +47,7 @@ impl Site {
     ) -> Result<Self, RoomKitError> {
         let hosting = topology.worker(worker.kit.as_deref())?;
         let silent = super::silent::Silent::start(
-            &topology.fresh()?,
+            &topology.fresh(),
             hosting.node_id(),
             executor.clone(),
             worker,

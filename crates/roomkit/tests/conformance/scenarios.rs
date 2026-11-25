@@ -91,35 +91,6 @@ pub(crate) struct Node {
     pub(crate) registry: std::sync::Arc<dyn roomkit::turns::TurnRegistry>,
 }
 
-/// What makes a node across a Redis server, from its URL, a key prefix and
-/// the scenario's bounds: a runner built with the Redis assembly has one.
-pub(crate) type RedisNode =
-    fn(&str, &str, roomkit::TurnTimeouts) -> Result<Node, roomkit::RoomKitError>;
-
-/// The Redis server the scenarios with executors run across, as `REDIS_URL`
-/// names it.
-pub(crate) fn redis_url() -> Option<String> {
-    std::env::var("REDIS_URL").ok()
-}
-
-/// Whether this run's executors are served across Redis: `REDIS_URL` names a
-/// server and the runner has its Redis assembly. They are served by the
-/// broker and the registry of this process otherwise.
-pub(crate) fn across_redis() -> bool {
-    crate::REDIS_NODE.is_some() && redis_url().is_some()
-}
-
-/// The backend's name in the result file of a pass: `<backend>+redis-executors`
-/// when it serves its executors across Redis, so that roomkit-specs records
-/// it apart from the core's own pass; `backend` otherwise.
-pub(crate) fn result_backend(backend: &str, across_redis: bool) -> String {
-    if across_redis {
-        format!("{backend}+redis-executors")
-    } else {
-        backend.to_owned()
-    }
-}
-
 /// The scenario at `path`, which names `id`.
 fn load(path: &Path, id: &str) -> Value {
     let scenario: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
@@ -282,8 +253,7 @@ fn judge(id: String, problems: &[String], known: &[(&str, &str)], run: &mut Run)
 /// Every scenario of the repository's copy runs on `pass`; those this
 /// implementation fails there are exactly `known`, the known failures.
 /// When `ROOMKIT_CONFORMANCE_JUNIT` names a directory, the pass writes its
-/// result file there (`crate::junit`), under the name [`result_backend`]
-/// gives it.
+/// result file there (`crate::junit`), under its backend's name.
 #[expect(
     clippy::print_stdout,
     reason = "the suite prints its count, as a test does"
@@ -291,8 +261,8 @@ fn judge(id: String, problems: &[String], known: &[(&str, &str)], run: &mut Run)
 pub(crate) fn every_scenario_gives_what_the_rfc_says(pass: &Pass, known: &[(&str, &str)]) {
     let filter = std::env::var("ROOMKIT_CONFORMANCE_FILTER").ok();
     let executors = crate::EXECUTOR_PASS;
-    let backend = result_backend(crate::BACKEND, across_redis());
-    let output = junit::claim(&backend, pass.runtime);
+    let backend = crate::BACKEND;
+    let output = junit::claim(backend, pass.runtime);
     let run = run(
         &suite().join("scenarios"),
         filter.as_deref(),
@@ -301,7 +271,7 @@ pub(crate) fn every_scenario_gives_what_the_rfc_says(pass: &Pass, known: &[(&str
         executors,
     );
     if let Some(output) = &output {
-        junit::write(output, &backend, pass.runtime, &run.cases);
+        junit::write(output, backend, pass.runtime, &run.cases);
     }
     let skipped = run
         .cases

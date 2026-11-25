@@ -172,42 +172,32 @@ fn the_pass_on_the_contract_alone_runs_the_scenarios_with_executors_alone() {
     assert_eq!(run.cases.len(), 1);
 }
 
-/// A pass that serves its executors across Redis writes a file and a class
-/// of its own, `<backend>+redis-executors`; one that has no executor beside
-/// the kit skips their scenarios and writes the backend's.
+/// A pass that has executors beside the kit runs their scenarios; one that
+/// has none skips them, with the reason.
 #[test]
-fn a_pass_running_the_executor_scenarios_is_named_apart() {
+fn a_pass_without_executors_skips_their_scenarios() {
     let runs: scenarios::ExecutorPass = |_, _| Some(Vec::new());
-    let apart = format!("{}+redis-executors", crate::BACKEND);
     let skipped = r#"><skipped message="§10.6.7: this pass has no turn executor beside the kit"/></testcase>"#;
-    for (executors, across_redis, backend, outcome) in [
-        (None, false, crate::BACKEND, skipped),
-        (Some(runs), true, apart.as_str(), "/>"),
-    ] {
-        let root = suite_of(&[json!({"id": "area/runs-apart", "setup": {"executors": []}})]);
-        let named = scenarios::result_backend(crate::BACKEND, across_redis);
+    for (executors, outcome) in [(None, skipped), (Some(runs), "/>")] {
+        let root = suite_of(&[json!({"id": "area/with-executors", "setup": {"executors": []}})]);
+        let backend = crate::BACKEND;
         let file =
-            junit::claim_in(Some("results".into()), &root, &named, ONE_THREAD.runtime).unwrap();
+            junit::claim_in(Some("results".into()), &root, backend, ONE_THREAD.runtime).unwrap();
         let run = scenarios::run(&root, None, &ONE_THREAD, &[], executors);
         let revision = Revision {
             commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
             clean: true,
         };
         let output = Output { file, revision };
-        junit::write(&output, &named, ONE_THREAD.runtime, &run.cases);
+        junit::write(&output, backend, ONE_THREAD.runtime, &run.cases);
         let cases = cases_of(&output.file);
         std::fs::remove_dir_all(&root).unwrap();
 
         let class = format!("conformance.{backend}.current_thread");
         assert_eq!(
-            output.file,
-            root.join("results")
-                .join(format!("{backend}-current_thread.xml"))
-        );
-        assert_eq!(
             cases,
             [format!(
-                r#"<testcase classname="{class}" name="area/runs-apart"{outcome}"#
+                r#"<testcase classname="{class}" name="area/with-executors"{outcome}"#
             )]
         );
     }

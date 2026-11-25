@@ -1,5 +1,5 @@
 //! Placement cases use separate worker nodes. The ordered presence scenarios
-//! follow Python's fixture: the same Redis backend serves the room owner's
+//! follow Python's fixture: the same backend serves the room owner's
 //! workers and reports their start and close before the next scenario step.
 
 use std::collections::BTreeMap;
@@ -11,7 +11,6 @@ use roomkit::turns::{
 };
 use roomkit::{RoomKitError, TurnExecutor, TurnTimeouts};
 use serde_json::Value;
-use uuid::Uuid;
 
 use crate::scenarios::Node;
 
@@ -24,68 +23,44 @@ pub(super) fn is_presence(id: &str) -> bool {
     )
 }
 
-/// What the scenario's nodes run on: the Redis server `REDIS_URL` names
-/// when the runner has its Redis assembly, the broker and the registry of
-/// this process otherwise.
-enum Service {
-    Redis {
-        node: crate::scenarios::RedisNode,
-        url: String,
-        key_prefix: String,
-    },
-    InProcess {
-        broker: Arc<InMemoryTurnBroker>,
-        registry: Arc<InMemoryTurnRegistry>,
-    },
+/// What the scenario's nodes run on: a broker and a registry of this
+/// process, which no other scenario reaches.
+struct Services {
+    broker: Arc<InMemoryTurnBroker>,
+    registry: Arc<InMemoryTurnRegistry>,
 }
 
-impl Service {
-    fn of_this_run() -> Self {
-        match (crate::REDIS_NODE, crate::scenarios::redis_url()) {
-            (Some(node), Some(url)) => Self::Redis {
-                node,
-                url,
-                key_prefix: format!("roomkit:test:scenario:{}", Uuid::new_v4()),
-            },
-            _ => Self::InProcess {
-                broker: Arc::new(InMemoryTurnBroker::new()),
-                registry: Arc::new(InMemoryTurnRegistry::new()),
-            },
+impl Services {
+    fn new() -> Self {
+        Self {
+            broker: Arc::new(InMemoryTurnBroker::new()),
+            registry: Arc::new(InMemoryTurnRegistry::new()),
         }
     }
 
     /// A new node of the scenario, with the services it runs on.
-    fn node(&self, timeouts: TurnTimeouts) -> Result<Node, RoomKitError> {
-        match self {
-            Self::Redis {
-                node,
-                url,
-                key_prefix,
-            } => node(url, key_prefix, timeouts),
-            Self::InProcess { broker, registry } => {
-                let broker: Arc<dyn TurnBroker> = Arc::<InMemoryTurnBroker>::clone(broker);
-                let registry: Arc<dyn TurnRegistry> = Arc::<InMemoryTurnRegistry>::clone(registry);
-                let options = DistributedTurnBackendOptions {
-                    timeouts,
-                    ..DistributedTurnBackendOptions::default()
-                };
-                Ok(Node {
-                    backend: DistributedTurnBackend::new(
-                        Arc::clone(&broker),
-                        Arc::clone(&registry),
-                        options,
-                    ),
-                    broker,
-                    registry,
-                })
-            }
+    fn node(&self, timeouts: TurnTimeouts) -> Node {
+        let broker: Arc<dyn TurnBroker> = Arc::<InMemoryTurnBroker>::clone(&self.broker);
+        let registry: Arc<dyn TurnRegistry> = Arc::<InMemoryTurnRegistry>::clone(&self.registry);
+        let options = DistributedTurnBackendOptions {
+            timeouts,
+            ..DistributedTurnBackendOptions::default()
+        };
+        Node {
+            backend: DistributedTurnBackend::new(
+                Arc::clone(&broker),
+                Arc::clone(&registry),
+                options,
+            ),
+            broker,
+            registry,
         }
     }
 }
 
 pub(super) struct Topology {
     owner: DistributedTurnBackend,
-    service: Service,
+    services: Services,
     pub(super) timeouts: TurnTimeouts,
     nodes: Mutex<BTreeMap<String, DistributedTurnBackend>>,
     shared: bool,
@@ -94,7 +69,7 @@ pub(super) struct Topology {
 impl Topology {
     pub(super) fn new(scenario: &Value) -> Result<Self, RoomKitError> {
         let timeouts = timeouts(scenario)?;
-        let service = Service::of_this_run();
+        let services = Services::new();
         let mut nodes = BTreeMap::new();
         for process in scenario["setup"]["processes"]
             .as_array()
@@ -109,12 +84,12 @@ impl Topology {
                     "main names the run's own process".into(),
                 ));
             }
-            nodes.insert(name.to_owned(), service.node(timeouts)?.backend);
+            nodes.insert(name.to_owned(), services.node(timeouts).backend);
         }
         Ok(Self {
-            owner: service.node(timeouts)?.backend,
+            owner: services.node(timeouts).backend,
             nodes: Mutex::new(nodes),
-            service,
+            services,
             timeouts,
             shared: scenario["id"].as_str().is_some_and(is_presence),
         })
@@ -126,8 +101,8 @@ impl Topology {
 
     /// A node of the scenario no process of its setup names, with the
     /// services it runs on: a worker's own, or a peer's the runner writes.
-    pub(super) fn fresh(&self) -> Result<Node, RoomKitError> {
-        self.service.node(self.timeouts)
+    pub(super) fn fresh(&self) -> Node {
+        self.services.node(self.timeouts)
     }
 
     pub(super) fn node(
@@ -143,7 +118,7 @@ impl Topology {
             .get_mut(name)
             .ok_or_else(|| RoomKitError::Value(format!("unknown executor process {name}")))?;
         if restart {
-            *node = self.fresh()?.backend;
+            *node = self.fresh().backend;
         }
         Ok(node.clone())
     }
@@ -158,7 +133,7 @@ impl Topology {
         if self.shared {
             Ok(self.owner.clone())
         } else {
-            Ok(self.fresh()?.backend)
+            Ok(self.fresh().backend)
         }
     }
 

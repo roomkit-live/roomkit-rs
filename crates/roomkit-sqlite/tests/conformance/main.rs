@@ -11,8 +11,6 @@
 
 #[path = "../../../roomkit/tests/conformance/acp_agents.rs"]
 mod acp_agents;
-#[path = "../../../roomkit/tests/conformance/across_redis.rs"]
-mod across_redis;
 #[path = "../../../roomkit/tests/conformance/agents.rs"]
 mod agents;
 #[path = "../../../roomkit/tests/conformance/ai_hooks.rs"]
@@ -89,7 +87,6 @@ mod sandbox;
 mod scenarios;
 
 const EXECUTOR_PASS: Option<scenarios::ExecutorPass> = Some(distributed_executors::run);
-const REDIS_NODE: Option<scenarios::RedisNode> = Some(across_redis::node);
 
 #[path = "../../../roomkit/tests/conformance/scripted.rs"]
 mod scripted;
