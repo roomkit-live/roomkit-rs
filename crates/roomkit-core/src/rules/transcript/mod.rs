@@ -1087,9 +1087,12 @@ pub fn turn_author(event: &RoomEvent, context: &RoomContext) -> TurnAuthor {
 /// content's text form (§6.6), each of its lines under its speaker's label
 /// when the room has several speakers, as the turn's history labels them;
 /// `None` for an event that reads as no text, which waits a turn of its
-/// own, and for an event that opens no turn (a notice, a reaction: RFC
+/// own, for an event that opens no turn (a notice, a reaction: RFC
 /// §6.4; an edit or a delete: RFC §10.3), whose own turn the agent does
-/// not take. Python's `steered_message`: its speakers are those of the
+/// not take, and for an instruction (RFC §10.1.1 rule 6): the
+/// application's, marked and never attributed, it would read in a running
+/// turn as a speaker's words, so it waits the turn that reads it as an
+/// instruction. Python's `steered_message`: its speakers are those of the
 /// events the agent may read and `event`'s, nameless ones told apart and
 /// counted by source, as the conversation counts them ([`asking_label`]).
 pub fn steered_text(
@@ -1097,7 +1100,7 @@ pub fn steered_text(
     context: &RoomContext,
     channel_id: &ChannelId,
 ) -> Option<String> {
-    if opens_no_turn(event) {
+    if opens_no_turn(event) || event.r#type == EventType::Instruction {
         return None;
     }
     let text = text_of(&event.content);

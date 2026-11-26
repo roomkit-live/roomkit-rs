@@ -146,6 +146,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- An instruction of the application that comes while the turn another
+  instruction opened runs waits a turn of its own (RFC §6.4, §10.1.1 rule 6,
+  RMK-2146). With `steer_room_turns` it was handed to the running turn as a
+  message under a speaker's label, its runtime mark read as a copy: a
+  delegated task's result that came while the agent told another's read as a
+  participant's words.
 - Each row of an agent's response carries the instant it was written, as in
   Python (RFC §5.2, RMK-2096), where every row carried the `created_at` of
   the event the response answers: a streamed response's rows, and the rows a

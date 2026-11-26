@@ -312,7 +312,9 @@ fn nothing() -> Outcome {
 /// loop reached. A message that reads as no text, or that no loop takes
 /// (not reachable yet, or reading its queue no more), waits a turn of its
 /// own; so does an event that opens no turn (a notice, a change: RFC
-/// §6.4), never handed to the running one.
+/// §6.4), never handed to the running one, and an instruction of the
+/// application (RFC §10.1.1 rule 6), which a turn reads as one only when
+/// it opens it.
 ///
 /// Only the author of the message the turn answers writes to it. A turn
 /// runs in its author's name: its tools read them as its actor (RFC

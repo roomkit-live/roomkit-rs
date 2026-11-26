@@ -823,6 +823,69 @@ async fn a_notice_while_the_model_answers_is_not_steered() {
     assert_eq!(requests.len(), 1);
 }
 
+/// An instruction of the application addressed to the agent, as `text`.
+fn instruction(text: &str) -> roomkit::model::InboundMessage {
+    let content = roomkit::model::TextContent::new(text);
+    let mut message = roomkit::model::InboundMessage::new(channel("sms"), "app", content);
+    message.event_type = EventType::Instruction;
+    message.addressed_to = Some(vec![channel("assistant")]);
+    message
+}
+
+/// Delivers `message` to the room.
+async fn deliver(room: &Room, message: roomkit::model::InboundMessage) {
+    let options = roomkit::ProcessInboundOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    };
+    let result = room.kit.process_inbound(message, options).await.unwrap();
+    assert!(!result.blocked, "{:?}", result.reason);
+}
+
+/// RFC §6.4, §10.1.1 rule 6: an instruction is the application's, marked
+/// and never attributed. One that comes while the turn another instruction
+/// opened runs has that turn's author, and is still no message for it:
+/// steered in, it would read as a participant's words, its mark a copy. It
+/// waits a turn of its own, which reads it as an instruction (RMK-2146).
+#[tokio::test]
+async fn an_instruction_while_an_instructed_turn_runs_waits_a_turn_of_its_own() {
+    const MARK: &str = "[Instruction from the application:";
+    let model = Gated::new(
+        [
+            ScriptedRound::answering("The first task failed."),
+            ScriptedRound::answering("The second task is done."),
+        ],
+        0,
+    );
+    let room = Arc::new(steering_turns(model.clone(), Paused::new().tools()).await);
+    let turn = {
+        let room = Arc::clone(&room);
+        tokio::spawn(async move { deliver(&room, instruction("Report the first result.")).await })
+    };
+    model.answering().await;
+
+    let mut second = {
+        let room = Arc::clone(&room);
+        tokio::spawn(async move { deliver(&room, instruction("Report the second result.")).await })
+    };
+    let early = tokio::time::timeout(std::time::Duration::from_millis(50), &mut second).await;
+    assert!(early.is_err(), "handed to the running turn");
+    model.release();
+    turn.await.unwrap();
+    second.await.unwrap();
+    room.kit.close().await.unwrap();
+
+    let requests = model.requests();
+    assert_eq!(requests.len(), 2);
+    let opening = requests[1].messages.last().unwrap().text();
+    assert!(
+        opening.starts_with(MARK) && opening.contains("Report the second result."),
+        "{:?}",
+        texts(&requests[1])
+    );
+    assert!(!read(&requests[1], "A copy of a runtime mark"));
+}
+
 // Python: tests/test_steering_during_turn.py::test_off_a_message_during_a_turn_starts_its_own
 #[tokio::test]
 async fn off_a_message_during_a_turn_starts_its_own() {

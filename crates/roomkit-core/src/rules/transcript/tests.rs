@@ -893,6 +893,18 @@ fn a_steered_message_counts_no_blocked_message_s_author_as_a_speaker() {
     );
 }
 
+/// RFC §6.4, §10.1.1 rule 6: an instruction is marked and never attributed,
+/// so it is no message for a running turn, which would read it as a
+/// speaker's words (RMK-2146).
+#[test]
+fn an_instruction_is_no_message_for_the_running_turn() {
+    let mut room = Timeline::new();
+    room.says("sms", "+15550001", None, "Refund me");
+    let event = room.instruction("Report the task's result.", false);
+    let agent = ChannelId::new(AGENT).unwrap();
+    assert_eq!(steered_text(&event, &room.context, &agent), None);
+}
+
 fn read_with(room: &Timeline, event: &RoomEvent, memory: &super::TurnMemory) -> Vec<Message> {
     super::conversation_with_memory(
         &ChannelId::new(AGENT).unwrap(),
