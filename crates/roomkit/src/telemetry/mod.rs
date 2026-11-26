@@ -27,7 +27,6 @@ mod tests;
 
 pub use config::TelemetryConfig;
 pub use console::{ConsoleTelemetryProvider, ConsoleTelemetryProviderOptions};
-pub use context::get_current_span;
 pub(crate) use context::within_current_span;
 #[cfg(test)]
 pub(crate) use context::within_no_span;
@@ -37,6 +36,7 @@ pub(crate) use context::{
 };
 #[doc(hidden)]
 pub use context::{current_records_sensitive_data, current_telemetry};
+pub use context::{get_current_span, get_current_telemetry_ctx};
 pub use kinds::{Attr, SpanKind};
 pub use mock::MockTelemetryProvider;
 pub use noop::NoopTelemetryProvider;

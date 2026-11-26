@@ -287,7 +287,6 @@ impl Late {
     }
 
     /// The provider's own context of the span, once it opened.
-    #[cfg(feature = "opentelemetry")]
     pub(super) fn context(&self) -> Option<Arc<dyn Any + Send + Sync>> {
         self.context.get().cloned().flatten()
     }

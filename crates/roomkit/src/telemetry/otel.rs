@@ -19,8 +19,10 @@ use opentelemetry_sdk::propagation::{BaggagePropagator, TraceContextPropagator};
 use opentelemetry_sdk::trace::{SdkTracer, SdkTracerProvider};
 use serde_json::Value;
 
-use super::context::current_span_context;
-use super::{EndSpanOptions, RecordMetricOptions, SpanKind, StartSpanOptions, TelemetryProvider};
+use super::{
+    EndSpanOptions, RecordMetricOptions, SpanKind, StartSpanOptions, TelemetryProvider,
+    get_current_telemetry_ctx,
+};
 
 /// How many ended spans a provider keeps as parents for late children, the
 /// latest to end: a context each, as Python's `_ENDED_SPANS_KEPT`.
@@ -216,8 +218,8 @@ impl OpenTelemetryProvider {
     /// parent, else the parent this provider started, else the carried
     /// context, the span then staying in its trace under an ancestor.
     fn parent_context(&self, parent_id: &str, name: &str) -> Context {
-        let carried =
-            current_span_context().and_then(|context| context.downcast_ref::<Context>().cloned());
+        let carried = get_current_telemetry_ctx()
+            .and_then(|context| context.downcast_ref::<Context>().cloned());
         if let Some(context) = &carried
             && span_id_of(context) == parent_id
         {

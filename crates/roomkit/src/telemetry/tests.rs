@@ -496,3 +496,177 @@ async fn a_turn_request_under_no_span_names_none() {
     let blank = within_kit(&telemetry, Some(String::new()), async { current_trace() });
     assert_eq!(blank.await, None);
 }
+
+/// A provider whose spans' contexts are their ids, and which keeps the
+/// context each span starts under: the witness of what the kit gives a
+/// provider written outside this crate, which reads it with
+/// [`get_current_telemetry_ctx`] as an OpenTelemetry provider does.
+#[derive(Default)]
+struct Contexts {
+    spans: MockTelemetryProvider,
+    started_under: Mutex<BTreeMap<String, Option<String>>>,
+}
+
+impl Contexts {
+    /// The context the span `name` started under.
+    fn under(&self, span_id: &str) -> Option<String> {
+        self.started_under
+            .lock()
+            .unwrap()
+            .get(span_id)
+            .cloned()
+            .flatten()
+    }
+}
+
+fn context_of(span_id: &str) -> Arc<dyn std::any::Any + Send + Sync> {
+    Arc::new(span_id.to_owned())
+}
+
+impl TelemetryProvider for Contexts {
+    fn name(&self) -> &'static str {
+        "contexts"
+    }
+
+    fn start_span(&self, kind: SpanKind, name: &str, options: StartSpanOptions) -> String {
+        let span_id = self.spans.start_span(kind, name, options);
+        let under = get_current_telemetry_ctx()
+            .and_then(|context| context.downcast_ref::<String>().cloned());
+        self.started_under
+            .lock()
+            .unwrap()
+            .insert(span_id.clone(), under);
+        span_id
+    }
+
+    fn end_span(&self, span_id: &str, options: EndSpanOptions) {
+        self.spans.end_span(span_id, options);
+    }
+
+    fn set_attribute(&self, span_id: &str, key: &str, value: serde_json::Value) {
+        self.spans.set_attribute(span_id, key, value);
+    }
+
+    fn record_metric(&self, name: &str, value: f64, options: RecordMetricOptions) {
+        self.spans.record_metric(name, value, options);
+    }
+
+    fn get_span_context(&self, span_id: &str) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
+        Some(context_of(span_id))
+    }
+
+    fn inject_context(&self, span_id: &str) -> BTreeMap<String, String> {
+        BTreeMap::from([("traceparent".to_owned(), format!("00-trace-{span_id}-01"))])
+    }
+
+    fn extract_context(
+        &self,
+        carrier: &BTreeMap<String, String>,
+    ) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
+        Some(context_of(carrier.get("traceparent")?.split('-').nth(2)?))
+    }
+}
+
+fn reporting_to(provider: Arc<dyn TelemetryProvider>) -> KitTelemetry {
+    KitTelemetry {
+        provider,
+        sensitive: false,
+        suppressed: Arc::default(),
+    }
+}
+
+// Python: tests/test_opentelemetry.py::TestAcrossProcesses: a turn of
+// another process continues the span its request names, in that trace.
+#[tokio::test]
+async fn a_turn_s_spans_start_under_the_context_its_request_names() {
+    let owner = Contexts::default();
+    let executor = Arc::new(Contexts::default());
+    let parent = owner.start_span(
+        SpanKind::Broadcast,
+        "broadcast",
+        StartSpanOptions::default(),
+    );
+    let mut trace = owner.inject_context(&parent);
+    trace.insert("span_id".to_owned(), parent.clone());
+    let child = {
+        let provider = Arc::clone(&executor);
+        let telemetry = reporting_to(Arc::<Contexts>::clone(&executor));
+        within_turn_trace(Some(telemetry), Some(&trace), async move {
+            assert_eq!(get_current_span(), Some(parent.clone()));
+            let options = StartSpanOptions {
+                parent_id: Some(parent),
+                ..StartSpanOptions::default()
+            };
+            provider.start_span(SpanKind::LlmGenerate, "generate", options)
+        })
+        .await
+    };
+    assert_eq!(executor.under(&child), Some(trace["span_id"].clone()));
+}
+
+// Python: tests/test_opentelemetry.py::TestAcrossProcesses: a turn
+// request names its span by the provider's trace context, and by its id
+// alone for a provider that writes none.
+#[tokio::test]
+async fn a_turn_request_names_its_span_by_the_provider_s_trace_context() {
+    let provider: Arc<dyn TelemetryProvider> = Arc::new(Contexts::default());
+    let span = provider.start_span(
+        SpanKind::Broadcast,
+        "broadcast",
+        StartSpanOptions::default(),
+    );
+    let named = within_kit(
+        &reporting_to(Arc::clone(&provider)),
+        Some(span.clone()),
+        async { current_trace() },
+    )
+    .await
+    .unwrap();
+    let bare = reporting_to(Arc::new(NoopTelemetryProvider));
+    let without_a_carrier = within_kit(&bare, Some(span.clone()), async { current_trace() })
+        .await
+        .unwrap();
+    assert_eq!(
+        named,
+        BTreeMap::from([
+            ("span_id".to_owned(), span.clone()),
+            ("traceparent".to_owned(), format!("00-trace-{span}-01")),
+        ])
+    );
+    assert_eq!(
+        without_a_carrier,
+        BTreeMap::from([("span_id".to_owned(), span)])
+    );
+}
+
+// Python: core/mixins/lane_execution.py carries `parent_ctx` itself: what a
+// call's work opens starts under the context its late span had when it
+// opened, whatever the provider keeps of that span once it ended.
+#[tokio::test]
+async fn a_child_of_an_ended_late_span_starts_under_its_context() {
+    let provider = Arc::new(Contexts::default());
+    let telemetry = reporting_to(Arc::<Contexts>::clone(&provider));
+    let late = LateSpan::new(
+        &telemetry,
+        SpanKind::Custom,
+        "late",
+        StartSpanOptions::default(),
+    );
+    let (late_id, child) = {
+        let provider = Arc::clone(&provider);
+        late.within(async move {
+            current_call_goes_in();
+            let late_id = get_current_span().unwrap();
+            provider.end_span(&late_id, EndSpanOptions::default());
+            let options = StartSpanOptions {
+                parent_id: get_current_span(),
+                ..StartSpanOptions::default()
+            };
+            let child = provider.start_span(SpanKind::Custom, "child", options);
+            (late_id, child)
+        })
+        .await
+    };
+    drop(late);
+    assert_eq!(provider.under(&child), Some(late_id));
+}

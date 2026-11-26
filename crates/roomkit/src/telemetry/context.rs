@@ -36,7 +36,6 @@ impl Current {
     }
 
     /// The provider's own context of the current span.
-    #[cfg(feature = "opentelemetry")]
     fn span_context(&self) -> Option<Arc<dyn Any + Send + Sync>> {
         match self.late.as_deref().filter(|late| late.id().is_some()) {
             Some(late) => late.context(),
@@ -99,10 +98,17 @@ pub fn current_records_sensitive_data() -> bool {
     read(|current| Some(current.telemetry.sensitive)).unwrap_or(false)
 }
 
-/// The provider's own context of the current span, Python's
-/// `get_current_telemetry_ctx()`.
-#[cfg(feature = "opentelemetry")]
-pub(crate) fn current_span_context() -> Option<Arc<dyn Any + Send + Sync>> {
+/// Python `get_current_telemetry_ctx()`: the current span's context as its
+/// provider gave it ([`TelemetryProvider::get_span_context`], or
+/// [`TelemetryProvider::extract_context`] for a span of another process),
+/// under which a provider written outside this crate starts a span, in the
+/// current span's trace; `None` under no span, or when the provider gives
+/// no context.
+///
+/// [`TelemetryProvider::get_span_context`]: super::TelemetryProvider::get_span_context
+/// [`TelemetryProvider::extract_context`]: super::TelemetryProvider::extract_context
+#[must_use]
+pub fn get_current_telemetry_ctx() -> Option<Arc<dyn Any + Send + Sync>> {
     read(Current::span_context)
 }
 

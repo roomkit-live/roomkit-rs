@@ -26,10 +26,8 @@ use serde_json::json;
 
 use super::otel::ENDED_SPANS_KEPT;
 use super::{
-    EndSpanOptions, KitTelemetry, LateSpan, NoopTelemetryProvider, OpenTelemetryProvider,
-    OpenTelemetryProviderOptions, RecordMetricOptions, SpanKind, StartSpanOptions,
-    TelemetryProvider, current_call_goes_in, current_trace, get_current_span, within_kit,
-    within_turn_trace,
+    EndSpanOptions, OpenTelemetryProvider, OpenTelemetryProviderOptions, RecordMetricOptions,
+    SpanKind, StartSpanOptions, TelemetryProvider,
 };
 
 /// A provider whose spans land in an in-memory exporter.
@@ -314,56 +312,6 @@ fn the_metadata_tags_every_span() {
     assert_eq!(attribute(&span, "roomkit.env"), Some("test".into()));
 }
 
-// Python: tests/test_opentelemetry.py::TestAcrossProcesses::test_a_span_another_provider_names_is_the_parent_of_its_spans
-#[tokio::test]
-async fn a_span_another_provider_names_is_the_parent_of_its_spans() {
-    let (owner, exporter) = provider();
-    let tracer_provider = SdkTracerProvider::builder()
-        .with_simple_exporter(exporter.clone())
-        .build();
-    let executor: Arc<dyn TelemetryProvider> =
-        Arc::new(OpenTelemetryProvider::new(OpenTelemetryProviderOptions {
-            tracer_provider: Some(tracer_provider),
-            ..OpenTelemetryProviderOptions::default()
-        }));
-    let parent = owner.start_span(
-        SpanKind::Broadcast,
-        "broadcast",
-        StartSpanOptions::default(),
-    );
-    let carrier = owner.inject_context(&parent);
-    assert!(carrier.contains_key("traceparent"), "{carrier:?}");
-    let mut trace = carrier;
-    trace.insert("span_id".to_owned(), parent.clone());
-    let telemetry = KitTelemetry {
-        provider: Arc::clone(&executor),
-        sensitive: false,
-        suppressed: Arc::default(),
-    };
-    let child = {
-        let executor = Arc::clone(&executor);
-        let parent = parent.clone();
-        within_turn_trace(Some(telemetry), Some(&trace), async move {
-            assert_eq!(get_current_span(), Some(parent.clone()));
-            let options = StartSpanOptions {
-                parent_id: Some(parent),
-                ..StartSpanOptions::default()
-            };
-            executor.start_span(SpanKind::LlmGenerate, "generate", options)
-        })
-        .await
-    };
-    executor.end_span(&child, EndSpanOptions::default());
-    owner.end_span(&parent, EndSpanOptions::default());
-    let broadcast = finished(&exporter, "roomkit.broadcast");
-    let generate = finished(&exporter, "roomkit.generate");
-    assert_eq!(generate.parent_span_id, broadcast.span_context.span_id());
-    assert_eq!(
-        generate.span_context.trace_id(),
-        broadcast.span_context.trace_id()
-    );
-}
-
 // Python: tests/test_opentelemetry.py::TestAcrossProcesses::test_a_carrier_that_names_no_span_gives_no_context
 #[test]
 fn a_carrier_that_names_no_span_gives_no_context() {
@@ -498,86 +446,4 @@ fn the_close_exports_the_spans_it_ends_when_the_collector_answers() {
     );
     provider.close();
     assert_eq!(collector.exported(), vec!["roomkit.still open".to_owned()]);
-}
-
-// Python: tests/test_opentelemetry.py::TestAcrossProcesses::test_a_turn_request_names_its_span_by_trace_context
-#[tokio::test]
-async fn a_turn_request_names_its_span_by_trace_context() {
-    let (provider, _) = provider();
-    let provider: Arc<dyn TelemetryProvider> = Arc::new(provider);
-    let span = provider.start_span(
-        SpanKind::Broadcast,
-        "broadcast",
-        StartSpanOptions::default(),
-    );
-    let telemetry = KitTelemetry {
-        provider: Arc::clone(&provider),
-        sensitive: false,
-        suppressed: Arc::default(),
-    };
-    let named = within_kit(&telemetry, Some(span.clone()), async { current_trace() })
-        .await
-        .unwrap();
-    let bare = KitTelemetry {
-        provider: Arc::new(NoopTelemetryProvider),
-        sensitive: false,
-        suppressed: Arc::default(),
-    };
-    let without_a_carrier = within_kit(&bare, Some(span.clone()), async { current_trace() })
-        .await
-        .unwrap();
-    provider.end_span(&span, EndSpanOptions::default());
-    assert_eq!(named["span_id"], span);
-    assert_eq!(named["traceparent"].split('-').nth(2), Some(span.as_str()));
-    assert_eq!(
-        without_a_carrier,
-        BTreeMap::from([("span_id".to_owned(), span)])
-    );
-}
-
-// Python: core/mixins/lane_execution.py carries `parent_ctx` itself: what a
-// call's work opens stays in its trace once the provider forgot its ended span.
-#[tokio::test]
-async fn a_child_of_a_forgotten_late_span_stays_in_its_trace() {
-    let (provider, exporter) = provider();
-    let provider: Arc<dyn TelemetryProvider> = Arc::new(provider);
-    let telemetry = KitTelemetry {
-        provider: Arc::clone(&provider),
-        sensitive: false,
-        suppressed: Arc::default(),
-    };
-    let late = LateSpan::new(
-        &telemetry,
-        SpanKind::Custom,
-        "late",
-        StartSpanOptions::default(),
-    );
-    let work = {
-        let provider = Arc::clone(&provider);
-        late.within(async move {
-            current_call_goes_in();
-            let late_id = get_current_span().unwrap();
-            provider.end_span(&late_id, EndSpanOptions::default());
-            for _ in 0..=ENDED_SPANS_KEPT {
-                let noise =
-                    provider.start_span(SpanKind::Custom, "noise", StartSpanOptions::default());
-                provider.end_span(&noise, EndSpanOptions::default());
-            }
-            let options = StartSpanOptions {
-                parent_id: get_current_span(),
-                ..StartSpanOptions::default()
-            };
-            let child = provider.start_span(SpanKind::Custom, "child", options);
-            provider.end_span(&child, EndSpanOptions::default());
-        })
-    };
-    work.await;
-    drop(late);
-    let parent = finished(&exporter, "roomkit.late");
-    let child = finished(&exporter, "roomkit.child");
-    assert_eq!(child.parent_span_id, parent.span_context.span_id());
-    assert_eq!(
-        child.span_context.trace_id(),
-        parent.span_context.trace_id()
-    );
 }

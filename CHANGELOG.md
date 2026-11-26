@@ -8,6 +8,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `telemetry::get_current_telemetry_ctx()`: the current span's context as
+  its provider gave it, under which a telemetry provider written outside
+  this crate starts its spans in the current span's trace (RMK-2011),
+  Python's `roomkit.telemetry.get_current_telemetry_ctx`. It is compiled
+  with or without the `opentelemetry` feature, whose provider reads it.
 - `testing::check_turn_broker` and `testing::check_turn_registry`: the
   contract of the distributed turn backend's two ports, as checks a service
   that implements them calls from its own tests (RMK-2012). The core runs
