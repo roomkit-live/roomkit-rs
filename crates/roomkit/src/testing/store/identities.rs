@@ -3,12 +3,11 @@
 //! to another in each other organization (gap G-060), so that resolving it
 //! is never a guess.
 
-use pretty_assertions::assert_eq;
-use roomkit::model::{ChannelType, Identity, IdentityId};
-use roomkit::{ConversationStore, StoreError};
+use crate::model::{ChannelType, Identity, IdentityId};
+use crate::{ConversationStore, StoreError};
 use serde_json::json;
 
-use crate::Store;
+use super::{Held, Open};
 
 const ALICE: &str = "+15550000001";
 
@@ -27,8 +26,8 @@ fn identity(name: &str, organization: Option<&str>) -> Identity {
 }
 
 /// A store holding `identities`.
-async fn holding(identities: Vec<Identity>) -> Store {
-    let store = crate::store().await;
+async fn holding<T: Held>(open: Open<'_, T>, identities: Vec<Identity>) -> T {
+    let store = open().await;
     for identity in identities {
         store.create_identity(identity).await.unwrap();
     }
@@ -36,12 +35,12 @@ async fn holding(identities: Vec<Identity>) -> Store {
 }
 
 /// The id of the identity of `organization` ALICE's number resolves to.
-async fn resolved(store: &Store, organization: Option<&str>) -> Option<String> {
+async fn resolved<T: Held>(store: &T, organization: Option<&str>) -> Option<String> {
     store
         .resolve_identity(
             &ChannelType::SMS,
             ALICE,
-            roomkit::store::ResolveIdentityOptions {
+            crate::store::ResolveIdentityOptions {
                 organization_id: organization.map(str::to_owned),
             },
         )
@@ -50,22 +49,25 @@ async fn resolved(store: &Store, organization: Option<&str>) -> Option<String> {
         .map(|identity| identity.id.to_string())
 }
 
-#[tokio::test]
-async fn an_identity_is_read_as_it_was_created() {
+async fn an_identity_is_read_as_it_was_created<T: Held>(open: Open<'_, T>) {
     let mut created = identity("id_jean", Some("bank"));
     created.display_name = Some("Jean".to_owned());
     created.external_id = Some("crm_42".to_owned());
     created.metadata.insert("tier".to_owned(), json!("gold"));
-    let store = holding(vec![created.clone()]).await;
+    let store = holding(open, vec![created.clone()]).await;
     assert_eq!(store.get_identity(&id("id_jean")).await, Ok(Some(created)));
 }
 
-#[tokio::test]
-async fn an_address_resolves_to_the_identity_of_the_caller_s_organization() {
-    let store = holding(vec![
-        identity("id_bank", Some("bank")),
-        identity("id_clinic", Some("clinic")),
-    ])
+async fn an_address_resolves_to_the_identity_of_the_caller_s_organization<T: Held>(
+    open: Open<'_, T>,
+) {
+    let store = holding(
+        open,
+        vec![
+            identity("id_bank", Some("bank")),
+            identity("id_clinic", Some("clinic")),
+        ],
+    )
     .await;
     assert_eq!(
         resolved(&store, Some("clinic")).await,
@@ -73,27 +75,30 @@ async fn an_address_resolves_to_the_identity_of_the_caller_s_organization() {
     );
 }
 
-#[tokio::test]
-async fn an_identity_of_an_organization_does_not_resolve_for_a_caller_naming_none() {
-    let store = holding(vec![identity("id_bank", Some("bank"))]).await;
+pub(super) async fn an_identity_of_an_organization_does_not_resolve_for_a_caller_naming_none<
+    T: Held,
+>(
+    open: Open<'_, T>,
+) {
+    let store = holding(open, vec![identity("id_bank", Some("bank"))]).await;
     assert_eq!(resolved(&store, None).await, None);
 }
 
-#[tokio::test]
-async fn an_identity_of_no_organization_resolves_for_a_caller_naming_none() {
-    let store = holding(vec![identity("id_alice", None)]).await;
+async fn an_identity_of_no_organization_resolves_for_a_caller_naming_none<T: Held>(
+    open: Open<'_, T>,
+) {
+    let store = holding(open, vec![identity("id_alice", None)]).await;
     assert_eq!(resolved(&store, None).await, Some("id_alice".to_owned()));
 }
 
-#[tokio::test]
-async fn an_address_on_another_channel_type_does_not_resolve() {
-    let store = holding(vec![identity("id_alice", None)]).await;
+async fn an_address_on_another_channel_type_does_not_resolve<T: Held>(open: Open<'_, T>) {
+    let store = holding(open, vec![identity("id_alice", None)]).await;
     assert_eq!(
         store
             .resolve_identity(
                 &ChannelType::WHATSAPP,
                 ALICE,
-                roomkit::store::ResolveIdentityOptions::default()
+                crate::store::ResolveIdentityOptions::default()
             )
             .await,
         Ok(None)
@@ -102,9 +107,10 @@ async fn an_address_on_another_channel_type_does_not_resolve() {
 
 /// RFC §14.1: the same address may belong to a different identity in
 /// each organization, and to one only within an organization.
-#[tokio::test]
-async fn an_address_another_identity_of_the_organization_uses_is_refused() {
-    let store = holding(vec![identity("id_one", Some("bank"))]).await;
+async fn an_address_another_identity_of_the_organization_uses_is_refused<T: Held>(
+    open: Open<'_, T>,
+) {
+    let store = holding(open, vec![identity("id_one", Some("bank"))]).await;
     assert_eq!(
         store
             .create_identity(identity("id_two", Some("bank")))
@@ -117,10 +123,9 @@ async fn an_address_another_identity_of_the_organization_uses_is_refused() {
 
 /// An identity is never created over an id another organization holds: the
 /// stored one, and where it resolves, stay as they are (RFC §5.6, §17.2).
-#[tokio::test]
-async fn an_id_another_organization_holds_is_refused() {
+async fn an_id_another_organization_holds_is_refused<T: Held>(open: Open<'_, T>) {
     let held = identity("id_alice", Some("acme"));
-    let store = holding(vec![held.clone()]).await;
+    let store = holding(open, vec![held.clone()]).await;
     let mut intruder = Identity::new(id("id_alice"));
     intruder.organization_id = Some("globex".to_owned());
     assert_eq!(
@@ -135,9 +140,10 @@ async fn an_id_another_organization_holds_is_refused() {
 }
 
 /// A replaced identity stops resolving at an address it no longer holds.
-#[tokio::test]
-async fn a_replaced_identity_stops_resolving_at_what_it_no_longer_holds() {
-    let store = holding(vec![identity("id_alice", Some("acme"))]).await;
+async fn a_replaced_identity_stops_resolving_at_what_it_no_longer_holds<T: Held>(
+    open: Open<'_, T>,
+) {
+    let store = holding(open, vec![identity("id_alice", Some("acme"))]).await;
     let mut replaced = Identity::new(id("id_alice"));
     replaced.organization_id = Some("acme".to_owned());
     replaced.link(ChannelType::SMS, "+15550000002");
@@ -146,11 +152,10 @@ async fn a_replaced_identity_stops_resolving_at_what_it_no_longer_holds() {
 }
 
 /// No organization counts as another, either way.
-#[tokio::test]
-async fn no_organization_counts_as_another() {
+async fn no_organization_counts_as_another<T: Held>(open: Open<'_, T>) {
     for (stored, given) in [(None, Some("acme")), (Some("acme"), None)] {
         let held = identity("id_alice", stored);
-        let store = holding(vec![held.clone()]).await;
+        let store = holding(open, vec![held.clone()]).await;
         let mut other = Identity::new(id("id_alice"));
         other.organization_id = given.map(str::to_owned);
         assert_eq!(
@@ -163,13 +168,12 @@ async fn no_organization_counts_as_another() {
 
 /// One write: a replacement refused for an address another identity holds leaves
 /// what it held.
-#[tokio::test]
-async fn a_replacement_refused_for_an_address_keeps_the_old_ones() {
+async fn a_replacement_refused_for_an_address_keeps_the_old_ones<T: Held>(open: Open<'_, T>) {
     let first = identity("id_alice", Some("acme"));
     let mut other = Identity::new(id("id_bob"));
     other.organization_id = Some("acme".to_owned());
     other.link(ChannelType::SMS, "+15550000002");
-    let store = holding(vec![first.clone(), other]).await;
+    let store = holding(open, vec![first.clone(), other]).await;
     let mut replaced = Identity::new(id("id_alice"));
     replaced.organization_id = Some("acme".to_owned());
     replaced.link(ChannelType::SMS, "+15550000002");
@@ -188,10 +192,9 @@ async fn a_replacement_refused_for_an_address_keeps_the_old_ones() {
 
 /// The empty string and none both name no organization, as Python's stores read
 /// them: for a read, a link and an unlink, whichever form the identity has.
-#[tokio::test]
-async fn an_empty_organization_is_no_organization() {
+async fn an_empty_organization_is_no_organization<T: Held>(open: Open<'_, T>) {
     for (stored, given) in [(None, Some("")), (Some(""), None)] {
-        let store = holding(vec![identity("id_alice", stored)]).await;
+        let store = holding(open, vec![identity("id_alice", stored)]).await;
         assert_eq!(
             resolved(&store, given).await.as_deref(),
             Some("id_alice"),
@@ -202,7 +205,7 @@ async fn an_empty_organization_is_no_organization() {
                 &id("id_alice"),
                 &ChannelType::SMS,
                 "+15550000002",
-                roomkit::store::LinkAddressOptions {
+                crate::store::LinkAddressOptions {
                     organization_id: given.map(str::to_owned),
                 },
             )
@@ -213,7 +216,7 @@ async fn an_empty_organization_is_no_organization() {
                 &id("id_alice"),
                 &ChannelType::SMS,
                 "+15550000002",
-                roomkit::store::UnlinkAddressOptions {
+                crate::store::UnlinkAddressOptions {
                     organization_id: given.map(str::to_owned),
                 },
             )
@@ -228,9 +231,8 @@ async fn an_empty_organization_is_no_organization() {
 
 /// Python's `create_identity`: an identity created under an id the store
 /// holds replaces the stored one.
-#[tokio::test]
-async fn an_identity_created_again_replaces_the_stored_one() {
-    let store = holding(vec![identity("id_alice", None)]).await;
+async fn an_identity_created_again_replaces_the_stored_one<T: Held>(open: Open<'_, T>) {
+    let store = holding(open, vec![identity("id_alice", None)]).await;
     let mut renamed = Identity::new(id("id_alice"));
     renamed.display_name = Some("Alice B.".to_owned());
     let created = store.create_identity(renamed.clone()).await;
@@ -240,27 +242,28 @@ async fn an_identity_created_again_replaces_the_stored_one() {
     );
 }
 
-#[tokio::test]
-async fn a_linked_address_resolves_to_its_identity() {
-    let store = holding(vec![Identity::new(id("id_jean"))]).await;
+async fn a_linked_address_resolves_to_its_identity<T: Held>(open: Open<'_, T>) {
+    let store = holding(open, vec![Identity::new(id("id_jean"))]).await;
     store
         .link_address(
             &id("id_jean"),
             &ChannelType::SMS,
             ALICE,
-            roomkit::store::LinkAddressOptions::default(),
+            crate::store::LinkAddressOptions::default(),
         )
         .await
         .unwrap();
     assert_eq!(resolved(&store, None).await, Some("id_jean".to_owned()));
 }
 
-#[tokio::test]
-async fn linking_to_an_identity_of_another_organization_is_refused() {
-    let store = holding(vec![Identity {
-        organization_id: Some("bank".to_owned()),
-        ..Identity::new(id("id_jean"))
-    }])
+async fn linking_to_an_identity_of_another_organization_is_refused<T: Held>(open: Open<'_, T>) {
+    let store = holding(
+        open,
+        vec![Identity {
+            organization_id: Some("bank".to_owned()),
+            ..Identity::new(id("id_jean"))
+        }],
+    )
     .await;
     assert_eq!(
         store
@@ -268,7 +271,7 @@ async fn linking_to_an_identity_of_another_organization_is_refused() {
                 &id("id_jean"),
                 &ChannelType::SMS,
                 ALICE,
-                roomkit::store::LinkAddressOptions {
+                crate::store::LinkAddressOptions {
                     organization_id: Some("clinic".to_owned())
                 }
             )
@@ -278,15 +281,18 @@ async fn linking_to_an_identity_of_another_organization_is_refused() {
 }
 
 /// RFC §5.6: moving an address is an unlink, then a link.
-#[tokio::test]
-async fn an_unlinked_address_can_be_linked_to_another_identity() {
-    let store = holding(vec![identity("id_one", None), Identity::new(id("id_two"))]).await;
+async fn an_unlinked_address_can_be_linked_to_another_identity<T: Held>(open: Open<'_, T>) {
+    let store = holding(
+        open,
+        vec![identity("id_one", None), Identity::new(id("id_two"))],
+    )
+    .await;
     store
         .unlink_address(
             &id("id_one"),
             &ChannelType::SMS,
             ALICE,
-            roomkit::store::UnlinkAddressOptions::default(),
+            crate::store::UnlinkAddressOptions::default(),
         )
         .await
         .unwrap();
@@ -295,53 +301,52 @@ async fn an_unlinked_address_can_be_linked_to_another_identity() {
             &id("id_two"),
             &ChannelType::SMS,
             ALICE,
-            roomkit::store::LinkAddressOptions::default(),
+            crate::store::LinkAddressOptions::default(),
         )
         .await
         .unwrap();
     assert_eq!(resolved(&store, None).await, Some("id_two".to_owned()));
 }
 
-#[tokio::test]
-async fn an_unlinked_address_resolves_to_no_one() {
-    let store = holding(vec![identity("id_one", None)]).await;
+async fn an_unlinked_address_resolves_to_no_one<T: Held>(open: Open<'_, T>) {
+    let store = holding(open, vec![identity("id_one", None)]).await;
     store
         .unlink_address(
             &id("id_one"),
             &ChannelType::SMS,
             ALICE,
-            roomkit::store::UnlinkAddressOptions::default(),
+            crate::store::UnlinkAddressOptions::default(),
         )
         .await
         .unwrap();
     assert_eq!(resolved(&store, None).await, None);
 }
 
-#[tokio::test]
-async fn unlinking_an_address_the_identity_does_not_use_changes_nothing() {
-    let store = holding(vec![identity("id_one", None)]).await;
+async fn unlinking_an_address_the_identity_does_not_use_changes_nothing<T: Held>(
+    open: Open<'_, T>,
+) {
+    let store = holding(open, vec![identity("id_one", None)]).await;
     store
         .unlink_address(
             &id("id_one"),
             &ChannelType::WHATSAPP,
             ALICE,
-            roomkit::store::UnlinkAddressOptions::default(),
+            crate::store::UnlinkAddressOptions::default(),
         )
         .await
         .unwrap();
     assert_eq!(resolved(&store, None).await, Some("id_one".to_owned()));
 }
 
-#[tokio::test]
-async fn unlinking_from_an_identity_of_another_organization_is_refused() {
-    let store = holding(vec![identity("id_bank", Some("bank"))]).await;
+async fn unlinking_from_an_identity_of_another_organization_is_refused<T: Held>(open: Open<'_, T>) {
+    let store = holding(open, vec![identity("id_bank", Some("bank"))]).await;
     assert_eq!(
         store
             .unlink_address(
                 &id("id_bank"),
                 &ChannelType::SMS,
                 ALICE,
-                roomkit::store::UnlinkAddressOptions {
+                crate::store::UnlinkAddressOptions {
                     organization_id: Some("clinic".to_owned())
                 }
             )
@@ -351,26 +356,24 @@ async fn unlinking_from_an_identity_of_another_organization_is_refused() {
 }
 
 // Python: tests/test_store_memory.py::TestIdentityOperations::test_get_nonexistent
-#[tokio::test]
-async fn an_unknown_identity_reads_as_none() {
-    let store = crate::store().await;
+async fn an_unknown_identity_reads_as_none<T: Held>(open: Open<'_, T>) {
+    let store = open().await;
     assert_eq!(store.get_identity(&id("nope")).await, Ok(None));
 }
 
 // Python: tests/test_store_memory.py::TestIdentityOperations::test_multiple_addresses_same_channel
-#[tokio::test]
-async fn two_addresses_on_one_channel_resolve_to_their_identity() {
+async fn two_addresses_on_one_channel_resolve_to_their_identity<T: Held>(open: Open<'_, T>) {
     let mut created = Identity::new(id("id1"));
     created.link(ChannelType::SMS, "+15551111111");
     created.link(ChannelType::SMS, "+15552222222");
-    let store = holding(vec![created]).await;
+    let store = holding(open, vec![created]).await;
     let mut found = Vec::new();
     for address in ["+15551111111", "+15552222222"] {
         let identity = store
             .resolve_identity(
                 &ChannelType::SMS,
                 address,
-                roomkit::store::ResolveIdentityOptions::default(),
+                crate::store::ResolveIdentityOptions::default(),
             )
             .await
             .unwrap();
@@ -380,15 +383,14 @@ async fn two_addresses_on_one_channel_resolve_to_their_identity() {
 }
 
 // Python: tests/test_store_identity_scoping.py::TestOneIdentityPerAddress::test_an_unknown_identity_is_refused
-#[tokio::test]
-async fn linking_to_an_unknown_identity_is_refused_and_links_nothing() {
-    let store = crate::store().await;
+async fn linking_to_an_unknown_identity_is_refused_and_links_nothing<T: Held>(open: Open<'_, T>) {
+    let store = open().await;
     let linked = store
         .link_address(
             &id("id_ghost"),
             &ChannelType::SMS,
             ALICE,
-            roomkit::store::LinkAddressOptions {
+            crate::store::LinkAddressOptions {
                 organization_id: Some("acme".to_owned()),
             },
         )
@@ -400,11 +402,10 @@ async fn linking_to_an_unknown_identity_is_refused_and_links_nothing() {
 }
 
 // Python: tests/test_store_identity_scoping.py::TestUnlinkingAnAddress::test_the_conversations_that_named_the_address_stay_as_they_are
-#[tokio::test]
-async fn unlinking_an_address_leaves_the_conversations_that_named_it() {
-    use roomkit::model::{ChannelBinding, Participant, ParticipantId, Room, RoomId, Timestamp};
+async fn unlinking_an_address_leaves_the_conversations_that_named_it<T: Held>(open: Open<'_, T>) {
+    use crate::model::{ChannelBinding, Participant, ParticipantId, Room, RoomId, Timestamp};
 
-    let store = holding(vec![identity("id_jean", Some("acme"))]).await;
+    let store = holding(open, vec![identity("id_jean", Some("acme"))]).await;
     let room = RoomId::new("room_1").unwrap();
     store
         .create_room(Room {
@@ -413,7 +414,7 @@ async fn unlinking_an_address_leaves_the_conversations_that_named_it() {
         })
         .await
         .unwrap();
-    let sms = roomkit::model::ChannelId::new("sms").unwrap();
+    let sms = crate::model::ChannelId::new("sms").unwrap();
     let binding = ChannelBinding {
         attached_at: Timestamp::UNIX_EPOCH,
         participant_id: Some(ParticipantId::new(ALICE).unwrap()),
@@ -435,7 +436,7 @@ async fn unlinking_an_address_leaves_the_conversations_that_named_it() {
             &id("id_jean"),
             &ChannelType::SMS,
             ALICE,
-            roomkit::store::UnlinkAddressOptions {
+            crate::store::UnlinkAddressOptions {
                 organization_id: Some("acme".to_owned()),
             },
         )
@@ -452,34 +453,68 @@ async fn unlinking_an_address_leaves_the_conversations_that_named_it() {
     );
 }
 
-#[tokio::test]
-async fn unlinking_from_an_unknown_identity_is_refused() {
-    let store = crate::store().await;
+async fn unlinking_from_an_unknown_identity_is_refused<T: Held>(open: Open<'_, T>) {
+    let store = open().await;
     assert_eq!(
         store
             .unlink_address(
                 &id("id_ghost"),
                 &ChannelType::SMS,
                 ALICE,
-                roomkit::store::UnlinkAddressOptions::default()
+                crate::store::UnlinkAddressOptions::default()
             )
             .await,
         Err(StoreError::IdentityNotFound(id("id_ghost")))
     );
 }
 
-#[tokio::test]
-async fn linking_an_address_another_identity_of_the_organization_uses_is_refused() {
-    let store = holding(vec![identity("id_one", None), Identity::new(id("id_two"))]).await;
+pub(super) async fn linking_an_address_another_identity_of_the_organization_uses_is_refused<
+    T: Held,
+>(
+    open: Open<'_, T>,
+) {
+    let store = holding(
+        open,
+        vec![identity("id_one", None), Identity::new(id("id_two"))],
+    )
+    .await;
     assert!(matches!(
         store
             .link_address(
                 &id("id_two"),
                 &ChannelType::SMS,
                 ALICE,
-                roomkit::store::LinkAddressOptions::default()
+                crate::store::LinkAddressOptions::default()
             )
             .await,
         Err(StoreError::AddressLinked { .. })
     ));
+}
+
+/// This module's checks, in order.
+pub(super) async fn check<T: Held>(open: Open<'_, T>) {
+    an_identity_is_read_as_it_was_created(open).await;
+    an_address_resolves_to_the_identity_of_the_caller_s_organization(open).await;
+    an_identity_of_an_organization_does_not_resolve_for_a_caller_naming_none(open).await;
+    an_identity_of_no_organization_resolves_for_a_caller_naming_none(open).await;
+    an_address_on_another_channel_type_does_not_resolve(open).await;
+    an_address_another_identity_of_the_organization_uses_is_refused(open).await;
+    an_id_another_organization_holds_is_refused(open).await;
+    a_replaced_identity_stops_resolving_at_what_it_no_longer_holds(open).await;
+    no_organization_counts_as_another(open).await;
+    a_replacement_refused_for_an_address_keeps_the_old_ones(open).await;
+    an_empty_organization_is_no_organization(open).await;
+    an_identity_created_again_replaces_the_stored_one(open).await;
+    a_linked_address_resolves_to_its_identity(open).await;
+    linking_to_an_identity_of_another_organization_is_refused(open).await;
+    an_unlinked_address_can_be_linked_to_another_identity(open).await;
+    an_unlinked_address_resolves_to_no_one(open).await;
+    unlinking_an_address_the_identity_does_not_use_changes_nothing(open).await;
+    unlinking_from_an_identity_of_another_organization_is_refused(open).await;
+    an_unknown_identity_reads_as_none(open).await;
+    two_addresses_on_one_channel_resolve_to_their_identity(open).await;
+    linking_to_an_unknown_identity_is_refused_and_links_nothing(open).await;
+    unlinking_an_address_leaves_the_conversations_that_named_it(open).await;
+    unlinking_from_an_unknown_identity_is_refused(open).await;
+    linking_an_address_another_identity_of_the_organization_uses_is_refused(open).await;
 }

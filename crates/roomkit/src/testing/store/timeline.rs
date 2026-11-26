@@ -3,18 +3,18 @@
 //! follows the rule of the page it stands for"), with the Python
 //! implementation's arguments.
 
-use pretty_assertions::assert_eq;
-use roomkit::model::{
+use crate::model::{
     ChannelSet, ChannelType, EventStatus, EventType, RoomEvent, Timestamp, Visibility,
 };
-use roomkit::store::{GetEventCountOptions, ListEventsOptions};
-use roomkit::{ConversationStore, EventFilter, StoreError};
+use crate::store::{GetEventCountOptions, ListEventsOptions};
+use crate::{ConversationStore, EventFilter, StoreError};
 
-use super::{channel, event, event_id, event_stored, participant_id, room_id, with_events};
-use crate::Store;
+use super::{
+    Held, Open, channel, event, event_id, event_stored, participant_id, room_id, with_events,
+};
 
 /// The indexes of `room_1`'s page `query` reads.
-async fn page(store: &Store, query: ListEventsOptions) -> Vec<u64> {
+async fn page<T: Held>(store: &T, query: ListEventsOptions) -> Vec<u64> {
     store
         .list_events(&room_id(), query)
         .await
@@ -27,9 +27,10 @@ async fn page(store: &Store, query: ListEventsOptions) -> Vec<u64> {
 /// Python: `tests/test_store_memory.py::TestEventOperations::test_list_events_newest_first_short_room`:
 /// the newest page of a room shorter than its limit holds every event, in
 /// ascending order.
-#[tokio::test]
-async fn the_newest_page_of_a_room_shorter_than_its_limit_holds_every_event() {
-    let store = with_events((0..2).map(event).collect()).await;
+async fn the_newest_page_of_a_room_shorter_than_its_limit_holds_every_event<T: Held>(
+    open: Open<'_, T>,
+) {
+    let store = with_events(open, (0..2).map(event).collect()).await;
     let newest = ListEventsOptions {
         newest_first: true,
         limit: 100,
@@ -41,9 +42,8 @@ async fn the_newest_page_of_a_room_shorter_than_its_limit_holds_every_event() {
 /// RFC §14.1: the window is chosen from its end, the page always rendered
 /// ascending; `offset` counts back from the newest end under
 /// `newest_first`, and a cursor ignores both.
-#[tokio::test]
-async fn each_window_is_read_in_ascending_index_order() {
-    let store = with_events((0..6).map(event).collect()).await;
+async fn each_window_is_read_in_ascending_index_order<T: Held>(open: Open<'_, T>) {
+    let store = with_events(open, (0..6).map(event).collect()).await;
     let query = ListEventsOptions::default();
     let cases = [
         (
@@ -141,9 +141,8 @@ async fn each_window_is_read_in_ascending_index_order() {
 
 /// A cursor as high as an index can be bounds the page as any other: no
 /// index is above it, and every one below.
-#[tokio::test]
-async fn a_cursor_past_every_index_bounds_the_page() {
-    let store = with_events((0..6).map(event).collect()).await;
+async fn a_cursor_past_every_index_bounds_the_page<T: Held>(open: Open<'_, T>) {
+    let store = with_events(open, (0..6).map(event).collect()).await;
     let after = ListEventsOptions {
         after_index: Some(u64::MAX),
         ..ListEventsOptions::default()
@@ -160,9 +159,8 @@ async fn a_cursor_past_every_index_bounds_the_page() {
 }
 
 /// RFC §14.1: `after_index` and `before_index` exclude each other.
-#[tokio::test]
-async fn both_cursors_are_refused() {
-    let store = with_events((0..3).map(event).collect()).await;
+async fn both_cursors_are_refused<T: Held>(open: Open<'_, T>) {
+    let store = with_events(open, (0..3).map(event).collect()).await;
     let both = ListEventsOptions {
         after_index: Some(0),
         before_index: Some(2),
@@ -178,15 +176,14 @@ async fn both_cursors_are_refused() {
 
 /// RFC §14.1: the refused rows are left out before the page is cut, so a
 /// page of `limit` received events is full, and served on request.
-#[tokio::test]
-async fn refused_events_are_left_out_before_the_page_is_cut() {
+async fn refused_events_are_left_out_before_the_page_is_cut<T: Held>(open: Open<'_, T>) {
     let events = (0..6)
         .map(|index| match index {
             1 | 4 => event_stored(index, EventStatus::Blocked),
             _ => event(index),
         })
         .collect();
-    let store = with_events(events).await;
+    let store = with_events(open, events).await;
     let every_row = Some(EventFilter {
         include_blocked: true,
         ..EventFilter::default()
@@ -340,9 +337,8 @@ fn criteria() -> Vec<(&'static str, EventFilter, Vec<u64>)> {
 
 /// RFC §14.1: each criterion of a filter applies before the page is cut,
 /// and a count with the filter counts the rows the page serves.
-#[tokio::test]
-async fn a_filter_s_criteria_select_the_page_and_its_count() {
-    let store = with_events(varied()).await;
+async fn a_filter_s_criteria_select_the_page_and_its_count<T: Held>(open: Open<'_, T>) {
+    let store = with_events(open, varied()).await;
     for (case, filter, expected) in criteria() {
         let query = ListEventsOptions {
             event_filter: Some(filter.clone()),
@@ -367,9 +363,10 @@ async fn a_filter_s_criteria_select_the_page_and_its_count() {
 
 /// The Python implementation's `visibility_filter` is a value compared as
 /// it is, which the filter's own visibility takes precedence over.
-#[tokio::test]
-async fn a_visibility_filter_is_an_exact_value_the_filter_s_own_overrides() {
-    let store = with_events(varied()).await;
+async fn a_visibility_filter_is_an_exact_value_the_filter_s_own_overrides<T: Held>(
+    open: Open<'_, T>,
+) {
+    let store = with_events(open, varied()).await;
     let transport = ListEventsOptions {
         visibility_filter: Some(Visibility::Transport),
         ..ListEventsOptions::default()
@@ -401,9 +398,8 @@ async fn a_visibility_filter_is_an_exact_value_the_filter_s_own_overrides() {
 
 /// The Python implementation's model refuses a filter that admits nothing
 /// by construction; a read and a count refuse it alike.
-#[tokio::test]
-async fn a_filter_that_admits_nothing_by_construction_is_refused() {
-    let store = with_events(varied()).await;
+async fn a_filter_that_admits_nothing_by_construction_is_refused<T: Held>(open: Open<'_, T>) {
+    let store = with_events(open, varied()).await;
     let instant = Timestamp::from_unix_millis(1000).unwrap();
     let refused = [
         (
@@ -454,4 +450,16 @@ async fn a_filter_that_admits_nothing_by_construction_is_refused() {
             )
         );
     }
+}
+
+/// This module's checks, in order.
+pub(super) async fn check<T: Held>(open: Open<'_, T>) {
+    the_newest_page_of_a_room_shorter_than_its_limit_holds_every_event(open).await;
+    each_window_is_read_in_ascending_index_order(open).await;
+    a_cursor_past_every_index_bounds_the_page(open).await;
+    both_cursors_are_refused(open).await;
+    refused_events_are_left_out_before_the_page_is_cut(open).await;
+    a_filter_s_criteria_select_the_page_and_its_count(open).await;
+    a_visibility_filter_is_an_exact_value_the_filter_s_own_overrides(open).await;
+    a_filter_that_admits_nothing_by_construction_is_refused(open).await;
 }

@@ -1,9 +1,24 @@
 //! Python: `tests/test_context_visibility.py::test_received_events_preserves_order_duplicates_and_objects`.
 
-use roomkit::model::{EventStatus, RoomEvent};
+use roomkit::model::{
+    ChannelId, ChannelType, EventId, EventSource, EventStatus, RoomEvent, RoomId, TextContent,
+};
 use roomkit::received_events;
 
-use super::suite::event_stored;
+/// `evt_{index}` of `room_1`, a text from SMS, stored `status`.
+fn event_stored(index: u64, status: EventStatus) -> RoomEvent {
+    let mut event = RoomEvent {
+        id: EventId::new(format!("evt_{index}")).unwrap(),
+        ..RoomEvent::new(
+            RoomId::new("room_1").unwrap(),
+            EventSource::new(ChannelId::new("sms").unwrap(), ChannelType::SMS),
+            TextContent::new("hi"),
+        )
+    };
+    event.index = index;
+    event.status = status;
+    event
+}
 
 #[test]
 fn received_events_preserves_order_duplicates_and_objects() {

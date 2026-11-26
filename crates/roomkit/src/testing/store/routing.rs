@@ -2,16 +2,14 @@
 //! §14.1, gap G-058): the sender is found by their address or by the
 //! identity the caller resolved for them, the newest room winning.
 
-use pretty_assertions::assert_eq;
-use roomkit::model::{IdentityId, Participant, Room, RoomId, RoomStatus, Timestamp};
-use roomkit::store::{
+use crate::model::{IdentityId, Participant, Room, RoomId, RoomStatus, Timestamp};
+use crate::store::{
     FindRoomIdByBindingOptions, FindRoomIdByParticipantOptions, FindRoomIdsByChannelOptions,
 };
-use roomkit::{ConversationStore, RoomFilter};
+use crate::{ConversationStore, RoomFilter};
 use serde_json::json;
 
-use super::{binding, channel, participant_id, room_id, with_room};
-use crate::Store;
+use super::{Held, Open, binding, channel, participant_id, room_id, with_room};
 
 const ALICE: &str = "+15550000001";
 
@@ -21,8 +19,8 @@ fn marie() -> IdentityId {
 
 /// A store holding `named`, rooms created a second apart in that order,
 /// each with an SMS binding naming the id it gives, or no one.
-async fn bound(named: &[(&str, Option<&str>)]) -> Store {
-    let store = crate::store().await;
+async fn bound<T: Held>(open: Open<'_, T>, named: &[(&str, Option<&str>)]) -> T {
+    let store = open().await;
     for (offset, (room, correspondent)) in named.iter().enumerate() {
         let room_id = RoomId::new(*room).unwrap();
         let created = Timestamp::from_unix_millis(i64::try_from(offset).unwrap() * 1000).unwrap();
@@ -42,8 +40,8 @@ async fn bound(named: &[(&str, Option<&str>)]) -> Store {
 
 /// The room the binding lookup finds for ALICE on SMS, with `identity`
 /// resolved for her, under `filter`.
-async fn by_binding(
-    store: &Store,
+async fn by_binding<T: Held>(
+    store: &T,
     identity: Option<&IdentityId>,
     filter: &RoomFilter,
 ) -> Option<String> {
@@ -59,13 +57,15 @@ async fn by_binding(
         .map(|room| room.to_string())
 }
 
-#[tokio::test]
-async fn the_newest_room_whose_binding_names_the_participant_is_found() {
-    let store = bound(&[
-        ("older", Some(ALICE)),
-        ("newer", Some(ALICE)),
-        ("newest", Some("+15550000002")),
-    ])
+async fn the_newest_room_whose_binding_names_the_participant_is_found<T: Held>(open: Open<'_, T>) {
+    let store = bound(
+        open,
+        &[
+            ("older", Some(ALICE)),
+            ("newer", Some(ALICE)),
+            ("newest", Some("+15550000002")),
+        ],
+    )
     .await;
     assert_eq!(
         by_binding(&store, None, &RoomFilter::default()).await,
@@ -73,9 +73,8 @@ async fn the_newest_room_whose_binding_names_the_participant_is_found() {
     );
 }
 
-#[tokio::test]
-async fn a_binding_of_another_channel_finds_no_room() {
-    let store = bound(&[("room_1", Some(ALICE))]).await;
+async fn a_binding_of_another_channel_finds_no_room<T: Held>(open: Open<'_, T>) {
+    let store = bound(open, &[("room_1", Some(ALICE))]).await;
     let found = store
         .find_room_id_by_binding(
             &channel("whatsapp"),
@@ -86,9 +85,8 @@ async fn a_binding_of_another_channel_finds_no_room() {
     assert_eq!(found, Ok(None));
 }
 
-#[tokio::test]
-async fn a_room_the_filter_refuses_is_not_found_by_its_binding() {
-    let store = bound(&[("room_1", Some(ALICE))]).await;
+async fn a_room_the_filter_refuses_is_not_found_by_its_binding<T: Held>(open: Open<'_, T>) {
+    let store = bound(open, &[("room_1", Some(ALICE))]).await;
     let filter = RoomFilter {
         statuses: Some(vec![RoomStatus::Paused]),
         ..RoomFilter::default()
@@ -96,9 +94,8 @@ async fn a_room_the_filter_refuses_is_not_found_by_its_binding() {
     assert_eq!(by_binding(&store, None, &filter).await, None);
 }
 
-#[tokio::test]
-async fn a_binding_naming_the_sender_s_identity_is_found() {
-    let store = bound(&[("by_identity", Some("id_marie"))]).await;
+async fn a_binding_naming_the_sender_s_identity_is_found<T: Held>(open: Open<'_, T>) {
+    let store = bound(open, &[("by_identity", Some("id_marie"))]).await;
     assert_eq!(
         (
             by_binding(&store, None, &RoomFilter::default()).await,
@@ -108,17 +105,22 @@ async fn a_binding_naming_the_sender_s_identity_is_found() {
     );
 }
 
-#[tokio::test]
-async fn the_newest_room_either_name_finds_wins() {
-    let identity_newer = bound(&[
-        ("by_address", Some(ALICE)),
-        ("by_identity", Some("id_marie")),
-    ])
+async fn the_newest_room_either_name_finds_wins<T: Held>(open: Open<'_, T>) {
+    let identity_newer = bound(
+        open,
+        &[
+            ("by_address", Some(ALICE)),
+            ("by_identity", Some("id_marie")),
+        ],
+    )
     .await;
-    let address_newer = bound(&[
-        ("by_identity", Some("id_marie")),
-        ("by_address", Some(ALICE)),
-    ])
+    let address_newer = bound(
+        open,
+        &[
+            ("by_identity", Some("id_marie")),
+            ("by_address", Some(ALICE)),
+        ],
+    )
     .await;
     let filter = RoomFilter::default();
     assert_eq!(
@@ -140,9 +142,8 @@ fn jean() -> Participant {
     }
 }
 
-#[tokio::test]
-async fn a_participant_reached_through_the_channel_finds_its_room() {
-    let store = with_room().await;
+async fn a_participant_reached_through_the_channel_finds_its_room<T: Held>(open: Open<'_, T>) {
+    let store = with_room(open).await;
     let mut participant = jean();
     participant.identity_id = Some(IdentityId::new("id_jean").unwrap());
     store.add_participant(participant).await.unwrap();
@@ -166,9 +167,8 @@ async fn a_participant_reached_through_the_channel_finds_its_room() {
     assert_eq!((by_id, by_identity), (Some(room_id()), Some(room_id())));
 }
 
-#[tokio::test]
-async fn a_participant_reached_through_another_channel_finds_no_room() {
-    let store = with_room().await;
+async fn a_participant_reached_through_another_channel_finds_no_room<T: Held>(open: Open<'_, T>) {
+    let store = with_room(open).await;
     store.add_participant(jean()).await.unwrap();
     let found = store
         .find_room_id_by_participant(
@@ -181,9 +181,10 @@ async fn a_participant_reached_through_another_channel_finds_no_room() {
 }
 
 // Python: tests/test_shared_channel_routing.py::TestAnIdentifiedCorrespondent::test_an_identity_does_not_pull_a_number_into_a_room_of_another_channel
-#[tokio::test]
-async fn an_identity_does_not_pull_a_number_into_a_room_of_another_channel() {
-    let store = with_room().await;
+async fn an_identity_does_not_pull_a_number_into_a_room_of_another_channel<T: Held>(
+    open: Open<'_, T>,
+) {
+    let store = with_room(open).await;
     let mut member = jean();
     member.identity_id = Some(IdentityId::new("id_jean").unwrap());
     store.add_participant(member).await.unwrap();
@@ -198,9 +199,10 @@ async fn an_identity_does_not_pull_a_number_into_a_room_of_another_channel() {
 }
 
 // Python: tests/test_shared_channel_routing.py::TestEitherNameFindsTheNewestRoom::test_an_older_room_joined_through_the_channel_is_found_past_a_newer_one
-#[tokio::test]
-async fn an_older_room_joined_through_the_channel_is_found_past_a_newer_one() {
-    let store = bound(&[("older", None), ("newer", None)]).await;
+async fn an_older_room_joined_through_the_channel_is_found_past_a_newer_one<T: Held>(
+    open: Open<'_, T>,
+) {
+    let store = bound(open, &[("older", None), ("newer", None)]).await;
     for (room, through) in [("older", "sms"), ("newer", "email")] {
         let member = Participant {
             joined_at: Timestamp::UNIX_EPOCH,
@@ -223,9 +225,8 @@ async fn an_older_room_joined_through_the_channel_is_found_past_a_newer_one() {
 }
 
 // Python: tests/test_shared_channel_routing.py::TestAPausedConversation::test_the_newest_room_wins_whatever_its_status
-#[tokio::test]
-async fn the_newest_room_wins_whatever_its_status() {
-    let store = bound(&[("older", Some(ALICE)), ("newer", Some(ALICE))]).await;
+async fn the_newest_room_wins_whatever_its_status<T: Held>(open: Open<'_, T>) {
+    let store = bound(open, &[("older", Some(ALICE)), ("newer", Some(ALICE))]).await;
     let newer = RoomId::new("newer").unwrap();
     let mut room = store.get_room(&newer).await.unwrap().unwrap();
     room.status = RoomStatus::Paused;
@@ -240,9 +241,8 @@ async fn the_newest_room_wins_whatever_its_status() {
 /// oldest first, at most `limit` (2 by default), of a group binding or not
 /// when `group` names it; a room holding a participant reached through the
 /// channel, and binding none, is not among them.
-#[tokio::test]
-async fn the_rooms_binding_a_channel_are_found_oldest_first() {
-    let store = bound(&[("first", None), ("second", None), ("third", None)]).await;
+async fn the_rooms_binding_a_channel_are_found_oldest_first<T: Held>(open: Open<'_, T>) {
+    let store = bound(open, &[("first", None), ("second", None), ("third", None)]).await;
     let mut group = store
         .get_binding(&RoomId::new("third").unwrap(), &channel("sms"))
         .await
@@ -299,9 +299,8 @@ async fn the_rooms_binding_a_channel_are_found_oldest_first() {
 /// key, a binding naming no correspondent, not a group's, names the
 /// address its metadata holds under the key; without the key, it names
 /// none.
-#[tokio::test]
-async fn a_binding_names_its_recipient_under_the_recipient_key() {
-    let store = bound(&[("recipient", None), ("group", None)]).await;
+async fn a_binding_names_its_recipient_under_the_recipient_key<T: Held>(open: Open<'_, T>) {
+    let store = bound(open, &[("recipient", None), ("group", None)]).await;
     for (room, group) in [("recipient", false), ("group", true)] {
         let mut binding = store
             .get_binding(&RoomId::new(room).unwrap(), &channel("sms"))
@@ -334,4 +333,20 @@ async fn a_binding_names_its_recipient_under_the_recipient_key() {
         found,
         (Ok(Some(RoomId::new("recipient").unwrap())), Ok(None))
     );
+}
+
+/// This module's checks, in order.
+pub(super) async fn check<T: Held>(open: Open<'_, T>) {
+    the_newest_room_whose_binding_names_the_participant_is_found(open).await;
+    a_binding_of_another_channel_finds_no_room(open).await;
+    a_room_the_filter_refuses_is_not_found_by_its_binding(open).await;
+    a_binding_naming_the_sender_s_identity_is_found(open).await;
+    the_newest_room_either_name_finds_wins(open).await;
+    a_participant_reached_through_the_channel_finds_its_room(open).await;
+    a_participant_reached_through_another_channel_finds_no_room(open).await;
+    an_identity_does_not_pull_a_number_into_a_room_of_another_channel(open).await;
+    an_older_room_joined_through_the_channel_is_found_past_a_newer_one(open).await;
+    the_newest_room_wins_whatever_its_status(open).await;
+    the_rooms_binding_a_channel_are_found_oldest_first(open).await;
+    a_binding_names_its_recipient_under_the_recipient_key(open).await;
 }

@@ -1,7 +1,8 @@
-//! The store suite (RFC §14) on the in-memory store.
+//! The store contract (RFC §14) on the in-memory store, and the store's
+//! own behaviours.
 //!
-//! The suite, in `suite/`, is written for any store: roomkit-sqlite runs
-//! it on its own (crates/roomkit-sqlite/tests/store/main.rs).
+//! The contract's checks are `roomkit::testing::check_conversation_store`:
+//! roomkit-sqlite runs them on its store (crates/roomkit-sqlite/tests/store/main.rs).
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
@@ -10,18 +11,12 @@ mod abstract_only_store;
 mod connection;
 mod connection_store;
 mod received_events;
-mod suite;
+mod room_filter;
 
 use roomkit::InMemoryStore;
+use roomkit::testing::check_conversation_store;
 
-/// The store the suite runs on.
-pub(crate) type Store = InMemoryStore;
-
-/// An empty store, opened as a store that awaits its I/O is.
-#[expect(
-    clippy::unused_async,
-    reason = "the suite opens every store the same way, some awaiting"
-)]
-pub(crate) async fn store() -> Store {
-    InMemoryStore::new()
+#[tokio::test]
+async fn the_in_memory_store_keeps_the_store_contract() {
+    check_conversation_store(|| async { Box::new(InMemoryStore::new()) }).await;
 }

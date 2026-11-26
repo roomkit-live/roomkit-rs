@@ -531,6 +531,12 @@ approved = "2026-11-26"
 reason = "language: the kit's clock reaches a Python store as the model's default timestamp; a Rust store reads it from the task the kit writes in (HITL 25354d80)"
 
 [[exception]]
+rust = "roomkit::testing::check_conversation_store"
+approved = "2026-11-26"
+until = "roomkit.testing.check_conversation_store"
+reason = "the store contract as one check a store written outside the crate runs, Rust first; Python's same name to come (HITL 25354d80, RMK-2155)"
+
+[[exception]]
 rust = "roomkit::track_host_room_lock"
 approved = "2026-11-26"
 until = "roomkit.track_host_room_lock"

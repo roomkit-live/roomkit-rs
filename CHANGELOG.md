@@ -8,6 +8,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `testing::check_conversation_store(open)`: the store contract (RFC §14)
+  as one check a store written outside this crate runs from its own tests
+  (RMK-2011). `open` opens an empty store at each call, and gives the
+  store or what holds it while a check runs (a `Box` of an in-memory
+  store, a store on a file of its own); each check opens its own. The
+  checks are the core's store suite, which the in-memory store, the
+  SQLite store and the Postgres store pass. Python's same name comes with
+  RMK-2155.
 - `track_host_room_lock` and `written` are public, for a room lock manager
   and a conversation store written outside this crate (RMK-2011). A lock
   manager wraps its acquisition in `track_host_room_lock(manager, room,
