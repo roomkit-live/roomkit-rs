@@ -22,6 +22,7 @@ else:
 
 ATTRIBUTE_CLASSES = {
     "base": {"ExecutorLink", "TurnLink", "RoomOwner", "TurnBackend"},
+    "distributed": {"DistributedTurnBackend"},
     "redis": {"RedisTurnBackend"},
     "owner": {"TurnClient"},
     "executor": {"TurnExecutor"},

@@ -1860,6 +1860,11 @@ fn turn_transport_option_defaults() {
     assert!(worker.owns_channels);
     // roomkit.TurnExecutor.__init__(timeouts) = None, resolving to TurnTimeouts()
     assert_eq!(worker.timeouts, roomkit::TurnTimeouts::default());
+    let distributed = roomkit::turns::DistributedTurnBackendOptions::default();
+    // roomkit.DistributedTurnBackend.__init__(timeouts) = None, resolving to TurnTimeouts()
+    assert_eq!(distributed.timeouts, roomkit::TurnTimeouts::default());
+    // roomkit.DistributedTurnBackend.__init__(_loop_back) = False
+    assert!(!distributed._loop_back);
 }
 
 fn assert_no_app_error(registry: &roomkit::turns::ErrorClasses) {

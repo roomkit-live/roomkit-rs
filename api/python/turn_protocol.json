@@ -1,12 +1,13 @@
 {
   "attributes": {
-    "roomkit.ExecutorLink": [
-      "request"
-    ],
-    "roomkit.RedisTurnBackend": [
+    "roomkit.DistributedTurnBackend": [
       "node_id",
       "timeouts"
     ],
+    "roomkit.ExecutorLink": [
+      "request"
+    ],
+    "roomkit.RedisTurnBackend": [],
     "roomkit.RoomOwner": [
       "executor"
     ],
@@ -27,7 +28,7 @@
       "request"
     ]
   },
-  "commit": "02bc1f7540776601778bf844ad2301865f9d7849",
+  "commit": "6c0181a25c002e2dbe270bad2204153baa15c10a",
   "protocol_records": {
     "roomkit.core.hooks.SyncPipelineResult": {
       "__init__": [

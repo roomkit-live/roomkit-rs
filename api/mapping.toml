@@ -1759,80 +1759,29 @@ params = ["carrying"]
 approved = "2026-11-18"
 reason = "None requests a fresh room context. The tool_methods integration tests cover explicit None and supplied values."
 
-# The distributed turn backend's ports, Rust first (HITL 8afa1a82): Python keeps
-# its Redis backend whole for now.
+# The distributed turn backend's ports, the same as Python's since its ports
+# (RMK-2012): what only the language forces differs.
 
 [[exception]]
-rust = "roomkit::turns::DistributedTurnBackend"
-approved = "2026-11-25"
-reason = "the backend across processes, over a broker and a registry: Python's RedisTurnBackend without Redis. Rust first: the backend across processes takes its services by two ports, where Python keeps its Redis backend whole (HITL 8afa1a82, RMK-2012)"
-
-[[exception]]
-rust = "roomkit::turns::DistributedTurnBackendOptions"
-approved = "2026-11-25"
-reason = "what DistributedTurnBackend::new takes beside its two services: the time bounds, and Python's private _loop_back. Rust first: the backend across processes takes its services by two ports, where Python keeps its Redis backend whole (HITL 8afa1a82, RMK-2012)"
-
-[[exception]]
-rust = "roomkit::turns::TurnBroker"
-approved = "2026-11-25"
-reason = "the port of the messages between processes: an inbox a node. Rust first: the backend across processes takes its services by two ports, where Python keeps its Redis backend whole (HITL 8afa1a82, RMK-2012)"
-
-[[exception]]
-rust = "roomkit::turns::TurnInbox"
-approved = "2026-11-25"
-reason = "a reader of one node's inbox, which TurnBroker::inbox opens. Rust first: the backend across processes takes its services by two ports, where Python keeps its Redis backend whole (HITL 8afa1a82, RMK-2012)"
-
-[[exception]]
-rust = "roomkit::turns::InboxEntry"
-approved = "2026-11-25"
-reason = "an entry a TurnInbox reads: its id and its message. Rust first: the backend across processes takes its services by two ports, where Python keeps its Redis backend whole (HITL 8afa1a82, RMK-2012)"
+python = "roomkit.BrokerMessage.__init__"
+params = ["ref"]
+approved = "2026-11-26"
+reason = "language: ref is a Rust keyword: the field is BrokerMessage::reference (RMK-2012)"
 
 [[exception]]
 rust = "roomkit::turns::BrokerMessage"
-approved = "2026-11-25"
-reason = "a message a TurnBroker carries. Rust first: the backend across processes takes its services by two ports, where Python keeps its Redis backend whole (HITL 8afa1a82, RMK-2012)"
+members = ["reference"]
+approved = "2026-11-26"
+reason = "language: Python's BrokerMessage.ref, ref being a Rust keyword (RMK-2012)"
 
 [[exception]]
-rust = "roomkit::turns::TurnRegistry"
-approved = "2026-11-25"
-reason = "the port of what the processes share: beats, a room's holder, the presence last published. Rust first: the backend across processes takes its services by two ports, where Python keeps its Redis backend whole (HITL 8afa1a82, RMK-2012)"
+python = "roomkit.TurnInbox"
+members = ["close"]
+approved = "2026-11-26"
+reason = "language: Rust lets go of a reader's connection as it drops the reader (RMK-2012)"
 
 [[exception]]
-rust = "roomkit::turns::BeatWriter"
-approved = "2026-11-25"
-reason = "a writer of beats on a connection of its own, which TurnRegistry::beater opens for the heartbeat. Rust first: the backend across processes takes its services by two ports, where Python keeps its Redis backend whole (HITL 8afa1a82, RMK-2012)"
-
-[[exception]]
-rust = "roomkit::turns::Beat"
-approved = "2026-11-25"
-reason = "a node's beat, as a TurnRegistry writes it. Rust first: the backend across processes takes its services by two ports, where Python keeps its Redis backend whole (HITL 8afa1a82, RMK-2012)"
-
-[[exception]]
-rust = "roomkit::turns::RegistryView"
-approved = "2026-11-25"
-reason = "the executors and the owners beating, as a TurnRegistry answers them. Rust first: the backend across processes takes its services by two ports, where Python keeps its Redis backend whole (HITL 8afa1a82, RMK-2012)"
-
-[[exception]]
-rust = "roomkit::turns::Beats"
-approved = "2026-11-25"
-reason = "what TurnRegistry::beats reads: last beats and running turns. Rust first: the backend across processes takes its services by two ports, where Python keeps its Redis backend whole (HITL 8afa1a82, RMK-2012)"
-
-[[exception]]
-rust = "roomkit::turns::InMemoryTurnBroker"
-approved = "2026-11-25"
-reason = "a TurnBroker of this process, as InMemoryStore is a store's: for tests and one-process nodes. Rust first: the backend across processes takes its services by two ports, where Python keeps its Redis backend whole (HITL 8afa1a82, RMK-2012)"
-
-[[exception]]
-rust = "roomkit::turns::InMemoryTurnRegistry"
-approved = "2026-11-25"
-reason = "a TurnRegistry of this process, as InMemoryStore is a store's: for tests and one-process nodes. Rust first: the backend across processes takes its services by two ports, where Python keeps its Redis backend whole (HITL 8afa1a82, RMK-2012)"
-
-[[exception]]
-rust = "roomkit::testing::check_turn_broker"
-approved = "2026-11-25"
-reason = "the contract of TurnBroker as a check a service's own tests call: an inbox read in order until acknowledged, a waiting read. Rust first, with the port it checks: Python gets it with its ports (HITL 702a2e92, RMK-2012)"
-
-[[exception]]
-rust = "roomkit::testing::check_turn_registry"
-approved = "2026-11-25"
-reason = "the contract of TurnRegistry as a check a service's own tests call: beats and their view, a room's holder, a presence claimed once. Rust first, with the port it checks: Python gets it with its ports (HITL 702a2e92, RMK-2012)"
+python = "roomkit.BeatWriter"
+members = ["close"]
+approved = "2026-11-26"
+reason = "language: Rust lets go of a writer's connection as it drops the writer (RMK-2012)"

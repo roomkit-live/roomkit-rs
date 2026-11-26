@@ -65,7 +65,7 @@ class PinTargets(unittest.TestCase):
         (tests / "public_api_signatures.json").write_text(json.dumps({f"roomkit.Name{version}": {}}), encoding="utf-8")
         turns = self.roomkit / "src/roomkit/turns"
         turns.mkdir(parents=True, exist_ok=True)
-        for module in ("base", "redis", "owner", "executor", "wire"):
+        for module in ("base", "distributed", "redis", "owner", "executor", "wire"):
             (turns / f"{module}.py").write_text("", encoding="utf-8")
         for path in ("turns/_codec", "turns/_executor_turn", "turns/_frame_sender", "models/streaming", "providers/ai/tool_intent"):
             module = self.roomkit / f"src/roomkit/{path}.py"
