@@ -75,7 +75,8 @@ pub struct Beat {
 /// The executors and the room owners beating, as the registry keeps them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RegistryView {
-    /// The registry's time, in milliseconds: the clock of every beat.
+    /// The registry's time, in milliseconds since the Unix epoch: the clock
+    /// of every beat, which an executor's last beat reads.
     pub now: i64,
     /// Each executor's last beat, and its declaration when it has one.
     pub executors: BTreeMap<String, (i64, Option<String>)>,

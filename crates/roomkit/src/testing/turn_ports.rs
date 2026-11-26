@@ -17,9 +17,15 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use roomkit_core::ops::Environment;
+
+use crate::environment::SystemEnvironment;
 use crate::turns::{Beat, BrokerMessage, InboxEntry, TurnBroker, TurnRegistry};
 
 const BLOCK: Duration = Duration::from_millis(20);
+/// How far a registry's clock may stray from this machine's: a server's
+/// clock is another machine's.
+const CLOCK_SKEW_MS: u64 = 3_600_000;
 
 /// Checks that `broker` keeps the contract of [`TurnBroker`]: an inbox is
 /// read in the order it was posted in, the messages of one post in theirs,
@@ -35,7 +41,7 @@ pub async fn check_turn_broker(broker: Arc<dyn TurnBroker>) {
 }
 
 /// Checks that `registry` keeps the contract of [`TurnRegistry`]: a beat
-/// is written at the registry's time and viewed until withdrawn or
+/// is written at the registry's time, the time of day, and viewed until withdrawn or
 /// forgotten, a beat older than its node's last one changes nothing; a room
 /// has one holder until forgotten; a presence is claimed once a change.
 ///
@@ -126,6 +132,12 @@ async fn a_beat_is_viewed_until_withdrawn(registry: &dyn TurnRegistry) {
     assert!(
         view.now >= written,
         "a beat is written at the registry's time"
+    );
+    let today = SystemEnvironment.now().as_unix_millis();
+    assert!(
+        view.now.abs_diff(today) < CLOCK_SKEW_MS,
+        "the registry's time is the time of day, in milliseconds since 1970: it reads {}",
+        view.now
     );
     assert!(view.owners.contains_key("n1"));
 

@@ -6,14 +6,15 @@ use std::fmt;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use roomkit_core::ops::Environment;
 use tokio::sync::Notify;
-use tokio::time::Instant;
 
 use super::broker::{
     Beat, BeatWriter, Beats, BrokerMessage, InboxEntry, RegistryView, TurnBroker, TurnInbox,
     TurnRegistry,
 };
 use crate::RoomKitError;
+use crate::environment::SystemEnvironment;
 use crate::turns::{TurnFuture, lock};
 
 #[derive(Default)]
@@ -171,13 +172,17 @@ struct Records {
 
 struct Kept {
     records: Mutex<Records>,
-    started: Instant,
 }
 
 impl Kept {
-    /// The registry's time, in milliseconds.
+    /// The registry's time: the time of day, in milliseconds since the
+    /// Unix epoch, as a server's registry keeps it.
+    #[expect(
+        clippy::unused_self,
+        reason = "the registry's clock, read as a server's would be"
+    )]
     fn now(&self) -> i64 {
-        i64::try_from(self.started.elapsed().as_millis()).unwrap_or(i64::MAX)
+        SystemEnvironment.now().as_unix_millis()
     }
 
     fn beat(&self, beat: &Beat) {
@@ -222,7 +227,6 @@ impl InMemoryTurnRegistry {
     pub fn new() -> Self {
         Self(Arc::new(Kept {
             records: Mutex::default(),
-            started: Instant::now(),
         }))
     }
 }

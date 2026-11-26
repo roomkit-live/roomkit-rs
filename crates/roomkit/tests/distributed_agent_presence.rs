@@ -16,6 +16,7 @@ use roomkit::{
     AgentIdentity, AttachChannelOptions, ChannelDeclaration, CreateRoomOptions, InMemoryStore,
     RoomKit, RoomKitOptions, TurnExecutor, TurnExecutorOptions, TurnTimeouts,
 };
+use roomkit_core::ops::{Environment, SystemEnvironment};
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
 #[tokio::test]
@@ -267,10 +268,12 @@ async fn each_node_lists_local_workers_directly_and_only_advertised_peers() {
     let (hosting, elsewhere) = (node(), node());
     let named = worker("host-1");
     let dynamic = dynamic_worker("dynamic", "agent-");
+    let serving = unix_millis();
     hosting.serve(named.clone()).await.unwrap();
     hosting.serve(dynamic.clone()).await.unwrap();
     let here = hosting.executors().await.unwrap();
     let remote = elsewhere.executors().await.unwrap();
+    let listed = unix_millis();
     dynamic.close().await;
     let after = hosting.executors().await.unwrap();
     named.close().await;
@@ -299,7 +302,13 @@ async fn each_node_lists_local_workers_directly_and_only_advertised_peers() {
     assert_eq!(remote.len(), 1);
     let peer = remote.first().unwrap();
     assert_eq!(peer.executor_id, named.executor_id());
-    assert!(peer.last_beat.is_some() && peer.covers("worker", &[], None).unwrap());
+    assert!(peer.covers("worker", &[], None).unwrap());
+    // Its last beat is the time it beat, as on a server's registry.
+    let beat = peer.last_beat.unwrap().as_unix_millis();
+    assert!(
+        (serving - 1000..=listed + 1000).contains(&beat),
+        "last beat {beat} ms, read between {serving} and {listed}"
+    );
     assert_eq!(after.len(), 1);
     assert_eq!(after.first().unwrap().executor_id, named.executor_id());
 }
@@ -460,4 +469,8 @@ async fn attaching_a_live_agent_identifies_an_executor_already_served() {
     drop(own);
     drop(owner);
     assert!(weak.upgrade().is_none());
+}
+
+fn unix_millis() -> i64 {
+    SystemEnvironment.now().as_unix_millis()
 }
