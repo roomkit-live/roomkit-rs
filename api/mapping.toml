@@ -59,7 +59,6 @@ roomkit_ai = ["roomkit.providers.ai", "roomkit", "roomkit.tools", "roomkit.skill
 roomkit_mcp = ["roomkit.tools"]
 roomkit_acp = ["roomkit"]
 roomkit_sqlite = ["roomkit", "roomkit.store"]
-roomkit_postgres = ["roomkit.store", "roomkit.knowledge"]
 "roomkit::realtime" = ["roomkit.realtime"]
 "roomkit::providers::sms" = ["roomkit.providers.sms"]
 "roomkit::delivery" = ["roomkit.delivery", "roomkit"]
@@ -889,17 +888,6 @@ rust = "roomkit::store::ConversationStore::connection"
 params = ["work"]
 approved = "2026-11-17"
 reason = "language: the same connection block under the store module path (approved 2026-11-17)"
-
-[[exception]]
-rust = "roomkit_postgres::PostgresCancelQuery"
-approved = "2026-11-17"
-reason = "language: a supplied standard pool hides its TLS connector; this shared callback supplies cancellation with the pool's exact connector and server-close acknowledgement (approved 2026-11-17)"
-
-[[exception]]
-rust = "roomkit_postgres::PostgresStoreOptions"
-members = ["cancel_query"]
-approved = "2026-11-17"
-reason = "language: external pools require an explicit cancellation capability before a connection block begins; owned pools retain their own connector (approved 2026-11-17)"
 
 [[missing]]
 python = "roomkit.HookTrigger"

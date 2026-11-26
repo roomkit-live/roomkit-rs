@@ -122,8 +122,7 @@ the mapping and its tests. The check does not generate or update this document.
 | `roomkit_ai::FireBeforeHookOptions` | — | Whole type |
 | `roomkit_ai::FireOnToolHookOptions` | — | Whole type |
 | `roomkit::ConversationStore::connection`, `roomkit::store::ConversationStore::connection` | `roomkit.ConversationStore.connection` | `work`: a borrowed async body passed as a future; acquisition precedes its first poll. Default backends run the body directly. PostgreSQL retains one connection through nested calls and cancellation cleanup (approved 2026-11-17). |
-| `roomkit_postgres::PostgresCancelQuery` | External pool cancellation | Shared callback taking a `CancelToken` and returning a boxed `Result<(), StoreError>` future. Uses the exact TLS connector and waits for server closure; RoomKit then drains Sync/ReadyForQuery (approved 2026-11-17). |
-| `roomkit_postgres::PostgresStoreOptions` | `roomkit.store.PostgresStore` | `cancel_query`: required for `connection()` with a supplied standard pool, default `None`; absence returns `StoreError::Value` before the body runs. Custom pools unable to reconnect from their token are outside this capability (approved 2026-11-17). |
+| — in this crate; `roomkit_providers_postgres::PostgresStore`, `PostgresAdvisoryLockManager`, `PostgresKnowledgeSource` and their options (`PostgresCancelQuery` among them) in the roomkit-providers repository | `roomkit.store.PostgresStore`, `roomkit.store.PostgresAdvisoryLockManager`, `roomkit.knowledge.PostgresKnowledgeSource` | The Postgres store, lock and knowledge source left this workspace with every vendor's code (RMK-2011), with the options and the behaviour they had here; the store passes `roomkit::testing::check_conversation_store`. |
 | `roomkit::ConversationStore` | — | `is_process_local` |
 | `roomkit::ConversationStore` | — | `set_telemetry` |
 | `roomkit::store::ConversationStore` | — | `set_telemetry` |

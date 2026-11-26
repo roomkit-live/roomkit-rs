@@ -155,6 +155,18 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- **BREAKING — the Postgres store left this repository**: the crate
+  `roomkit-postgres`, its conformance runner, the Postgres driver and the
+  root patch of its fork (RMK-2011). `PostgresStore`,
+  `PostgresAdvisoryLockManager`, `PostgresKnowledgeSource` and their
+  options are in
+  [roomkit-providers](https://github.com/roomkit-live/roomkit-providers),
+  in the crate `roomkit-providers-postgres`, with the schema, the keys and
+  the behaviour they had; its README holds the root patch an application
+  repeats. The store passes `testing::check_conversation_store`, the
+  store contract this crate exports. Migration: depend on
+  `roomkit-providers-postgres` instead of `roomkit-postgres`, and import
+  the same names from `roomkit_providers_postgres`.
 - **BREAKING — the OpenTelemetry provider left this repository**, with the
   `opentelemetry` feature and the `opentelemetry` and `opentelemetry_sdk`
   dependencies (RMK-2011): no feature of the engine is tied to a vendor.

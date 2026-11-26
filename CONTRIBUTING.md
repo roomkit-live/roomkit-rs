@@ -75,7 +75,7 @@ API keeps the report free of findings no entry covers, and of dead entries.
 
 `make test` runs the shared conformance scenarios (`conformance/`) on the
 in-memory store, on one thread and on four workers, and on SQLite on one
-thread; `make postgres-test` runs them on PostgreSQL. When
+thread. When
 `ROOMKIT_CONFORMANCE_JUNIT` names a directory, a relative one read from the
 repository's root, each pass also writes `<backend>-<runtime>.xml` there: a
 JUnit XML report with one case per scenario, named by its id, under the class

@@ -69,28 +69,6 @@ A model provider comes from
 is built on these crates: pin a revision of it that names the engine revision
 you use.
 
-### PostgreSQL driver
-
-If your application uses `roomkit-postgres`, apply these entries in the
-root `Cargo.toml` of the application workspace. The exact version keeps Cargo
-on the patched driver when other 0.7 releases are available. The patch also
-aligns the SQL types used by the application, pool and TLS connector.
-
-```toml
-[dependencies]
-tokio-postgres = "=0.7.18"
-
-[patch.crates-io]
-tokio-postgres = { git = "https://github.com/sboily/rust-postgres", rev = "068bbab6cf2bd3867aa897d1e296126dfed650f8" }
-postgres-types = { git = "https://github.com/sboily/rust-postgres", rev = "068bbab6cf2bd3867aa897d1e296126dfed650f8" }
-postgres-protocol = { git = "https://github.com/sboily/rust-postgres", rev = "068bbab6cf2bd3867aa897d1e296126dfed650f8" }
-```
-
-This revision waits for PostgreSQL to close the cancellation connection before
-the store reuses a pooled connection. Keep the patch until you upgrade to a
-RoomKit revision that uses a released driver containing the fix.
-[Upstream change](https://github.com/rust-postgres/rust-postgres/pull/1409).
-
 ## A first room
 
 This example connects a recording transport and an echo agent without network
@@ -140,10 +118,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | [`roomkit-mcp`](crates/roomkit-mcp) | MCP client and tools; enable `http` for remote servers |
 | [`roomkit-acp`](crates/roomkit-acp) | Agent Client Protocol adapter |
 | [`roomkit-sqlite`](crates/roomkit-sqlite) | SQLite conversation store |
-| [`roomkit-postgres`](crates/roomkit-postgres) | PostgreSQL store, locking and knowledge source |
 | [`roomkit-core`](crates/roomkit-core) | Models, rules and operations without I/O |
 
-Applications normally depend on `roomkit` and the adapters they use.
+Applications normally depend on `roomkit` and the adapters they use. The
+stores, locks and providers of a vendor or a service (Postgres, Redis,
+OpenTelemetry, the model providers) are in
+[roomkit-providers](https://github.com/roomkit-live/roomkit-providers).
 `roomkit-core` and the effect protocol are implementation interfaces; see
 [ARCHITECTURE.md](ARCHITECTURE.md) for the boundaries.
 

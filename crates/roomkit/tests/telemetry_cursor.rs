@@ -3,7 +3,7 @@
 //! `framework.inbound`, never a root, as every other store span of the
 //! message. Python's `tests/test_telemetry.py::TestStoreQuerySpan`, on an
 //! in-memory store that opens the `store.<operation>` spans
-//! `roomkit-postgres` opens.
+//! `roomkit-providers-postgres` opens.
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
@@ -53,7 +53,7 @@ fn in_room() -> ProcessInboundOptions {
 
 /// An in-memory store that opens a `store.<operation>` span over each cursor
 /// read and write, under the span current when it is called, as
-/// `roomkit-postgres`'s.
+/// `roomkit-providers-postgres`'s.
 #[derive(Default)]
 struct CursorSpans {
     store: InMemoryStore,
