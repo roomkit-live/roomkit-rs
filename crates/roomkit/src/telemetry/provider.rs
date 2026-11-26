@@ -130,7 +130,7 @@ pub struct RecordMetricOptions {
 ///
 /// A provider is called from the kit's tasks and MUST NOT block them: an
 /// export that waits on the network belongs on a thread of its own, as
-/// [`OpenTelemetryProvider`](super) does.
+/// the OpenTelemetry provider of `roomkit-providers-opentelemetry` does.
 pub trait TelemetryProvider: Any + Send + Sync {
     /// Python `name`: the provider's name (`noop`, `mock`, `console`).
     fn name(&self) -> &str;

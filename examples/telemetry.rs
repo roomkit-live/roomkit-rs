@@ -1,7 +1,7 @@
 //! A message's spans: the kit reports what it does to its telemetry
 //! provider, here one that records it, and a test reads the tree. An
-//! application hands its OpenTelemetry tracer provider to
-//! `OpenTelemetryProvider` with the cargo feature `opentelemetry`.
+//! application hands its OpenTelemetry tracer provider to the
+//! `OpenTelemetryProvider` of `roomkit-providers-opentelemetry`.
 //!
 //! ```sh
 //! cargo run --example telemetry

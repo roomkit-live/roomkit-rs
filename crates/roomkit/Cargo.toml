@@ -36,12 +36,6 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
-opentelemetry = { workspace = true, optional = true }
-opentelemetry_sdk = { workspace = true, optional = true }
-
-# Python's extra `roomkit[opentelemetry]`: `telemetry::OpenTelemetryProvider`.
-[features]
-opentelemetry = ["dep:opentelemetry", "dep:opentelemetry_sdk"]
 
 [dev-dependencies]
 agent-client-protocol-schema.workspace = true
@@ -60,8 +54,6 @@ roomkit-mcp = { workspace = true, features = ["http"] }
 axum.workspace = true
 # The turn backend's liveness, tested on tokio's paused clock.
 tokio = { workspace = true, features = ["test-util", "net", "io-util"] }
-# The in-memory exporter the `opentelemetry` feature's tests read.
-opentelemetry_sdk = { workspace = true, features = ["testing"] }
 
 [lints]
 workspace = true

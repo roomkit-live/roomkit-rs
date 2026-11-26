@@ -4,10 +4,11 @@
 //! The kit reports to the provider of
 //! [`RoomKitOptions::telemetry`](crate::RoomKitOptions::telemetry), a
 //! [`NoopTelemetryProvider`] by default. [`MockTelemetryProvider`] records
-//! what it is told for a test, [`ConsoleTelemetryProvider`] logs it, and,
-//! with the cargo feature `opentelemetry` (off by default, as Python's
-//! extra), `OpenTelemetryProvider` hands it to an OpenTelemetry SDK
-//! tracer provider, whose exporter the application chooses.
+//! what it is told for a test and [`ConsoleTelemetryProvider`] logs it.
+//! The `roomkit-providers-opentelemetry` crate of the roomkit-providers
+//! repository hands it to an OpenTelemetry SDK tracer provider, whose
+//! exporter the application chooses: a provider written outside this crate
+//! starts its spans under [`get_current_telemetry_ctx`].
 
 mod config;
 mod console;
@@ -16,11 +17,6 @@ mod kinds;
 mod mock;
 mod noop;
 mod open;
-#[cfg(feature = "opentelemetry")]
-mod otel;
-#[cfg(test)]
-#[cfg(feature = "opentelemetry")]
-mod otel_tests;
 mod provider;
 #[cfg(test)]
 mod tests;
@@ -43,8 +39,6 @@ pub use noop::NoopTelemetryProvider;
 pub(crate) use open::{
     KitTelemetry, Late, LateSpan, OpenSpan, end_hook_span, end_observer_span, within_kit,
 };
-#[cfg(feature = "opentelemetry")]
-pub use otel::{OpenTelemetryProvider, OpenTelemetryProviderOptions};
 pub use provider::{
     EndSpanOptions, RecordMetricOptions, Span, SpanGuard, StartSpanOptions, TelemetryProvider,
 };

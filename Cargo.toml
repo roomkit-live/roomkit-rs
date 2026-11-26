@@ -80,10 +80,6 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", 
 uuid = { version = "1", features = ["v4"] }
 # Direct skill filenames use Python's NFKC normalization (HITL 19458017).
 unicode-normalization = { version = "0.1.26", default-features = false }
-# `roomkit`'s feature `opentelemetry`, off by default, as Python's extra
-# (HITL 2796129a): the API and the SDK's traces and metrics, no exporter.
-opentelemetry = { version = "0.33", default-features = false, features = ["trace", "metrics"] }
-opentelemetry_sdk = { version = "0.33", default-features = false, features = ["trace", "metrics"] }
 
 pretty_assertions = "1"
 # Property tests (decision 3 of step 2b). No default features: no forking

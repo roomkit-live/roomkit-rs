@@ -137,6 +137,18 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- **BREAKING — the OpenTelemetry provider left this repository**, with the
+  `opentelemetry` feature and the `opentelemetry` and `opentelemetry_sdk`
+  dependencies (RMK-2011): no feature of the engine is tied to a vendor.
+  `OpenTelemetryProvider` and `OpenTelemetryProviderOptions` are in
+  [roomkit-providers](https://github.com/roomkit-live/roomkit-providers), in
+  the crate `roomkit-providers-opentelemetry`, with the options and the
+  behaviour they had. The engine keeps the telemetry interface
+  (`TelemetryProvider`) and gives a provider written outside it the current
+  span's context (`telemetry::get_current_telemetry_ctx`). Migration:
+  depend on `roomkit-providers-opentelemetry`, import
+  `OpenTelemetryProvider` and `OpenTelemetryProviderOptions` from it, and
+  drop the `opentelemetry` feature of `roomkit`.
 - **BREAKING — the turn backend on Redis left this repository**, with the
   `redis` feature and the `redis` dependency (RMK-2012): no feature of the
   engine is tied to a service. `RedisTurnBackend` and
