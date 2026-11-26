@@ -18,6 +18,8 @@ mod awaited_task;
 mod caller_deadline;
 #[path = "support/clock.rs"]
 mod clock;
+#[path = "reentrancy/host_manager.rs"]
+mod host_manager;
 #[path = "reentrancy/named_budget.rs"]
 mod named_budget;
 #[path = "reentrancy/preflight.rs"]
@@ -3151,6 +3153,15 @@ async fn a_call_a_locked_hook_s_task_nests_ends_by_the_event_s_deadline_past_its
         for cancels in [1, 2] {
             caller_deadline::nested_call_keeps_deadline(body_returned, cancels).await;
         }
+    }
+}
+
+// Python: src/roomkit/store/postgres_lock.py's locked(), which marks its
+// room held through roomkit.core.locks (RMK-2156 makes that public).
+#[tokio::test]
+async fn a_host_holding_an_outside_manager_s_guard_enters_once_tracked() {
+    for tracked in [true, false] {
+        host_manager::a_host_holding_its_guard_enters_once_tracked(tracked).await;
     }
 }
 

@@ -157,6 +157,8 @@ the mapping and its tests. The check does not generate or update this document.
 | `roomkit::ChannelRegistration` | — | Whole type |
 | `roomkit::default_inbound_event` | — | Whole type |
 | `roomkit::keep_context` | — | Whole type |
+| `roomkit::store::written::event`, `binding`, `now` | — | A store's checks on what it writes and its clock: Python's models refuse such a value when they are built |
+| `roomkit::track_host_room_lock` | `roomkit.core.locks._has_room_lock`, `_mark_room_locked` (private; RMK-2156) | A lock manager wraps its acquisition in it, so that a host holding its guard can call the kit for that room |
 | `roomkit::RoomKitError` | — | `Store`, `Lock`, `Channel`, `Router`, `Identity` |
 | `roomkit::RoomKitError` | — | `Internal` |
 | `roomkit::model::ErrorRecord` | — | Whole type |

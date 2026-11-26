@@ -12,6 +12,7 @@ use roomkit::model::{
     Participant, ParticipantId, Room, RoomEvent, RoomId, RoomStatus, Task, TaskId, ThreadSummary,
     Timestamp, Verification, VerificationRequest,
 };
+use roomkit::store::written;
 use roomkit::store::{
     AdvanceDeliveredIndexOptions, CommitEventOptions, DeleteEventOptions, FindLatestRoomOptions,
     FindRoomIdByBindingOptions, FindRoomIdByChannelOptions, FindRoomIdByParticipantOptions,
@@ -20,7 +21,7 @@ use roomkit::store::{
     PatchRoomMetadataOptions, ResolveIdentityOptions, UnlinkAddressOptions,
 };
 use roomkit::telemetry::TelemetryProvider;
-use roomkit::{ConversationStore, StoreError, written};
+use roomkit::{ConversationStore, StoreError};
 
 use crate::error::{Failure, NoConnection};
 use crate::lent::{Lent, cancellable};

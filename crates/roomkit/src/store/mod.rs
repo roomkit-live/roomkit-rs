@@ -50,10 +50,9 @@ use self::rooms::rooms_read_by;
 /// [`StoreError::Value`], nothing written, so that a later read of the
 /// record never fails on it (RFC §6.4 media URLs, a rate limit not above
 /// 0). The Python implementation refuses such a value when its model is
-/// built; Rust refuses it at each door that writes it. Outside the public
-/// API: every store of the workspace runs them, and a third-party store
-/// runs none unless it calls them.
-#[doc(hidden)]
+/// built; Rust refuses it at each door that writes it. Every store of this
+/// crate runs them, and a store written outside it calls them where it
+/// writes an event or a binding, and reads its clock from [`written::now`].
 pub mod written {
     use std::future::Future;
 

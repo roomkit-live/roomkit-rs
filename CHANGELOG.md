@@ -8,6 +8,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `track_host_room_lock` and `written` are public, for a room lock manager
+  and a conversation store written outside this crate (RMK-2011). A lock
+  manager wraps its acquisition in `track_host_room_lock(manager, room,
+  acquire)`, so that a host holding its guard can call the kit for that
+  room, as with the built-in manager (RFC §13.5); a store calls
+  `written::event` and `written::binding` where it writes one, which refuse
+  a value its model refuses (`StoreError::Value`), and reads its clock from
+  `written::now`. Python's managers mark a room held through private
+  functions of `roomkit.core.locks`; its models refuse such a value when
+  they are built.
 - `telemetry::get_current_telemetry_ctx()`: the current span's context as
   its provider gave it, under which a telemetry provider written outside
   this crate starts its spans in the current span's trace (RMK-2011),

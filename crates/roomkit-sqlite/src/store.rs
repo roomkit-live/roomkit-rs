@@ -12,6 +12,7 @@ use roomkit::model::{
     Participant, ParticipantId, Room, RoomEvent, RoomId, RoomStatus, Task, TaskId, ThreadSummary,
     Timestamp, Verification, VerificationRequest,
 };
+use roomkit::store::written;
 use roomkit::store::{
     AdvanceDeliveredIndexOptions, CommitEventOptions, DeleteEventOptions, FindLatestRoomOptions,
     FindRoomIdByBindingOptions, FindRoomIdByChannelOptions, FindRoomIdByParticipantOptions,
@@ -19,7 +20,7 @@ use roomkit::store::{
     LinkAddressOptions, ListEventsOptions, ListRoomsOptions, ListTasksOptions,
     PatchRoomMetadataOptions, ResolveIdentityOptions, UnlinkAddressOptions,
 };
-use roomkit::{ConversationStore, StoreError, written};
+use roomkit::{ConversationStore, StoreError};
 use tokio::sync::OnceCell;
 
 use crate::connection::{CLOSED, Database};

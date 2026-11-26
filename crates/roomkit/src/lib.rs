@@ -75,7 +75,6 @@ pub mod identity;
 mod inbound;
 mod kit;
 mod lock_manager;
-#[doc(hidden)]
 pub use host_locks::track_host_room_lock;
 mod locks;
 mod media;
@@ -271,8 +270,6 @@ pub use self::router::{
 pub use self::store::error::{StoreError, StoreFailure};
 pub use self::store::query::EventFilter;
 pub use self::store::rooms::RoomFilter;
-#[doc(hidden)]
-pub use self::store::written;
 #[doc(inline)]
 pub use self::store::{ConversationStore, InMemoryStore};
 pub use self::stream::{DeliveryStream, ResponseItem, ResponseStream, StreamItem};

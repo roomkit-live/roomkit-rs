@@ -94,8 +94,27 @@ pub(crate) fn lease(manager: &dyn RoomLockManager, room: &RoomId) -> Option<Leas
         .map(|g| g.lease.clone())
 }
 
-/// Internal adapter bridge for RoomKit's room lock managers (RFC §13.5).
-#[doc(hidden)]
+/// What a [`RoomLockManager`] wraps its acquisition in, `acquire` the
+/// future that takes the room's lock, so that a host holding its guard can
+/// call the kit for that room (RFC §9.5.1, §13.5). When the calling task
+/// already holds `room`'s lock from `manager`, it takes nothing again and
+/// gives a guard whose release does nothing; else it takes the lock and
+/// marks it held by the calling task, which lends it to the kit's calls
+/// that task makes while the guard lives. The kit's own acquisition, and a
+/// lock of another kind than a room's (a key that holds a NUL), are taken
+/// as they are. A manager installed on no kit lends nothing.
+///
+/// The built-in [`InMemoryLockManager`](crate::InMemoryLockManager) wraps
+/// its acquisition in it; a manager written outside this crate (a Postgres
+/// advisory lock) does the same in its [`locked`](RoomLockManager::locked):
+/// `Box::pin(roomkit::track_host_room_lock(self, room_id, acquire))`.
+///
+/// Python's managers do it through `roomkit.core.locks._has_room_lock` and
+/// `_mark_room_locked`.
+///
+/// # Errors
+///
+/// Returns what `acquire` returns.
 pub async fn track_host_room_lock(
     manager: &dyn RoomLockManager,
     room: &RoomId,

@@ -516,6 +516,27 @@ approved = "2026-10-27"
 reason = "an override cannot call a trait's default body (convention 8)"
 
 [[exception]]
+rust = "roomkit::store::written::event"
+approved = "2026-11-26"
+reason = "language: Python's models refuse such a value when they are built; a Rust struct literal runs no check, so a store checks what it writes at the door (HITL 25354d80)"
+
+[[exception]]
+rust = "roomkit::store::written::binding"
+approved = "2026-11-26"
+reason = "language: Python's models refuse such a value when they are built; a Rust struct literal runs no check, so a store checks what it writes at the door (HITL 25354d80)"
+
+[[exception]]
+rust = "roomkit::store::written::now"
+approved = "2026-11-26"
+reason = "language: the kit's clock reaches a Python store as the model's default timestamp; a Rust store reads it from the task the kit writes in (HITL 25354d80)"
+
+[[exception]]
+rust = "roomkit::track_host_room_lock"
+approved = "2026-11-26"
+until = "roomkit.track_host_room_lock"
+reason = "Python's managers mark a room held through private functions of roomkit.core.locks; public in Rust for a manager written outside the crate, Python's public name to come (HITL 3a0a733c, RMK-2156)"
+
+[[exception]]
 rust = "roomkit::keep_context"
 approved = "2026-10-27"
 reason = "tokio does not carry task-locals into a spawned task (decision 18)"
