@@ -842,6 +842,7 @@ async fn deliver(room: &Room, message: roomkit::model::InboundMessage) {
     assert!(!result.blocked, "{:?}", result.reason);
 }
 
+// Python: tests/test_steering_during_turn.py::test_an_instruction_while_an_instructed_turn_runs_waits_a_turn_of_its_own
 /// RFC §6.4, §10.1.1 rule 6: an instruction is the application's, marked
 /// and never attributed. One that comes while the turn another instruction
 /// opened runs has that turn's author, and is still no message for it:
