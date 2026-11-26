@@ -1862,20 +1862,6 @@ fn turn_transport_option_defaults() {
     assert_eq!(worker.timeouts, roomkit::TurnTimeouts::default());
 }
 
-#[cfg(feature = "redis")]
-#[test]
-fn redis_turn_transport_option_defaults() {
-    let options = roomkit::RedisTurnBackendOptions::default();
-    // roomkit.RedisTurnBackend.__init__(client) = None
-    assert!(options.client.is_none());
-    // roomkit.RedisTurnBackend.__init__(key_prefix) = 'roomkit:turns'
-    assert_eq!(options.key_prefix, "roomkit:turns");
-    // roomkit.RedisTurnBackend.__init__(_loop_back) = False
-    assert!(!options._loop_back);
-    // roomkit.RedisTurnBackend.__init__(timeouts) = None, resolving to TurnTimeouts()
-    assert_eq!(options.timeouts, roomkit::TurnTimeouts::default());
-}
-
 fn assert_no_app_error(registry: &roomkit::turns::ErrorClasses) {
     let record = roomkit::turns::wire::ErrorRecord::new("example:AppError", "failed");
     assert!(matches!(

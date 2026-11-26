@@ -126,7 +126,7 @@ async fn releasing_a_public_link_tells_its_peer_only_before_its_end_was_read() {
     let request: TurnRequest = serde_json::from_value(row["message"].clone()).unwrap();
     for (peer, read_end) in [("reader", true), ("abandoned", false)] {
         let (link, controls) =
-            super::super::transport::RedisLink::new(request.clone(), backend.timeouts());
+            super::super::transport::DistributedLink::new(request.clone(), backend.timeouts());
         let route = backend.route_turn(&request.turn_id, peer, false).unwrap();
         link.memory.frames.put(&Frame::End).unwrap();
         if read_end {

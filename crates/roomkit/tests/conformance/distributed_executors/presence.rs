@@ -129,7 +129,7 @@ impl Presence {
 }
 
 /// The runner's own transport: each operation of the public contract handed
-/// to the Redis backend, a claim failing while its fault is armed.
+/// to the distributed backend, a claim failing while its fault is armed.
 struct PresenceBackend {
     inner: DistributedTurnBackend,
     faults: Option<Arc<Faults>>,

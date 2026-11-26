@@ -1,4 +1,4 @@
-//! Dispatch a Redis request to the executor hosted in this process.
+//! Dispatch another node's request to the executor hosted in this process.
 use std::sync::Arc;
 
 use super::DistributedTurnBackend;

@@ -1,4 +1,4 @@
-//! Duplicate references in Redis streams, without a Redis connection.
+//! Duplicate references in an inbox, without a service.
 use std::time::Duration;
 
 use super::{Message, Routes};

@@ -1,6 +1,6 @@
 //! RFC §6.4 and §10.6. The normal runner places declared channels on workers
-//! with independent nodes of a distributed turn backend, across Redis or in
-//! this process, and compares the complete scenario expectations.
+//! with independent nodes of a distributed turn backend, on a broker and a
+//! registry of this process, and compares the complete scenario expectations.
 #[path = "distributed_executors/channel.rs"]
 mod channel;
 #[path = "distributed_executors/own_process.rs"]
@@ -58,7 +58,7 @@ pub(super) fn run(
 /// transport, written on the public contract alone (roomkit-specs
 /// `conformance/README.md`, "On a transport written on the contract alone").
 /// None for a scenario whose kit the runner serves by a transport of its own
-/// already, and without a Redis server.
+/// already.
 pub(super) fn run_on_the_contract_alone(
     scenario: &Value,
     runtime: fn() -> tokio::runtime::Runtime,
@@ -270,7 +270,7 @@ impl Workers {
     }
 
     /// Withdraw the declaration while retaining the worker, its builds and its active turns.
-    /// Resuming re-advertises that same instance on the same Redis node.
+    /// Resuming re-advertises that same instance on the same node.
     async fn advertise(&self, id: &str, paused: bool) -> Result<(), RoomKitError> {
         let active = self.active.lock().await;
         let site = active

@@ -53,8 +53,6 @@ pub use distributed::{
     InMemoryTurnBroker, InMemoryTurnRegistry, InboxEntry, RegistryView, TurnBroker, TurnInbox,
     TurnRegistry,
 };
-#[cfg(feature = "redis")]
-pub use distributed::{RedisTurnBackend, RedisTurnBackendOptions};
 mod backend_handle;
 pub use backend_handle::TurnBackendHandle;
 mod local_presence_claims;

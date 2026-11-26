@@ -1,5 +1,5 @@
 //! A worker the scenario kills has its own Tokio runtime. Dropping that runtime
-//! stops its Redis stream and active work without sending a graceful close.
+//! stops its inbox's reader and active work without sending a graceful close.
 use roomkit::turns::DistributedTurnBackend;
 use roomkit::{RoomKitError, TurnExecutor};
 use tokio::sync::oneshot;

@@ -329,9 +329,6 @@ pub use self::orchestration::{ResultTool, SUBMIT_RESULT};
 pub use self::turn::OwnerToolAnswer;
 #[doc(inline)]
 pub use self::turns::{InMemoryTurnBackend, TurnTimeouts};
-#[doc(inline)]
-#[cfg(feature = "redis")]
-pub use self::turns::{RedisTurnBackend, RedisTurnBackendOptions};
 
 /// Python's `roomkit.tools` helpers this crate has.
 pub mod tools {

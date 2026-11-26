@@ -147,11 +147,23 @@ Applications normally depend on `roomkit` and the adapters they use.
 `roomkit-core` and the effect protocol are implementation interfaces; see
 [ARCHITECTURE.md](ARCHITECTURE.md) for the boundaries.
 
-## Run an agent on a Redis turn executor
+## Run an agent in another process
 
-Enable the `redis` feature on the `roomkit` dependency. The room owner and
-each worker create their own `RedisTurnBackend` with the same Redis URL and
-key prefix. On the owner, create a
+A room's process and an agent's process reach each other through a
+`roomkit::turns::DistributedTurnBackend`. The backend's logic is this
+crate's. It takes two services by their ports: a `TurnBroker` carries the
+messages between processes, a `TurnRegistry` keeps what the processes
+share. `InMemoryTurnBroker` and `InMemoryTurnRegistry` keep both in one
+process, for tests and for nodes that share a process.
+
+On Redis, the `roomkit-providers-redis` crate of the roomkit-providers
+repository implements both ports and assembles the backend as
+`RedisTurnBackend`, with the keys and the messages of the Python SDK's
+backend: either process can run the Python SDK or the Rust SDK. This
+crate holds no service's code.
+
+The room owner and each worker create their own backend on the same
+services. On the owner, create a
 `roomkit::turns::TurnBackendHandle::new(Arc::new(backend))`, pass
 `Some(handle.clone())` to `RoomKitOptions::turn_backend` and register the
 remote agent with `ChannelDeclaration::new(channel_id)`.
@@ -159,34 +171,26 @@ remote agent with `ChannelDeclaration::new(channel_id)`.
 On the worker, build a `TurnExecutor` with a channel factory and set
 `TurnExecutorOptions::hosts` to the channel IDs or prefixes it serves.
 Call `backend.serve(executor.clone()).await?` before accepting work. The owner
-stores the resulting conversation events. Either process can run the Python
-SDK or the Rust SDK.
+stores the resulting conversation events.
 
 To try organization-based placement locally, run
 `cargo run --example turns_executor_organizations`. Two workers serve three
 rooms. The room in an unserved organization sees the agent offline.
 
-The [two-process example used by the interoperability tests](crates/roomkit/tests/redis_interop/main.rs)
-contains both roles. To run the checks against a dedicated Redis, set
-`REDIS_URL` and set `ROOMKIT_PYTHON` to the interpreter of a reference RoomKit
-checkout with its test and Redis dependencies installed.
+A service that implements the ports checks them with
+`roomkit::testing::check_turn_broker` and `check_turn_registry` from its
+own tests.
+
+The shared RFC scenarios with executors run on the in-memory broker and
+registry. To check them with the in-memory conversation store on both Tokio
+runtimes, run
 
 ```sh
-cargo test --locked -p roomkit --features redis --test redis_interop
-```
-
-The shared RFC scenarios use the same Redis service. To check the executor
-scenarios with the in-memory conversation store on both Tokio runtimes, run
-
-```sh
-ROOMKIT_CONFORMANCE_FILTER=executors/ cargo test --locked -p roomkit --features redis --test conformance -- every_scenario --nocapture
+ROOMKIT_CONFORMANCE_FILTER=executors/ cargo test --locked -p roomkit --test conformance -- every_scenario --nocapture
 ```
 
 Set `ROOMKIT_CONFORMANCE_JUNIT` to a directory to retain the pass, failure
-and skip counts for each runtime. The SQLite and PostgreSQL conformance
-runners also accept `REDIS_URL`. A pass that runs the executor scenarios
-across Redis names its backend `<backend>+redis-executors` in that file
-(CONTRIBUTING.md, "Conformance results").
+and skip counts for each runtime (CONTRIBUTING.md, "Conformance results").
 
 ## Examples and documentation
 

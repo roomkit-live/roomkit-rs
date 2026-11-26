@@ -1,4 +1,4 @@
-//! Executor declarations and heartbeats use Redis server time in milliseconds.
+//! Executor declarations and heartbeats use the registry's time in milliseconds.
 use std::collections::BTreeSet;
 
 use roomkit_core::model::Timestamp;
@@ -94,7 +94,7 @@ async fn read_view(backend: &DistributedTurnBackend) -> Result<(View, i64), Room
     Ok((view(backend, timeout).await?, timeout))
 }
 
-/// Check against Redis server time, the same clock that wrote the owner heartbeat.
+/// Check against the registry's time, the same clock that wrote the owner heartbeat.
 pub(super) async fn owner_alive(
     backend: &DistributedTurnBackend,
     peer: &str,
@@ -138,7 +138,7 @@ impl DistributedTurnBackend {
     /// Passing `None` forgets the state and returns `false`, so the next attach publishes again.
     ///
     /// # Errors
-    /// The backend is closed, or the Redis registry cannot be reached.
+    /// The backend is closed, or the registry cannot be reached.
     pub async fn claim_presence(
         &self,
         channel_id: &str,

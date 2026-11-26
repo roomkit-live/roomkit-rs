@@ -105,7 +105,7 @@ impl DistributedTurnBackend {
         else {
             return Err(refused());
         };
-        // Taken: a record of the holder Redis refuses, or a submission dropped
+        // Taken: a record of the holder the registry refuses, or a submission dropped
         // while it is written, lets the turn go on its executor.
         let mut taken = PendingHandover::new(self, &target.node, &memory.turn_id);
         self.held_by(channel, room, &member).await?;
@@ -240,7 +240,7 @@ impl Drop for PendingHandover<'_> {
                 "",
             );
             if let Err(error) = self.backend.post_unconfirmed(self.peer, &release) {
-                tracing::debug!(%error, "could not release a cancelled Redis handover");
+                tracing::debug!(%error, "could not release a cancelled handover");
             }
         }
     }

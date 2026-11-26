@@ -85,7 +85,7 @@ impl PeerOwner {
             in_memory::local_call(owner, call).await?
         };
         // A refusal can precede decoding the call and therefore carry an empty call id.
-        // The Redis question reference already correlates the answer with this caller.
+        // The question's reference already correlates the answer with this caller.
         if result.call_id != call_id && !(result.call_id.is_empty() && result.error.is_some()) {
             return Err(RoomKitError::TurnLink {
                 reason: "frame_invalid".into(),
@@ -96,7 +96,7 @@ impl PeerOwner {
     }
 
     /// Enqueues at once for an owner on another node: a room call that
-    /// follows must follow this work in the owner's Redis stream, even when
+    /// follows must follow this work in the owner's inbox, even when
     /// the caller never yields between them.
     fn publication(
         &self,

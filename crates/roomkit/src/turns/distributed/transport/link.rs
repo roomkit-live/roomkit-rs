@@ -9,7 +9,7 @@ use crate::turns::pipe::{LinkFailure, PipeReceiver, pipe};
 use crate::turns::wire::{Control, Frame};
 use crate::turns::{MemoryTurn, TurnError, TurnFuture, TurnLink, TurnRequest, TurnTimeouts};
 
-pub(in crate::turns::distributed) struct RedisLink {
+pub(in crate::turns::distributed) struct DistributedLink {
     request: TurnRequest,
     pub(in crate::turns::distributed) memory: Arc<MemoryTurn>,
     reader: Mutex<Reader>,
@@ -21,7 +21,7 @@ struct Reader {
     ended: Option<LinkFailure>,
 }
 
-impl RedisLink {
+impl DistributedLink {
     pub(in crate::turns::distributed) fn new(
         request: TurnRequest,
         timeouts: TurnTimeouts,
@@ -45,7 +45,7 @@ impl RedisLink {
     }
 }
 
-impl TurnLink for RedisLink {
+impl TurnLink for DistributedLink {
     fn request(&self) -> &TurnRequest {
         &self.request
     }
@@ -98,7 +98,7 @@ impl TurnLink for RedisLink {
     }
 }
 
-impl Drop for RedisLink {
+impl Drop for DistributedLink {
     fn drop(&mut self) {
         self.release();
     }

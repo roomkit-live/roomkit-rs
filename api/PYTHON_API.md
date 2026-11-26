@@ -64,14 +64,14 @@ the mapping and its tests. The check does not generate or update this document.
 | `roomkit::turns::wire::InputOutcome`, `ToolOutcome` | `turns.wire.InputAnswer.outcome`, `ToolResult.outcome` | Variants serialize to the literals declared on the corresponding Python field. |
 | `roomkit::turns::wire::Item`, `ToolEnd`, `WireLoopEnd`, `WireResult` | `turns._codec` stream items, tool ends, loop ends and results | The item discriminator carries the marker kind. Tool results preserve the choice of a JSON value or typed content parts. |
 | `roomkit::turns::ToolHooks::decide_before_tool_use`, `roomkit::turns::ToolHooks::judge_tool_call`, `roomkit::turns::ToolHooks::observe_failed_tool_call`, `roomkit::turns::ToolHooks::report_tool_call`, `roomkit::turns::ToolHooks::run_tool_call_chain` | `executor.wiring.tools` methods of the same names | Rust accepts explicit `None` for the omitted `carrying` context and `claim` callback. |
-| `roomkit::RedisTurnBackend::new`, `roomkit::turns::RedisTurnBackend::new`, `roomkit::RedisTurnBackendOptions` | `roomkit.RedisTurnBackend(url=None)` | With the `redis` feature, pass `None` for an omitted URL. Both omission and an empty string select `redis://localhost:6379`. Pass the application's `redis::aio::ConnectionManager` as `client` to retain its data connection and timeouts. Supplying a client requires a URL for the independent heartbeat and inbox connections. Clones share the same backend identity. |
+| — in this crate; `roomkit_providers_redis::RedisTurnBackend::new`, `roomkit_providers_redis::RedisTurnBackendOptions` in the roomkit-providers repository | `roomkit.RedisTurnBackend(url=None)` | The backend on Redis left this crate with every service's code (RMK-2012): it is `DistributedTurnBackend` assembled on the Redis implementation of the two ports. There, pass `None` for an omitted URL; both omission and an empty string select `redis://localhost:6379`. Pass the application's `redis::aio::ConnectionManager` as `client` to retain its data connection and timeouts; supplying a client requires a URL for the independent heartbeat and inbox connections. Clones share the same backend identity. |
 | `roomkit::TurnExecutor::new`, `roomkit::TurnExecutorOptions` | `roomkit.TurnExecutor.__init__` | The factory asynchronously returns an optional channel. The listed hosts, organizations and executor ID are supplied through options. A worker starts serving when its backend's `serve` completes. |
 | `roomkit::turns::TurnFuture` | An awaitable returned by a link or a backend | A boxed future allows a trait object to call asynchronous application code. |
 | `roomkit::turns::TurnContext` | `contextvars.Context` from `ExecutorLink.turn_context` and `stream_context` | A local link can capture the current execution context. A distributed worker receives a fresh context. |
 | `roomkit::turns::TurnBackend::executors_now` | `TurnBackend.executors_now` | Refresh a cached catalogue before skipping a turn. The default delegates to the transport's ordinary catalogue read. |
 | `roomkit::turns::TurnBackend::watch_executors` | `TurnBackend.watch_executors` | Have a listener run when this process serves an executor or one it serves closes. The default keeps none, and the owner learns at its next look; a backend that wraps another hands the listener on. |
 | `roomkit::turns::ExecutorWatchers`, `ExecutorWatchers::changed` | The listeners `TurnBackend` keeps, `TurnBackend.executors_changed` | A trait keeps no state: a backend holds an `ExecutorWatchers`, gives it each listener (`watch`) and runs them (`changed`) once it serves an executor and when one it serves closes. |
-| `roomkit::turns::DistributedTurnBackend`, `roomkit::turns::DistributedTurnBackendOptions` | — (Python keeps `RedisTurnBackend` whole) | The turn backend across processes, over a broker and a registry: `new(broker, registry, options)`. `RedisTurnBackend` assembles one on Redis. Rust first (RMK-2012). |
+| `roomkit::turns::DistributedTurnBackend`, `roomkit::turns::DistributedTurnBackendOptions` | — (Python keeps `RedisTurnBackend` whole) | The turn backend across processes, over a broker and a registry: `new(broker, registry, options)`. The `roomkit-providers-redis` crate assembles one on Redis as `RedisTurnBackend`. Rust first (RMK-2012). |
 | `roomkit::turns::TurnBroker`, `roomkit::turns::TurnInbox`, `roomkit::turns::InboxEntry`, `roomkit::turns::BrokerMessage` | — | The port of the messages between the processes of a distributed backend: an inbox a node, posted to, read in order after a cursor, acknowledged. Rust first (RMK-2012). |
 | `roomkit::turns::TurnRegistry`, `roomkit::turns::BeatWriter`, `roomkit::turns::Beat`, `roomkit::turns::RegistryView`, `roomkit::turns::Beats` | — | The port of what those processes share: their beats and the view of them, a room's holder, the presence last published. Rust first (RMK-2012). |
 | `roomkit::turns::InMemoryTurnBroker`, `roomkit::turns::InMemoryTurnRegistry` | — | The two ports kept in one process, for tests and for nodes that share a process. Rust first (RMK-2012). |
@@ -594,13 +594,13 @@ after the turn by calling `reach_owner`.
 kit returns a set containing `"*"`. A standalone worker can serve rooms without
 an organization by leaving its declaration at `None`.
 
-A backend implements `submit`, `serve`, `control` and `close`. `submit_to` hands a turn to the one executor a host names; its default refuses with `no_executor`, nothing handed, and the in-memory and Redis backends override it. Clone the same
+A backend implements `submit`, `serve`, `control` and `close`. `submit_to` hands a turn to the one executor a host names; its default refuses with `no_executor`, nothing handed, and the in-memory and the distributed backends override it. Clone the same
 handle for the kit, the standalone `TurnClient` and direct calls. Its default
 `claim_presence` remembers a change once per room and channel. Detach forgets
 the pair. Independent handles each own their default claims. A distributed
 transport can return `Some(future)` from its trait override to share claims
-across processes, as the Redis backend does. A transport that lists workers supplies a future from `executors`. An empty list confirms no worker is available. The default, `None`, declares no catalogue. In either case, the handle returns a list to the caller. A transport can override `executors_now` for a fresh read when a decision would skip a turn.
-The Redis feature provides this interface for a Redis deployment.
+across processes, as the distributed backend does. A transport that lists workers supplies a future from `executors`. An empty list confirms no worker is available. The default, `None`, declares no catalogue. In either case, the handle returns a list to the caller. A transport can override `executors_now` for a fresh read when a decision would skip a turn.
+`DistributedTurnBackend` provides this interface over a broker and a registry; the `roomkit-providers-redis` crate gives both on Redis.
 
 Each standalone factory returns a
 future yielding `Result<Option<C>, RoomKitError>` for one concrete
@@ -643,7 +643,7 @@ or `claim`. A supplied context can reuse room history. A supplied claim
 decides whether to announce an outcome already judged.
 
 The signature snapshot lists methods and properties. The parity check also
-reads turn attributes such as `link.request` and `RedisTurnBackend.node_id`,
+reads turn attributes such as `link.request` and `TurnBackend.timeouts`,
 and the constructor fields of wire records used by public links, from the
 same pinned Python source. Rust exposes the two attributes as accessors. `ChannelCall::new` and `RoomCall::new` generate a fresh correlation ID. Applications can set an explicit ID. Reading either call from JSON uses the same defaults.
 

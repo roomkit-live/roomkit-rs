@@ -1,4 +1,4 @@
-//! The explicitly supplied single-process transport carries real turns without a Redis feature.
+//! The explicitly supplied single-process transport carries real turns with no other backend.
 mod owner;
 mod presence;
 use roomkit::testing::{EchoAgent, EchoAgentOptions};

@@ -46,18 +46,6 @@ jobs:
   checks:
     name: Format, lint, test, docs
     runs-on: ubuntu-latest
-    services:
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 2s
-          --health-timeout 3s
-          --health-retries 15
-    env:
-      REDIS_URL: redis://127.0.0.1:6379
     steps:
       - uses: actions/checkout@v7
       # Installs the toolchain pinned in rust-toolchain.toml and caches builds.

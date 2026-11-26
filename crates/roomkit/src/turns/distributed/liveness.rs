@@ -1,4 +1,4 @@
-//! The process's Redis heartbeat can stand in for messages only for a turn it still runs.
+//! The process's heartbeat can stand in for messages only for a turn it still runs.
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};

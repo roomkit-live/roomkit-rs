@@ -1,4 +1,4 @@
-//! The Redis backend as an application-facing turn transport.
+//! The distributed backend as an application-facing turn transport.
 use super::DistributedTurnBackend;
 use crate::RoomKitError;
 use crate::turns::wire::{HostResult, OwnerMessage};
@@ -8,7 +8,7 @@ use crate::turns::{
 };
 use std::sync::Arc;
 mod link;
-pub(super) use link::RedisLink;
+pub(super) use link::DistributedLink;
 
 impl TurnBackend for DistributedTurnBackend {
     fn submit(

@@ -64,7 +64,7 @@ impl DistributedTurnBackend {
         }
         while let Some(joined) = outbox.writers.try_join_next() {
             if let Err(error) = joined {
-                tracing::warn!(%error, "Redis turn writer exited");
+                tracing::warn!(%error, "Turn message writer exited");
             }
         }
         let (receipt, result) = oneshot::channel();
@@ -144,7 +144,7 @@ impl DistributedTurnBackend {
             match self.write(destination, &pending.message).await {
                 Ok(()) => return Ok(()),
                 Err(error) if pending.retry.again() => {
-                    tracing::warn!(%error, "Retrying a Redis turn message");
+                    tracing::warn!(%error, "Retrying a turn message");
                     tokio::select! {
                         _ = stop.changed() => return Err(super::routes::closed()),
                         () = tokio::time::sleep(Duration::from_secs(1)) => {}

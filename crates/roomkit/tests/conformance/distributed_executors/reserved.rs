@@ -8,7 +8,7 @@
 //! it returned the turn's link, and whether the request was marked handed
 //! once it returned. With none reserved, the turns are placed as usual.
 //!
-//! Wrapped, the Redis backend is the kit's application transport rather
+//! Wrapped, the distributed backend is the kit's application transport rather
 //! than its native one, as for a killed owner: the owner's side drives the
 //! same public link either way, as Python's kit does.
 

@@ -1,4 +1,4 @@
-//! An application's transport serves a built-in executor without Redis or a store.
+//! An application's transport serves a built-in executor without a service or a store.
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;

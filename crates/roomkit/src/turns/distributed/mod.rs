@@ -16,10 +16,6 @@ mod placement;
 #[cfg(test)]
 mod placement_tests;
 mod process;
-#[cfg(feature = "redis")]
-mod redis_backend;
-#[cfg(feature = "redis")]
-mod redis_broker;
 mod registry;
 mod routes;
 #[cfg(test)]
@@ -43,8 +39,6 @@ pub use broker::{
     TurnRegistry,
 };
 pub use memory::{InMemoryTurnBroker, InMemoryTurnRegistry};
-#[cfg(feature = "redis")]
-pub use redis_backend::{RedisTurnBackend, RedisTurnBackendOptions};
 
 type Worker = Arc<dyn super::ServedExecutor>;
 pub(crate) type WorkerLookup = Box<dyn Fn() -> Option<Worker> + Send + Sync>;

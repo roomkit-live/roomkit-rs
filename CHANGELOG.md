@@ -21,9 +21,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   NATS, runs the backend alone; a message broker, as Kafka or RabbitMQ, gives
   the first and takes its registry elsewhere. `InMemoryTurnBroker` and
   `InMemoryTurnRegistry` keep both in one process, for tests and for nodes
-  that share a process. `RedisTurnBackend` is now such a backend assembled on
-  Redis, with the constructor and the operations it had; the `redis` feature
-  gates that assembly alone, and the backend's logic builds without it.
+  that share a process. The backend's logic builds and is tested with no
+  service: the conformance plays the scenarios with executors on the
+  in-memory pair.
 - `ExecutorInfo::of(executor, options)` and `ServedExecutor::same_as(other)`: a
   turn backend lists an executor it serves, and tells the owner's own
   executor from the others, by public names (RFC §10.6.7, RMK-2012). `of`
@@ -58,7 +58,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   does not take it fails `no_executor` before anything is handed
   (`TurnRequest::handed` stays false, read on a clone of the request); any
   other reason comes after the hand-over, the turn never handed elsewhere.
-  `InMemoryTurnBackend` and `RedisTurnBackend` take it; a transport that keeps
+  `InMemoryTurnBackend` and `DistributedTurnBackend` take it; a transport that keeps
   the trait's default refuses (`examples/turns_submit_to_executor.rs`).
 
 - A streamed text names the row it follows, `metadata["follows_index"]`, as
@@ -127,6 +127,22 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `ChatDialectOptions` the scenario states, and names no vendor; the two
   scenarios that read a vendor's own rendering left the shared corpus, so
   the runners have no known failure left (RMK-1982).
+
+### Removed
+
+- **BREAKING — the turn backend on Redis left this repository**, with the
+  `redis` feature and the `redis` dependency (RMK-2012): no feature of the
+  engine is tied to a service. `RedisTurnBackend` and
+  `RedisTurnBackendOptions` are in
+  [roomkit-providers](https://github.com/roomkit-live/roomkit-providers), in
+  the crate `roomkit-providers-redis`, with the constructor, the operations,
+  the keys and the messages they had; `RedisTurnBroker` and
+  `RedisTurnRegistry` there are the two ports on Redis. The engine keeps the
+  backend's logic (`DistributedTurnBackend`) and its ports, and proves them
+  on its in-memory broker and registry. Migration: depend on
+  `roomkit-providers-redis`, import `RedisTurnBackend` and
+  `RedisTurnBackendOptions` from it, and drop the `redis` feature of
+  `roomkit`.
 
 ### Fixed
 

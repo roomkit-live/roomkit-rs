@@ -1371,19 +1371,6 @@ rust = "roomkit::turns::TurnBackendHandle"
 approved = "2026-11-18"
 reason = "A trait object cannot store the backend instance's inherited presence state. Kits, clients and direct calls share a cloned handle; the transport can override distributed claims (HITL a12b3f92)."
 
-# An optional positional URL uses explicit None in Rust. Both exported paths are callable.
-[[exception]]
-rust = "roomkit::RedisTurnBackend::new"
-params = ["url"]
-approved = "2026-11-18"
-reason = "Rust callers supply None for Python's omitted positional URL. The constructor checks client injection before resolving the default endpoint."
-
-[[exception]]
-rust = "roomkit::turns::RedisTurnBackend::new"
-params = ["url"]
-approved = "2026-11-18"
-reason = "Re-export of the same optional positional URL constructor. None and an empty URL use localhost:6379; an injected client requires a supplied URL."
-
 [[exception]]
 rust = "roomkit_mcp::McpToolProvider::new"
 params = ["url"]

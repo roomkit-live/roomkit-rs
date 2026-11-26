@@ -116,7 +116,7 @@ impl DistributedTurnBackend {
             .await
             .is_err()
         {
-            tracing::warn!("A Redis turn handler outlived the backend's cancellation bound");
+            tracing::warn!("A turn handler outlived the backend's cancellation bound");
         }
     }
 }

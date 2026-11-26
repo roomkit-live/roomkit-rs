@@ -16,7 +16,7 @@
 //! an end owed are the same on both paths, and Python's kit takes its turns
 //! through an in-memory backend too. Every scenario that holds a turn's end
 //! or bounds its turns, outside `executors/`, takes that path. A run that
-//! carries its turns over a transport of its own, the Redis executor pass,
+//! carries its turns over a transport of its own, the executor pass,
 //! holds no end: a scenario that asks it to is refused as a setup problem.
 
 use std::collections::BTreeMap;

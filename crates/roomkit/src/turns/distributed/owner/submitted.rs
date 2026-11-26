@@ -2,14 +2,14 @@
 use super::{Delivered, DistributedTurnBackend, PendingHandover, invalid};
 use crate::RoomKitError;
 use crate::turns::distributed::routes::TurnRoute;
-use crate::turns::distributed::{routes, transport::RedisLink};
+use crate::turns::distributed::{routes, transport::DistributedLink};
 use crate::turns::pipe::PipeReceiver;
 use crate::turns::wire::{Control, Frame};
 use crate::turns::{CarriedRequest, ExecutorInfo, TurnLink, TurnRequest};
 use std::sync::Arc;
 
 impl DistributedTurnBackend {
-    /// Submit a turn to a locally served worker or another Redis process.
+    /// Submit a turn to a locally served worker or another process.
     ///
     /// # Errors
     /// Returns a placement or transport error if no executor accepts the request.
@@ -44,7 +44,7 @@ impl DistributedTurnBackend {
         self.ensure_open()?;
         let raw = serde_json::to_string(&request).map_err(|error| invalid(error.to_string()))?;
         let carried = CarriedRequest::from_wire(&raw).map_err(invalid)?;
-        let (link, controls) = RedisLink::new(request, self.timeouts());
+        let (link, controls) = DistributedLink::new(request, self.timeouts());
         let memory = &link.memory;
         let marker = link.request().handover.clone();
         let mark = |handed| marker.mark(handed);
@@ -77,7 +77,7 @@ impl DistributedTurnBackend {
         &self,
         peer: &str,
         route: TurnRoute,
-        link: &RedisLink,
+        link: &DistributedLink,
         controls: PipeReceiver<Control>,
     ) -> Result<(), RoomKitError> {
         let mut pending = PendingHandover::new(self, peer, &link.memory.turn_id);

@@ -61,7 +61,7 @@ impl DistributedTurnBackend {
     /// Advertise and serve this executor. A later registration can replace a closed executor.
     ///
     /// # Errors
-    /// A registration on a closed backend fails, as does publishing its first Redis heartbeat.
+    /// A registration on a closed backend fails, as does publishing its first heartbeat.
     pub async fn serve<S: crate::ConversationStore>(
         &self,
         executor: crate::TurnExecutor<S>,
@@ -185,7 +185,7 @@ impl DistributedTurnBackend {
                     .build()
                     .map_err(|err| RoomKitError::Runtime(err.to_string()))?;
                 std::thread::Builder::new()
-                    .name("roomkit-redis-heartbeat".into())
+                    .name("roomkit-turn-heartbeat".into())
                     .spawn(move || {
                         let _exited = exited;
                         runtime.block_on(async {
@@ -286,7 +286,7 @@ impl DistributedTurnBackend {
     /// Withdraw this node and close the links it owns.
     ///
     /// # Errors
-    /// Redis may be unavailable when withdrawing. Expired heartbeats are forgotten by readers.
+    /// The registry may be unreachable when withdrawing. Expired heartbeats are forgotten by readers.
     pub async fn close(&self) -> Result<(), RoomKitError> {
         let mut closed = self.0.closing.lock().await;
         if *closed {
@@ -345,11 +345,7 @@ impl DistributedTurnBackend {
         tokio::time::timeout(self.timeouts().bounded().cancel, publish)
             .await
             .map_err(|_| {
-                RoomKitError::Runtime("Timed out withdrawing the Redis turn backend".into())
+                RoomKitError::Runtime("Timed out withdrawing the distributed turn backend".into())
             })?
     }
 }
-
-#[cfg(test)]
-#[cfg(feature = "redis")]
-mod injected_client_tests;

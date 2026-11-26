@@ -9,7 +9,6 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
-redis = { workspace = true, optional = true }
 # The model's filling constructors, which read the system clock (step 5,
 # lot 2).
 roomkit-core = { workspace = true, features = ["system-environment"] }
@@ -42,7 +41,6 @@ opentelemetry_sdk = { workspace = true, optional = true }
 
 # Python's extra `roomkit[opentelemetry]`: `telemetry::OpenTelemetryProvider`.
 [features]
-redis = ["dep:redis"]
 opentelemetry = ["dep:opentelemetry", "dep:opentelemetry_sdk"]
 
 [dev-dependencies]
@@ -74,9 +72,3 @@ name = "content_logging"
 path = "tests/content_logging.rs"
 harness = false
 
-# One real Redis, separate owner and executor processes, either SDK in either role.
-[[test]]
-name = "redis_interop"
-path = "tests/redis_interop/main.rs"
-harness = false
-required-features = ["redis"]
