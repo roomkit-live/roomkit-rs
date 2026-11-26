@@ -160,7 +160,7 @@ impl Peer {
         };
         let taken = response == "taken";
         let answer = BrokerMessage::new("answer", &self.node, response, "", &message.reference);
-        self.broker.post(&message.sender, &answer).await?;
+        self.broker.post(&message.sender, &[answer]).await?;
         if taken
             && !self.gate.is_empty()
             && let Some(run) = self.run.upgrade()

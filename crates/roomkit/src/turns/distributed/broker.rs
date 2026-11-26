@@ -114,11 +114,12 @@ pub trait BeatWriter: Send {
 /// The messages between the processes of a distributed turn backend: an
 /// inbox a node, read in the order posted.
 pub trait TurnBroker: Send + Sync + 'static {
-    /// Add `message` to `node`'s inbox, after those it holds.
+    /// Add `messages` to `node`'s inbox, in their order, after those it
+    /// holds.
     fn post<'a>(
         &'a self,
         node: &'a str,
-        message: &'a BrokerMessage,
+        messages: &'a [BrokerMessage],
     ) -> TurnFuture<'a, Result<(), RoomKitError>>;
 
     /// A reader of `node`'s inbox, each read waiting `block` at most.
@@ -162,8 +163,8 @@ pub trait TurnRegistry: Send + Sync + 'static {
     fn forget_owner<'a>(&'a self, node: &'a str) -> TurnFuture<'a, Result<(), RoomKitError>>;
 
     /// The last beat of each of `members`, and for each node of `running`
-    /// whether it runs each of the turns named. What is read of one node is
-    /// read as one of its beats left it.
+    /// whether it runs each of the turns named; either may name none. What
+    /// is read of one node is read as one of its beats left it.
     fn beats<'a>(
         &'a self,
         members: &'a [&'a str],

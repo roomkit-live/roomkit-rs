@@ -60,18 +60,20 @@ impl TurnBroker for InMemoryTurnBroker {
     fn post<'a>(
         &'a self,
         node: &'a str,
-        message: &'a BrokerMessage,
+        messages: &'a [BrokerMessage],
     ) -> TurnFuture<'a, Result<(), RoomKitError>> {
         Box::pin(async move {
             {
                 let mut inboxes = lock(&self.0.inboxes);
-                inboxes.posted += 1;
-                let id = inboxes.posted;
-                inboxes
-                    .of
-                    .entry(node.to_owned())
-                    .or_default()
-                    .insert(id, message.clone());
+                for message in messages {
+                    inboxes.posted += 1;
+                    let id = inboxes.posted;
+                    inboxes
+                        .of
+                        .entry(node.to_owned())
+                        .or_default()
+                        .insert(id, message.clone());
+                }
             }
             self.0.posted.notify_waiters();
             Ok(())

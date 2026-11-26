@@ -8,7 +8,9 @@ pub(super) use super::broker::BrokerMessage as Message;
 
 impl DistributedTurnBackend {
     pub(super) async fn write(&self, destination: &str, msg: &Message) -> Result<(), RoomKitError> {
-        self.broker().post(destination, msg).await
+        self.broker()
+            .post(destination, std::slice::from_ref(msg))
+            .await
     }
 
     pub(super) fn read_block(&self) -> Duration {

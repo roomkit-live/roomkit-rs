@@ -73,7 +73,7 @@ impl TurnBroker for WatchedBroker {
     fn post<'a>(
         &'a self,
         node: &'a str,
-        message: &'a BrokerMessage,
+        messages: &'a [BrokerMessage],
     ) -> TurnFuture<'a, Result<(), RoomKitError>> {
         Box::pin(async move {
             if let Some(refusals) = lock(&self.refused).get_mut(node) {
@@ -82,8 +82,12 @@ impl TurnBroker for WatchedBroker {
                     "the test broker refuses the inbox of {node}"
                 )));
             }
-            self.carried.post(node, message).await?;
-            lock(&self.posted).push((node.to_owned(), message.clone()));
+            self.carried.post(node, messages).await?;
+            let posted = messages
+                .iter()
+                .cloned()
+                .map(|message| (node.to_owned(), message));
+            lock(&self.posted).extend(posted);
             Ok(())
         })
     }

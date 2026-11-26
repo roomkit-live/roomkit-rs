@@ -22,7 +22,8 @@ use crate::turns::{Beat, BrokerMessage, InboxEntry, TurnBroker, TurnRegistry};
 const BLOCK: Duration = Duration::from_millis(20);
 
 /// Checks that `broker` keeps the contract of [`TurnBroker`]: an inbox is
-/// read in the order it was posted in, after any entry, until acknowledged;
+/// read in the order it was posted in, the messages of one post in theirs,
+/// after any entry, until acknowledged;
 /// a node reads its own inbox alone; a read that waits takes a message
 /// posted meanwhile, and waits no longer than its block.
 ///
@@ -58,9 +59,11 @@ fn bodies(entries: &[InboxEntry]) -> Vec<&str> {
 }
 
 async fn an_inbox_is_read_in_the_order_posted_until_acknowledged(broker: &dyn TurnBroker) {
-    broker.post("n1", &frame("one")).await.unwrap();
-    broker.post("n1", &frame("two")).await.unwrap();
-    broker.post("n2", &frame("another node's")).await.unwrap();
+    broker
+        .post("n1", &[frame("one"), frame("two")])
+        .await
+        .unwrap();
+    broker.post("n2", &[frame("another node's")]).await.unwrap();
     let mut inbox = broker.inbox("n1", BLOCK).await.unwrap();
     let entries = inbox.read("").await.unwrap();
     assert_eq!(bodies(&entries), ["one", "two"]);
@@ -71,7 +74,7 @@ async fn an_inbox_is_read_in_the_order_posted_until_acknowledged(broker: &dyn Tu
     assert_eq!(inbox.read(&ids[1]).await.unwrap(), []);
     assert_eq!(bodies(&inbox.read(&ids[0]).await.unwrap()), ["two"]);
 
-    broker.post("n1", &frame("three")).await.unwrap();
+    broker.post("n1", &[frame("three")]).await.unwrap();
     assert_eq!(bodies(&inbox.read(&ids[1]).await.unwrap()), ["three"]);
 
     // A reader that starts over reads what was not acknowledged.
@@ -87,7 +90,7 @@ async fn a_waiting_read_takes_a_message_posted_meanwhile(broker: Arc<dyn TurnBro
         .unwrap();
     let reading = tokio::spawn(async move { inbox.read("").await.unwrap() });
     tokio::time::sleep(BLOCK).await;
-    broker.post("waiting", &frame("late")).await.unwrap();
+    broker.post("waiting", &[frame("late")]).await.unwrap();
     let entries = tokio::time::timeout(Duration::from_secs(2), reading)
         .await
         .expect("the read waited its whole block")
@@ -149,6 +152,19 @@ async fn a_beat_is_viewed_until_withdrawn(registry: &dyn TurnRegistry) {
         .unwrap();
     assert_eq!(beats.last, [Some(written), None]);
     assert_eq!(beats.running, [[true, false]]);
+
+    // The turns a node runs are read with no executor's beat asked, and a
+    // beat with no turn.
+    let beats = registry.beats(&[], &running).await.unwrap();
+    assert_eq!(
+        (beats.last, beats.running),
+        (vec![], vec![vec![true, false]])
+    );
+    let beats = registry.beats(&["n1:a"], &[("n1", vec![])]).await.unwrap();
+    assert_eq!(
+        (beats.last, beats.running),
+        (vec![Some(written)], vec![vec![]])
+    );
 
     // The heartbeat's own writer writes a beat as the registry does.
     let mut beater = registry.beater().await.unwrap();
