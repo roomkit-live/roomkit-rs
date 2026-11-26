@@ -112,7 +112,7 @@ impl PeerOwner {
             };
             let body = serde_json::to_string(&envelope).map_err(|error| invalid(&error))?;
             let reference = Uuid::new_v4().simple().to_string();
-            let message = Message::new("work", backend.node_id(), body, "", &reference);
+            let message = Message::addressed("work", backend.node_id(), body, "", &reference);
             backend.post_unconfirmed(&peer, &message)?;
             Ok(None)
         } else {

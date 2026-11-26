@@ -23,7 +23,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `InMemoryTurnBroker` and `InMemoryTurnRegistry` keep both in one process,
   for tests and for nodes that share a process. The backend's logic builds
   and is tested with no service: the conformance plays the scenarios with
-  executors on the in-memory pair.
+  executors on the in-memory pair. The same names as RoomKit's Python, whose
+  defaults `BrokerMessage::new(kind, sender, body)` and `Beat::new(node,
+  generation)` take, the rest set by struct update.
 - `ExecutorInfo::of(executor, options)` and `ServedExecutor::same_as(other)`: a
   turn backend lists an executor it serves, and tells the owner's own
   executor from the others, by public names (RFC §10.6.7, RMK-2012). `of`

@@ -54,7 +54,10 @@ pub async fn check_turn_registry(registry: Arc<dyn TurnRegistry>) {
 }
 
 fn frame(body: &str) -> BrokerMessage {
-    BrokerMessage::new("frame", "sender", body.to_owned(), "turn", "")
+    BrokerMessage {
+        target: "turn".to_owned(),
+        ..BrokerMessage::new("frame", "sender", body.to_owned())
+    }
 }
 
 fn bodies(entries: &[InboxEntry]) -> Vec<&str> {
@@ -105,11 +108,7 @@ async fn a_waiting_read_takes_a_message_posted_meanwhile(broker: Arc<dyn TurnBro
 }
 
 fn beat(generation: u64) -> Beat {
-    Beat {
-        node: "n1".to_owned(),
-        generation,
-        ..Beat::default()
-    }
+    Beat::new("n1", generation)
 }
 
 async fn a_beat_is_viewed_until_withdrawn(registry: &dyn TurnRegistry) {

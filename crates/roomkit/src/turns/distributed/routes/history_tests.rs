@@ -4,7 +4,7 @@ use std::time::Duration;
 use super::{Message, Routes};
 
 fn entry(kind: &str, reference: &str) -> Message {
-    Message::new(kind, "worker", String::new(), "", reference)
+    Message::addressed(kind, "worker", String::new(), "", reference)
 }
 
 #[tokio::test(start_paused = true)]
@@ -56,6 +56,6 @@ fn a_publication_and_a_question_can_share_a_reference_without_sharing_an_answer(
     routes.answered(&question, "prior answer");
     assert_eq!(routes.first(&question), Err(Some("prior answer".into())));
     assert_eq!(routes.first(&work), Err(None));
-    let another_sender = Message::new("owner", "another", String::new(), "", "common");
+    let another_sender = Message::addressed("owner", "another", String::new(), "", "common");
     assert_eq!(routes.first(&another_sender), Ok(()));
 }

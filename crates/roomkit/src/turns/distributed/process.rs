@@ -233,11 +233,9 @@ impl DistributedTurnBackend {
         let scope = lock(&self.0.serving);
         let node = self.node_id();
         let mut beat = Beat {
-            node: node.into(),
-            generation: scope.generation,
             owner: scope.owner,
             running: lock(&self.0.routes).running(),
-            ..Beat::default()
+            ..Beat::new(node, scope.generation)
         };
         for worker in &scope.workers {
             let id = worker.executor_id();

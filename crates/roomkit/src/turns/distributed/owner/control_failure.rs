@@ -40,7 +40,7 @@ async fn an_inbound_frame_is_read_while_an_outgoing_write_is_backed_up() {
     let peer = "worker";
     services.broker.refuse(peer);
     backend.listen().await;
-    let previous = Message::new(
+    let previous = Message::addressed(
         "answer",
         backend.node_id(),
         "reply".to_owned(),
@@ -66,7 +66,7 @@ async fn an_inbound_frame_is_read_while_an_outgoing_write_is_backed_up() {
     tokio::pin!(forwarding);
     tokio::select! {biased; ()=&mut forwarding=>panic!("owner bridge exited"), ()=std::future::ready(())=>{}}
 
-    let frame = Message::new(
+    let frame = Message::addressed(
         "frame",
         peer,
         serde_json::json!({"turn_id":"running","seq":1,"message":{"type":"heartbeat"}}).to_string(),

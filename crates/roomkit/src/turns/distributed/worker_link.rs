@@ -185,7 +185,7 @@ impl ExecutorLink for WorkerLink {
             .map_err(|error| invalid(error.to_string()))?;
             let body = crate::turns::wire::peer_error_payload(raw).map_err(invalid)?;
             let id = &self.request.turn_id;
-            let message = Message::new("frame", self.backend.node_id(), body, id, "");
+            let message = Message::addressed("frame", self.backend.node_id(), body, id, "");
             self.backend.post(&self.peer, &message).await?;
             Ok(seq)
         })

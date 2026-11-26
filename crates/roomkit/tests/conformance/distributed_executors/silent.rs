@@ -80,10 +80,8 @@ impl Peer {
     async fn beat(&self) -> Result<(), RoomKitError> {
         self.registry
             .beat(&Beat {
-                node: self.node.clone(),
-                generation: 1,
                 declared: BTreeMap::from([(self.member.clone(), self.declaration.clone())]),
-                ..Beat::default()
+                ..Beat::new(&self.node, 1)
             })
             .await
     }
@@ -159,7 +157,10 @@ impl Peer {
             other => return Err(error(format!("unexpected mute peer entry: {other}"))),
         };
         let taken = response == "taken";
-        let answer = BrokerMessage::new("answer", &self.node, response, "", &message.reference);
+        let answer = BrokerMessage {
+            reference: message.reference.clone(),
+            ..BrokerMessage::new("answer", &self.node, response)
+        };
         self.broker.post(&message.sender, &[answer]).await?;
         if taken
             && !self.gate.is_empty()

@@ -112,7 +112,7 @@ async fn an_unreadable_control_cuts_the_turn_as_its_owner_lost() {
             break;
         }
     }
-    let unreadable = Message::new(
+    let unreadable = Message::addressed(
         "control",
         owner.node_id(),
         "not a control".into(),

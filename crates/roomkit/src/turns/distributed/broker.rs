@@ -13,7 +13,7 @@ use crate::turns::TurnFuture;
 
 /// A message of a node's inbox. The backend writes and reads its fields;
 /// a broker carries them as they are.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BrokerMessage {
     /// What the message is: a turn's request, a frame, a control, an answer.
     pub kind: String,
@@ -28,14 +28,31 @@ pub struct BrokerMessage {
 }
 
 impl BrokerMessage {
-    /// A message of `kind` from `sender`.
-    pub fn new(kind: &str, sender: &str, body: String, target: &str, reference: &str) -> Self {
+    /// A message of `kind` from `sender`, for nothing in particular on the
+    /// node that reads it and expecting no answer: `target` and `reference`
+    /// empty, set by struct update.
+    pub fn new(kind: &str, sender: &str, body: String) -> Self {
         Self {
             kind: kind.into(),
             sender: sender.into(),
             body,
+            ..Self::default()
+        }
+    }
+
+    /// A message for `target` on the node that reads it, naming
+    /// `reference`: the backend's own messages.
+    pub(crate) fn addressed(
+        kind: &str,
+        sender: &str,
+        body: String,
+        target: &str,
+        reference: &str,
+    ) -> Self {
+        Self {
             target: target.into(),
             reference: reference.into(),
+            ..Self::new(kind, sender, body)
         }
     }
 }
@@ -70,6 +87,19 @@ pub struct Beat {
     pub running: Vec<String>,
     /// Whether the node is a room owner.
     pub owner: bool,
+}
+
+impl Beat {
+    /// A beat of `node` at its change `generation` that declares, withdraws
+    /// and runs nothing, and is no room owner's: the rest set by struct
+    /// update.
+    pub fn new(node: &str, generation: u64) -> Self {
+        Self {
+            node: node.into(),
+            generation,
+            ..Self::default()
+        }
+    }
 }
 
 /// The executors and the room owners beating, as the registry keeps them.

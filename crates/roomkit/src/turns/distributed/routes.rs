@@ -198,7 +198,7 @@ impl DistributedTurnBackend {
             routes.answers.insert(id.clone(), (peer.into(), tx));
         }
         let _registration = Question(&self.0.routes, id.clone());
-        let question = Message::new(kind, self.node_id(), body, target, &id);
+        let question = Message::addressed(kind, self.node_id(), body, target, &id);
         tokio::select! {
             biased;
             answer = &mut rx => return answer.map_err(|_| closed()),
@@ -212,7 +212,7 @@ impl DistributedTurnBackend {
         lock(&self.0.routes).answered(msg, &body);
         self.post_unconfirmed(
             &msg.sender,
-            &Message::new("answer", self.node_id(), body, "", &msg.reference),
+            &Message::addressed("answer", self.node_id(), body, "", &msg.reference),
         )
     }
 
@@ -267,7 +267,7 @@ impl DistributedTurnBackend {
             .answers
             .insert(id.clone(), (sender.node_id().to_owned(), tx));
         let _registration = Question(&self.0.routes, id.clone());
-        let marker = Message::new("answer", sender.node_id(), String::new(), "", &id);
+        let marker = Message::addressed("answer", sender.node_id(), String::new(), "", &id);
         let wait = async {
             sender.post(self.node_id(), &marker).await?;
             rx.await.map_err(|_| closed())?;

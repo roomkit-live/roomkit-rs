@@ -13,7 +13,7 @@ fn backend() -> (Services, DistributedTurnBackend) {
 }
 
 fn envelope(kind: &str) -> Message {
-    Message::new(kind, "sender", kind.to_owned(), "turn", "ref")
+    Message::addressed(kind, "sender", kind.to_owned(), "turn", "ref")
 }
 
 #[tokio::test]
@@ -95,8 +95,8 @@ async fn a_refusal_to_one_peer_does_not_stall_another_peers_turn() {
     let (services, backend) = backend();
     services.broker.refuse("unavailable");
     let mut turn = backend.route_turn("active", "healthy", false).unwrap();
-    let question = Message::new("request", "unavailable", String::new(), "absent", "q");
-    let frame = Message::new("frame", "healthy", "heartbeat".to_owned(), "active", "");
+    let question = Message::addressed("request", "unavailable", String::new(), "absent", "q");
+    let frame = Message::addressed("frame", "healthy", "heartbeat".to_owned(), "active", "");
     for incoming in [&question, &question, &frame] {
         backend.write(backend.node_id(), incoming).await.unwrap();
     }

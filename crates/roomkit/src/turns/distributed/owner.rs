@@ -160,7 +160,7 @@ impl DistributedTurnBackend {
     }
 
     async fn release_turn(&self, peer: &str, turn: &str) {
-        let release = Message::new("released", self.node_id(), turn.to_owned(), turn, "");
+        let release = Message::addressed("released", self.node_id(), turn.to_owned(), turn, "");
         drop(self.post(peer, &release).await);
     }
 
@@ -189,7 +189,7 @@ impl DistributedTurnBackend {
                             break;
                         }
                     };
-                    let msg = Message::new("control", self.node_id(), body, &memory.turn_id, "");
+                    let msg = Message::addressed("control", self.node_id(), body, &memory.turn_id, "");
                     write.start(self, &peer, &msg)
                 }
                 result = write.finished() => result,
@@ -232,7 +232,7 @@ impl Drop for PendingHandover<'_> {
         if self.armed {
             // A Send submission can be dropped from a thread outside the runtime.
             let _runtime = self.runtime.enter();
-            let release = Message::new(
+            let release = Message::addressed(
                 "released",
                 self.backend.node_id(),
                 self.turn.to_owned(),

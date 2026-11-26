@@ -92,7 +92,7 @@ async fn closing_a_worker_writes_its_numbered_end_to_the_owner_before_returning(
     owner
         .post(
             host.node_id(),
-            &Message::new("control", owner.node_id(), beat.to_string(), "turn", ""),
+            &Message::addressed("control", owner.node_id(), beat.to_string(), "turn", ""),
         )
         .await
         .unwrap();
