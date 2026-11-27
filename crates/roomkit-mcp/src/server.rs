@@ -59,8 +59,10 @@ pub(crate) struct McpServer {
 
 struct Inner {
     program: String,
+    /// Where a legacy SSE connection's callers send their cancellations;
+    /// `None` on another transport.
     #[cfg(feature = "http")]
-    legacy: bool,
+    legacy: Option<crate::http::legacy::request::Cancellations>,
     peer: Peer<RoleClient>,
     tools: Listed,
     capture: Capture,
@@ -134,7 +136,7 @@ impl McpServer {
             inner: Arc::new(Inner {
                 program,
                 #[cfg(feature = "http")]
-                legacy: false,
+                legacy: None,
                 peer: service.peer().clone(),
                 tools,
                 capture,
@@ -158,7 +160,7 @@ impl McpServer {
         tools: Listed,
         capture: Capture,
         finished: tokio::sync::oneshot::Receiver<()>,
-        legacy: bool,
+        legacy: Option<crate::http::legacy::request::Cancellations>,
     ) -> Self {
         let instructions = service
             .peer_info()

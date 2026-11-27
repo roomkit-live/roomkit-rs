@@ -38,9 +38,14 @@ pub(super) async fn connect(
     let (client, finished, failure) = Client::new(capture.clone())?;
     let interrupted = Arc::new(Notify::new());
     let writer_stop = Arc::clone(&interrupted);
+    let (cancellations, given_up) = request::cancellations();
     let connected = {
         let connecting = async move {
-            let transport = Legacy::open(&url, headers, client, failure.clone(), writer_stop)
+            let writer = WriterParts {
+                interrupted: writer_stop,
+                given_up,
+            };
+            let transport = Legacy::open(&url, headers, client, failure.clone(), writer)
                 .await
                 .map_err(|_| failure.error("MCP legacy transport failed"))?;
             super::session::open(transport, &failure, filter.as_ref(), discover).await
@@ -70,7 +75,11 @@ pub(super) async fn connect(
     };
     match connected {
         Ok((service, tools)) => Ok(crate::server::McpServer::from_http(
-            service, tools, capture, finished, true,
+            service,
+            tools,
+            capture,
+            finished,
+            Some(cancellations),
         )),
         Err(error) => {
             let _finished = finished.await;
@@ -85,13 +94,20 @@ pub(super) struct Legacy {
     failure: Failure,
 }
 
+/// What the writer is stopped by and what it takes its callers'
+/// cancellations from.
+pub(super) struct WriterParts {
+    interrupted: Arc<Notify>,
+    given_up: tokio::sync::mpsc::UnboundedReceiver<request::Cancellation>,
+}
+
 impl Legacy {
     pub(super) async fn open(
         url: &str,
         headers: HeaderMap,
         client: Client,
         failure: Failure,
-        interrupted: Arc<Notify>,
+        writer: WriterParts,
     ) -> Result<Self, HttpFailure> {
         let parsed = Url::parse(url).map_err(|_| failure.record(None, "invalid MCP endpoint"))?;
         let response = client.legacy_get(parsed, headers.clone()).await?;
@@ -100,7 +116,14 @@ impl Legacy {
         let target = announced(url, &mut stream, &failure).await?;
         Ok(Self {
             stream: Some(stream),
-            writer: Writer::new(client, target, headers, failure.clone(), interrupted),
+            writer: Writer::new(
+                client,
+                target,
+                headers,
+                failure.clone(),
+                writer.interrupted,
+                writer.given_up,
+            ),
             failure,
         })
     }

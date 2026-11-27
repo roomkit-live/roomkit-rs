@@ -3,15 +3,31 @@
 //! rmcp owns its send tasks separately from the response future. A local
 //! marker therefore connects the caller's lifetime to the writer's rendezvous;
 //! it never changes JSON parameters or the SDK's result parsing.
+//!
+//! A caller that gives up on its request once it went to rmcp, at its
+//! deadline or dropped, tells the server with `notifications/cancelled`, as
+//! Python's SDK does for a request whose write began. The writer posts the
+//! cancellation before what it has queued, and skips the request when it had
+//! not taken it.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 
 use rmcp::model::{
     CancelledNotification, CancelledNotificationParam, ClientJsonRpcMessage, ClientNotification,
     ClientRequest, GetExtensions, RequestId, ServerResult,
 };
 use rmcp::service::{Peer, PeerRequestOptions, RoleClient, ServiceError};
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
+use tokio::time::Instant;
+
+/// How long a cancellation waits for the writer at most, as Python's SDK
+/// bounds that courtesy write: past it, the cancellation is not sent.
+const CANCELLATION_WAIT: Duration = Duration::from_secs(5);
+
+/// The reason a cancellation gives, Python's: its provider cancels a call it
+/// gives up on as its caller.
+const CANCELLED: &str = "caller cancelled";
 
 #[derive(Clone, Copy, Default)]
 enum Phase {
@@ -24,20 +40,65 @@ enum Phase {
 #[derive(Clone, Default)]
 struct Marker(Arc<Mutex<Phase>>);
 
+/// A request its caller gave up on, which the writer tells the server of.
+pub(super) struct Cancellation {
+    id: RequestId,
+    since: Instant,
+}
+
+impl Cancellation {
+    /// The `notifications/cancelled` the writer posts; none once the
+    /// cancellation waited past [`CANCELLATION_WAIT`] for the writer.
+    pub(super) fn notification(self) -> Option<ClientJsonRpcMessage> {
+        if self.since.elapsed() > CANCELLATION_WAIT {
+            tracing::warn!(
+                id = %self.id,
+                "MCP cancellation not sent: the legacy writer stayed busy"
+            );
+            return None;
+        }
+        let params = CancelledNotificationParam::new(Some(self.id), Some(CANCELLED.into()));
+        Some(ClientJsonRpcMessage::notification(
+            ClientNotification::CancelledNotification(CancelledNotification::new(params)),
+        ))
+    }
+}
+
+/// Where a connection's callers send the cancellations its writer posts.
+#[derive(Clone)]
+pub(crate) struct Cancellations(mpsc::UnboundedSender<Cancellation>);
+
+/// A connection's cancellations: the callers' end and the writer's.
+pub(super) fn cancellations() -> (Cancellations, mpsc::UnboundedReceiver<Cancellation>) {
+    let (sender, receiver) = mpsc::unbounded_channel();
+    (Cancellations(sender), receiver)
+}
+
 struct Caller {
     marker: Marker,
     peer: Peer<RoleClient>,
+    cancellations: Cancellations,
+    /// The request while its caller waits for the answer.
     id: Option<RequestId>,
     runtime: Option<tokio::runtime::Handle>,
 }
 
+fn lock(marker: &Marker) -> MutexGuard<'_, Phase> {
+    marker
+        .0
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 pub(crate) async fn send(
     peer: &Peer<RoleClient>,
+    cancellations: &Cancellations,
     mut request: ClientRequest,
 ) -> Result<ServerResult, ServiceError> {
     let mut caller = Caller {
         marker: Marker::default(),
         peer: peer.clone(),
+        cancellations: cancellations.clone(),
         id: None,
         runtime: tokio::runtime::Handle::try_current().ok(),
     };
@@ -53,11 +114,7 @@ pub(crate) async fn send(
 
 impl Drop for Caller {
     fn drop(&mut self) {
-        let mut phase = self
-            .marker
-            .0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut phase = lock(&self.marker);
         if matches!(*phase, Phase::Queued) {
             *phase = Phase::Abandoned;
         }
@@ -65,6 +122,13 @@ impl Drop for Caller {
         let Some(id) = self.id.take() else {
             return;
         };
+        // A writer that ended has no server to tell.
+        let _queued = self.cancellations.0.send(Cancellation {
+            id: id.clone(),
+            since: Instant::now(),
+        });
+        // rmcp releases its responder once it sends a cancellation: this
+        // marked one stays local, the writer posting the server's.
         let mut notification =
             CancelledNotification::new(CancelledNotificationParam::new(Some(id), None));
         notification.extensions.insert(self.marker.clone());
@@ -80,8 +144,9 @@ impl Drop for Caller {
     }
 }
 
-/// Python removes its response waiter without a wire notification on abandonment.
-/// Acknowledge only our marked cleanup so rmcp releases its local responder.
+/// rmcp's cancellation of a request a caller gave up on stays local: it only
+/// releases rmcp's responder. The writer posts the server's
+/// ([`Cancellation`]).
 pub(super) fn local_cancellation(message: &ClientJsonRpcMessage) -> bool {
     let ClientJsonRpcMessage::Notification(notification) = message else {
         return false;
@@ -103,10 +168,7 @@ pub(super) fn accept(message: &ClientJsonRpcMessage, accepted: oneshot::Sender<(
     let Some(marker) = marker else {
         return accepted.send(()).is_ok();
     };
-    let mut phase = marker
-        .0
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut phase = lock(marker);
     if matches!(*phase, Phase::Abandoned) {
         let _accepted = accepted.send(());
         return false;
@@ -154,5 +216,29 @@ mod tests {
         let (accepted, received) = oneshot::channel();
         assert!(accept(&message, accepted));
         assert_eq!(received.blocking_recv(), Ok(()));
+    }
+
+    // Python's SDK: `_ABANDON_WRITE_TIMEOUT`, its bound on the courtesy
+    // cancellation's write.
+    #[tokio::test(start_paused = true)]
+    async fn a_cancellation_that_waited_past_its_bound_is_not_sent() {
+        let since = Instant::now();
+        tokio::time::advance(CANCELLATION_WAIT).await;
+        let id = RequestId::Number(3);
+        let sent = Cancellation {
+            id: id.clone(),
+            since,
+        }
+        .notification()
+        .map(|message| serde_json::to_value(message).unwrap());
+        assert_eq!(
+            sent,
+            Some(
+                serde_json::json!({"jsonrpc":"2.0","method":"notifications/cancelled",
+                "params":{"requestId":3,"reason":"caller cancelled"}})
+            )
+        );
+        tokio::time::advance(Duration::from_millis(1)).await;
+        assert!(Cancellation { id, since }.notification().is_none());
     }
 }

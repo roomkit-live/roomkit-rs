@@ -8,6 +8,7 @@ use tokio::sync::{Notify, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 use super::client::Client;
+use super::request::{self, Cancellation};
 use crate::http::client::{Failure, HttpFailure};
 
 struct Pending {
@@ -29,6 +30,7 @@ impl Writer {
         headers: HeaderMap,
         failure: Failure,
         interrupted: Arc<Notify>,
+        cancelled: mpsc::UnboundedReceiver<Cancellation>,
     ) -> Self {
         let (messages, received) = mpsc::channel(1);
         let (stop, stopped) = oneshot::channel();
@@ -38,7 +40,7 @@ impl Writer {
                 biased;
                 () = interrupted.notified() => {}
                 _ = stopped => {}
-                () = write(client, url, headers, received, errors) => {}
+                () = write(client, url, headers, received, cancelled, errors) => {}
             }
         });
         Self {
@@ -58,7 +60,7 @@ impl Writer {
         let messages = self.messages.clone();
         let failure = self.failure.clone();
         async move {
-            if super::request::local_cancellation(&message) {
+            if request::local_cancellation(&message) {
                 return Ok(());
             }
             let (accepted, received) = oneshot::channel();
@@ -94,14 +96,12 @@ async fn write(
     url: Url,
     headers: HeaderMap,
     mut received: mpsc::Receiver<Pending>,
+    mut cancelled: mpsc::UnboundedReceiver<Cancellation>,
     failure: Failure,
 ) {
-    while let Some(pending) = received.recv().await {
-        if !super::request::accept(&pending.message, pending.accepted) {
-            continue;
-        }
-        client.capture.outgoing(&pending.message);
-        let Ok(message) = crate::wire::message(&pending.message) else {
+    while let Some(message) = next(&mut received, &mut cancelled).await {
+        client.capture.outgoing(&message);
+        let Ok(message) = crate::wire::message(&message) else {
             failure.record(None, "invalid MCP request");
             return;
         };
@@ -113,6 +113,31 @@ async fn write(
             // Python stops its writer after a failed POST. Its separate GET
             // reader stays open, and a pending response retains its deadline.
             return;
+        }
+    }
+}
+
+/// The next message the writer posts: a caller's cancellation before
+/// anything queued, then the next message queued, a request no caller waits
+/// for skipped; `None` once rmcp's queue closed.
+async fn next(
+    received: &mut mpsc::Receiver<Pending>,
+    cancelled: &mut mpsc::UnboundedReceiver<Cancellation>,
+) -> Option<ClientJsonRpcMessage> {
+    loop {
+        tokio::select! {
+            biased;
+            Some(cancellation) = cancelled.recv() => {
+                if let Some(notification) = cancellation.notification() {
+                    return Some(notification);
+                }
+            }
+            pending = received.recv() => {
+                let pending = pending?;
+                if request::accept(&pending.message, pending.accepted) {
+                    return Some(pending.message);
+                }
+            }
         }
     }
 }

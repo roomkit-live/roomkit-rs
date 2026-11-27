@@ -92,18 +92,31 @@ async fn queued() {
             provider.close().await;
             peer.closed().await;
             let seen = peer.shared.seen.lock().unwrap();
-            let methods: Vec<_> = seen
-                .messages
-                .iter()
-                .map(|message| message["method"].as_str().unwrap())
-                .collect();
+            // Python's SDK counts a request its writer took as sent: it tells
+            // the server once the writer is free, the request never posted.
             assert_eq!(
-                methods,
-                ["initialize", "notifications/initialized", kind.method()]
+                methods(&seen.messages),
+                [
+                    "initialize",
+                    "notifications/initialized",
+                    "notifications/cancelled",
+                    kind.method()
+                ]
             );
-            assert_eq!(seen.requests.len(), 4);
+            assert_eq!(
+                seen.messages.get(2).unwrap().pointer("/params/reason"),
+                Some(&json!("caller cancelled"))
+            );
+            assert_eq!(seen.requests.len(), 5);
         }
     }
+}
+
+fn methods(messages: &[Value]) -> Vec<&str> {
+    messages
+        .iter()
+        .map(|message| message["method"].as_str().unwrap())
+        .collect()
 }
 
 async fn sent() {
@@ -125,24 +138,27 @@ async fn sent() {
         provider.close().await;
         peer.closed().await;
         let seen = peer.shared.seen.lock().unwrap();
-        let methods: Vec<_> = seen
-            .messages
-            .iter()
-            .map(|message| message["method"].as_str().unwrap())
-            .collect();
+        // Python's SDK tells the server a request it gave up on is cancelled.
         assert_eq!(
-            methods,
+            methods(&seen.messages),
             [
                 "initialize",
                 "notifications/initialized",
                 kind.method(),
+                "notifications/cancelled",
                 kind.method()
             ]
         );
-        assert_eq!(seen.requests.len(), 5);
+        let sent = seen.messages.get(2).unwrap().get("id");
+        assert_eq!(
+            seen.messages.get(3).unwrap().get("params"),
+            Some(&json!({"requestId": sent, "reason": "caller cancelled"}))
+        );
+        assert_eq!(seen.requests.len(), 6);
     }
 }
 
+// Python: test_abandoned_request_waiting_for_the_legacy_writer_is_not_posted.
 #[tokio::test]
 async fn abandoned_requests_waiting_for_the_writer_are_not_posted() {
     queued().await;
@@ -151,8 +167,9 @@ async fn abandoned_requests_waiting_for_the_writer_are_not_posted() {
 async fn abandoned_requests_waiting_for_the_writer_on_several_workers() {
     queued().await;
 }
+// Python: test_expired_request_already_posted_sends_a_cancellation_notification.
 #[tokio::test]
-async fn expired_requests_already_posted_add_no_cancellation_notification() {
+async fn expired_requests_already_posted_send_a_cancellation_notification() {
     sent().await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -195,6 +212,57 @@ fn a_queued_future_can_be_dropped_outside_its_runtime() {
         );
         provider.close().await;
         peer.closed().await;
-        assert_eq!(peer.shared.seen.lock().unwrap().requests.len(), 4);
+        let seen = peer.shared.seen.lock().unwrap();
+        assert_eq!(
+            methods(&seen.messages)[2..],
+            ["notifications/cancelled", "tools/call"]
+        );
+        assert_eq!(seen.requests.len(), 5);
     });
+}
+
+// Python: test_mcp_legacy_write_deadline.py::
+// test_concurrent_callers_wait_before_http_pool_acquisition.
+#[tokio::test]
+async fn concurrent_callers_wait_for_the_writer_and_each_is_cancelled() {
+    let peer = Peer::start(Mode::HeldPost).await;
+    let provider = peer.provider(None, Duration::from_secs(3));
+    provider.connect().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(1), peer.shared.post_held.notified())
+        .await
+        .unwrap();
+    let mut callers: Vec<_> = (0..64)
+        .map(|_| {
+            Box::pin(provider.request(
+                "never/sent",
+                None,
+                RequestOptions {
+                    timeout: Duration::from_secs(30),
+                },
+            ))
+        })
+        .collect();
+    for caller in &mut callers {
+        assert!(futures_util::poll!(caller).is_pending());
+    }
+    // GET, the initialize answered, the initialized notification held.
+    assert_eq!(peer.shared.seen.lock().unwrap().requests.len(), 3);
+    drop(callers);
+    peer.shared.release_post.notify_one();
+    assert_eq!(
+        invoke(&provider, Kind::Host, "kept", Duration::from_secs(1))
+            .await
+            .unwrap(),
+        Kind::Host.result()
+    );
+    provider.close().await;
+    peer.closed().await;
+    let seen = peer.shared.seen.lock().unwrap();
+    // None of the 64 requests went out; the server is told of each once the
+    // writer is free.
+    let methods = methods(&seen.messages);
+    assert_eq!(methods[..2], ["initialize", "notifications/initialized"]);
+    assert_eq!(methods[2..66], ["notifications/cancelled"; 64]);
+    assert_eq!(methods[66..], ["host/read"]);
+    assert_eq!(seen.requests.len(), 4 + 64);
 }

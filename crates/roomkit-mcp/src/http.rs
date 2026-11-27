@@ -120,7 +120,7 @@ impl McpHttp {
         };
         match connected {
             Ok((service, tools)) => Ok(McpServer::from_http(
-                service, tools, capture, finished, false,
+                service, tools, capture, finished, None,
             )),
             Err(error) => {
                 stop.cancel();
