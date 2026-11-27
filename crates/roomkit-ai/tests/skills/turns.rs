@@ -566,7 +566,7 @@ async fn a_reference_is_read_and_every_way_out_is_refused() {
         r#"{"filename": "guide.md", "content": "Guide: base URL https://api.acme.test\n"}"#.to_owned(),
         r#"{"error": "Invalid reference filename: '../SKILL.md' must not contain a path"}"#.to_owned(),
         r#"{"error": "Invalid reference filename: '/etc/passwd' must be relative"}"#.to_owned(),
-        r#"{"error": "Invalid reference filename: '\uff0e\uff0e\uff0fSKILL.md' must hold only letters, digits, '.', '_' and '-'"}"#.to_owned(),
+        r#"{"error": "Invalid reference filename: '\uff0e\uff0e\uff0fSKILL.md' must not contain a path"}"#.to_owned(),
         r#"{"error": "Invalid reference filename: 'sub/deep.md' must not contain a path"}"#.to_owned(),
         r#"{"error": "Reference not found: missing.md"}"#.to_owned(),
         r#"{"error": "Reference too large: big.md (past 262144 bytes)"}"#.to_owned(),
@@ -593,8 +593,8 @@ async fn a_reference_is_read_and_every_way_out_is_refused() {
 }
 
 /// The references an activation names are those a read takes: a link out
-/// of `references/`, a name a read refuses and a directory are left out,
-/// and a `references/` that leads out of the skill names none.
+/// of `references/` and a directory are left out, a name of a space is a
+/// read's, and a `references/` that leads out of the skill names none.
 #[cfg(unix)]
 #[tokio::test]
 async fn an_activation_names_only_the_references_a_read_takes() {
@@ -640,7 +640,7 @@ async fn an_activation_names_only_the_references_a_read_takes() {
     assert_eq!(
         tool_results(&model)[1],
         [
-            body(),
+            body().replace(r#"["guide.md"]"#, r#"["guide.md", "my guide.md"]"#),
             r###"{"name": "linked-refs", "description": "Linked references", "instructions": "## Instructions\nFollow the linked-refs rules."}"###.to_owned(),
             r#"{"error": "Invalid reference directory: 'references' escapes the skill directory"}"#.to_owned(),
             r#"{"error": "Skill 'nope' not found"}"#.to_owned(),

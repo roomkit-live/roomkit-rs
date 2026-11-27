@@ -23,24 +23,13 @@ pub(super) fn contained_directory(directory: &Path, kind: &str) -> Result<PathBu
     Ok(resolved)
 }
 
-/// Resolve a normalized single filename inside its bundled directory (RFC §24.6).
-///
-/// Both the directory and its target must remain contained after symlinks are
-/// resolved. Missing components are allowed. `None` uses Python's default
-/// error label, `"file"`; a custom `kind` changes only that label.
-///
-/// # Errors
-///
-/// Returns `SkillPathError` for an invalid name, escaped directory/target or
-/// path that cannot be resolved. This does not read or execute the target.
-/// Cyclic symlinks are refused as in Python 3.12; Python 3.13+ can instead
-/// return an unresolved cyclic path from this standalone helper.
-pub fn safe_join_filename(
-    directory: &Path,
-    filename: &str,
-    kind: Option<&str>,
-) -> Result<PathBuf, SkillPathError> {
-    let kind = kind.unwrap_or("file");
+/// The name `filename` normalized (NFKC), or why a read refuses it, in
+/// Python's order of causes (`safe_join_filename`): no name; then, on the
+/// name normalized, so that a character that normalizes onto a separator, a
+/// root or a drive passes no check made on its raw spelling (RFC §24.6), a
+/// control character, an absolute path in any platform's spelling, a
+/// separator, dots alone. The words name the `kind` and the raw name.
+pub(super) fn checked_filename(filename: &str, kind: &str) -> Result<String, SkillPathError> {
     let invalid = |reason: &str| {
         SkillPathError(format!(
             "Invalid {kind} filename: {}{reason}",
@@ -66,6 +55,34 @@ pub fn safe_join_filename(
     if normalized.trim_matches(['.', ' ']).is_empty() {
         return Err(invalid(""));
     }
+    Ok(normalized)
+}
+
+/// Resolve a normalized single filename inside its bundled directory (RFC §24.6).
+///
+/// Both the directory and its target must remain contained after symlinks are
+/// resolved. Missing components are allowed. `None` uses Python's default
+/// error label, `"file"`; a custom `kind` changes only that label.
+///
+/// # Errors
+///
+/// Returns `SkillPathError` for an invalid name, escaped directory/target or
+/// path that cannot be resolved. This does not read or execute the target.
+/// Cyclic symlinks are refused as in Python 3.12; Python 3.13+ can instead
+/// return an unresolved cyclic path from this standalone helper.
+pub fn safe_join_filename(
+    directory: &Path,
+    filename: &str,
+    kind: Option<&str>,
+) -> Result<PathBuf, SkillPathError> {
+    let kind = kind.unwrap_or("file");
+    let invalid = |reason: &str| {
+        SkillPathError(format!(
+            "Invalid {kind} filename: {}{reason}",
+            quoted_name(filename)
+        ))
+    };
+    let normalized = checked_filename(filename, kind)?;
     let base = contained_directory(directory, kind)?;
     let target = resolve(&base.join(normalized)).map_err(|_| invalid(" cannot be resolved"))?;
     if !target.starts_with(&base) {

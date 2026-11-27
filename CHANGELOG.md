@@ -217,6 +217,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `raw_payload`, as in Python (RFC §5.2, §8.1, RMK-2190): `process_webhook`
   stored the message with neither, its source's `raw_payload` empty, the
   provider's id only in `external_id` and the idempotency key, which keep it.
+- `read_skill_reference` reads a reference's name as Python does (RFC
+  §24.6, RMK-2197): normalized (NFKC) before it is checked and opened, so a
+  full-width separator, root or drive is refused as the one it normalizes to,
+  and a name of other characters (a space, a letter outside ASCII) is read,
+  and named among an activation's references, where it was refused unless
+  it held only `[A-Za-z0-9._-]`.
 - An ASYNC hook a turn executor fires on one of the turn's triggers
   (`ON_AI_RESPONSE` among them) calls at least as deep as the turn's
   response, and an event it sends through the turn's host is that deep, as

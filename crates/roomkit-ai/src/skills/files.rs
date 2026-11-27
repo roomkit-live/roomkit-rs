@@ -3,10 +3,11 @@
 //! `references/` directory once links are followed (RFC §24.6, §17.8).
 //!
 //! The check is where a path ends up, never how it is spelled: the name is
-//! checked first (one plain component of `[A-Za-z0-9._-]`, which no
-//! character outside ASCII passes, so none that normalizes onto a
-//! separator does), then the directory and the file are resolved with
-//! their links followed, and each must still be inside the one above it.
+//! checked first, normalized (NFKC) before it is inspected so that no
+//! character that normalizes onto a separator, a root or a drive passes
+//! (RFC §24.6), as one plain component, then the directory and the file
+//! are resolved with their links followed, and each must still be inside
+//! the one above it.
 //! A file is opened once it is checked, then checked again through its
 //! handle: on Linux the path the kernel gives the open file must be inside,
 //! so a file swapped for a link out between the check and the read, even
@@ -232,7 +233,7 @@ pub(crate) fn is_below(path: &Path, directory: &Path) -> bool {
 /// The reference `name` of the skill in `skill`, or the words the model
 /// reads of why it cannot be read (the reference implementation's).
 pub(crate) fn read_reference(skill: &Path, name: &str) -> Result<String, String> {
-    checked_name(name)?;
+    let normalized = checked_name(name)?;
     let directory = match references_of(skill) {
         Ok(directory) => directory,
         Err(Unresolved::Missing) => return Err(not_found(name)),
@@ -245,7 +246,9 @@ pub(crate) fn read_reference(skill: &Path, name: &str) -> Result<String, String>
             return Err("Invalid reference directory: cannot be resolved".to_owned());
         }
     };
-    let opened = open_inside(&directory.join(name), |target| target.starts_with(&directory))
+    let opened = open_inside(&directory.join(&normalized), |target| {
+        target.starts_with(&directory)
+    })
         // `references/` must still be where it was, inside the skill.
         .and_then(|file| match references_of(skill) {
             Ok(again) if again == directory => Ok(file),
@@ -330,42 +333,11 @@ fn references_of(skill: &Path) -> Result<PathBuf, Unresolved> {
     }
 }
 
-/// Whether `name` is a reference's name, a read refuses otherwise, in the
-/// reference implementation's order of causes: no name, a control
-/// character, an absolute path in any platform's spelling, a separator,
-/// dots alone; then any character but `[A-Za-z0-9._-]`.
-fn checked_name(name: &str) -> Result<(), String> {
-    if name.trim().is_empty() || name.chars().any(char::is_control) {
-        return Err(invalid(name, ""));
-    }
-    if is_absolute_anywhere(name) {
-        return Err(invalid(name, " must be relative"));
-    }
-    if name.contains(['/', '\\']) {
-        return Err(invalid(name, " must not contain a path"));
-    }
-    if name.trim_matches(['.', ' ']).is_empty() {
-        return Err(invalid(name, ""));
-    }
-    if !name
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-    {
-        return Err(invalid(
-            name,
-            " must hold only letters, digits, '.', '_' and '-'",
-        ));
-    }
-    Ok(())
-}
-
-/// Whether `name` is absolute on POSIX or on Windows: a root, a drive
-/// letter, a UNC path.
-fn is_absolute_anywhere(name: &str) -> bool {
-    let mut characters = name.chars();
-    let first = characters.next();
-    let drive = first.is_some_and(|c| c.is_ascii_alphabetic()) && characters.next() == Some(':');
-    name.starts_with('/') || name.starts_with("\\\\") || drive
+/// The name a read of the reference `name` opens, normalized (NFKC), or the
+/// words a read refuses it with: the check of every bundled file's name
+/// (`paths::checked_filename`), Python's `safe_join_filename`.
+fn checked_name(name: &str) -> Result<String, String> {
+    super::paths::checked_filename(name, "reference").map_err(|refused| refused.0)
 }
 
 fn invalid(name: &str, why: &str) -> String {
@@ -522,18 +494,33 @@ mod tests {
             ),
             (
                 "\u{ff0e}\u{ff0e}\u{ff0f}SKILL.md",
-                "Invalid reference filename: '\u{ff0e}\u{ff0e}\u{ff0f}SKILL.md' must hold only \
-                 letters, digits, '.', '_' and '-'",
+                "Invalid reference filename: '\u{ff0e}\u{ff0e}\u{ff0f}SKILL.md' must not contain \
+                 a path",
             ),
             (
-                "my guide.md",
-                "Invalid reference filename: 'my guide.md' must hold only letters, digits, '.', \
-                 '_' and '-'",
+                "\u{ff0f}etc\u{ff0f}passwd",
+                "Invalid reference filename: '\u{ff0f}etc\u{ff0f}passwd' must be relative",
+            ),
+            (
+                "\u{ff0e}\u{ff0e}",
+                "Invalid reference filename: '\u{ff0e}\u{ff0e}'",
+            ),
+            (
+                "1:notes.md",
+                "Invalid reference filename: '1:notes.md' must be relative",
             ),
         ];
         for (name, words) in refused {
             assert_eq!(checked_name(name), Err(words.to_owned()), "{name:?}");
         }
-        assert_eq!(checked_name("return-policy_v2.md"), Ok(()));
+        // Read as Python reads it: any other character is the name's, and a
+        // character outside ASCII is read as the one it normalizes to.
+        for (name, read) in [
+            ("return-policy_v2.md", "return-policy_v2.md"),
+            ("my guide.md", "my guide.md"),
+            ("\u{ff4e}otes.md", "notes.md"),
+        ] {
+            assert_eq!(checked_name(name), Ok(read.to_owned()), "{name:?}");
+        }
     }
 }
