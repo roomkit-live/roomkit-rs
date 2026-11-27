@@ -305,7 +305,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   as an explicit key (`[lookup, ?admin]`), is refused alike, where it was
   gated as `?admin`. Migration: quote a tool name that holds a colon,
   `allowed_tools: ["issue_refund: money"]`, or put the note in a comment,
-  `- issue_refund  # money`.
+  `- issue_refund  # money`; quote an entry starting with `?`,
+  `['?admin']`, or write it as a block item, `- ?admin`.
 
 ## [0.3.0] — 2026-11-22
 
