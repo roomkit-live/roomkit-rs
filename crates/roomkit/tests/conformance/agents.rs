@@ -458,7 +458,7 @@ pub(crate) fn scripted_agent_with_skills(
         Serving::Router(scripted_router(spec, own, (run, &shared), &mut models)?)
     };
     if let Some(memory) = spec.get("memory") {
-        let memory = agent_memory(memory, (&id, run), options.max_context_events, &mut models)?;
+        let memory = agent_memory(memory, (&id, run, process), &options, &mut models)?;
         options.memory = Some(memory);
     }
     let mut chain = crate::mcp_servers::handlers(&servers)?;
@@ -705,24 +705,32 @@ impl AiRouter for ScriptedAiRouter {
 }
 
 /// The scripted memory `memory` of the agent `id`, recorded on `run`, its
-/// summarizer among `models`.
+/// summarizer among `models`. Another `process`'s agent holds a memory of
+/// its own over the setup agent's one summarizer, as it answers from its one
+/// model (README, `processes`).
 fn agent_memory(
     memory: &Value,
-    (id, run): (&ChannelId, &Arc<Run>),
-    max_context_events: usize,
+    (id, run, process): (&ChannelId, &Arc<Run>, bool),
+    options: &AiChannelOptions,
     models: &mut Models,
 ) -> Result<Arc<dyn roomkit_ai::memory::MemoryProvider>, String> {
-    let summarizer = match memory.get("summarizer") {
-        Some(summarizer) => {
+    let name = format!("{id}/summarizer");
+    let shared = process
+        .then(|| crate::run::lock(&run.models).get(&name).cloned())
+        .flatten();
+    let summarizer = match (memory.get("summarizer"), shared) {
+        (Some(_), Some(shared)) => Some(shared),
+        (Some(summarizer), None) => {
             let rounds = summarizer["rounds"].as_array().into_iter().flatten();
             let summarizer =
                 ScriptedProvider::new(rounds.map(round).collect::<Result<Vec<_>, _>>()?);
-            models.push((format!("{id}/summarizer"), summarizer.clone()));
+            models.push((name, summarizer.clone()));
             Some(summarizer)
         }
-        None => None,
+        (None, _) => None,
     };
-    scripted_memory(memory, max_context_events, summarizer, (id.clone(), run))
+    let window = options.max_context_events;
+    scripted_memory(memory, window, summarizer, (id.clone(), run))
 }
 
 /// A scripted agent's bounds and budgets (README, "Scripted agents").
