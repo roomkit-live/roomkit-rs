@@ -148,6 +148,20 @@ pub enum StoreError {
         /// The key.
         key: String,
     },
+    /// Python's `EventIndexTakenError`: the room holds another event at the
+    /// index an added event carries (RFC §8.1, §14.3). The commit is
+    /// refused, nothing written, and the event at that index is kept. A
+    /// commit takes the room's next index under the store's lock, so only
+    /// an event added at an index of its own meets it, a caller of
+    /// [`add_event`](super::ConversationStore::add_event); an event under
+    /// an id the store holds is outside this rule.
+    #[error("room {room_id} holds another event at the index {index}")]
+    EventIndexTaken {
+        /// The room.
+        room_id: RoomId,
+        /// The index.
+        index: u64,
+    },
     /// A read's arguments cannot be served together, the Python
     /// implementation's `ValueError`: a timeline read's two cursors,
     /// which exclude each other (RFC §14.1), or a filter that admits
@@ -193,6 +207,7 @@ impl StoreError {
             Self::EventNotFound(_) => "EventNotFound",
             Self::TaskNotFound(_) => "TaskNotFound",
             Self::IdempotencyKeyTaken { .. } => "IdempotencyKeyTaken",
+            Self::EventIndexTaken { .. } => "EventIndexTaken",
             Self::Value(_) => "Value",
             Self::Unavailable(_) => "StoreUnavailable",
         };

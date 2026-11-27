@@ -417,6 +417,38 @@ async fn an_added_event_whose_key_its_channel_holds_is_refused<T: Held>(open: Op
     );
 }
 
+/// Python: `tests/test_store_binding_contract.py::test_an_event_at_a_held_index_is_refused`:
+/// RFC §8.1, an index is unique in its room. An event added at an index
+/// another event holds is refused, nothing written, the stored one kept
+/// and the room's counters unmoved; an index no event holds is taken.
+async fn an_added_event_at_a_held_index_is_refused<T: Held>(open: Open<'_, T>) {
+    let store = with_events(open, vec![event(0), event(1)]).await;
+    let before = store.get_room(&room_id()).await.unwrap().unwrap();
+    let at_held = RoomEvent {
+        id: event_id("evt_again"),
+        content: TextContent::new("again").into(),
+        ..event(0)
+    };
+    let refused = store.add_event(at_held).await;
+    let written = store.get_event(&event_id("evt_again")).await;
+    let kept = store.get_event(&event_id("evt_0")).await.unwrap().unwrap();
+    let after = store.get_room(&room_id()).await.unwrap().unwrap();
+    let free = store.add_event(event(5)).await.map(|added| added.index);
+    assert_eq!(
+        (refused, written, kept.content, after.event_count, free),
+        (
+            Err(StoreError::EventIndexTaken {
+                room_id: room_id(),
+                index: 0,
+            }),
+            Ok(None),
+            TextContent::new("hi").into(),
+            before.event_count,
+            Ok(5),
+        )
+    );
+}
+
 /// Python: `tests/test_store_memory.py::TestEventOperations::test_event_count`:
 /// an added event is counted, though the room's counters do not move.
 async fn an_added_event_is_counted<T: Held>(open: Open<'_, T>) {
@@ -804,6 +836,7 @@ pub(super) async fn check<T: Held>(open: Open<'_, T>) {
     a_key_is_found_from_its_channel_or_within_the_room(open).await;
     a_key_its_channel_holds_refuses_another_event(open).await;
     an_added_event_whose_key_its_channel_holds_is_refused(open).await;
+    an_added_event_at_a_held_index_is_refused(open).await;
     an_added_event_is_counted(open).await;
     a_blank_key_is_stored_as_no_key_and_finds_nothing(open).await;
     an_update_and_a_change_s_commit_keep_the_delivery_results(open).await;

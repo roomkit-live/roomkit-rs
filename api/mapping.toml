@@ -192,6 +192,7 @@ roomkit_acp = ["roomkit"]
 "roomkit.EventNotFoundError" = ["0"]
 "roomkit.TaskNotFoundError" = ["0"]
 "roomkit.IdempotencyKeyTakenError" = ["room_id", "channel_id", "key"]
+"roomkit.EventIndexTakenError" = ["room_id", "index"]
 
 # Python's messages name the directory and why, the skill and why, the
 # skill and the rules it breaks.

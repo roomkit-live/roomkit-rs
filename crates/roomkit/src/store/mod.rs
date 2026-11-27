@@ -981,8 +981,9 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// [`StoreError::RoomNotFound`] for a room the store lacks, nothing
     /// written (decided 2026-10-31, RMK-1058);
     /// [`StoreError::IdempotencyKeyTaken`] for a key its channel holds in
-    /// the room for another event; [`StoreError::Value`] for a content its
-    /// model refuses.
+    /// the room for another event; [`StoreError::EventIndexTaken`] for an
+    /// index another event holds in the room (RFC §8.1), nothing written;
+    /// [`StoreError::Value`] for a content its model refuses.
     fn add_event(
         &self,
         event: RoomEvent,

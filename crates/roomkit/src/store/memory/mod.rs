@@ -205,6 +205,22 @@ fn taken_key(events: &[RoomEvent], event: &RoomEvent) -> Option<StoreError> {
     })
 }
 
+/// The refusal of `event`'s add when `record`, its room's, holds another
+/// event at the index it carries (RFC §8.1, §14.3). Every index the room
+/// holds is below its next index, so an event at or past it meets none and
+/// is never compared.
+fn held_index(record: &Record, event: &RoomEvent) -> Option<StoreError> {
+    let held = event.index < record.next_index
+        && record
+            .events
+            .iter()
+            .any(|stored| stored.index == event.index && stored.id != event.id);
+    held.then(|| StoreError::EventIndexTaken {
+        room_id: event.room_id.clone(),
+        index: event.index,
+    })
+}
+
 /// Writes `room` whole over the record's, keeping the counters the store
 /// manages: a caller's stale copy never rewinds them (RFC §14.3).
 fn write_room(record: &mut Record, room: &mut Room) {
@@ -896,7 +912,9 @@ impl ConversationStore for InMemoryStore {
         event.idempotency_key = idempotency::key(event.idempotency_key);
         let room_id = event.room_id.clone();
         self.write(&room_id, |record| {
-            if let Some(taken) = taken_key(&record.events, &event) {
+            if let Some(taken) =
+                taken_key(&record.events, &event).or_else(|| held_index(record, &event))
+            {
                 return Err(taken);
             }
             record.append(event.clone());

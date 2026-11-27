@@ -870,12 +870,14 @@ impl From<StoreError> for RoomKitError {
             },
             StoreError::Value(message) => Self::Value(message),
             StoreError::Unavailable(failure) => Self::Store(failure),
-            // No call of the kit writes a participant: these refusals reach a
-            // caller from the store itself, as its `StoreError`, which names
-            // Python's `ParticipantExistsError` and
-            // `ParticipantNotFoundError`.
+            // No call of the kit writes a participant, nor an event at an
+            // index of its own: these refusals reach a caller from the store
+            // itself, as its `StoreError`, which names Python's
+            // `ParticipantExistsError`, `ParticipantNotFoundError` and
+            // `EventIndexTakenError`.
             other @ (StoreError::ParticipantExists { .. }
             | StoreError::ParticipantNotFound { .. }
+            | StoreError::EventIndexTaken { .. }
             | StoreError::TaskNotFound(_)) => Self::Store(StoreFailure::new(other)),
         }
     }
