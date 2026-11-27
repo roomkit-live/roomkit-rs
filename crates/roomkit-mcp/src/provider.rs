@@ -154,7 +154,9 @@ impl McpToolProvider {
     /// Its handshake and tool discovery are bounded by `connect_timeout`
     /// (60 seconds), as a command's: past them, [`connect`](Self::connect)
     /// fails after HTTP workers drain. Streamable HTTP deletes its negotiated
-    /// session; legacy SSE closes its reader and writer.
+    /// session; legacy SSE closes its reader and writer. Legacy SSE is
+    /// deprecated by the MCP 2026-07-28 revision: building a provider on it
+    /// logs a warning.
     ///
     /// # Errors
     ///

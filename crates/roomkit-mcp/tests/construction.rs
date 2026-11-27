@@ -5,6 +5,12 @@ use roomkit_mcp::{
     McpToolProviderOptions,
 };
 
+// The lines `tracing` emits, for a test that checks one is logged.
+#[cfg(feature = "http")]
+#[expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
+#[path = "../../roomkit/tests/support/warnings.rs"]
+mod warnings;
+
 fn stdio(command: &str) -> McpToolProviderOptions {
     McpToolProviderOptions {
         transport: "stdio".into(),
@@ -353,4 +359,32 @@ async fn each_stdio_entry_reads_shared_environment_and_keeps_owned_arguments() {
             }
         }
     }
+}
+
+// Python: test_mcp_constructor.py::test_the_legacy_sse_transport_warns_it_is_deprecated.
+#[cfg(feature = "http")]
+#[test]
+fn the_legacy_sse_transport_warns_it_is_deprecated() {
+    let deprecated = "HTTP+SSE transport is deprecated";
+    let (warnings, _capturing) = warnings::Warnings::capture();
+    let url = "http://localhost:1/mcp";
+    let sse = || roomkit_mcp::FromUrlOptions {
+        transport: "sse".into(),
+        ..Default::default()
+    };
+    McpToolProvider::from_url(url, roomkit_mcp::FromUrlOptions::default()).unwrap();
+    assert_eq!(warnings.containing(deprecated), Vec::<String>::new());
+    McpToolProvider::from_url(url, sse()).unwrap();
+    McpToolProvider::new(
+        Some(url),
+        McpToolProviderOptions {
+            transport: "sse".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(warnings.containing(deprecated).len(), 2);
+    // A refused construction builds nothing to warn of, as in Python.
+    assert!(McpToolProvider::from_url("ftp://localhost/mcp", sse()).is_err());
+    assert_eq!(warnings.containing(deprecated).len(), 2);
 }

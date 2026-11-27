@@ -93,11 +93,20 @@ fn http(url: Option<&str>, options: &McpToolProviderOptions) -> Result<Target, M
         } else {
             options.headers.clone().unwrap_or_default()
         };
+        let legacy = options.transport == "sse";
+        if legacy {
+            // Python's `DeprecationWarning`, at each construction too.
+            tracing::warn!(
+                target: "roomkit::mcp",
+                "MCP's HTTP+SSE transport is deprecated by the MCP 2026-07-28 revision: \
+                 use streamable_http"
+            );
+        }
         Ok(Target::Url {
             url: url.to_owned(),
             headers: retained,
             timeout: options.connect_timeout.unwrap_or(Duration::from_secs(60)),
-            legacy: options.transport == "sse",
+            legacy,
         })
     }
     #[cfg(not(feature = "http"))]
