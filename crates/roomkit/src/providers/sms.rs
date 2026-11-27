@@ -144,7 +144,9 @@ impl WebhookMeta {
 
     /// The message the webhook received, on the channel `channel_id`: from
     /// its sender, keyed by its provider's id, which is also its external
-    /// id, its metadata the provider, the recipient and the timestamp.
+    /// id and its `provider_message_id` (RFC §8.1), its `raw_payload` the
+    /// webhook's payload unmodified (RFC §5.2), its metadata the provider,
+    /// the recipient and the timestamp.
     ///
     /// # Errors
     ///
@@ -170,6 +172,8 @@ impl WebhookMeta {
         Ok(InboundMessage {
             external_id: self.external_id.clone(),
             idempotency_key: self.external_id.clone(),
+            provider_message_id: self.external_id.clone(),
+            raw_payload: self.raw.clone(),
             metadata,
             ..InboundMessage::new(
                 channel_id.clone(),
@@ -283,8 +287,11 @@ mod tests {
     #[test]
     fn to_inbound() {
         let timestamp: Timestamp = "2026-01-28T12:00:00Z".parse().unwrap();
+        let mut raw = Metadata::new();
+        raw.insert("key".to_owned(), Value::from("value"));
         let meta = WebhookMeta {
             timestamp: Some(timestamp),
+            raw: raw.clone(),
             ..meta("Hello")
         };
         let inbound = meta.to_inbound(&sms()).unwrap();
@@ -293,6 +300,9 @@ mod tests {
         assert_eq!(inbound.content, TextContent::new("Hello").into());
         assert_eq!(inbound.external_id.as_deref(), Some("SM123"));
         assert_eq!(inbound.idempotency_key.as_deref(), Some("SM123"));
+        // RFC §8.1: the provider's own id; RFC §5.2: its payload, unmodified.
+        assert_eq!(inbound.provider_message_id.as_deref(), Some("SM123"));
+        assert_eq!(inbound.raw_payload, raw);
         assert_eq!(inbound.metadata["provider"], "twilio");
         assert_eq!(inbound.metadata["recipient"], "+15559876543");
         assert_eq!(inbound.metadata["timestamp"], "2026-01-28T12:00:00+00:00");

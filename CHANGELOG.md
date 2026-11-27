@@ -204,6 +204,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A message `WebhookMeta::to_inbound` builds keeps the provider's id as
+  its `provider_message_id` and the webhook's payload, unmodified, as its
+  `raw_payload`, as in Python (RFC §5.2, §8.1, RMK-2190): `process_webhook`
+  stored the message with neither, its source's `raw_payload` empty, the
+  provider's id only in `external_id` and the idempotency key, which keep it.
 - An ASYNC hook a turn executor fires on one of the turn's triggers
   (`ON_AI_RESPONSE` among them) calls at least as deep as the turn's
   response, and an event it sends through the turn's host is that deep, as
