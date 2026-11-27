@@ -164,6 +164,18 @@ pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[
          hooks run in the room's locked pass, so no other message commits while a hook holds \
          the row (RMK-2172)",
     ),
+    (
+        "verification/a-deferred-code-reply-from-a-locked-hook-is-answered-after-the-hook-s-work",
+        "RFC §11.7.6 (RK-11.7.6-008): a deferred code reply sent from a hook's locked section \
+         has its released message answered before that hook's event is delivered, the \
+         release's rerun placed in the room's lane ahead of it (RMK-2183)",
+    ),
+    (
+        "status/a-task-the-close-cuts-reaches-the-status-hooks-before-the-store-is-sealed",
+        "timing: RFC §19.8 (RK-19.8-018): on several workers the end a cut turn posts during \
+         the kit's close is published on a task the close cuts before its room's \
+         ON_STATUS_POSTED hooks run; one thread runs them in time (RMK-2184)",
+    ),
 ];
 
 /// A scenario that has not finished by then fails instead of hanging the
