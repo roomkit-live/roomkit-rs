@@ -25,7 +25,8 @@
 //! `isError` with two texts; `content` answers every kind of content;
 //! `big` answers a text of `chars` characters; `huge` a message over
 //! 4 MiB; `structured` structured content alone; `slow` never answers;
-//! `env` the names of its environment's variables; `crash` exits.
+//! `env` the names of its environment's variables; `crash` exits. Unlisted,
+//! `verbatim` answers its `result` argument as the call's result.
 
 #![expect(
     clippy::indexing_slicing,
@@ -376,6 +377,7 @@ fn call(params: &Value) -> Option<Value> {
         }
         "huge" => text("h".repeat(5 * 1024 * 1024)),
         "structured" => structured(arguments),
+        "verbatim" => arguments["result"].clone(),
         "constructor_probe" => text(constructor_probe().to_string()),
         "slow" => return None,
         "crash" => std::process::exit(3),

@@ -181,6 +181,32 @@ async fn a_result_with_no_part_reads_as_an_empty_array() {
     );
 }
 
+/// A result that carries none of `content`, `structuredContent` and
+/// `isError` is no call result: the call fails, as Python's SDK refuses a
+/// `CallToolResult` without `content`, whether the result is empty, carries
+/// `_meta` alone or says only that it is complete.
+#[tokio::test]
+async fn a_result_without_content_fails_the_call() {
+    let server = connected("normal").await;
+    let mut failed = Vec::new();
+    for result in [
+        json!({}),
+        json!({ "_meta": { "trace": "7" } }),
+        json!({ "resultType": "complete" }),
+    ] {
+        let answered = server
+            .call_tool(
+                "verbatim",
+                mapping(&json!({ "result": result })),
+                CallToolOptions::default(),
+            )
+            .await;
+        failed.push(matches!(answered, Err(McpError::Call { .. })));
+    }
+    server.close().await;
+    assert_eq!(failed, [true, true, true]);
+}
+
 /// A handler called once the server is closed fails as Python's raises,
 /// `RuntimeError`, the model reading the kind of failure only; what reads
 /// the server fails before it is connected and after it is closed.
