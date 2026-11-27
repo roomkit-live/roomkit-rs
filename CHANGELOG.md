@@ -233,6 +233,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   on a `read_stored_result` that found nothing. The turn's footprint
   measures it the same way, as in Python.
 
+- A message that expired while step 2 created its room starts no session
+  (RFC §10.1 step 2, §13.6), its caller gone or its `process_timeout`
+  passed while the creation's hooks ran: no `session_started`, no
+  `ON_SESSION_STARTED` hook, as in Python. The room is still completed and
+  attached. Both emitted `session_started` and fired the hooks: a dropped
+  call by an earlier decision (gap G-068), reversed on 2026-11-27, and a
+  call past its deadline before it was refused `process_timeout`.
+
 - A message `WebhookMeta::to_inbound` builds keeps the provider's id as
   its `provider_message_id` and the webhook's payload, unmodified, as its
   `raw_payload`, as in Python (RFC §5.2, §8.1, RMK-2190): `process_webhook`

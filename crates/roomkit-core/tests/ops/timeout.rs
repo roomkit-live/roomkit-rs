@@ -447,7 +447,10 @@ mod a_timed_out_call {
     }
 
     /// Gap G-068: the room step 2 creates is attached whatever the
-    /// deadline, its attach recorded; only the event is not written.
+    /// deadline, its attach recorded; only the event is not written. The
+    /// message, expired by then, starts no session and is not parsed
+    /// (decided 2026-11-27, RMK-2175: Python's `_prepare_event` refuses it
+    /// before its session starts).
     #[test]
     fn leaves_the_room_step_2_created_attached() {
         let mut sim = Sim::without_rooms();
@@ -461,7 +464,8 @@ mod a_timed_out_call {
                 sim.room_exists,
                 sim.bindings.len(),
                 sim.timeline.len(),
-                sim.traced("handle_inbound")
+                sim.traced("handle_inbound"),
+                sim.framework_event_names()
             ),
             (
                 timed_out(),
@@ -469,7 +473,12 @@ mod a_timed_out_call {
                 1,
                 // The attach's record alone (gap G-046).
                 1,
-                vec!["handle_inbound sms deadline passed"]
+                Vec::<&str>::new(),
+                vec![
+                    "room_created".to_owned(),
+                    "room_channel_attached".to_owned(),
+                    "process_timeout".to_owned()
+                ]
             )
         );
     }

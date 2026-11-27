@@ -115,10 +115,10 @@ mod a_missing_room {
 
     /// RFC §10.1 step 2, §13.6, gap G-076: a caller that stops waiting
     /// while the room's hooks are due expires the call, and the room is
-    /// completed all the same: its hooks run, its channel is attached and
-    /// its session starts, none of it within the call's bound but a session's
-    /// hooks named with an underscore, which this room has none of. The message
-    /// stops before its parse, nothing of it written.
+    /// completed all the same: its hooks run and its channel is attached,
+    /// none of it within the call's bound. The message, expired, starts no
+    /// session (decided 2026-11-27, as Python's) and stops before its
+    /// parse, nothing of it written.
     #[test]
     fn is_completed_when_its_caller_stops_waiting_before_its_hooks() {
         let mut sim = no_room_yet();
@@ -139,7 +139,7 @@ mod a_missing_room {
                 // The attach's record (gap G-046), nothing of the message.
                 vec!["#0 system delivered \"Channel sms attached (read_write, all)\"".to_owned()],
                 Vec::<&str>::new(),
-                ["room_created", "room_channel_attached", "session_started"]
+                ["room_created", "room_channel_attached"]
                     .map(str::to_owned)
                     .to_vec()
             )

@@ -47,7 +47,9 @@
 //! creation is a write, and a room created is completed (gap G-068). The
 //! session it starts is the message's: the hooks the message waits for run
 //! within the deadline, and past it they are cut, the others not fired,
-//! `session_started` not emitted and the message refused.
+//! `session_started` not emitted and the message refused. A message that
+//! expired while its room was created, its caller gone or its deadline
+//! passed, starts no session at all (decided 2026-11-27).
 
 use std::convert::Infallible;
 use std::mem;
@@ -577,7 +579,10 @@ impl NamedRoom {
 
     /// The attach or the record is over, and reported: a room step 2
     /// created starts a session on a channel other than `VOICE` and
-    /// `REALTIME_VOICE` (RFC §10.1 step 2).
+    /// `REALTIME_VOICE` (RFC §10.1 step 2), unless the message expired
+    /// while the room was created, its caller gone or its deadline passed:
+    /// an expired message starts no session, the room standing (decided
+    /// 2026-11-27, as Python's `_prepare_event` refuses it).
     fn on_changed(
         &mut self,
         cx: &mut Cx<'_>,
@@ -592,6 +597,11 @@ impl NamedRoom {
         self.tell_room(cx);
         if !created || !starts_session(&self.channel.channel_type) {
             return Progress::Done(Named::Arrived(context));
+        }
+        // The call's own expiry: step 2 creates a room for a call, never
+        // for an entry adopted into an operation's room, which exists.
+        if cx.io.is_expired() || self.bound.has_passed(cx.env.now()) {
+            return Progress::Done(Named::Expired);
         }
         match report::report_session_started(cx, self.session_started(), &context, self.bound) {
             Some((effect, started)) => {

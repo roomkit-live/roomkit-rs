@@ -8,6 +8,7 @@
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 use std::collections::BTreeMap;
 use std::future::{Future, ready};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -342,11 +343,12 @@ async fn session_started_hands_a_session_started_event() {
     );
 }
 
-/// Decision 1 of step 2b, gap G-068: the caller gives up while the hooks of
-/// the room its message created run. The room is completed all the same:
-/// the hooks finish, the channel is attached with a binding naming the
-/// sender, and the session starts. The message, not decided by then, stops
-/// there, nothing of it committed.
+/// Gap G-068: the caller gives up while the hooks of the room its message
+/// created run. The room is completed all the same: the hooks finish and
+/// the channel is attached with a binding naming the sender. The message,
+/// expired by then, starts no session and stops there, nothing of it
+/// committed (decided 2026-11-27, as Python's: it reversed decision 1 of
+/// step 2b, which started the session).
 #[tokio::test]
 async fn a_room_created_for_a_dropped_call_is_attached_all_the_same() {
     let (kit, sms) = kit_without_rooms();
@@ -368,10 +370,10 @@ async fn a_room_created_for_a_dropped_call_is_attached_all_the_same() {
         },
     )
     .unwrap();
-    let session_started = Arc::new(Notify::new());
-    let started_notice = Arc::clone(&session_started);
+    let sessions = Arc::new(AtomicUsize::new(0));
+    let started_notice = Arc::clone(&sessions);
     kit.on("session_started", move |_| {
-        started_notice.notify_one();
+        started_notice.fetch_add(1, Ordering::SeqCst);
         ready(())
     })
     .unwrap();
@@ -388,12 +390,12 @@ async fn a_room_created_for_a_dropped_call_is_attached_all_the_same() {
         () = observing.notified() => {}
     }
     go.notify_one();
-    let started = tokio::time::timeout(Duration::from_secs(5), session_started.notified()).await;
+    roomkit::testing::idle(&kit).await;
     let bindings = kit.store().list_bindings(&room).await.unwrap();
     let timeline = kit.store().list_events(&room, every_row()).await.unwrap();
     assert_eq!(
         (
-            started.is_ok(),
+            sessions.load(Ordering::SeqCst),
             bindings
                 .iter()
                 .map(|binding| {
@@ -404,7 +406,7 @@ async fn a_room_created_for_a_dropped_call_is_attached_all_the_same() {
             timeline.len()
         ),
         (
-            true,
+            0,
             vec![("sms".to_owned(), Some("+15551234567".to_owned()))],
             // The attach's lifecycle record alone (gap G-046).
             1
