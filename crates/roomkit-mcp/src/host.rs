@@ -123,6 +123,13 @@ impl McpToolProvider {
         timeout: Duration,
     ) -> Result<Metadata, McpError> {
         let server = self.connected_server()?;
+        if timeout.is_zero() {
+            // No time at all: nothing goes out, as with Python's provider.
+            return Err(McpError::CallTimeout {
+                tool: method.into(),
+                after: timeout,
+            });
+        }
         let ticket = server.host_capture().ticket();
         let mut request = CustomRequest::new(method, params.clone().map(Value::Object));
         request.extensions.insert(ticket.marker(params));

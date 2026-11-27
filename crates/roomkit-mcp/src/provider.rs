@@ -486,6 +486,14 @@ impl McpToolProvider {
         timeout: Duration,
     ) -> Result<CallToolResult, McpError> {
         let server = self.connected_server()?;
+        if timeout.is_zero() {
+            // No time at all: the call never starts, so neither it nor its
+            // cancellation goes out, as with Python's provider.
+            return Err(McpError::CallTimeout {
+                tool: name.to_owned(),
+                after: timeout,
+            });
+        }
         match tokio::time::timeout(timeout, server.call(name, arguments)).await {
             Ok(Ok(answered)) => {
                 crate::structured::publish(&answered);
