@@ -826,6 +826,10 @@ pub(crate) fn register_channel_with_skills(
     if crate::scripted::country_code_refused(channel) {
         return Ok(Err(named("invalid_argument")));
     }
+    // A tool policy the implementation refuses refuses the agent (RFC §21.1).
+    if agents::tool_policy_refused(channel) {
+        return Ok(Err(named("invalid_argument")));
+    }
     let declared = channel["declared"] == true;
     let registered = if channel["type"] == "host" {
         register_built(

@@ -6,7 +6,7 @@
 #[path = "agents/direct_prompt.rs"]
 pub(crate) mod direct_prompt;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::{Future, pending};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -27,13 +27,14 @@ use roomkit_ai::tasks::{
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
     Agent, AgentOptions, AiChannel, AiChannelOptions, AiChannelTurnConfig, AiContentPart,
-    AiContext, AiImagePart, AiMessage, AiMessageContent, AiProvider, AiResponse, AiRole, AiRouter,
-    AiRouterFuture, AiTextPart, AiThinkingPart, AiTool, AiToolCall, DynAiProvider, FallbackRouter,
-    FinishReason, HumanInputToolHandler, HumanInputToolHandlerOptions, ModelInfo, ModelPricing,
-    ProviderError, ProviderErrorOptions, ProviderStream, RouteReason, RouteRequest, Routed,
-    ServedCall, StreamDone, StreamEvent, StreamTextDelta, StreamThinkingDelta, StreamToolCallDelta,
-    StreamUsage, Tool, ToolContext, ToolEntry, ToolError, ToolHandler, ToolPolicy, ToolResult,
-    ToolResultPart, Tools, check_schema_answer, checked_stream, schema_for_generate,
+    AiContext, AiError, AiImagePart, AiMessage, AiMessageContent, AiProvider, AiResponse, AiRole,
+    AiRouter, AiRouterFuture, AiTextPart, AiThinkingPart, AiTool, AiToolCall, DynAiProvider,
+    FallbackRouter, FinishReason, HumanInputToolHandler, HumanInputToolHandlerOptions, ModelInfo,
+    ModelPricing, ProviderError, ProviderErrorOptions, ProviderStream, RoleOverride,
+    RoleOverrideOptions, RouteReason, RouteRequest, Routed, ServedCall, StreamDone, StreamEvent,
+    StreamTextDelta, StreamThinkingDelta, StreamToolCallDelta, StreamUsage, Tool, ToolContext,
+    ToolEntry, ToolError, ToolHandler, ToolPolicy, ToolPolicyOptions, ToolResult, ToolResultPart,
+    Tools, check_schema_answer, checked_stream, schema_for_generate,
 };
 use serde_json::{Value, json};
 
@@ -1613,8 +1614,46 @@ fn milliseconds(bound: &Value, member: &str) -> Result<Option<Duration>, String>
     Ok(Some(Duration::from_millis(bound)))
 }
 
+/// What a scenario's `tool_policy` writes: Python's keywords, each role's
+/// override as its own keywords, read before the implementation builds them.
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
+struct PolicySpec {
+    allow: Vec<String>,
+    deny: Vec<String>,
+    role_overrides: BTreeMap<String, RoleOverrideOptions>,
+}
+
+/// The `ToolPolicy` `spec` describes, built as an integrator builds it, or the
+/// implementation's refusal of it (RFC §21.1: a pattern holding a bracket).
+fn policy_of(spec: &Value) -> Result<Result<ToolPolicy, AiError>, String> {
+    let spec: PolicySpec =
+        serde_json::from_value(spec.clone()).map_err(|error| format!("tool_policy: {error}"))?;
+    let mut role_overrides = BTreeMap::new();
+    for (role, options) in spec.role_overrides {
+        match RoleOverride::new(options) {
+            Ok(rule) => role_overrides.insert(role, rule),
+            Err(refused) => return Ok(Err(refused)),
+        };
+    }
+    Ok(ToolPolicy::new(ToolPolicyOptions {
+        allow: spec.allow,
+        deny: spec.deny,
+        role_overrides,
+    }))
+}
+
 fn tool_policy(spec: &Value) -> Result<ToolPolicy, String> {
-    serde_json::from_value(spec.clone()).map_err(|error| format!("tool_policy: {error}"))
+    policy_of(spec)?.map_err(|error| format!("tool_policy: {error}"))
+}
+
+/// Whether the implementation refuses the `tool_policy` a scripted agent is
+/// configured with (RFC §21.1, a pattern holding a bracket): the
+/// registration's `invalid_argument`, as Python's runner reads the policy's
+/// refusal.
+pub(crate) fn tool_policy_refused(spec: &Value) -> bool {
+    spec.get("tool_policy")
+        .is_some_and(|policy| matches!(policy_of(policy), Ok(Err(AiError::ToolPattern { .. }))))
 }
 
 /// Each request `model` received, as the scenario reads it: the messages
