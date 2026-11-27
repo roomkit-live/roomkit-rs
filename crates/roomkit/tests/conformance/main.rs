@@ -151,7 +151,12 @@ pub(crate) async fn process_kit(
 
 /// Scenario id → the rule this implementation breaks (roomkit-specs
 /// `conformance/README.md`, "Known failures").
-pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[];
+pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[(
+    "streaming/a-streamed-row-s-hooks-run-without-the-room-lock",
+    "RFC §9.5.1, §13.5 (RK-9.5.1-067, RK-13.5-007): a streamed row's BEFORE_BROADCAST \
+     hooks run in the room's locked pass, so no other message commits while a hook holds \
+     the row (RMK-2172)",
+)];
 
 /// A scenario that has not finished by then fails instead of hanging the
 /// suite.

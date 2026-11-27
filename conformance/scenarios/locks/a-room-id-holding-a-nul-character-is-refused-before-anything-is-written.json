@@ -1,0 +1,46 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "locks/a-room-id-holding-a-nul-character-is-refused-before-anything-is-written",
+  "title": "A room id holding a NUL character is refused by create_room with a value error, before anything is written",
+  "rules": [
+    "§13.5",
+    "§10.1 step 2"
+  ],
+  "requirements": [
+    "RK-13.5-022"
+  ],
+  "notes": "create_room refuses room\\u0000one: no room is created, and no framework event names it. The steps neither read such an id from the store nor route a message to one, since not every store can hold or look up an id with a NUL character. Not observed: the taking of a room's lock refusing such an id that came from elsewhere (a room written to the store straight, a router's answer), before the lock manager is asked.",
+  "setup": {
+    "channels": [
+      {
+        "id": "sms",
+        "type": "sms",
+        "category": "transport"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "create_room",
+      "room": {
+        "id": "room\u0000one"
+      },
+      "expect": {
+        "error": "invalid_argument"
+      }
+    },
+    {
+      "idle": true
+    }
+  ],
+  "expect": {
+    "rooms": {
+      "$created": {
+        "$unordered": []
+      }
+    },
+    "framework_events": {
+      "room\u0000one": []
+    }
+  }
+}
