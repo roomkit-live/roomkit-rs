@@ -160,6 +160,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `ChatDialectOptions` the scenario states, and names no vendor; the two
   scenarios that read a vendor's own rendering left the shared corpus, so
   the runners have no known failure left (RMK-1982).
+- **`rmcp` 3.12**, where 3.9 was required (RMK-2201): the MCP protocol on
+  the wire is unchanged, the handshake still `initialize` at 2025-11-25.
+  rmcp no longer brings chrono, so `cargo deny` no longer ignores its
+  unmaintained advisory (RUSTSEC-2026-0543, RMK-1751).
 
 ### Removed
 

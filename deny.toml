@@ -6,11 +6,6 @@ all-features = true
 
 [advisories]
 yanked = "deny"
-# chrono, unmaintained with no safe version (RUSTSEC-2026-0543), comes only
-# through rmcp, the MCP SDK behind roomkit-mcp: ignored until rmcp leaves it.
-ignore = [
-    { id = "RUSTSEC-2026-0543", reason = "chrono, through rmcp only; no safe version; until rmcp drops it" },
-]
 
 [licenses]
 # A license joins this list in the change that adds the dependency needing it.

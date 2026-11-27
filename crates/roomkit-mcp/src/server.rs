@@ -394,8 +394,7 @@ pub(crate) fn check_label(label: &str) -> Result<(), McpError> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
     use pretty_assertions::assert_eq;
     use serde_json::{Value, json};
@@ -403,13 +402,17 @@ mod tests {
 
     use super::*;
 
+    /// The messages a server was sent, in order.
+    type Received = Arc<Mutex<Vec<Value>>>;
+
     /// A server on `stream` whose every listing says it stays fresh for a
-    /// day (`ttlMs`), counting the listings it is asked for.
-    async fn fresh_for_a_day(stream: DuplexStream, listings: Arc<AtomicUsize>) {
+    /// day (`ttlMs`), keeping every message it is sent in `received`.
+    async fn fresh_for_a_day(stream: DuplexStream, received: Received) {
         let (read, mut write) = tokio::io::split(stream);
         let mut lines = BufReader::new(read).lines();
         while let Ok(Some(line)) = lines.next_line().await {
             let request: Value = serde_json::from_str(&line).unwrap();
+            received.lock().unwrap().push(request.clone());
             let Some(id) = request.get("id").cloned() else {
                 continue;
             };
@@ -419,13 +422,10 @@ mod tests {
                     "capabilities": { "tools": {} },
                     "serverInfo": { "name": "fresh", "version": "0" },
                 }),
-                Some("tools/list") => {
-                    listings.fetch_add(1, Ordering::SeqCst);
-                    json!({
-                        "tools": [{ "name": "echo", "inputSchema": { "type": "object" } }],
-                        "ttlMs": 86_400_000,
-                    })
-                }
+                Some("tools/list") => json!({
+                    "tools": [{ "name": "echo", "inputSchema": { "type": "object" } }],
+                    "ttlMs": 86_400_000,
+                }),
                 _ => json!({}),
             };
             let reply = json!({ "jsonrpc": "2.0", "id": id, "result": result });
@@ -443,21 +443,54 @@ mod tests {
     #[tokio::test]
     async fn a_listing_that_says_it_stays_fresh_leaves_nothing_cached() {
         let (client, server) = tokio::io::duplex(64 * 1024);
-        let listings = Arc::new(AtomicUsize::new(0));
-        tokio::spawn(fresh_for_a_day(server, Arc::clone(&listings)));
+        let received = Received::default();
+        tokio::spawn(fresh_for_a_day(server, Arc::clone(&received)));
         let (read, write) = tokio::io::split(client);
         let (service, tools) = handshake(read, write, "fresh", None, true, Capture::default())
             .await
             .unwrap();
         let again = service.peer().list_tools(None).await.unwrap();
         let _ended = service.cancel().await;
+        let listings = received
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|message| message["method"] == "tools/list")
+            .count();
+        assert_eq!((tools.tools.len(), again.tools.len(), listings), (1, 1, 2));
+    }
+
+    /// RFC §21.2: the connection opens with MCP's `initialize` handshake at
+    /// protocol 2025-11-25, as Python's SDK opens it, `server/discover`
+    /// never sent: the protocol of the MCP revision of 2026-07-28 is not
+    /// spoken yet.
+    #[tokio::test]
+    async fn the_connection_opens_with_initialize_at_2025_11_25() {
+        let (client, server) = tokio::io::duplex(64 * 1024);
+        let received = Received::default();
+        tokio::spawn(fresh_for_a_day(server, Arc::clone(&received)));
+        let (read, write) = tokio::io::split(client);
+        let (service, _tools) = handshake(read, write, "fresh", None, true, Capture::default())
+            .await
+            .unwrap();
+        let _ended = service.cancel().await;
+        let methods: Vec<Value> = received
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|message| message["method"].clone())
+            .collect();
+        let version = received.lock().unwrap()[0]["params"]["protocolVersion"].clone();
         assert_eq!(
+            (methods, version),
             (
-                tools.tools.len(),
-                again.tools.len(),
-                listings.load(Ordering::SeqCst)
-            ),
-            (1, 1, 2)
+                vec![
+                    json!("initialize"),
+                    json!("notifications/initialized"),
+                    json!("tools/list")
+                ],
+                json!("2025-11-25")
+            )
         );
     }
 }

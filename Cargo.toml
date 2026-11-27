@@ -27,8 +27,9 @@ agent-client-protocol-schema = { version = "~1.15", default-features = false }
 # The `Stream` an AI provider's response is read as (step 4, decision 11),
 # with no default features: the trait alone.
 # MCP's client over stdio (step 4, decisions 11 and 12), for roomkit-mcp
-# alone: its minor version pinned, and moved on purpose.
-rmcp = { version = "~3.9", default-features = false, features = ["client", "transport-async-rw"] }
+# alone: 3.12 or a later 3.x, the version Cargo.lock holds moved on purpose
+# (`cargo update -p rmcp`), its changelog read.
+rmcp = { version = "3.12", default-features = false, features = ["client", "transport-async-rw"] }
 # The signal roomkit-mcp stops an MCP server's process group with, on Unix
 # (killpg, without unsafe code here): its minor version pinned.
 nix = { version = "~0.31", default-features = false, features = ["signal"] }
