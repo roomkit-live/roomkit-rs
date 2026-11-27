@@ -37,6 +37,15 @@ use crate::rules::edits::is_deleted;
 /// What a part of a stored result other than text reads as.
 const NON_TEXT_PART: &str = "[non-text part]";
 
+/// How the placeholder of an oversized result starts, the result stored for
+/// the turn's re-read: Python's `EVICTION_PLACEHOLDER_PREFIX`.
+#[doc(hidden)]
+pub const EVICTION_PLACEHOLDER_PREFIX: &str = "Result too large (";
+
+/// What a replayed placeholder whose result the room no longer stores says
+/// after its size: Python's `_NOT_SHOWN`.
+const NOT_SHOWN: &str = "the rest is not shown here: call the tool again for it";
+
 /// One round of an earlier turn, as the history replays it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ToolRound {
@@ -62,11 +71,17 @@ struct Call<'a> {
 /// timeline oldest first, hold, as its history replays them: its own rows
 /// only (written by it, outbound, none deleted), each call its turn ended as
 /// it was sent, but one cancelled before it answered and one refused under
-/// a name vendors do not take.
-pub(super) fn tool_rounds(events: &[RoomEvent], channel_id: &ChannelId) -> Vec<ToolRound> {
+/// a name vendors do not take. `resolves` says whether the room still
+/// stores the result an oversized result's placeholder points to (Python's
+/// `tool_rounds(rows, resolves=...)`).
+pub(super) fn tool_rounds(
+    events: &[RoomEvent],
+    channel_id: &ChannelId,
+    resolves: &dyn Fn(&str) -> bool,
+) -> Vec<ToolRound> {
     rounds(own_rows(events, channel_id))
         .iter()
-        .filter_map(|calls| replayed_round(calls))
+        .filter_map(|calls| replayed_round(calls, resolves))
         .collect()
 }
 
@@ -184,7 +199,7 @@ fn answered(call: &Call<'_>) -> bool {
 /// `calls`, one round's, as it reads: the calls its turn ended and the model
 /// read the result of, each under the id the model gave it, as the turn sent
 /// it; none when none is.
-fn replayed_round(calls: &[Call<'_>]) -> Option<ToolRound> {
+fn replayed_round(calls: &[Call<'_>], resolves: &dyn Fn(&str) -> bool) -> Option<ToolRound> {
     let shown: Vec<&Call<'_>> = calls.iter().filter(|call| answered(call)).collect();
     let first = shown.first()?;
     let made = shown
@@ -206,7 +221,7 @@ fn replayed_round(calls: &[Call<'_>]) -> Option<ToolRound> {
     messages.extend(shown.iter().map(|call| {
         let result = call
             .end
-            .map_or(Cow::Borrowed(""), |end| result_text(&end.result));
+            .map_or(Cow::Borrowed(""), |end| shown_result(&end.result, resolves));
         let mut message = Message::tool_result(call.start.tool_id.clone(), result);
         // A failed call reads as one, as its round read it (RFC §6.4).
         message.is_error = call
@@ -220,6 +235,42 @@ fn replayed_round(calls: &[Call<'_>]) -> Option<ToolRound> {
         turn: first.turn.map(str::to_owned),
         messages,
     })
+}
+
+/// What a replayed call's `result` reads as: the result the model read; a
+/// placeholder whose result the room no longer stores (`resolves`), as its
+/// size alone, never as an id nothing resolves (RFC §6.4, Python's
+/// `_shown_result`).
+fn shown_result<'a>(result: &'a Value, resolves: &dyn Fn(&str) -> bool) -> Cow<'a, str> {
+    let text = result_text(result);
+    if evicted(result) && !resolves(&text) {
+        return Cow::Owned(format!("{}, {NOT_SHOWN}.", placeholder_size(&text)));
+    }
+    text
+}
+
+/// Whether a stored result is the placeholder an oversized one became,
+/// wherever it sits in a list of parts (an image may come first): Python's
+/// `_evicted`.
+fn evicted(result: &Value) -> bool {
+    match result {
+        Value::String(text) => text.starts_with(EVICTION_PLACEHOLDER_PREFIX),
+        Value::Array(parts) => parts.iter().any(|part| {
+            part.get("text")
+                .and_then(Value::as_str)
+                .is_some_and(|text| text.starts_with(EVICTION_PLACEHOLDER_PREFIX))
+        }),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::Object(_) => false,
+    }
+}
+
+/// The size head of the placeholder in `text`, `Result too large (N
+/// tokens)`, without the stored id: Python's `eviction_placeholder_size`.
+fn placeholder_size(text: &str) -> String {
+    let start = text.find(EVICTION_PLACEHOLDER_PREFIX).unwrap_or(0);
+    let tail = text.get(start..).unwrap_or(text);
+    let head = tail.split_once(')').map_or(tail, |(head, _)| head);
+    format!("{head})")
 }
 
 /// A stored result's text, borrowed when the row holds it as text: a list

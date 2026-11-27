@@ -17,8 +17,8 @@ use roomkit::model::{
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, ProcessInboundOptions, RoomKit,
-    RoomKitOptions, issue_mark, retire_mark,
+    AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, DetachChannelOptions,
+    ProcessInboundOptions, RoomKit, RoomKitOptions, issue_mark, retire_mark,
 };
 use roomkit_ai::memory::{
     BudgetAwareMemory, BudgetAwareMemoryOptions, CompactingMemory, CompactingMemoryOptions,
@@ -257,9 +257,19 @@ async fn the_footprint_is_the_turn_as_its_first_round_sends_it() {
     );
 }
 
-// Python: tests/test_turn_footprint.py::test_a_later_turn_is_measured_again_with_the_rounds_it_replays
-#[tokio::test]
-async fn a_later_turn_is_measured_again_with_the_rounds_it_replays() {
+/// What two turns of an agent whose first turn calls `lookup` measured,
+/// the second replaying that round: the footprints its memory recorded,
+/// those its tool handler read, and the model's last request. With
+/// `rejoin`, the result is stored past a low threshold and the agent
+/// leaves the room and joins it again between the turns: its store no
+/// longer holds the result.
+async fn two_turns(
+    rejoin: bool,
+) -> (
+    Vec<Option<TurnFootprint>>,
+    Vec<Option<TurnFootprint>>,
+    roomkit_ai::AiContext,
+) {
     let seen_in_handler: Arc<Mutex<Vec<Option<TurnFootprint>>>> = Arc::default();
     let seen = Arc::clone(&seen_in_handler);
     let handler = ToolHandler::new(move |_name, _arguments| {
@@ -276,6 +286,7 @@ async fn a_later_turn_is_measured_again_with_the_rounds_it_replays() {
         tools: vec![AiTool::new("lookup", "Looks up").unwrap().into()],
         tool_handler: Some(handler),
         memory: Some(Arc::new(memory.clone())),
+        evict_threshold_tokens: if rejoin { 300 } else { 5000 },
         ..AiChannelOptions::default()
     };
     let agent = AiChannel::new(channel("agent"), model.clone(), options).unwrap();
@@ -299,6 +310,22 @@ async fn a_later_turn_is_measured_again_with_the_rounds_it_replays() {
             .unwrap();
     }
     for body in ["first", "second"] {
+        if rejoin && body == "second" {
+            kit.detach_channel(
+                &room_id(),
+                &channel("agent"),
+                DetachChannelOptions::default(),
+            )
+            .await
+            .unwrap();
+            kit.attach_channel(
+                &room_id(),
+                &channel("agent"),
+                AttachChannelOptions::default(),
+            )
+            .await
+            .unwrap();
+        }
         let message = InboundMessage::new(channel("member"), "u1", TextContent::new(body));
         let options = ProcessInboundOptions {
             room_id: Some(room_id()),
@@ -308,25 +335,39 @@ async fn a_later_turn_is_measured_again_with_the_rounds_it_replays() {
         roomkit::testing::idle(&kit).await;
     }
     kit.close().await.unwrap();
+    let footprints = memory.0.lock().unwrap().clone();
+    let in_handler = seen_in_handler.lock().unwrap().clone();
+    (footprints, in_handler, model.requests().pop().unwrap())
+}
 
-    let last = model.requests().pop().unwrap();
-    let replayed: Vec<_> = last
+/// The replayed round's messages in `request`, and what the footprint
+/// charges them: the calls' message, then the results' text.
+fn replayed_round(request: &roomkit_ai::AiContext) -> (Vec<&roomkit_ai::AiMessage>, usize) {
+    let replayed: Vec<_> = request
         .messages
         .iter()
         .filter(|message| matches!(message.content, roomkit_ai::AiMessageContent::Parts(_)))
         .collect();
-    let footprints = memory.0.lock().unwrap().clone();
+    let (calls, results) = replayed.split_first().unwrap();
+    let results: usize = results
+        .iter()
+        .map(|message| estimate_message_tokens(message) - 4)
+        .sum();
+    let cost = estimate_message_tokens(calls) + 4 + results;
+    (replayed, cost)
+}
+
+// Python: tests/test_turn_footprint.py::test_a_later_turn_is_measured_again_with_the_rounds_it_replays
+#[tokio::test]
+async fn a_later_turn_is_measured_again_with_the_rounds_it_replays() {
+    let (footprints, in_handler, last) = two_turns(false).await;
+    let (replayed, cost) = replayed_round(&last);
     let (first, second) = (
         footprints[0].clone().unwrap(),
         footprints[1].clone().unwrap(),
     );
     // The rest of the turn is the same as the first's; the round is apart,
     // by its index and its turn, its results as one message (RMK-1370).
-    let calls = estimate_message_tokens(replayed[0]);
-    let results: usize = replayed[1..]
-        .iter()
-        .map(|message| estimate_message_tokens(message) - 4)
-        .sum();
     assert!(matches!(
         replayed[1].content,
         roomkit_ai::AiMessageContent::Parts(ref parts) if matches!(parts[0], AiContentPart::ToolResult(_))
@@ -337,8 +378,30 @@ async fn a_later_turn_is_measured_again_with_the_rounds_it_replays() {
         panic!("one round replayed: {:?}", second.replayed);
     };
     assert!(turn.is_some());
-    assert_eq!(*tokens, calls + 4 + results);
-    assert_eq!(seen_in_handler.lock().unwrap().clone(), vec![None]);
+    assert_eq!(*tokens, cost);
+    assert_eq!(in_handler, vec![None]);
+}
+
+/// RFC §6.4, §21.5 (RK-21.5-017): a placeholder whose result the room no
+/// longer stores is replayed as its size alone, and the footprint charges
+/// what the request replays, not the placeholder.
+#[tokio::test]
+async fn a_placeholder_the_room_let_go_is_measured_as_the_request_replays_it() {
+    let (footprints, _, last) = two_turns(true).await;
+    let (replayed, cost) = replayed_round(&last);
+    let second = footprints[1].clone().unwrap();
+    let roomkit_ai::AiMessageContent::Parts(ref parts) = replayed[1].content else {
+        panic!("a tool message: {:?}", replayed[1]);
+    };
+    let AiContentPart::ToolResult(ref result) = parts[0] else {
+        panic!("a tool result: {parts:?}");
+    };
+    let shown = format!("{:?}", result.result);
+    assert!(shown.contains("the rest is not shown here"), "{shown}");
+    let [(_, _, tokens)] = second.replayed.as_slice() else {
+        panic!("one round replayed: {:?}", second.replayed);
+    };
+    assert_eq!(*tokens, cost);
 }
 
 // Python: tests/test_turn_footprint.py::test_the_footprint_is_the_turn_as_round_0_sends_it

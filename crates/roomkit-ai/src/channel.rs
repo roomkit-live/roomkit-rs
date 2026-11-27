@@ -1416,7 +1416,10 @@ impl<P: AiProvider> AiChannel<P> {
             .filter(|past| self.is_own_tool_row(past) || self.is_own_instruction(past))
             .cloned()
             .collect();
-        earlier_turns(&rows, &self.channel_id)
+        let room = context.room.id.as_str();
+        earlier_turns(&rows, &self.channel_id, &|placeholder| {
+            self.eviction.holds(room, placeholder)
+        })
     }
 
     /// The images this channel's tool calls in `room` returned that ride
@@ -1786,23 +1789,22 @@ impl<P: AiProvider> AiChannel<P> {
             vision,
             describer: self.media.describer.as_ref(),
         };
+        // A replayed placeholder offers its id only while the room still
+        // stores its result (RFC §6.4).
+        let room = history.room.id.as_str();
+        let resolves: &dyn Fn(&str) -> bool =
+            &|placeholder: &str| self.eviction.holds(room, placeholder);
+        let reading = (|said: &RoomEvent| reader.read(said), resolves);
         if thinking {
             roomkit_core::rules::transcript::conversation_for_thought(
                 &self.channel_id,
                 read,
                 history,
                 memory,
-                |said| reader.read(said),
+                reading,
             )
         } else {
-            conversation_with_input(
-                &self.channel_id,
-                read,
-                history,
-                usize::MAX,
-                memory,
-                |said| reader.read(said),
-            )
+            conversation_with_input(&self.channel_id, read, history, usize::MAX, memory, reading)
         }
     }
 

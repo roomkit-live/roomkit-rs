@@ -952,13 +952,19 @@ fn a_copy_from_the_memory_s_last_user_text_into_the_turn_is_cut() {
         ..super::TurnMemory::default()
     };
 
+    let resolves: &dyn Fn(&str) -> bool = &|_| true;
     let conversation = super::conversation_with_input(
         &ChannelId::new(AGENT).unwrap(),
         &event,
         &room.context,
         usize::MAX,
         &memory,
-        |said| super::TurnContent::Text(crate::rules::transcoding::text_of(&said.content)),
+        (
+            |said: &RoomEvent| {
+                super::TurnContent::Text(crate::rules::transcoding::text_of(&said.content))
+            },
+            resolves,
+        ),
     );
 
     assert_eq!(

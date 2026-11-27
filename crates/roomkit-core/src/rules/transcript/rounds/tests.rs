@@ -69,8 +69,14 @@ fn served(index: u64, id: &str, result: &str) -> [RoomEvent; 2] {
 }
 
 fn rounds(rows: &[RoomEvent]) -> Vec<ToolRound> {
+    rounds_resolving(rows, true)
+}
+
+/// The rounds `rows` replay, the room storing the result of every
+/// placeholder (`resolves`), or none.
+fn rounds_resolving(rows: &[RoomEvent], resolves: bool) -> Vec<ToolRound> {
     let agent = ChannelId::new(AGENT).unwrap();
-    tool_rounds(rows, &agent)
+    tool_rounds(rows, &agent, &|_| resolves)
 }
 
 /// Each round's call ids.
@@ -448,4 +454,43 @@ fn a_row_the_agent_did_not_write_or_that_was_deleted_is_not_replayed() {
     }
     rows.extend(served(7, "own", "mine"));
     assert_eq!(results(&rounds(&rows)), ["mine"]);
+}
+
+const PLACEHOLDER: &str = "Result too large (2001 tokens). Full output saved as 'evicted_c1'. \
+                           Use read_stored_result to read it with pagination.\n\nPreview:\nhead";
+
+// Python: tests/test_channels/test_tool_history.py::test_a_placeholder_the_room_no_longer_stores_offers_no_stored_id
+/// A placeholder whose result the room no longer stores (the agent left the
+/// room and came back, the process restarted) reads as its size alone,
+/// never as an id nothing resolves, whether it is the result's text or a
+/// part of it behind an image (RFC §6.4, RK-21.5-017).
+#[test]
+fn a_placeholder_the_room_no_longer_stores_offers_no_stored_id() {
+    let behind_an_image =
+        json!([{ "type": "image", "url": "x" }, { "type": "text", "text": PLACEHOLDER }]);
+    for result in [json!(PLACEHOLDER), behind_an_image] {
+        let rows = served_with(1, "c1", result.clone());
+        assert_eq!(
+            results(&rounds_resolving(&rows, false)),
+            [
+                "Result too large (2001 tokens), the rest is not shown here: call the tool again for it."
+            ],
+            "{result}"
+        );
+    }
+}
+
+// Python: tests/test_channels/test_tool_history.py::test_a_placeholder_the_room_still_stores_reads_as_the_turn_read_it
+#[test]
+fn a_placeholder_the_room_still_stores_reads_as_the_turn_read_it() {
+    let rows = served_with(1, "c1", json!(PLACEHOLDER));
+    assert_eq!(results(&rounds_resolving(&rows, true)), [PLACEHOLDER]);
+}
+
+/// A served one-call round whose end holds `result`.
+fn served_with(index: u64, id: &str, result: Value) -> [RoomEvent; 2] {
+    [
+        start(index, id),
+        end(index + 1, id, result, Some(ToolCallOutcome::Served)),
+    ]
 }

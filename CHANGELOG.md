@@ -226,6 +226,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   provider, an SMS channel's its vendor's, as no event Python injects does.
   `SendEventOptions::provider` and `DirectEvent::provider` say so.
 
+- A turn's history replays an oversized result's placeholder whose result
+  the room no longer stores as the result's size alone (RFC §6.4, §21.5),
+  where it offered the stored id, which nothing then reads: an agent that
+  left the room and joined it again, or a kit started again, spent a round
+  on a `read_stored_result` that found nothing. The turn's footprint
+  measures it the same way, as in Python.
+
 - A message `WebhookMeta::to_inbound` builds keeps the provider's id as
   its `provider_message_id` and the webhook's payload, unmodified, as its
   `raw_payload`, as in Python (RFC §5.2, §8.1, RMK-2190): `process_webhook`

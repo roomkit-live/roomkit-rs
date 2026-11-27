@@ -343,6 +343,22 @@ fn small() -> String {
     "line\n".repeat(200)
 }
 
+// Python: tests/test_tool_eviction_room_scope.py::test_a_placeholder_holds_only_in_the_room_that_stored_its_result
+/// A later turn replays a placeholder as its turn read it only where its
+/// result is still stored; elsewhere, or once dropped, it offers no id
+/// (RFC §6.4, RK-21.5-017).
+#[test]
+fn a_placeholder_holds_only_in_the_room_that_stored_its_result() {
+    let eviction = ToolEviction::new(50);
+    let placeholder = eviction.maybe_evict("room-a", "row\n".repeat(2000), "toolu_1");
+    assert!(eviction.holds("room-a", &placeholder));
+    assert!(!eviction.holds("room-b", &placeholder));
+    assert!(!ToolEviction::new(50).holds("room-a", &placeholder));
+    assert!(!eviction.holds("room-a", "Result too large (2001 tokens). Preview: no id"));
+    eviction.forget("room-a");
+    assert!(!eviction.holds("room-a", &placeholder));
+}
+
 // RFC §10.6.2: forgetting one room drops its data, not another room or its issued ids.
 #[test]
 fn a_forgotten_room_keeps_no_result_and_never_reuses_its_old_ids() {

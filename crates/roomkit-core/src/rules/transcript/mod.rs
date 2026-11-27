@@ -99,6 +99,7 @@ use self::marks::{
 #[doc(hidden)]
 pub use self::quote::FENCED_TAGS;
 pub use self::quote::quoted;
+pub use self::rounds::EVICTION_PLACEHOLDER_PREFIX;
 use self::rounds::{ToolRound, tool_rounds};
 pub use self::speakers::{LABEL_LIMIT, people_note, people_taking_part};
 use self::speakers::{Speaker, labelled_lines, labels_turns, people_as_read, speaker, tell_apart};
@@ -264,7 +265,9 @@ impl Message {
 /// outcome, but one cancelled before it answered and one refused under a
 /// name vendors do not take, under the id the model
 /// gave it, its arguments as the model wrote them (its start row's) and the
-/// result it read whole (its end row's). A round right after a message of
+/// result it read whole (its end row's), but an oversized result's
+/// placeholder, which reads as its size alone: no store is asked here
+/// whether it still holds the result. A round right after a message of
 /// its own turn, the text the model wrote with its calls, reads with it as
 /// the one message the turn sent. A round at or after `event`'s place, or
 /// before the history's first message, is left out; an instruction that
@@ -352,7 +355,10 @@ pub struct TurnConversation {
 /// event says what `read` reads of it, history and input alike, an event
 /// that reads as nothing left out: an AI channel's reading of its
 /// authors' media (RFC §6.4). An instruction reads as its text form
-/// (RFC §10.1.1).
+/// (RFC §10.1.1). A replayed placeholder of an oversized result reads as
+/// its size alone, no store being asked whether it still holds the result
+/// (RFC §21.5): an AI channel's turn asks its room's
+/// ([`conversation_with_input`]).
 pub fn conversation_with_memory(
     channel_id: &ChannelId,
     event: &RoomEvent,
@@ -361,12 +367,17 @@ pub fn conversation_with_memory(
     memory: &TurnMemory,
     read: impl Fn(&RoomEvent) -> TurnContent,
 ) -> Vec<Message> {
+    let resolves: &dyn Fn(&str) -> bool = &|_| false;
+    let read = (read, resolves);
     conversation_with_input(channel_id, event, context, history, memory, read).messages
 }
 
 /// The conversation and the position of the event this turn answers, before
 /// any memory messages are prepended. Used by the AI loop to keep that input
 /// whole during compaction, including when a discussion reads it in place.
+/// Beside `read`, `resolves` says whether the room still stores the result
+/// a replayed placeholder of an oversized result points to: one it no
+/// longer stores reads as its size alone (RFC §6.4).
 #[doc(hidden)]
 pub fn conversation_with_input(
     channel_id: &ChannelId,
@@ -374,9 +385,17 @@ pub fn conversation_with_input(
     context: &RoomContext,
     history: usize,
     memory: &TurnMemory,
-    read: impl Fn(&RoomEvent) -> TurnContent,
+    (read, resolves): (impl Fn(&RoomEvent) -> TurnContent, &dyn Fn(&str) -> bool),
 ) -> TurnConversation {
-    conversation_read(channel_id, event, context, (history, false), memory, read)
+    let reading = (read, resolves);
+    conversation_read(
+        channel_id,
+        event,
+        context,
+        (history, false),
+        memory,
+        reading,
+    )
 }
 
 /// The same conversation, with every speaker named for a listening thinker.
@@ -386,9 +405,17 @@ pub fn conversation_for_thought(
     event: &RoomEvent,
     context: &RoomContext,
     memory: &TurnMemory,
-    read: impl Fn(&RoomEvent) -> TurnContent,
+    (read, resolves): (impl Fn(&RoomEvent) -> TurnContent, &dyn Fn(&str) -> bool),
 ) -> TurnConversation {
-    conversation_read(channel_id, event, context, (usize::MAX, true), memory, read)
+    let reading = (read, resolves);
+    conversation_read(
+        channel_id,
+        event,
+        context,
+        (usize::MAX, true),
+        memory,
+        reading,
+    )
 }
 
 fn conversation_read(
@@ -397,7 +424,7 @@ fn conversation_read(
     context: &RoomContext,
     (history, force_names): (usize, bool),
     memory: &TurnMemory,
-    read: impl Fn(&RoomEvent) -> TurnContent,
+    (read, resolves): (impl Fn(&RoomEvent) -> TurnContent, &dyn Fn(&str) -> bool),
 ) -> TurnConversation {
     let mut authors = Authors::new(context);
     let mut turns = past_turns(channel_id, event, context, history, &mut authors, &read);
@@ -411,7 +438,7 @@ fn conversation_read(
             Earlier::default()
         } else {
             Earlier {
-                rounds: tool_rounds(&context.recent_events, channel_id),
+                rounds: tool_rounds(&context.recent_events, channel_id, resolves),
                 instructions: kept_instructions(&context.recent_events, channel_id),
             }
         };
@@ -885,9 +912,15 @@ pub struct Replayed {
 /// assistant's message making the calls then a tool message per result,
 /// then each instruction a turn read (RFC §10.1.1), the user message marked
 /// exactly as the turn's input was. Python's `EarlierTurns`, as the turn's
-/// footprint measures it (`_replayed_costs`).
-pub fn earlier_turns(events: &[RoomEvent], channel_id: &ChannelId) -> Vec<Replayed> {
-    let rounds = tool_rounds(events, channel_id)
+/// footprint measures it (`_replayed_costs`): a placeholder of an oversized
+/// result whose result the room no longer stores (`resolves`) reads as its
+/// size alone, as the turn's conversation replays it.
+pub fn earlier_turns(
+    events: &[RoomEvent],
+    channel_id: &ChannelId,
+    resolves: &dyn Fn(&str) -> bool,
+) -> Vec<Replayed> {
+    let rounds = tool_rounds(events, channel_id, resolves)
         .into_iter()
         .map(|round| Replayed {
             index: round.index,

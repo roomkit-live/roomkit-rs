@@ -44,7 +44,7 @@ pub(crate) const DEFAULT_EVICT_THRESHOLD_TOKENS: u64 = 5000;
 pub(crate) const REREAD_TOOL: &str = "read_stored_result";
 
 /// How every placeholder starts: one is never stored again.
-const PLACEHOLDER_PREFIX: &str = "Result too large (";
+const PLACEHOLDER_PREFIX: &str = roomkit_core::rules::transcript::EVICTION_PLACEHOLDER_PREFIX;
 
 /// The stored results a room keeps, its least recently read going first.
 const MAX_EVICTED: usize = 50;
@@ -121,6 +121,22 @@ impl ToolEviction {
     /// Whether `room` stores a result: Python's `has_evicted`.
     pub(crate) fn has_evicted(&self, room: &str) -> bool {
         self.lock().results.iter().any(|((at, _), _, _)| at == room)
+    }
+
+    /// Whether `room` still stores the result `placeholder` points to: a
+    /// later turn may then read it back as the turn that got it could
+    /// (RFC §6.4). Python's `holds`.
+    pub(crate) fn holds(&self, room: &str, placeholder: &str) -> bool {
+        let Some((_, rest)) = placeholder.split_once(" saved as '") else {
+            return false;
+        };
+        let result_id = rest.split('\'').next().unwrap_or_default();
+        !result_id.is_empty()
+            && self
+                .lock()
+                .results
+                .iter()
+                .any(|((at, held), _, _)| at == room && held == result_id)
     }
 
     /// Discards this room's results on detach or attach (RFC §10.6.2).
