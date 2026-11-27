@@ -13,8 +13,8 @@ use roomkit::model::{
 use roomkit::{ConversationStore, RoomKit, RoomKitError, SteerOptions, current_turn_id};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
-    AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, AiRole, ProviderError,
-    ToolResult, Tools,
+    AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, AiRole, AiRouter,
+    AiRouterFuture, DynAiProvider, ProviderError, RouteReason, RouteRequest, ToolResult, Tools,
 };
 use tokio::sync::watch;
 
@@ -450,6 +450,61 @@ async fn a_cancel_during_a_retry_s_backoff_ends_the_turn_at_once() {
     tokio::time::timeout(std::time::Duration::from_secs(1), turn)
         .await
         .expect("the stopped turn ended during the backoff")
+        .unwrap();
+
+    assert_eq!(
+        (
+            reached,
+            model.requests().len(),
+            answers(&room.timeline().await)
+        ),
+        (1, 1, (vec![], None))
+    );
+    room.kit.close().await.unwrap();
+}
+
+/// Names `first` at a turn's start; asked for a retry, it holds its choice
+/// for good, telling `choosing` it was asked.
+struct HoldsItsRetry {
+    first: Arc<dyn DynAiProvider>,
+    choosing: Arc<tokio::sync::Notify>,
+}
+
+impl AiRouter for HoldsItsRetry {
+    fn route(&self, request: RouteRequest) -> AiRouterFuture<'_> {
+        if matches!(request.reason, RouteReason::Turn) {
+            return Box::pin(std::future::ready(Some(Arc::clone(&self.first))));
+        }
+        self.choosing.notify_one();
+        Box::pin(std::future::pending())
+    }
+}
+
+// Python: tests/test_channels/test_ai_steering.py::TestACancelCutsAHeldGeneration::test_a_cancel_while_the_router_chooses_a_fallback_ends_the_turn
+/// RFC §21.3: the router's choice of another provider, once the turn's
+/// spent its retries, is part of the generation a `Cancel` aborts at once.
+#[tokio::test]
+async fn a_cancel_while_the_router_chooses_a_fallback_ends_the_turn() {
+    let model = ScriptedProvider::new([ScriptedRound::answering("")
+        .refusing(503, "overloaded")
+        .retrying()]);
+    let choosing = Arc::new(tokio::sync::Notify::new());
+    let router = HoldsItsRetry {
+        first: Arc::new(model.clone()),
+        choosing: Arc::clone(&choosing),
+    };
+    let agent =
+        AiChannel::routed(channel("assistant"), router, AiChannelOptions::default()).unwrap();
+    let room = Arc::new(Room::with_agent(agent).await);
+    let turn = first_turn(&room);
+    tokio::time::timeout(std::time::Duration::from_secs(2), choosing.notified())
+        .await
+        .unwrap();
+
+    let reached = steer(&room.kit, Cancel::default()).await;
+    tokio::time::timeout(std::time::Duration::from_secs(1), turn)
+        .await
+        .expect("the stopped turn ended while the router chose")
         .unwrap();
 
     assert_eq!(
