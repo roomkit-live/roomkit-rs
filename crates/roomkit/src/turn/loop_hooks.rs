@@ -341,6 +341,10 @@ impl crate::turns::ChannelTurnHooks {
             remaining: AtomicUsize::new(observers.len()),
             then: Mutex::new(then),
         });
+        // A body run asynchronously is at least as deep as the turn's
+        // response, whether the turn still runs as it starts or not, and
+        // the verbs it makes through the host carry that floor (RFC §8.3).
+        let floor = self.host().map_or(0, |host| host.shared.response_depth);
         for (spec, handler) in observers {
             let observing = hooks::observe_traced(
                 spec.clone(),
@@ -351,7 +355,7 @@ impl crate::turns::ChannelTurnHooks {
             // Boxed at once: each layer below moves its future by value, and
             // a debug build copies this one at every move, past a 2 MB stack
             // in a task's nested turn.
-            let observing = Box::pin(ExecutionContext::current().observing(0, observing));
+            let observing = Box::pin(ExecutionContext::current().observing(floor, observing));
             let (host, spec, done) = (self.clone(), spec.clone(), Arc::clone(&ended));
             let bounded = async move {
                 let observed = observing.await;

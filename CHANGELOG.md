@@ -204,6 +204,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- An ASYNC hook a turn executor fires on one of the turn's triggers
+  (`ON_AI_RESPONSE` among them) calls at least as deep as the turn's
+  response, and an event it sends through the turn's host is that deep, as
+  in Python (RFC §8.3, RMK-2169). On an executor apart from the room's
+  owner, such a hook's send was at depth 0.
 - An instruction of the application that comes while the turn another
   instruction opened runs waits a turn of its own (RFC §6.4, §10.1.1 rule 6,
   RMK-2146). With `steer_room_turns` it was handed to the running turn as a
