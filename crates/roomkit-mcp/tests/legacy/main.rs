@@ -4,6 +4,7 @@
 
 mod boundaries;
 mod calls;
+mod event_bound;
 mod headers;
 mod opening;
 mod peer;

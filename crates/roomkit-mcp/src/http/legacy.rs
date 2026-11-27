@@ -17,9 +17,14 @@ use rmcp::{
 use tokio::sync::Notify;
 
 use super::client::{Failure, HttpFailure};
-use crate::server::MESSAGE_LIMIT;
 use client::Client;
 use writer::Writer;
+
+/// The largest SSE event the GET stream may carry, in bytes, as Python's SDK
+/// reads it, a bound its legacy client does not let Python set: a larger
+/// event ends the connection, its one stream carrying every answer.
+/// Streamable HTTP reads events up to `MESSAGE_LIMIT`.
+const EVENT_LIMIT: usize = 1024 * 1024;
 
 pub(super) async fn connect(
     url: String,
@@ -91,7 +96,7 @@ impl Legacy {
         let parsed = Url::parse(url).map_err(|_| failure.record(None, "invalid MCP endpoint"))?;
         let response = client.legacy_get(parsed, headers.clone()).await?;
         let mut stream =
-            super::sse::legacy_stream(response, client.clone(), failure.clone(), MESSAGE_LIMIT);
+            super::sse::legacy_stream(response, client.clone(), failure.clone(), EVENT_LIMIT);
         let target = announced(url, &mut stream, &failure).await?;
         Ok(Self {
             stream: Some(stream),

@@ -29,6 +29,8 @@ pub(super) enum Mode {
     Eof,
     HeldPost,
     HeldResponse,
+    /// Answers each `tools/call` with a text of this many bytes.
+    LargeResult(usize),
     HoldOpening(&'static str),
     Redirect {
         method: Method,
@@ -255,7 +257,11 @@ fn record_message(shared: &Shared, message: Value) {
         {
             None
         }
-        Some("tools/call") => Some(json!({"content":[{"type":"text", "text":"done"}]})),
+        Some("tools/call") => Some(if let Mode::LargeResult(size) = shared.mode {
+            json!({"content":[{"type":"text", "text":"x".repeat(size)}]})
+        } else {
+            json!({"content":[{"type":"text", "text":"done"}]})
+        }),
         Some("host/read") => Some(json!({"done":true})),
         Some("resources/read") => Some(json!({"contents":[{"uri":"file:///kept", "text":"done"}]})),
         Some("notifications/initialized" | "notifications/cancelled") => None,
@@ -284,6 +290,7 @@ fn get(shared: Arc<Shared>) -> Response {
         | Mode::Eof
         | Mode::HeldPost
         | Mode::HeldResponse
+        | Mode::LargeResult(_)
         | Mode::HoldOpening(_)
         | Mode::Redirect { .. } => Some("text/event-stream"),
     };
@@ -313,7 +320,8 @@ fn get(shared: Arc<Shared>) -> Response {
         | Mode::Response(_)
         | Mode::Eof
         | Mode::HeldPost
-        | Mode::HeldResponse => relative,
+        | Mode::HeldResponse
+        | Mode::LargeResult(_) => relative,
     };
     if !(matches!(shared.mode, Mode::HoldOpening("endpoint")) && connection == 1) {
         sender
