@@ -154,9 +154,7 @@ fn operation(op: &Value, path: &str, found: &mut Vec<String>) {
         || op
             .get("params")
             .is_some_and(|v| !v.is_null() && !v.is_object())
-        || op
-            .get("timeout_ms")
-            .is_some_and(|v| v.as_u64().is_none_or(|n| n == 0))
+        || op.get("timeout_ms").is_some_and(|v| v.as_u64().is_none())
     {
         found.push(format!("{path}: invalid operation arguments"));
     }
@@ -276,7 +274,7 @@ mod tests {
             json!({"operations":[{"method":"connect","timeout_ms":10}]}),
             json!({"operations":[{"method":"request"}]}),
             json!({"operations":[{"method":"request","name":"read","params":[]}]}),
-            json!({"operations":[{"method":"read_resource","uri":"resource://x","timeout_ms":0}]}),
+            json!({"operations":[{"method":"read_resource","uri":"resource://x","timeout_ms":-1}]}),
             json!({"operations":[{"method":"tool_meta","mutate":{"path":[],"value":null}}]}),
             json!({"discover":null}),
             json!({"tool_filter":"all"}),

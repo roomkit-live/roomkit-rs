@@ -30,6 +30,7 @@ pub(crate) async fn session(spec: &Value) -> Result<Value, Unreadable> {
     provider.close().await;
     peer.settle_closed().await?;
     let http = peer.http(spec);
+    let posted = peer.posted();
     let requests = peer.finish().await?;
     let results = results?;
     let mut observed = json!({
@@ -40,6 +41,9 @@ pub(crate) async fn session(spec: &Value) -> Result<Value, Unreadable> {
     if let Some(http) = http {
         observed["http_json"] = json!(canonical(&http));
         observed["http"] = http;
+    }
+    if let Some(posted) = posted {
+        observed["messages"] = posted;
     }
     Ok(observed)
 }

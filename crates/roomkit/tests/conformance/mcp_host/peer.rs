@@ -89,6 +89,11 @@ impl Peer {
         legacy::observed(&self.state.lock().unwrap(), spec)
     }
 
+    /// A legacy peer's messages posted, as sent, notifications included.
+    pub(super) fn posted(&self) -> Option<Value> {
+        legacy::posted(&self.state.lock().unwrap())
+    }
+
     pub(super) fn operation(&self, discovery: bool, tool_call: bool) {
         let mut state = self.state.lock().unwrap();
         state.discovery = discovery;

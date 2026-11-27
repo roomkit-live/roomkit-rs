@@ -15,6 +15,8 @@ pub(super) struct State {
     closed: usize,
     messages: Option<mpsc::Sender<Value>>,
     requests: Vec<Value>,
+    /// Each JSON-RPC message posted, as sent, notifications included.
+    posted: Vec<Value>,
     changed: Arc<Notify>,
 }
 
@@ -51,6 +53,7 @@ pub(super) async fn exchange(
         "POST" => {
             let (sender, reply) = {
                 let mut state = shared.lock().unwrap();
+                state.legacy.as_mut().unwrap().posted.push(message.clone());
                 let legacy = state.legacy.as_ref().unwrap();
                 if *target != format!("/messages?session={}", legacy.connections) {
                     return Err("MCP POST did not use its announced endpoint".into());
@@ -173,6 +176,10 @@ pub(super) fn observed(state: &super::State, spec: &Value) -> Option<Value> {
     Some(
         json!({"connections":legacy.connections,"closed_connections":legacy.closed,"requests":requests}),
     )
+}
+
+pub(super) fn posted(state: &super::State) -> Option<Value> {
+    Some(Value::Array(state.legacy.as_ref()?.posted.clone()))
 }
 
 pub(super) fn check(state: &mut super::State) {
