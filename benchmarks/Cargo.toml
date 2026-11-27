@@ -1,0 +1,24 @@
+[package]
+name = "roomkit-benchmarks"
+description = "Measurements of RoomKit on the real clock, run by hand, never by the gates"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# A measurement, not a library: nothing of it is documented or published.
+[[bin]]
+name = "roomkit-benchmarks"
+path = "src/main.rs"
+doc = false
+
+[dependencies]
+roomkit.workspace = true
+roomkit-ai.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

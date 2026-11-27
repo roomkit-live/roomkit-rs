@@ -1608,6 +1608,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "roomkit-benchmarks"
+version = "0.3.0"
+dependencies = [
+ "roomkit",
+ "roomkit-ai",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "roomkit-core"
 version = "0.3.0"
 dependencies = [
