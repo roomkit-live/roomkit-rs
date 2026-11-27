@@ -4,13 +4,17 @@ use super::peer::{Mode, Peer};
 use roomkit_mcp::McpError;
 use std::time::Duration;
 
+// Python: test_legacy_get_uses_the_sdk_content_type_match.
 #[tokio::test]
-async fn get_content_type_uses_the_sdk_substring_before_parameters() {
+async fn get_content_type_is_read_as_a_media_type() {
     for (content_type, accepted) in [
         (Some("text/event-stream"), true),
         (Some("text/event-stream; charset=utf-8"), true),
-        (Some("prefix-text/event-stream-suffix"), true),
-        (Some("Text/Event-Stream"), false),
+        // The part before ";", trimmed and lowercased, is text/event-stream,
+        // as the MCP Python SDK 2 reads it (RMK-2203).
+        (Some("prefix-text/event-stream-suffix"), false),
+        (Some("Text/Event-Stream"), true),
+        (Some("text/event-stream ; charset=utf-8"), true),
         (Some("text/plain; text/event-stream"), false),
         (None, false),
     ] {

@@ -145,12 +145,10 @@ impl Client {
             .get("content-type")
             .and_then(|value| value.to_str().ok())
             .unwrap_or_default();
-        if !content_type
-            .split(';')
-            .next()
-            .unwrap_or_default()
-            .contains("text/event-stream")
-        {
+        // A media type, as Python's SDK reads it: the part before its
+        // parameters, trimmed, compared without case.
+        let media_type = content_type.split(';').next().unwrap_or_default().trim();
+        if !media_type.eq_ignore_ascii_case("text/event-stream") {
             return Err(self.failure.record(None, "expected an SSE response"));
         }
         Ok(response)
