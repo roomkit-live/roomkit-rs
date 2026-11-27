@@ -153,6 +153,48 @@ pub(crate) async fn process_kit(
 /// `conformance/README.md`, "Known failures").
 pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[
     (
+        "discussion/a-kept-result-whose-message-was-deleted-for-good-is-posted-again",
+        "RFC §19.7.5 rule 19 (RK-19.7.5-188): the kit posts a task's result at once, outside the \
+         discussion, never as a post entry of the speak queue kept in the room's \
+         private state until committed and keyed by the result's id (RMK-2193)",
+    ),
+    (
+        "discussion/a-posted-result-is-the-agent-s-message-without-a-generation-and-asks-no-one",
+        "RFC §19.7.5 rule 19 (RK-19.7.5-178): the kit posts a task's result at once, outside the \
+         discussion, never as a post entry of the speak queue kept in the room's \
+         private state until committed and keyed by the result's id (RMK-2193)",
+    ),
+    (
+        "discussion/a-posted-result-queued-when-the-discussion-ends-is-posted-once-no-turn-runs",
+        "RFC §19.7.5 rule 19 (RK-19.7.5-182): the kit posts a task's result at once, outside the \
+         discussion, never as a post entry of the speak queue kept in the room's \
+         private state until committed and keyed by the result's id (RMK-2193)",
+    ),
+    (
+        "discussion/a-result-a-closing-process-did-not-post-is-posted-by-the-next-uninstall-after-later-messages",
+        "RFC §19.7.5 rule 19 (RK-19.7.5-187): the kit posts a task's result at once, outside the \
+         discussion, never as a post entry of the speak queue kept in the room's \
+         private state until committed and keyed by the result's id (RMK-2193)",
+    ),
+    (
+        "discussion/a-result-s-post-that-comes-second-is-a-replay-and-stores-nothing",
+        "RFC §19.7.5 rule 19 (RK-19.7.5-186): the kit posts a task's result at once, outside the \
+         discussion, never as a post entry of the speak queue kept in the room's \
+         private state until committed and keyed by the result's id (RMK-2193)",
+    ),
+    (
+        "discussion/an-uninstall-in-another-process-posts-the-result-another-holds-before-the-agents-leave",
+        "RFC §19.7.5 rule 19 (RK-19.7.5-183): the kit posts a task's result at once, outside the \
+         discussion, never as a post entry of the speak queue kept in the room's \
+         private state until committed and keyed by the result's id (RMK-2193)",
+    ),
+    (
+        "discussion/an-uninstall-under-the-room-lock-posts-the-waiting-result-itself",
+        "RFC §19.7.5 rule 19 (RK-19.7.5-182, RK-19.7.5-185): the kit posts a task's result at once, outside the \
+         discussion, never as a post entry of the speak queue kept in the room's \
+         private state until committed and keyed by the result's id (RMK-2193)",
+    ),
+    (
         "memory/a-turn-a-memory-s-summary-joins-keeps-its-label-out-of-the-compaction-s-quote",
         "RFC §6.4 (RK-6.4-376): a compaction's summary quotes a labelled turn whole, the \
          summary a memory joined ahead of it and its label inside the quote, since the \
