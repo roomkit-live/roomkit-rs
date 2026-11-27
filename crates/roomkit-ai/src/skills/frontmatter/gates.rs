@@ -81,7 +81,8 @@ impl Gates {
 
 /// Never mistake a YAML scalar's spelling for the name it gates. Quoted
 /// values stay text; ambiguous unquoted numbers, dates and booleans are
-/// refused instead of approximating YAML's scalar conversion (RFC §24.1).
+/// refused instead of approximating YAML's scalar conversion, and so is a
+/// text YAML reads as a key (RFC §24.1).
 fn gate_item(text: &str) -> Item {
     if !text.starts_with(['"', '\'']) {
         let plain = without_comment(text).trim();
@@ -90,11 +91,18 @@ fn gate_item(text: &str) -> Item {
             lower.as_str(),
             "yes" | "no" | "true" | "false" | "on" | "off"
         );
-        if scalar || numeric_scalar(plain) {
+        if scalar || numeric_scalar(plain) || holds_a_key(plain) {
             return Item::Unread;
         }
     }
     list_item(text)
+}
+
+/// Whether YAML reads a key in `plain`, an unquoted text: a colon before a
+/// space, a tab or its end. Read as one name, `issue_refund: money` would
+/// gate a name no tool has and leave `issue_refund` open.
+fn holds_a_key(plain: &str) -> bool {
+    plain.ends_with(':') || plain.contains(": ") || plain.contains(":\t")
 }
 
 /// Conservative around YAML's numeric/date forms, without treating tool

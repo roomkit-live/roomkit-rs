@@ -286,6 +286,19 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   under its name, where they counted as one speaker and read unlabelled
   unless a participant record named them.
 
+### Security
+
+- **BREAKING — a local skill's `allowed_tools` or `requires` value or item
+  that YAML reads as a key refuses the skill**, as in Python (RFC §24.1,
+  RMK-2194): `Parsing failed for <skill>: the frontmatter's allowed_tools
+  cannot be read line by line`. An unquoted text holding a colon before a
+  space or a tab, or ending with one, was gated as one name: an item
+  `- issue_refund: money` gated a tool named `issue_refund: money`, and left
+  the tool named `issue_refund` open to the model before any activation.
+  Migration: quote a tool name that holds a colon,
+  `allowed_tools: ["issue_refund: money"]`, or put the note in a comment,
+  `- issue_refund  # money`.
+
 ## [0.3.0] — 2026-11-22
 
 ### Added

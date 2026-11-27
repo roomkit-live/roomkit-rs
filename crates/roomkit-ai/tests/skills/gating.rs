@@ -38,6 +38,21 @@ fn each_form_keeps_its_public_metadata_type() {
             "allowed_tools: [null, search_*, ~, fetch_*]\n",
             Some(list()),
         ),
+        (
+            "allowed_tools:\n  - \"issue_refund: money\"\n",
+            Some(SkillToolNames::List(vec!["issue_refund: money".into()])),
+        ),
+        (
+            "allowed_tools: 'issue_refund: money'\n",
+            Some(SkillToolNames::Text("issue_refund: money".into())),
+        ),
+        (
+            "allowed_tools: [issue_refund:money, 'void: *']\n",
+            Some(SkillToolNames::List(vec![
+                "issue_refund:money".into(),
+                "void: *".into(),
+            ])),
+        ),
     ];
     for (frontmatter, expected) in cases {
         let root = TempDir::new();
@@ -200,7 +215,8 @@ fn repeated_keys_cannot_erase_an_earlier_gate() {
 }
 
 // Python: tests/test_skill_frontmatter_lines.py::test_a_gating_key_a_line_cannot_hold_whole_refuses_the_skill,
-// test_a_line_it_cannot_place_under_a_list_key_refuses_the_skill;
+// test_a_line_it_cannot_place_under_a_list_key_refuses_the_skill,
+// test_the_line_reader_never_gates_less_than_yaml;
 // tests/test_skill_tool_gating.py::test_a_bracket_within_an_entry_refuses_the_skill.
 #[test]
 fn a_gate_that_cannot_be_read_whole_refuses_the_skill() {
@@ -221,6 +237,14 @@ fn a_gate_that_cannot_be_read_whole_refuses_the_skill() {
         "rm_[a-z]*",
         "'fetch]'",
         "\"[sw]earch_*, fetch_v?\"",
+        "issue_refund: money",
+        "search_*, issue_refund: money",
+        "\n  - issue_refund: money",
+        "[search_*, issue_refund: money]",
+        "\n  - issue_refund:\tmoney",
+        "issue_refund:",
+        "\n  - issue_refund:",
+        "[issue_refund:, search_*]",
     ] {
         let root = TempDir::new();
         let path = root.skill_with(
