@@ -97,6 +97,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **BREAKING — the in-memory store refuses an event `add_event` brings
+  at an index another event holds in its room, with the new
+  `StoreError::EventIndexTaken`**, nothing written, as Python's stores raise
+  `EventIndexTakenError` (RFC §8.1, RMK-2190): it stored both, two events at
+  one index. An index an `update_event` writes is held too. Migration:
+  `testing::check_conversation_store` checks the refusal, so a store
+  written outside this crate refuses a held index with
+  `StoreError::EventIndexTaken` to keep passing it.
 - A delegated task that did not complete tells its requester why, as in
   Python (RFC §23.3 step 6 and step 8, §23.4, RMK-2125), where it said only
   that it failed: one code of a closed list, with the runtime's words for it.
@@ -204,14 +212,6 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- **BREAKING** — the in-memory store refuses an event `add_event` brings
-  at an index another event holds in its room, with the new
-  `StoreError::EventIndexTaken`, nothing written, as Python's stores raise
-  `EventIndexTakenError` (RFC §8.1, RMK-2190): it stored both, two events at
-  one index. An index an `update_event` writes is held too. Migration:
-  `testing::check_conversation_store` checks the refusal, so a store
-  written outside this crate refuses a held index with
-  `StoreError::EventIndexTaken` to keep passing it.
 - A message `WebhookMeta::to_inbound` builds keeps the provider's id as
   its `provider_message_id` and the webhook's payload, unmodified, as its
   `raw_payload`, as in Python (RFC §5.2, §8.1, RMK-2190): `process_webhook`
