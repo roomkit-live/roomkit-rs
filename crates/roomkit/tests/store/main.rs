@@ -10,6 +10,7 @@ mod abstract_only;
 mod abstract_only_store;
 mod connection;
 mod connection_store;
+mod held_index;
 mod received_events;
 mod room_filter;
 

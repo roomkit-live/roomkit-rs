@@ -954,17 +954,19 @@ impl ConversationStore for InMemoryStore {
     async fn update_event(&self, mut event: RoomEvent) -> Result<RoomEvent, StoreError> {
         super::written::event(&mut event)?;
         let mut rooms = self.rooms();
-        let stored = rooms
-            .get_mut(&event.room_id)
-            .and_then(|record| {
-                record
-                    .events
-                    .iter_mut()
-                    .find(|stored| stored.id == event.id)
-            })
-            .ok_or_else(|| StoreError::EventNotFound(event.id.clone()))?;
+        let gone = || StoreError::EventNotFound(event.id.clone());
+        let record = rooms.get_mut(&event.room_id).ok_or_else(gone)?;
+        let stored = record
+            .events
+            .iter_mut()
+            .find(|stored| stored.id == event.id)
+            .ok_or_else(gone)?;
         event.delivery_results = mem::take(&mut stored.delivery_results);
         stored.clone_from(&event);
+        // A rewrite that moves the event's index keeps the room's next
+        // index past it, as Python's in-memory store does: every index held
+        // stays below it (`held_index`).
+        record.next_index = record.next_index.max(event.index.saturating_add(1));
         Ok(event)
     }
 

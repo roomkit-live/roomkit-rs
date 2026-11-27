@@ -204,13 +204,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- The in-memory store refuses an event `add_event` brings at an index
-  another event holds in its room, with the new
+- **BREAKING** — the in-memory store refuses an event `add_event` brings
+  at an index another event holds in its room, with the new
   `StoreError::EventIndexTaken`, nothing written, as Python's stores raise
   `EventIndexTakenError` (RFC §8.1, RMK-2190): it stored both, two events at
-  one index. `testing::check_conversation_store` checks it, so a store
-  written outside this crate passes the contract only if it refuses the
-  same.
+  one index. An index an `update_event` writes is held too. Migration:
+  `testing::check_conversation_store` checks the refusal, so a store
+  written outside this crate refuses a held index with
+  `StoreError::EventIndexTaken` to keep passing it.
 - A message `WebhookMeta::to_inbound` builds keeps the provider's id as
   its `provider_message_id` and the webhook's payload, unmodified, as its
   `raw_payload`, as in Python (RFC §5.2, §8.1, RMK-2190): `process_webhook`
