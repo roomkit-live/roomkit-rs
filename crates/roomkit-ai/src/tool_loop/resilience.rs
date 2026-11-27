@@ -127,6 +127,9 @@ impl Loop {
         let mut received = false;
         let mut told = roomkit::model::Metadata::new();
         let last = loop {
+            if steering.cut_requested() {
+                return Ok(Generation::cut_unread(&told));
+            }
             let sending = super::deferred::declared_for(
                 self.provider.dyn_supports_deferred_tools(),
                 &context,
@@ -180,10 +183,18 @@ impl Loop {
                 ?delay,
                 "a generation failed: trying it again"
             );
-            tokio::time::sleep(delay).await;
+            if cut_while(steering, tokio::time::sleep(delay))
+                .await
+                .is_none()
+            {
+                return Ok(Generation::cut_unread(&told));
+            }
             attempt += 1;
         };
-        let Some(other) = self.rerouted(&last.error).await else {
+        let Some(chosen) = cut_while(steering, self.rerouted(&last.error)).await else {
+            return Ok(Generation::cut_unread(&told));
+        };
+        let Some(other) = chosen else {
             return Err(last);
         };
         let reading = (steering, out, prefix, window, limits, provider_calls);
@@ -268,6 +279,18 @@ fn retry_delay(policy: &RetryPolicy, attempt: u32) -> Duration {
     let exponent = i32::try_from(attempt).unwrap_or(i32::MAX);
     let delay = policy.base_delay_seconds * policy.exponential_base.powi(exponent);
     Duration::try_from_secs_f64(delay.min(policy.max_delay_seconds)).unwrap_or(Duration::MAX)
+}
+
+/// What `work` gives, unless a steering `Cancel` reaches the loop first:
+/// `None`, `work` dropped. A retry's backoff and the router's choice are
+/// part of the generation a `Cancel` aborts at once (RFC §21.3), as
+/// Python's cut cancels whatever its generation awaits.
+async fn cut_while<T>(steering: &Steering, work: impl Future<Output = T>) -> Option<T> {
+    tokio::select! {
+        biased;
+        () = steering.cancel_reached() => None,
+        done = work => Some(done),
+    }
 }
 
 #[cfg(test)]

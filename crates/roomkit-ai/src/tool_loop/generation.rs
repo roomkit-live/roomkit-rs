@@ -12,6 +12,7 @@ use crate::provider::{
     AiToolCall, ProviderError, ProviderStream, RoundTranscript, StreamDone, StreamEvent,
     StreamToolCall,
 };
+use crate::steering::Steering;
 use crate::stream::{Yielder, next};
 
 /// The most calls one generation's round runs: far above a model's
@@ -139,7 +140,8 @@ impl Generation {
     /// reason and no usage, and one that goes on past its done event is read
     /// on, a failure there failing the generation as streamed, as Python's
     /// stream round reads it. A `Cancel` `steering` received stops the read
-    /// at the next event, which is dropped with the stream (RFC §21.3); a
+    /// at once, the provider's next event awaited or not, which is dropped
+    /// with the stream (RFC §21.3); a
     /// done event whose usage the turn's price cannot read stops it there,
     /// the count that raises as Python's does at that event following.
     /// A generation under a response schema (`held`) holds its text until
@@ -181,13 +183,13 @@ impl Generation {
         let mut served_results = Vec::new();
         let mut done = StreamDone::default();
         let mut reports = Vec::new();
-        let (mut streamed, mut received) = (false, false);
-        let mut unpriced = false;
-        while let Some(event) = next(&mut stream).await {
-            if steering.cancelled() {
+        let (mut streamed, mut received, mut unpriced) = (false, false, false);
+        loop {
+            let Ok(next_event) = next_unless_cut(&mut stream, steering).await else {
                 window.thinking.end();
                 return Ok(Self::cut(transcript, delivered, (done, reports), told));
-            }
+            };
+            let Some(event) = next_event else { break };
             let event = match event {
                 Ok(event) => event,
                 Err(error) => {
@@ -274,6 +276,14 @@ impl Generation {
         })
     }
 
+    /// A generation a `Cancel` stopped before its provider handed anything:
+    /// in a retry's backoff, while the router chose another provider, or
+    /// before an attempt began; what the round's tries `told` counts.
+    pub(super) fn cut_unread(told: &Metadata) -> Self {
+        let nothing = (StreamDone::default(), Vec::new());
+        Self::cut(RoundTranscript::new(), String::new(), nothing, told)
+    }
+
     /// A generation a `Cancel` stopped after it said what `transcript`
     /// holds, `delivered` of its text handed to the room, and after the end
     /// `done` it handed, if any, its usage among `reports`; with none, what
@@ -329,6 +339,27 @@ fn hands_an_answer(event: &StreamEvent, held: bool) -> bool {
         event,
         StreamEvent::ThinkingDelta(_) | StreamEvent::ToolCallDelta(_) | StreamEvent::Usage(_)
     ) || held && matches!(event, StreamEvent::TextDelta(_)))
+}
+
+/// A steering `Cancel` reached the loop: the read stops (RFC §21.3).
+struct Cut;
+
+/// The stream's next item, `None` at its end, unless a steering `Cancel`
+/// reached the loop first: while the provider holds its next event, which
+/// the cut drops with its wait, or as that event came (RFC §21.3).
+async fn next_unless_cut(
+    stream: &mut ProviderStream<'_>,
+    steering: &Steering,
+) -> Result<Option<Result<StreamEvent, ProviderError>>, Cut> {
+    let next_event = tokio::select! {
+        biased;
+        () = steering.cancel_reached() => return Err(Cut),
+        event = next(stream) => event,
+    };
+    if next_event.is_some() && steering.cancelled() {
+        return Err(Cut);
+    }
+    Ok(next_event)
 }
 
 /// Whether the generation's end reported its usage, its whole; when it did

@@ -20,7 +20,7 @@ use roomkit::model::{InjectMessage, RoomId, SteeringDirective};
 use roomkit_core::rules::transcript::{Message, Role, without_mark_copies};
 
 use crate::error::AiError;
-use crate::shutdown::Turn;
+use crate::shutdown::{Signal, Turn};
 
 /// What [`AiChannel::steer`](crate::AiChannel::steer) takes beside the
 /// directive: Python's `steer(directive, *, loop_id=None, room_id=None,
@@ -57,6 +57,9 @@ struct Running {
     /// Set by a `Cancel` as it is queued: the fast path a generation reads
     /// at each of its events.
     cancelled: AtomicBool,
+    /// Set by a `Cancel` as it is queued: it cuts a generation waiting on
+    /// its provider's next event (RFC §21.3).
+    cut: Signal,
     lifetime: Arc<Turn>,
 }
 
@@ -77,6 +80,7 @@ impl Running {
         queue.directives.push_back(directive.clone());
         if matches!(directive, SteeringDirective::Cancel(_)) {
             self.cancelled.store(true, Ordering::Release);
+            self.cut.set();
         }
         true
     }
@@ -144,6 +148,7 @@ impl Loops {
             turn_id,
             queue: Mutex::new(Queue::default()),
             cancelled: AtomicBool::new(false),
+            cut: Signal::default(),
             lifetime: Arc::default(),
         });
         lock(&self.running).push(Arc::clone(&running));
@@ -227,6 +232,18 @@ impl Steering {
     /// Whether a `Cancel` reached the loop.
     pub(crate) fn cancelled(&self) -> bool {
         self.running.cancelled.load(Ordering::Acquire)
+    }
+
+    /// Returns once a steering `Cancel` reached the loop, at once if one
+    /// did: what cuts a generation's wait on its provider (RFC §21.3).
+    pub(crate) async fn cancel_reached(&self) {
+        self.running.cut.wait().await;
+    }
+
+    /// Whether a steering `Cancel` reached the loop: a generation it cut
+    /// asks its provider nothing more (RFC §21.3).
+    pub(crate) fn cut_requested(&self) -> bool {
+        self.running.cut.is_set()
     }
 
     /// Reads every directive queued, applying each to `messages` and

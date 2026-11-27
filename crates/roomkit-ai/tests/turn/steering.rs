@@ -398,16 +398,68 @@ async fn a_cancel_during_a_generation_runs_none_of_its_calls() {
     model.release();
     turn.await.unwrap();
 
-    // The generation stops at its first event since the cancel, which is
-    // dropped with its stream: neither its text nor its call is written.
+    // The one generation stops at the cancel, its model holding it, and
+    // what its stream held is dropped with it: neither its text nor its
+    // call is written.
     let agent_rows = room
         .timeline()
         .await
         .into_iter()
         .filter(|event| event.source.channel_id == channel("assistant"))
         .count();
-    assert_eq!((reached, model.requests().len(), agent_rows), (1, 1, 0));
+    let generations = model.entered.load(Ordering::SeqCst);
+    assert_eq!(
+        (reached, generations, model.requests().len(), agent_rows),
+        (1, 1, 0, 0)
+    );
     assert!(!*tool.started.borrow(), "the call never ran");
+    room.kit.close().await.unwrap();
+}
+
+// Python: tests/test_channels/test_ai_steering.py::TestACancelCutsAHeldGeneration::test_a_cancel_during_a_retry_s_backoff_ends_the_turn_at_once
+/// RFC §21.3: the backoff before a retry is part of the generation a
+/// `Cancel` aborts at once: the turn ends, and the model is not asked again.
+#[tokio::test]
+async fn a_cancel_during_a_retry_s_backoff_ends_the_turn_at_once() {
+    let model = ScriptedProvider::new([
+        ScriptedRound::answering("")
+            .refusing(503, "overloaded")
+            .retrying(),
+        ScriptedRound::answering("Too late."),
+    ]);
+    let options = AiChannelOptions {
+        retry_policy: Some(roomkit::model::RetryPolicy {
+            max_retries: 1,
+            base_delay_seconds: 30.0,
+            ..roomkit::model::RetryPolicy::default()
+        }),
+        ..AiChannelOptions::default()
+    };
+    let agent = AiChannel::new(channel("assistant"), model.clone(), options).unwrap();
+    let room = Arc::new(Room::with_agent(agent).await);
+    let turn = first_turn(&room);
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while model.requests().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    let reached = steer(&room.kit, Cancel::default()).await;
+    tokio::time::timeout(std::time::Duration::from_secs(1), turn)
+        .await
+        .expect("the stopped turn ended during the backoff")
+        .unwrap();
+
+    assert_eq!(
+        (
+            reached,
+            model.requests().len(),
+            answers(&room.timeline().await)
+        ),
+        (1, 1, (vec![], None))
+    );
     room.kit.close().await.unwrap();
 }
 
@@ -637,8 +689,13 @@ async fn a_stop_in_one_room_leaves_the_other_rooms_turn_running() {
         reason: "stop pressed".to_owned(),
     };
     let reached = steer(&room.kit, stop).await;
+    // A's turn ends while its model still holds its generation (RFC §21.3,
+    // RMK-1764).
+    tokio::time::timeout(std::time::Duration::from_secs(1), turn_a)
+        .await
+        .expect("the stopped turn ended while its model held it")
+        .unwrap();
     model.release();
-    turn_a.await.unwrap();
     turn_b.await.unwrap();
 
     let in_b = room

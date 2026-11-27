@@ -44,18 +44,22 @@ fn extend_unique<T>(held: &mut Vec<Arc<T>>, others: &[Arc<T>]) {
 
 /// A latched notification: waiters arriving after the signal see it too.
 #[derive(Debug, Default)]
-struct Signal {
+pub(crate) struct Signal {
     set: AtomicBool,
     changed: Notify,
 }
 
 impl Signal {
-    fn set(&self) {
+    pub(crate) fn set(&self) {
         self.set.store(true, Ordering::Release);
         self.changed.notify_waiters();
     }
 
-    async fn wait(&self) {
+    pub(crate) fn is_set(&self) -> bool {
+        self.set.load(Ordering::Acquire)
+    }
+
+    pub(crate) async fn wait(&self) {
         let changed = self.changed.notified();
         tokio::pin!(changed);
         changed.as_mut().enable();

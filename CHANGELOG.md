@@ -212,6 +212,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A steering `Cancel` aborts a generation whose provider has not handed its
+  next event yet (RFC §21.3, RMK-1764), where the turn waited for that
+  event: a Stop pressed while a model was still reasoning before its first
+  word, or while a provider was slow, held `process_inbound` until the
+  provider spoke. The read is cut at once, a retry's backoff and the
+  router's choice of another provider included, and the turn ends
+  `cancelled`, nothing more of its answer stored, as in Python.
+
 - A message `WebhookMeta::to_inbound` builds keeps the provider's id as
   its `provider_message_id` and the webhook's payload, unmodified, as its
   `raw_payload`, as in Python (RFC §5.2, §8.1, RMK-2190): `process_webhook`
