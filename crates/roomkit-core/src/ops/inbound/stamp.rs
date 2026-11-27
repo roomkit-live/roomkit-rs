@@ -157,7 +157,8 @@ fn fill_from_message(event: &mut RoomEvent, message: &InboundMessage) {
 /// (RFC §10.5), with the id the pipeline gives it and the fields it owns:
 /// its source is the registered `channel`, `INBOUND` for a transport and
 /// `OUTBOUND` for an intelligence channel, whose event is its own words
-/// travelling out (gap G-069). An instruction is stamped as a message's is
+/// travelling out (gap G-069), naming the provider the call names, none
+/// when it names none. An instruction is stamped as a message's is
 /// (RFC §10.1.1 rules 3 and 4).
 pub(crate) fn stamp_direct(
     direct: DirectEvent,
@@ -175,7 +176,9 @@ pub(crate) fn stamp_direct(
         direction,
         ..EventSource::new(direct.channel_id, channel.channel_type.clone())
     };
-    source.provider = direct.provider.or_else(|| channel.provider_name.clone());
+    // The call's provider alone, as Python's `send_event` names it (RFC
+    // §5.2): an injected event is no provider's receipt.
+    source.provider = direct.provider;
     source.participant_id = direct.participant_id;
     let created_at = direct.created_at.unwrap_or(now);
     let mut event = RoomEvent::at(
@@ -560,6 +563,30 @@ mod tests {
     #[test]
     fn the_default_inbound_event_names_the_channel_s_provider() {
         assert_eq!(trigger().source.provider.as_deref(), Some("TwilioSMS"));
+    }
+
+    /// RFC §5.2, §10.5 (RK-10.5-015): an injected event names the provider
+    /// its call names, none when the call names none, whatever its
+    /// channel's provider, as Python's `send_event` does.
+    #[test]
+    fn a_direct_event_names_the_provider_its_call_names_alone() {
+        let stamped = |provider: Option<&str>| {
+            let direct = DirectEvent {
+                provider: provider.map(str::to_owned),
+                ..DirectEvent::new(
+                    ChannelId::new("sms").unwrap(),
+                    TextContent::new("A reminder"),
+                )
+            };
+            let room = RoomId::new("room_1").unwrap();
+            stamp_direct(direct, &sms(), room, fresh(), Timestamp::UNIX_EPOCH)
+                .source
+                .provider
+        };
+        assert_eq!(
+            (stamped(None), stamped(Some("other"))),
+            (None, Some("other".to_owned()))
+        );
     }
 
     #[test]

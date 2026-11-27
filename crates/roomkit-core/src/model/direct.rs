@@ -29,7 +29,7 @@ pub struct DirectEvent {
     /// G-041).
     pub visibility: Visibility,
     /// The provider or backend behind it, written on its source (RFC §5.2);
-    /// `None`, the channel's own.
+    /// `None` names none, whatever the channel's provider.
     pub provider: Option<String>,
     /// When it was created; `None`, the instant it is injected at.
     pub created_at: Option<Timestamp>,

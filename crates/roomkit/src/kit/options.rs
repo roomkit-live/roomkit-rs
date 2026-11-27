@@ -527,7 +527,7 @@ pub struct SendEventOptions {
     /// (gap G-041).
     pub visibility: Visibility,
     /// The provider or backend behind it, written on its source (RFC §5.2);
-    /// `None`, the channel's own.
+    /// `None` names none, whatever the channel's provider.
     pub provider: Option<String>,
     /// Where its answers may go (RFC §5.12, gap G-073); `None` restricts
     /// nothing. Never `internal` (gap G-041).

@@ -220,6 +220,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   router's choice of another provider included, and the turn ends
   `cancelled`, nothing more of its answer stored, as in Python.
 
+- An event `send_event` injects names the provider its call names, none when
+  it names none (RFC §5.2, §10.5), where it took its channel's
+  `provider_name`: an agent's injected reminder carried its model's
+  provider, an SMS channel's its vendor's, as no event Python injects does.
+  `SendEventOptions::provider` and `DirectEvent::provider` say so.
+
 - A message `WebhookMeta::to_inbound` builds keeps the provider's id as
   its `provider_message_id` and the webhook's payload, unmodified, as its
   `raw_payload`, as in Python (RFC §5.2, §8.1, RMK-2190): `process_webhook`
