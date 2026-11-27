@@ -54,6 +54,10 @@ fn each_form_keeps_its_public_metadata_type() {
             ])),
         ),
         (
+            "allowed_tools:\n  - ?admin\n",
+            Some(SkillToolNames::List(vec!["?admin".into()])),
+        ),
+        (
             "allowed_tools: [yEs, 08, 1e5, 0:30, 10-20, 2026-1-5]\n",
             Some(SkillToolNames::List(
                 ["yEs", "08", "1e5", "0:30", "10-20", "2026-1-5"]
@@ -254,6 +258,7 @@ fn a_gate_that_cannot_be_read_whole_refuses_the_skill() {
         "\n  - issue_refund:",
         "[issue_refund:, search_*]",
         "[search_*, 0b_]",
+        "[search_*, ?admin]",
     ] {
         let root = TempDir::new();
         let path = root.skill_with(

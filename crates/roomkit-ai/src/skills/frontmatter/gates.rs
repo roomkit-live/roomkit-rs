@@ -26,7 +26,7 @@ impl Gates {
             ))
         } else if value.starts_with('[') {
             Some(SkillToolNames::List(
-                flow_list_with(plain, gate_item).ok_or_else(|| unread(key))?,
+                flow_list_with(plain, flow_gate_item).ok_or_else(|| unread(key))?,
             ))
         } else if not_a_plain_text(value) || value.starts_with(['|', '>', '&', '!']) {
             return Err(unread(key));
@@ -93,6 +93,17 @@ fn gate_item(text: &str) -> Item {
         }
     }
     list_item(text)
+}
+
+/// An entry of a `[a, b]` list, read as [`gate_item`] reads an item. One
+/// starting with `?` is refused: YAML reads it there as an explicit key
+/// (`[lookup, ?admin]` holds a mapping), where a block item `- ?admin` is
+/// the text it is.
+fn flow_gate_item(text: &str) -> Item {
+    if text.starts_with('?') {
+        return Item::Unread;
+    }
+    gate_item(text)
 }
 
 /// Whether YAML reads a key in `plain`, an unquoted text: a colon before a

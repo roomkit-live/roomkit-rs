@@ -116,6 +116,7 @@ fn repeated_requirements_cannot_erase_dependencies_and_unreadable_ones_are_refus
         "tool_a: first",
         "\n  - tool_a: first",
         "[tool_a:, tool_b]",
+        "[tool_a, ?tool_b]",
     ] {
         let path = tree.skill_with(
             "skills",

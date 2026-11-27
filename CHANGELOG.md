@@ -301,7 +301,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   space or a tab, or ending with one, was gated as one name: an item
   `- issue_refund: money` gated a tool named `issue_refund: money`, and left
   the tool named `issue_refund` open to the model before any activation.
-  Migration: quote a tool name that holds a colon,
+  An unquoted entry of a `[a, b]` list starting with `?`, which YAML reads
+  as an explicit key (`[lookup, ?admin]`), is refused alike, where it was
+  gated as `?admin`. Migration: quote a tool name that holds a colon,
   `allowed_tools: ["issue_refund: money"]`, or put the note in a comment,
   `- issue_refund  # money`.
 
