@@ -40,3 +40,25 @@ is above 10 % of a core. Quantiles are nearest rank over the passes' samples.
 ## Results
 
 Compare runs from one machine only.
+
+### 2026-11-27, i7-13700KF, rustc 1.99.1
+
+**`close`** (commit 9726bf2f), one performance core (`taskset -c 2`),
+Linux 7.0, three passes; other load on the core under 10 % of it in every
+pass kept, the second pass run twice more and the third once more for other
+load: pass.
+
+| Case | n | p50 (s) | p99 (s) | max (s) | Bound (s) |
+|---|---:|---:|---:|---:|---:|
+| hook-honours | 60 | 0.051 | 0.053 | 0.053 | 3.05 |
+| hook-ignores | 12 | 0.051 | 0.052 | 0.052 | 3.05 |
+| tool-honours | 60 | 0.000 | 0.000 | 0.000 | 8.05 |
+| tool-ignores | 6 | 8.056 | 8.056 | 8.056 | 8.05 |
+
+A tool that ignores its cut holds the close for every wait in full (the
+grace, an unwind, the turn backend's unwind, the agent's 5 s close and the
+last unwind) and 6 ms of the close's own work, within the 50 ms it is
+allowed. A hook that blocks its thread is not waited for: the close returns
+with the grace. The Python implementation, on the same cases, gives such a
+hook its two unwinds, and waits one unwind less for such a tool (7.060 s).
+Aligning the two is carded (RMK-2162).
