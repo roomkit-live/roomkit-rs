@@ -285,6 +285,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Python (RFC §6.4, §12.2.3, RMK-2026): the model reads each of their turns
   under its name, where they counted as one speaker and read unlabelled
   unless a participant record named them.
+- A local skill's unquoted `allowed_tools` or `requires` name that YAML
+  keeps as a text gates that name, and one YAML types refuses the skill, as
+  in Python (RFC §24.1, RMK-2194): the reader refused any spelling close to
+  a number, a date or a boolean, so `yEs`, `08`, `1e5`, `0:30`, `10-20` and
+  `2026-1-5` refused the skill, and it gated `0b_`, which YAML reads as a
+  number. A tag on a name still refuses the skill.
 
 ### Security
 

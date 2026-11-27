@@ -134,6 +134,16 @@ pub(in crate::skills) fn python_text(plain: &str) -> PythonText {
     text.map_or(PythonText::NotYaml, PythonText::Text)
 }
 
+/// Whether `SafeLoader` reads `plain`, a plain scalar whole, as other than
+/// a text or no value: a boolean, a number or a date (YAML 1.1), as
+/// Python's line reader asks its resolver.
+pub(in crate::skills) fn typed_by_yaml(plain: &str) -> bool {
+    matches!(
+        implicit(plain).as_str(),
+        "bool" | "int" | "float" | "timestamp"
+    )
+}
+
 fn implicit(text: &str) -> String {
     match text {
         "" | "~" | "null" | "Null" | "NULL" => "null",

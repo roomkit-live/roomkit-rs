@@ -3,7 +3,7 @@
 mod normalize;
 mod scalar;
 
-pub(in crate::skills) use scalar::{PythonText, python_text};
+pub(in crate::skills) use scalar::{PythonText, python_text, typed_by_yaml};
 
 use super::SkillEntry;
 use crate::SkillError;

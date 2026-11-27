@@ -4,6 +4,7 @@ use super::scalars::{
     Item, NULLS, flow_list_with, list_item, not_a_plain_text, quoted_whole, without_comment,
 };
 use crate::skills::SkillToolNames;
+use crate::skills::served::typed_by_yaml;
 
 #[derive(Debug)]
 pub(super) struct Gates {
@@ -80,18 +81,14 @@ impl Gates {
 }
 
 /// Never mistake a YAML scalar's spelling for the name it gates. Quoted
-/// values stay text; ambiguous unquoted numbers, dates and booleans are
-/// refused instead of approximating YAML's scalar conversion, and so is a
-/// text YAML reads as a key (RFC §24.1).
+/// values stay text; an unquoted one YAML types (a boolean, a number, a
+/// date) is refused, as Python's readers refuse it, and so is a text YAML
+/// reads as a key (RFC §24.1). A plain text YAML keeps as written (`yEs`,
+/// `08`, `1e5`, `0:30`) gates that name.
 fn gate_item(text: &str) -> Item {
     if !text.starts_with(['"', '\'']) {
         let plain = without_comment(text).trim();
-        let lower = plain.to_ascii_lowercase();
-        let scalar = matches!(
-            lower.as_str(),
-            "yes" | "no" | "true" | "false" | "on" | "off"
-        );
-        if scalar || numeric_scalar(plain) || holds_a_key(plain) {
+        if typed_by_yaml(plain) || holds_a_key(plain) {
             return Item::Unread;
         }
     }
@@ -103,31 +100,6 @@ fn gate_item(text: &str) -> Item {
 /// gate a name no tool has and leave `issue_refund` open.
 fn holds_a_key(plain: &str) -> bool {
     plain.ends_with(':') || plain.contains(": ") || plain.contains(":\t")
-}
-
-/// Conservative around YAML's numeric/date forms, without treating tool
-/// names such as `3d_render` or `123abc*` as numbers.
-fn numeric_scalar(text: &str) -> bool {
-    let text = text.trim_start_matches(['+', '-']).replace('_', "");
-    if matches!(text.to_ascii_lowercase().as_str(), ".inf" | ".nan") {
-        return true;
-    }
-    if !text.starts_with(|c: char| c.is_ascii_digit() || c == '.') {
-        return false;
-    }
-    if text.parse::<f64>().is_ok() {
-        return true;
-    }
-    for (prefix, radix) in [("0x", 16), ("0b", 2)] {
-        if let Some(digits) = text.strip_prefix(prefix) {
-            return !digits.is_empty() && digits.chars().all(|c| c.is_digit(radix));
-        }
-    }
-    // Sexagesimal numbers and ISO dates/timestamps use only this alphabet.
-    text.contains([':', '-'])
-        && text
-            .chars()
-            .all(|c| c.is_ascii_digit() || ":-.+ tTzZ".contains(c))
 }
 
 fn unread(key: &str) -> String {

@@ -53,6 +53,14 @@ fn each_form_keeps_its_public_metadata_type() {
                 "void: *".into(),
             ])),
         ),
+        (
+            "allowed_tools: [yEs, 08, 1e5, 0:30, 10-20, 2026-1-5]\n",
+            Some(SkillToolNames::List(
+                ["yEs", "08", "1e5", "0:30", "10-20", "2026-1-5"]
+                    .map(String::from)
+                    .to_vec(),
+            )),
+        ),
     ];
     for (frontmatter, expected) in cases {
         let root = TempDir::new();
@@ -245,6 +253,7 @@ fn a_gate_that_cannot_be_read_whole_refuses_the_skill() {
         "issue_refund:",
         "\n  - issue_refund:",
         "[issue_refund:, search_*]",
+        "[search_*, 0b_]",
     ] {
         let root = TempDir::new();
         let path = root.skill_with(
