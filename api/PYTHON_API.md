@@ -487,6 +487,13 @@ writes and TLS flushing; reads have 300 seconds between progress. These are
 separate from the caller's opening/call bounds: a POST response may take more
 than five seconds. Legacy SSE uses owned Hyper/rustls I/O for those deadlines
 (approved in HITL 057d2d9a); Streamable HTTP retains its existing client.
+As on Python's SDK 2.3 (RMK-2203), the GET's `Content-Type` is read as a media
+type, an SSE event is bounded at 1 MiB, past which the connection ends, and a
+request given up once it went out has the writer post `notifications/cancelled`
+(reason `caller cancelled`) before what it has queued, unless the writer stays
+busy past five seconds. Python's `DeprecationWarning` for this transport is a
+`tracing::warn!` (target `roomkit::mcp`) with the same text, at each
+construction on `sse` (HITL 5fd1217f).
 
 
 `FromCommandOptions.discover` and `FromUrlOptions.discover` default to true;

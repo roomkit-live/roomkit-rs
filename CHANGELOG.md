@@ -171,6 +171,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and any `_meta` as given; the first `tools/list` page of a connection's
   listing goes with no `params` member either, where it carried rmcp's
   progress token.
+- The legacy HTTP+SSE MCP transport (`transport: "sse"`) behaves as Python's
+  on the MCP Python SDK 2.3 (RMK-2203): building a provider on it warns that
+  MCP 2026-07-28 deprecates it (`tracing::warn!`, Python's
+  `DeprecationWarning`); an event of its SSE stream is bounded at 1 MiB, past
+  which the connection ends, where it was 4 MiB; its `Content-Type` is read as
+  a media type (`Text/Event-Stream` accepted, `prefix-text/event-stream-suffix`
+  refused); and a request given up past its deadline or dropped tells the
+  server with `notifications/cancelled`. A call given a zero timeout sends
+  nothing, on every transport.
 
 ### Removed
 

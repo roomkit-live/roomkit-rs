@@ -12,6 +12,8 @@
 //!   SSE keeps a GET reader and sends messages to its announced POST address.
 //!   Its TCP/TLS connects and complete writes each have five seconds; reads
 //!   have 300 seconds between progress, separately from opening/call bounds.
+//!   Deprecated by the MCP 2026-07-28 revision, it warns at construction and
+//!   reads an SSE event of 1 MiB at most.
 //!   [`new`](McpToolProvider::new) accepts either transport or stdio.
 //! - A channel serves its tools through
 //!   [`get_tools`](McpToolProvider::get_tools) and
