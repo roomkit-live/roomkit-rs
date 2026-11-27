@@ -67,20 +67,25 @@ impl McpToolProvider {
     }
 
     /// Send a host request, preserving result fields even when they resemble a
-    /// typed SDK result. `None` sends an explicit empty parameters object.
+    /// typed SDK result. `params` go out as written, but for a `_meta` that
+    /// is `null` or empty, which goes as none; no parameters, or an empty
+    /// set, go out as no `params` member (RFC §21.2, RK-21.2-046).
     ///
     /// # Errors
-    /// Returns `NotConnected`, a server/transport `Call` error, or
-    /// `CallTimeout` when the configured deadline expires. A malformed result
-    /// metadata field returns `Validation`, as Python's generic result model.
+    /// Returns `NotConnected`; `Validation`, with nothing sent, when the
+    /// `_meta` of `params` is neither an object nor `null`; a
+    /// server/transport `Call` error, or `CallTimeout` when the configured
+    /// deadline expires. A malformed result metadata field returns
+    /// `Validation`, as Python's generic result model.
     pub async fn request(
         &self,
         method: &str,
         params: Option<&Metadata>,
         options: RequestOptions,
     ) -> Result<Metadata, McpError> {
+        self.connected_server()?;
         let mut result = self
-            .host_request(method, params.cloned().unwrap_or_default(), options.timeout)
+            .host_request(method, host_params(params)?, options.timeout)
             .await?;
         validate_metadata(&result)?;
         // Python's generic Result.model_dump(exclude_none=True) removes null
@@ -104,20 +109,22 @@ impl McpToolProvider {
             .into_iter()
             .collect();
         let result = self
-            .host_request("resources/read", params, options.timeout)
+            .host_request("resources/read", Some(params), options.timeout)
             .await?;
         crate::resources::result(result)
     }
 
+    /// Send `method` with `params` written as given: `None` writes no
+    /// `params` member.
     async fn host_request(
         &self,
         method: &str,
-        params: Metadata,
+        params: Option<Metadata>,
         timeout: Duration,
     ) -> Result<Metadata, McpError> {
         let server = self.connected_server()?;
         let ticket = server.host_capture().ticket();
-        let mut request = CustomRequest::new(method, Some(Value::Object(params.clone())));
+        let mut request = CustomRequest::new(method, params.clone().map(Value::Object));
         request.extensions.insert(ticket.marker(params));
         let response = server.host_request(ClientRequest::CustomRequest(request));
         tokio::time::timeout(timeout, response)
@@ -140,6 +147,35 @@ impl McpToolProvider {
                 message: "expected an MCP result object".into(),
             })
     }
+}
+
+/// A host request's parameters as they go out (RFC §21.2, RK-21.2-046): as
+/// the caller wrote them, but for a `_meta` that is `null` or empty, which
+/// goes as none; `None` when nothing is left, so that the request carries no
+/// `params` member, as Python's SDK sends it.
+///
+/// # Errors
+/// Returns `Validation` when `_meta` is neither an object nor `null`, as
+/// Python's request model refuses it.
+fn host_params(params: Option<&Metadata>) -> Result<Option<Metadata>, McpError> {
+    let Some(params) = params else {
+        return Ok(None);
+    };
+    let mut sent = params.clone();
+    let empty = match sent.get("_meta") {
+        None => false,
+        Some(Value::Null) => true,
+        Some(Value::Object(meta)) => meta.is_empty(),
+        Some(_) => {
+            return Err(McpError::Validation {
+                reason: "expected request metadata to be an object or null",
+            });
+        }
+    };
+    if empty {
+        sent.shift_remove("_meta");
+    }
+    Ok((!sent.is_empty()).then_some(sent))
 }
 
 fn validate_metadata(result: &Metadata) -> Result<(), McpError> {

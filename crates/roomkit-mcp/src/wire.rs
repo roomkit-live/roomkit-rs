@@ -1,10 +1,12 @@
 //! Write only explicitly marked host parameters verbatim. Ordinary MCP
-//! requests retain SDK serialization and its progress metadata.
+//! requests retain SDK serialization and its progress metadata, but for a
+//! request without parameters of its own, which goes with no `params`
+//! member (RFC §21.2, RK-21.2-046).
 #[cfg(feature = "http")]
 use rmcp::model::ClientJsonRpcMessage;
 use rmcp::model::{ClientRequest, Extensions, GetExtensions, GetMeta, RequestMetaObject};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::raw::Slot;
 
@@ -17,10 +19,35 @@ pub(crate) fn message(message: &ClientJsonRpcMessage) -> Result<Value, serde_jso
     Ok(value)
 }
 
+/// A request's `params` as RoomKit sends them: a host request's as its
+/// slot holds them, an SDK request's as the SDK wrote them, and none at all
+/// for a request without parameters, as Python's SDK sends it (RFC §21.2,
+/// RK-21.2-046).
 fn restore(request: &ClientRequest, value: &mut Value) {
+    let Some(message) = value.as_object_mut() else {
+        return;
+    };
     if let Some(slot) = request.extensions().get::<Slot>() {
-        value["params"] = Value::Object(slot.params().clone());
+        if let Some(params) = slot.params() {
+            message.insert("params".into(), Value::Object(params.clone()));
+        } else {
+            message.shift_remove("params");
+        }
+    } else if only_the_progress_token(request, message.get("params")) {
+        message.shift_remove("params");
     }
+}
+
+/// Whether an SDK request's `params` hold nothing but the progress token
+/// rmcp writes on every request (the first `tools/list` page's, say):
+/// RoomKit asks no progress of a request, and Python's SDK writes a token
+/// only for a caller that does.
+fn only_the_progress_token(request: &ClientRequest, params: Option<&Value>) -> bool {
+    let Some(token) = request.get_meta().get_progress_token() else {
+        return false;
+    };
+    serde_json::to_value(token)
+        .is_ok_and(|token| params == Some(&json!({"_meta": {"progressToken": token}})))
 }
 
 /// Only the bounded stdio transport's outbound request type changes. Its

@@ -34,6 +34,10 @@ pub(super) fn serve(modern: bool) {
 #[derive(Default)]
 struct State {
     listings: usize,
+    /// The `params` member of each `tools/list` received, as [`received`]
+    /// gives it.
+    listing_params: Vec<Value>,
+    echoes: usize,
     held: Vec<Value>,
     reads: usize,
     modern: bool,
@@ -47,16 +51,21 @@ impl State {
             "initialize" => handshake(self.modern),
             "tools/list" => {
                 self.listings += 1;
+                self.listing_params.push(received(message));
                 catalogue()
             }
-            "host/state" => {
-                json!({"listings":self.listings,"held":self.held.len(),"reads":self.reads})
-            }
+            "host/state" => json!({
+                "listings":self.listings,"listing_params":self.listing_params,
+                "echoes":self.echoes,"held":self.held.len(),"reads":self.reads,
+            }),
             "host/hold" => {
                 self.held.push(id.clone());
                 return None;
             }
-            "host/echo" => json!({"params":params}),
+            "host/echo" => {
+                self.echoes += 1;
+                received(message)
+            }
             "host/ping" => {
                 if !write(&json!({"jsonrpc":"2.0","id":id,"method":"ping"})) {
                     return None;
@@ -89,6 +98,15 @@ impl State {
         }
         json!({"released":true})
     }
+}
+
+/// The `params` member of `message` as it came: `{"params": ...}`, or
+/// `{"no_params": true}` for a request without one.
+fn received(message: &Value) -> Value {
+    message.get("params").map_or_else(
+        || json!({"no_params":true}),
+        |params| json!({"params":params}),
+    )
 }
 
 fn handshake(modern: bool) -> Value {

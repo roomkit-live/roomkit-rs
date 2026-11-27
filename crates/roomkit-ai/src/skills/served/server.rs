@@ -27,7 +27,8 @@ pub trait McpSkillServer: Send + Sync {
     fn server_extensions(&self) -> Result<BTreeMap<String, Metadata>, McpSkillServerError>;
 
     /// Send an unmodelled request and return its JSON object. `None` is Python's
-    /// default for `params`; an MCP provider sends an explicit empty object.
+    /// default for `params`; an MCP provider sends it, and an empty set, as no
+    /// `params` member (RFC §21.2, RK-21.2-046).
     ///
     /// # Errors
     /// Propagates the server's original error without changing its concrete type.

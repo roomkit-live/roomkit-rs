@@ -35,12 +35,14 @@ const NO_CALL_RESULT: &str = "roomkit/noCallResult";
 #[derive(Clone)]
 pub(crate) struct Slot {
     response: Weak<Mutex<Option<Value>>>,
-    params: Metadata,
+    params: Option<Metadata>,
 }
 
 impl Slot {
-    pub(crate) fn params(&self) -> &Metadata {
-        &self.params
+    /// The parameters the request is written with; `None` writes no
+    /// `params` member.
+    pub(crate) fn params(&self) -> Option<&Metadata> {
+        self.params.as_ref()
     }
 }
 
@@ -180,7 +182,7 @@ fn refuse_an_empty_call_result(message: &mut Value) {
 }
 
 impl Ticket {
-    pub(crate) fn marker(&self, params: Metadata) -> Slot {
+    pub(crate) fn marker(&self, params: Option<Metadata>) -> Slot {
         Slot {
             response: Arc::downgrade(&self.value),
             params,
@@ -207,7 +209,7 @@ mod tests {
 
     fn message(ticket: &Ticket, id: u32) -> ClientJsonRpcMessage {
         let mut request = CustomRequest::new("host/read", Some(json!({})));
-        request.extensions.insert(ticket.marker(Metadata::new()));
+        request.extensions.insert(ticket.marker(None));
         ClientJsonRpcMessage::request(
             ClientRequest::CustomRequest(request),
             RequestId::Number(i64::from(id)),

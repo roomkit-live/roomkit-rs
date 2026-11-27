@@ -495,8 +495,10 @@ still call tools directly. `tool_meta` reads the admitted listing once,
 while `server_info` and `server_extensions` read the handshake snapshots.
 Every accessor refuses outside a live connection.
 
-`request` sends caller parameters unchanged, including `_meta`; `None`
-sends an explicit empty object. Raw request results preserve extension fields,
+`request` sends caller parameters unchanged, including a non-empty `_meta`;
+`None`, an empty set or a `null` or empty `_meta` go out as no `params` member,
+and a `_meta` that is neither an object nor `null` returns `McpError::Validation`
+before anything is sent (RK-21.2-046). Raw request results preserve extension fields,
 omitting null model fields as Python does; its known `_meta` field remains
 validated. Handshake extras remain intact even where a newer Rust SDK gives
 them a more restrictive type. Resource results retain explicitly

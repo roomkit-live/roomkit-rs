@@ -189,22 +189,106 @@ async fn a_server_ping_with_the_same_id_cannot_consume_the_host_response() {
     provider.close().await;
 }
 
+fn object(value: &Value) -> Metadata {
+    value.as_object().unwrap().clone()
+}
+
+/// RFC §21.2, RK-21.2-046: no parameters, an empty set, or one whose only
+/// member is a `_meta` that is `null` or empty, go out as no `params`
+/// member, as Python's SDK sends them.
 #[tokio::test]
-async fn host_metadata_reaches_stdio_without_sdk_overwrites() {
+async fn a_host_request_without_parameters_goes_with_no_params_member() {
     let provider = fake("host").discover(false).connect().await.unwrap();
-    for meta in [
-        Value::Null,
-        json!("opaque"),
-        json!({}),
-        json!({"progressToken":"host","io.modelcontextprotocol/protocolVersion":"caller","custom":null}),
+    for params in [
+        None,
+        Some(json!({})),
+        Some(json!({"_meta":null})),
+        Some(json!({"_meta":{}})),
     ] {
-        let params = json!({"_meta":meta}).as_object().unwrap().clone();
-        let result = provider
-            .request("host/echo", Some(&params), RequestOptions::default())
+        let params = params.as_ref().map(object);
+        let echoed = provider
+            .request("host/echo", params.as_ref(), RequestOptions::default())
             .await
             .unwrap();
-        assert_eq!(result.get("params"), Some(&Value::Object(params)));
+        assert_eq!(
+            Value::Object(echoed),
+            json!({"no_params":true}),
+            "{params:?}"
+        );
     }
+    provider.close().await;
+}
+
+/// RFC §21.2, RK-21.2-046: host parameters reach stdio as written, a
+/// non-empty `_meta` and the nulls inside it included, without the SDK's
+/// progress token; only a `null` or empty `_meta` is left out.
+#[tokio::test]
+async fn host_parameters_reach_stdio_as_written_but_for_an_empty_meta() {
+    let meta = json!({"progressToken":"host","io.modelcontextprotocol/protocolVersion":"caller","custom":null});
+    let provider = fake("host").discover(false).connect().await.unwrap();
+    for (params, sent) in [
+        (json!({"nested":{"value":3}}), json!({"nested":{"value":3}})),
+        (json!({"_meta":meta}), json!({"_meta":meta})),
+        (
+            json!({"_meta":null,"nested":{"value":null}}),
+            json!({"nested":{"value":null}}),
+        ),
+        (json!({"nested":null,"_meta":{}}), json!({"nested":null})),
+    ] {
+        let echoed = provider
+            .request(
+                "host/echo",
+                Some(&object(&params)),
+                RequestOptions::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(Value::Object(echoed), json!({"params":sent}));
+    }
+    provider.close().await;
+}
+
+/// RFC §21.2, RK-21.2-046: a `_meta` that is neither an object nor `null`
+/// is refused before anything is sent, as Python's request model refuses
+/// it; outside a connection the refusal is `NotConnected`, as in Python.
+#[tokio::test]
+async fn a_host_request_whose_meta_is_not_an_object_is_refused_before_it_is_sent() {
+    let provider = fake("host").discover(false).provider();
+    let opaque = object(&json!({"_meta":"opaque"}));
+    assert!(matches!(
+        provider
+            .request("host/echo", Some(&opaque), RequestOptions::default())
+            .await,
+        Err(McpError::NotConnected)
+    ));
+    provider.connect().await.unwrap();
+    for meta in [json!("opaque"), json!([]), json!(false), json!(0)] {
+        let params = object(&json!({"_meta":meta}));
+        let error = provider
+            .request("host/echo", Some(&params), RequestOptions::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(error, McpError::Validation { .. }), "{meta}");
+    }
+    let state = provider
+        .request("host/state", None, RequestOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(state["echoes"], 0);
+    provider.close().await;
+}
+
+/// RFC §21.2, RK-21.2-046: the first `tools/list` page of the listing made
+/// at connection goes with no `params` member, without the progress token
+/// rmcp writes on every request.
+#[tokio::test]
+async fn the_first_listing_page_goes_with_no_params_member() {
+    let provider = fake("host").connect().await.unwrap();
+    let state = provider
+        .request("host/state", None, RequestOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(state["listing_params"], json!([{"no_params":true}]));
     provider.close().await;
 }
 

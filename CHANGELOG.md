@@ -164,6 +164,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the wire is unchanged, the handshake still `initialize` at 2025-11-25.
   rmcp no longer brings chrono, so `cargo deny` no longer ignores its
   unmaintained advisory (RUSTSEC-2026-0543, RMK-1751).
+- `McpToolProvider::request()` sends no `params` member for no parameters
+  or an empty set, nor for a `null` or empty `_meta`, and refuses a `_meta`
+  that is not an object with `McpError::Validation`, nothing sent, as in
+  Python (RFC §21.2, RK-21.2-046, RMK-2202), where it sent `"params": {}`
+  and any `_meta` as given; the first `tools/list` page of a connection's
+  listing goes with no `params` member either, where it carried rmcp's
+  progress token.
 
 ### Removed
 

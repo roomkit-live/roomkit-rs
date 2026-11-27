@@ -4,7 +4,7 @@ use pretty_assertions::assert_eq;
 use roomkit::model::Metadata;
 use roomkit_ai::{McpSkillServer, McpSkillServerError};
 use roomkit_mcp::McpError;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::support::fake;
 
@@ -35,8 +35,8 @@ async fn the_protocol_preserves_snapshots_parameters_and_complete_resource_resul
         0
     );
     assert_eq!(
-        server.request("host/echo", None).await.unwrap()["params"],
-        json!({})
+        Value::Object(server.request("host/echo", None).await.unwrap()),
+        json!({"no_params":true})
     );
     let params: Metadata = json!({"_meta":{"keep":7},"nested":{"value":null}})
         .as_object()

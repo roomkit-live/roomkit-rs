@@ -142,12 +142,10 @@ impl State {
         let mut observed = json!({"method":method});
         if let Some(params) = message.get("params") {
             observed["params"] = params.clone();
-        } else if method == "tools/list" && self.discovery {
-            observed["params"] = json!({});
         }
         if ((method == "tools/list" && self.discovery)
             || (method == "tools/call" && self.tool_call))
-            && let Some(params) = observed["params"].as_object_mut()
+            && let Some(params) = observed.get_mut("params").and_then(Value::as_object_mut)
             && let Some(meta) = params.get_mut("_meta").and_then(Value::as_object_mut)
             && meta.get("progressToken").is_some_and(Value::is_u64)
         {
@@ -169,7 +167,12 @@ impl State {
             );
         };
         self.position += 1;
-        let expected = json!({"method":reply["method"],"params":reply.get("params").cloned().unwrap_or_else(||json!({}))});
+        // A script without params is a request without them: an empty set
+        // goes out as no params member (RK-21.2-046).
+        let mut expected = json!({"method":reply["method"]});
+        if let Some(params) = reply.get("params") {
+            expected["params"] = params.clone();
+        }
         if observed != expected {
             self.problems
                 .push(format!("MCP request {observed} differs from {expected}"));
@@ -334,6 +337,32 @@ mod tests {
                 }
                 let _reply = state.reply(&request);
                 assert!(!state.problems.is_empty(), "{request}");
+            }
+        }
+    }
+
+    // roomkit-specs conformance/README.md, `mcp_session`: omitted script
+    // params mean a request sent with no params member (RK-21.2-046).
+    #[test]
+    fn a_script_without_params_matches_only_a_request_without_them() {
+        for method in ["vendor/read", "tools/list"] {
+            for discovery in [false, true] {
+                for params in [None, Some(json!({})), Some(Value::Null)] {
+                    let mut state = state(method);
+                    state.spec = json!({"replies":[{"method":method,"result":{}}]});
+                    state.discovery = discovery;
+                    let mut request = json!({"jsonrpc":"2.0","id":1,"method":method});
+                    if let Some(params) = &params {
+                        request["params"] = params.clone();
+                    }
+                    let _reply = state.reply(&request);
+                    assert_eq!(state.problems.is_empty(), params.is_none(), "{request}");
+                    let mut observed = json!({"method":method});
+                    if let Some(params) = params {
+                        observed["params"] = params;
+                    }
+                    assert_eq!(state.requests, [observed]);
+                }
             }
         }
     }
