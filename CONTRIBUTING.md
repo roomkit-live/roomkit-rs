@@ -86,7 +86,6 @@ runs are skipped with their reason. Without the variable nothing is written.
 
 ```sh
 ROOMKIT_CONFORMANCE_JUNIT=target/conformance cargo test -p roomkit --test conformance
-ROOMKIT_CONFORMANCE_JUNIT=target/conformance cargo test -p roomkit-sqlite --test conformance
 ```
 
 The scenarios with `setup.executors` run on a distributed turn backend, its

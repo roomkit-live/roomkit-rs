@@ -58,7 +58,6 @@ roomkit_ai = ["roomkit.providers.ai", "roomkit", "roomkit.tools", "roomkit.skill
 "roomkit_ai::classifiers" = ["roomkit.classifiers", "roomkit"]
 roomkit_mcp = ["roomkit.tools"]
 roomkit_acp = ["roomkit"]
-roomkit_sqlite = ["roomkit", "roomkit.store"]
 "roomkit::realtime" = ["roomkit.realtime"]
 "roomkit::providers::sms" = ["roomkit.providers.sms"]
 "roomkit::delivery" = ["roomkit.delivery", "roomkit"]

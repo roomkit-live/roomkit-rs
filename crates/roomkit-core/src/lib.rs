@@ -21,7 +21,7 @@
 //! # Not a service's API
 //!
 //! A service depends on `roomkit`, the runtime, and on the crates beside
-//! it (`roomkit-ai`, `roomkit-sqlite`, `roomkit-mcp`),
+//! it (`roomkit-ai`, `roomkit-mcp`),
 //! never on this crate: `roomkit` re-exports the [`model`] whole and, of the
 //! rules and operations, what a service names. The rest of this crate, the
 //! effect protocol ([`ops::Operation`], [`ops::Effect`], ...) and the rules

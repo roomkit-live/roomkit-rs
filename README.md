@@ -117,12 +117,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | [`roomkit-ai`](crates/roomkit-ai) | Provider-independent AI channel, tool loop, skills and policies |
 | [`roomkit-mcp`](crates/roomkit-mcp) | MCP client and tools; enable `http` for remote servers |
 | [`roomkit-acp`](crates/roomkit-acp) | Agent Client Protocol adapter |
-| [`roomkit-sqlite`](crates/roomkit-sqlite) | SQLite conversation store |
 | [`roomkit-core`](crates/roomkit-core) | Models, rules and operations without I/O |
 
 Applications normally depend on `roomkit` and the adapters they use. The
-stores, locks and providers of a vendor or a service (Postgres, Redis,
-OpenTelemetry, the model providers) are in
+stores, locks and providers of a vendor or a service (SQLite, Postgres,
+Redis, OpenTelemetry, the model providers) are in
 [roomkit-providers](https://github.com/roomkit-live/roomkit-providers).
 `roomkit-core` and the effect protocol are implementation interfaces; see
 [ARCHITECTURE.md](ARCHITECTURE.md) for the boundaries.

@@ -7,7 +7,7 @@ MSRV := $(shell sed -n 's/^rust-version = "\(.*\)"$$/\1/p' Cargo.toml).0
 # The examples: every file of examples/, each declared in examples/Cargo.toml.
 EXAMPLES := $(sort $(basename $(notdir $(wildcard examples/*.rs))))
 
-.PHONY: all fmt fmt-check clippy test test-core doc deny check-core-deps examples msrv msrv-toolchain hooks conformance-sync conformance-check sqlite-fixture turns-fixture api-sync api-check-pin api-test api-parity
+.PHONY: all fmt fmt-check clippy test test-core doc deny check-core-deps examples msrv msrv-toolchain hooks conformance-sync conformance-check turns-fixture api-sync api-check-pin api-test api-parity
 
 all: conformance-check api-check-pin api-test fmt-check clippy test test-core doc api-parity deny check-core-deps examples
 
@@ -111,33 +111,10 @@ conformance-check:
 		exit 1; \
 	fi
 
-# The cross-read fixture of roomkit-sqlite (step 4, decision 2): a SQLite
-# file the Python implementation's SQLiteStore writes, which
-# crates/roomkit-sqlite/tests/cross_read.rs reads and rewrites with nothing
-# lost. It is written by tests/fixtures/make_fixture.py with the interpreter
-# of a roomkit checkout (ROOMKIT_DIR, beside this repository's main one),
-# whose commit, on roomkit's origin/main, is recorded in
-# tests/fixtures/ROOMKIT_COMMIT, and the file's fingerprint in
-# tests/fixtures/FIXTURE_SHA256, which the test checks. The file is never
-# edited here: change the generator, and write it again.
+# The roomkit checkout the fixtures and the API snapshot are read from,
+# beside this repository's main one.
 ROOMKIT_DIR ?= $(abspath $(dir $(shell git rev-parse --path-format=absolute --git-common-dir))../roomkit)
 export ROOMKIT_DIR
-SQLITE_FIXTURES := crates/roomkit-sqlite/tests/fixtures
-
-sqlite-fixture:
-	@commit=$$(git -C "$$ROOMKIT_DIR" rev-parse --verify HEAD) && \
-	if ! git -C "$$ROOMKIT_DIR" diff --quiet HEAD -- src; then \
-		echo "roomkit at $$ROOMKIT_DIR has changes under src/: write the fixture from a commit"; exit 1; \
-	fi && \
-	if ! git -C "$$ROOMKIT_DIR" merge-base --is-ancestor "$$commit" origin/main; then \
-		echo "roomkit $$commit is not on origin/main: push it and fetch first"; exit 1; \
-	fi && \
-	PYTHONDONTWRITEBYTECODE=1 "$$ROOMKIT_DIR/.venv/bin/python" -I \
-		$(SQLITE_FIXTURES)/make_fixture.py $(SQLITE_FIXTURES)/python-v14.db && \
-	echo "$$commit" > $(SQLITE_FIXTURES)/ROOMKIT_COMMIT && \
-	sha256sum $(SQLITE_FIXTURES)/python-v14.db | cut -c1-64 > $(SQLITE_FIXTURES)/FIXTURE_SHA256 && \
-	echo "sqlite fixture written by roomkit $$commit"
-
 # The turn backend's cross-read fixture (step 4, milestone 7): the messages
 # the Python implementation's in-memory backend carries for one turn, a
 # streamed answer whose tool sends an event through its turn, which

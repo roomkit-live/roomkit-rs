@@ -83,8 +83,8 @@ use sha2::{Digest, Sha256};
 use crate::scenarios::{scenarios, suite};
 use crate::store_faults::FaultingStore;
 
-/// The kit the scenarios run on, over the in-memory store; roomkit-sqlite
-/// runs them on its store too (crates/roomkit-sqlite/tests/conformance).
+/// The kit the scenarios run on, over the in-memory store: the conformance
+/// is the core's, and runs on no other store.
 pub(crate) type Kit = RoomKit<Store>;
 /// The store of the kit the runner builds, which a `store_fault` step makes
 /// fail or hold (`store_faults`).

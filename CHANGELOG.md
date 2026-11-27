@@ -155,6 +155,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- **BREAKING — the SQLite store left this repository**: the crate
+  `roomkit-sqlite`, its conformance runner and the SQLite library
+  (RMK-2011). `SqliteStore` and its options are in
+  [roomkit-providers](https://github.com/roomkit-live/roomkit-providers),
+  in the crate `roomkit-providers-sqlite`, with the file and the
+  behaviour they had; the store passes `testing::check_conversation_store`.
+  The engine keeps its in-memory store only. Migration: depend on
+  `roomkit-providers-sqlite` instead of `roomkit-sqlite`, and import the
+  same names from `roomkit_providers_sqlite`.
 - **BREAKING — the Postgres store left this repository**: the crate
   `roomkit-postgres`, its conformance runner, the Postgres driver and the
   root patch of its fork (RMK-2011). `PostgresStore`,

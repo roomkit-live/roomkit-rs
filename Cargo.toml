@@ -19,7 +19,6 @@ roomkit-acp = { path = "crates/roomkit-acp" }
 roomkit-ai = { path = "crates/roomkit-ai" }
 roomkit-core = { path = "crates/roomkit-core" }
 roomkit-mcp = { path = "crates/roomkit-mcp" }
-roomkit-sqlite = { path = "crates/roomkit-sqlite" }
 
 # The Agent Client Protocol's types (HITL 0e261e51, parity stream L): the
 # schema crate alone, its minor version pinned, without its JSON Schema
@@ -85,10 +84,6 @@ pretty_assertions = "1"
 # test runner, no regex strategies. Each property test turns off the
 # persistence of failing cases, which a failing test prints instead.
 proptest = { version = "1", default-features = false, features = ["std"] }
-# The SQLite store (decision 4 of step 4): the SQLite library compiled in,
-# with the JSON functions and the full-text index of the Python
-# implementation's schema.
-rusqlite = { version = "0.41", features = ["bundled"] }
 # Development only: the server a test serves in process (the conformance
 # runner's MCP servers), and the combinators of a stream.
 axum = { version = "0.8", default-features = false, features = ["http1", "query", "tokio", "ws"] }

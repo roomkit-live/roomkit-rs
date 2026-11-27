@@ -2,7 +2,7 @@
 //! own behaviours.
 //!
 //! The contract's checks are `roomkit::testing::check_conversation_store`:
-//! roomkit-sqlite runs them on its store (crates/roomkit-sqlite/tests/store/main.rs).
+//! the stores of roomkit-providers run them on theirs.
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
