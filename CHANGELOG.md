@@ -223,6 +223,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A discussion turn whose end is recorded as its driver stops still tells
+  `TurnEnded`, once (RFC §19.7.5 rules 6 and 17, RMK-2191), where a stop
+  (an uninstall, the kit closing) that landed while the driver recorded the
+  turn's end dropped the announcement: a hook following `OnSpeakQueue` never
+  saw the turn end. As in Python.
+
 - A steering `Cancel` aborts a generation whose provider has not handed its
   next event yet (RFC §21.3, RMK-1764), where the turn waited for that
   event: a Stop pressed while a model was still reasoning before its first

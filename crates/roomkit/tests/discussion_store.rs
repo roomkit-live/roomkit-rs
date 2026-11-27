@@ -42,6 +42,9 @@ struct FlakyStore {
     write_held: Arc<AtomicBool>,
     writing: Arc<Notify>,
     write_on: Arc<Notify>,
+    /// Holds the next write of a turn's end (a queue that gave turns and
+    /// names no agent speaking) until `write_on`.
+    end_write_held: Arc<AtomicBool>,
     /// Holds the next write of a discussion's configuration until told.
     config_held: Arc<AtomicBool>,
     config_writing: Arc<Notify>,
@@ -86,6 +89,14 @@ impl ConversationStore for FlakyStore {
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(0);
         if given > 0 && self.write_held.swap(false, Ordering::SeqCst) {
+            self.writing.notify_one();
+            self.write_on.notified().await;
+        }
+        let ends = patch
+            .get("_speak_queue")
+            .and_then(|queue| queue.get("speaking"))
+            .is_some_and(serde_json::Value::is_null);
+        if given > 0 && ends && self.end_write_held.swap(false, Ordering::SeqCst) {
             self.writing.notify_one();
             self.write_on.notified().await;
         }
@@ -415,6 +426,50 @@ async fn an_uninstall_during_a_plan_s_write_tells_the_turn_given_then_its_end() 
         .expect("the uninstall ends once the plan stored its queue")
         .unwrap()
         .unwrap();
+    drop(saying.await);
+    idle(&kit).await;
+
+    assert_eq!(
+        *told.borrow(),
+        [SpeakQueueChange::TurnGiven, SpeakQueueChange::TurnEnded]
+    );
+    kit.close().await.unwrap();
+}
+
+// Python: tests/orchestration/test_discussion_edges.py::test_a_stop_as_a_turn_ends_still_announces_its_end_once[the_end]
+/// RFC §19.7.5 rules 6 and 17: a stop that lands while the driver records a
+/// turn's end, here an uninstall, tells the end all the same, once.
+#[tokio::test]
+async fn a_stop_while_a_turn_s_end_is_recorded_still_tells_its_end_once() {
+    let store = FlakyStore::default();
+    let (end_held, writing, write_on) = (
+        Arc::clone(&store.end_write_held),
+        Arc::clone(&store.writing),
+        Arc::clone(&store.write_on),
+    );
+    let kit = installed(store, DiscussionOptions::default()).await;
+    let room = RoomId::new("r1").unwrap();
+    let told = turns_told(&kit);
+    end_held.store(true, Ordering::SeqCst);
+    let saying = {
+        let kit = kit.clone();
+        tokio::spawn(async move {
+            kit.process_inbound(hello(), ProcessInboundOptions::default())
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(5), writing.notified())
+        .await
+        .expect("the driver records the turn's end");
+
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        kit.uninstall_strategy(&room, UninstallStrategyOptions::default()),
+    )
+    .await
+    .expect("the uninstall stops the driver")
+    .unwrap();
+    write_on.notify_one();
     drop(saying.await);
     idle(&kit).await;
 

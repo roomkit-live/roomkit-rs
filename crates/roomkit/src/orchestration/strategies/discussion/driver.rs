@@ -100,6 +100,18 @@ pub(super) fn now<S: ConversationStore>(kit: &RoomKit<S>) -> f64 {
 /// waiting for it is told, however the run ends.
 struct TurnOver<'room, S: ConversationStore>(&'room DiscussionRoom<S>);
 
+/// Tells `TurnEnded` for its agent once dropped: a turn's end is told
+/// however its record ends (rules 6 and 17).
+struct TellsEnd<'room, S: ConversationStore>(&'room DiscussionRoom<S>, Option<ChannelId>);
+
+impl<S: ConversationStore> Drop for TellsEnd<'_, S> {
+    fn drop(&mut self) {
+        if let Some(agent) = self.1.take() {
+            self.0.fire(SpeakQueueChange::TurnEnded, vec![agent], None);
+        }
+    }
+}
+
 impl<S: ConversationStore> Drop for TurnOver<'_, S> {
     fn drop(&mut self) {
         self.0.state().cutter = None;
@@ -908,9 +920,13 @@ impl<S: ConversationStore> DiscussionRoom<S> {
 
     // -- A turn's end --
 
-    /// The turn has ended (rule 6): told, once its end is recorded, unless the
-    /// discussion is being forgotten and its queue goes (rule 1).
+    /// The turn has ended (rule 6): told once its end is recorded, or its
+    /// record cut by a stop, unless the discussion is being forgotten and its
+    /// queue goes, when nothing is recorded (rules 1 and 17).
     async fn ended(&self, kit: &RoomKit<S>, entry: &Entry, responses: Vec<RoomEvent>) {
+        // Told however the record ends, a stop's abort included, as Python's
+        // `_ended` tells it in a `finally`.
+        let told = TellsEnd(self, Some(entry.agent.clone()));
         let forgotten = self.state().forgotten;
         let queued = if forgotten {
             Vec::new()
@@ -929,7 +945,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
                 }
             }
         };
-        self.fire(SpeakQueueChange::TurnEnded, vec![entry.agent.clone()], None);
+        drop(told);
         if !queued.is_empty() {
             self.fire(SpeakQueueChange::Queued, queued, None);
         }
