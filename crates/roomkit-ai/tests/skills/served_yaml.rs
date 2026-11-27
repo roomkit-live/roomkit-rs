@@ -12,7 +12,11 @@ fn served_frontmatter_matches_the_shared_positive_and_negative_corpus() {
         let file = file.unwrap();
         let filename = file.file_name();
         let filename = filename.to_str().unwrap();
-        if !filename.starts_with("frontmatter-") {
+        // The corpus is the one-skill accept and refuse cases; the bound
+        // scenarios (`frontmatter-is-read-…`, …) list two skills each.
+        if !filename.starts_with("frontmatter-accepts-")
+            && !filename.starts_with("frontmatter-refuses-")
+        {
             continue;
         }
         let scenario: Value =
