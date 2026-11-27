@@ -221,25 +221,27 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `cancelled`, nothing more of its answer stored, as in Python.
 
 - An event `send_event` injects names the provider its call names, none when
-  it names none (RFC §5.2, §10.5), where it took its channel's
+  it names none (RFC §5.2, §10.5, RMK-2191), where it took its channel's
   `provider_name`: an agent's injected reminder carried its model's
   provider, an SMS channel's its vendor's, as no event Python injects does.
   `SendEventOptions::provider` and `DirectEvent::provider` say so.
 
 - A turn's history replays an oversized result's placeholder whose result
-  the room no longer stores as the result's size alone (RFC §6.4, §21.5),
+  the room no longer stores as the result's size alone (RFC §6.4, §21.5,
+  RMK-2191),
   where it offered the stored id, which nothing then reads: an agent that
   left the room and joined it again, or a kit started again, spent a round
   on a `read_stored_result` that found nothing. The turn's footprint
   measures it the same way, as in Python.
 
 - A message that expired while step 2 created its room starts no session
-  (RFC §10.1 step 2, §13.6), its caller gone or its `process_timeout`
-  passed while the creation's hooks ran: no `session_started`, no
-  `ON_SESSION_STARTED` hook, as in Python. The room is still completed and
-  attached. Both emitted `session_started` and fired the hooks: a dropped
-  call by an earlier decision (gap G-068), reversed on 2026-11-27, and a
-  call past its deadline before it was refused `process_timeout`.
+  (RFC §10.1 step 2, §13.6, RMK-2175), its caller gone or its
+  `process_timeout` passed while the creation's hooks ran: no
+  `session_started`, no `ON_SESSION_STARTED` hook, as in Python. The room is
+  still completed and attached. Both emitted `session_started` and fired the
+  hooks: a dropped call by an earlier decision (gap G-068), reversed on
+  2026-11-27, and a call past its deadline before it was refused
+  `process_timeout`.
 
 - A message `WebhookMeta::to_inbound` builds keeps the provider's id as
   its `provider_message_id` and the webhook's payload, unmodified, as its
