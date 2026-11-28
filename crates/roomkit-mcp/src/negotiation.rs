@@ -171,10 +171,14 @@ fn id(sent: usize) -> NumberOrString {
 }
 
 /// Whether a discovery's `result` agrees on 2026-07-28, as Python's SDK
-/// reads it: a result its model reads (the cache members it defaults
-/// filled in), naming that revision.
+/// reads it: the copy Python's provider shows it (`compatible_handshake`,
+/// the cache members its model defaults filled in), naming that revision.
 fn agrees(result: &Value) -> bool {
-    let mut read = result.clone();
+    let mut read = serde_json::json!({ "result": result });
+    crate::protocol::compatible_handshake(&mut read);
+    let Some(mut read) = read.get_mut("result").map(Value::take) else {
+        return false;
+    };
     crate::protocol::with_discovery_defaults(&mut read);
     serde_json::from_value::<DiscoverResult>(read).is_ok_and(|result| {
         result

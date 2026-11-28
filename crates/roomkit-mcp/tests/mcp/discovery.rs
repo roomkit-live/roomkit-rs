@@ -189,6 +189,32 @@ fn a_protocol_other_than_auto_or_legacy_is_refused() {
     ));
 }
 
+/// A discovery whose extension settings are not all objects is read as
+/// Python's provider shows it to its SDK, those settings left out: it still
+/// agrees on 2026-07-28, and the other extensions are kept.
+#[tokio::test]
+async fn an_extension_that_is_no_object_leaves_the_discovery_agreed() {
+    let mut odd = discovery();
+    odd["result"]["capabilities"]["extensions"] = json!({"io.x/good":{"a":1},"io.x/bad":5});
+    let scripted = Scripted::new();
+    let plan = json!({"server/discover": odd, "initialize": handshake(), "tools/list": tools()});
+    let provider = scripted.server(&plan).connect().await.unwrap();
+    let read = read(&provider);
+    provider.close().await;
+    assert_eq!(
+        (
+            scripted.methods(),
+            read["server_info"]["name"].clone(),
+            read["extensions"].clone()
+        ),
+        (
+            vec!["server/discover".to_owned(), "tools/list".to_owned()],
+            json!("modern"),
+            json!({"io.x/good":{"a":1}})
+        )
+    );
+}
+
 /// A discovery result says what the server is in its `_meta`: a
 /// `serverInfo` beside it, which only a handshake result has, is not read.
 #[tokio::test]
