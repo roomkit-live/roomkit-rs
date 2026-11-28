@@ -91,7 +91,8 @@ impl Scripted for AiGenerationEvent {
     /// The replacement event: its context's `system_prompt`, `messages`,
     /// `reasoning_effort`, `thinking_budget`, `enable_thinking`, `response_schema` and `response_metadata` the patch's, its `tools` those of the context the patch names, and
     /// each tool `define` gives in place of the tool of its name, or after
-    /// them.
+    /// them, its messages then holding each block of `turn_notes` added to
+    /// the turn's notes through the implementation's `add_turn_note`.
     fn write_record(&self, reaction: &Value) {
         if let Some(keys) = reaction.get("writes_record").and_then(Value::as_object) {
             self.ai_context
@@ -128,8 +129,9 @@ impl Scripted for AiGenerationEvent {
                         .tools
                         .retain(|tool| kept.contains(&tool.name.as_str()));
                 }
-                // Applied after the others, as Python's runner does.
-                "define" => {}
+                // Applied after the others, as Python's runner does, the
+                // notes on the messages the patch leaves last.
+                "define" | "turn_notes" => {}
                 other => return Err(format!("{other}: no generation member the harness patches")),
             }
         }
@@ -150,6 +152,11 @@ impl Scripted for AiGenerationEvent {
                 Some(own) => *own = tool,
                 None => tools.push(tool),
             }
+        }
+        for block in patch["turn_notes"].as_array().into_iter().flatten() {
+            let block = block.as_str().ok_or("a turn note is a text")?;
+            context.messages =
+                roomkit_ai::add_turn_note(std::mem::take(&mut context.messages), block);
         }
         self.ai_context = context.into();
         Ok(self)
@@ -339,6 +346,11 @@ pub(crate) fn turn_hook_handler<P: Scripted>(
             };
             payload.write_record(&reaction);
             perform(&run, &reaction, &Scope::in_room(&room_id)).await?;
+            if reaction.get("invalid_result").is_some() {
+                // A MODIFY with no payload (README, Reactions), which the
+                // shape check allows on a SYNC AFTER_TOOL_ROUND hook alone.
+                return Ok(HookResult::new(HookAction::Modify));
+            }
             match reaction.get("result") {
                 Some(result) => Ok(turn_hook_result(result, payload)?),
                 None => Ok(allow),

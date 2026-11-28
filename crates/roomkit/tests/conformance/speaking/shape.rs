@@ -272,8 +272,18 @@ pub(crate) fn check(channel: &Value, path: &str, found: &mut Vec<String>) {
     }
 }
 
+/// A speak decision's patch: its decision, and the event, room and channel
+/// it may name (README, `speak_policy`).
 pub(super) fn patch(value: &Value) -> Result<(), String> {
-    let members = object(value, &["decision"])?;
+    let members = object(value, &["decision", "event", "room_id", "channel_id"])?;
+    for member in ["room_id", "channel_id"] {
+        if members.get(member).is_some_and(|value| !value.is_string()) {
+            return Err(format!("{member}: expected a text"));
+        }
+    }
+    if members.get("event").is_some_and(|value| !value.is_object()) {
+        return Err("event: expected a patch".into());
+    }
     decision(members.get("decision").ok_or("missing decision")?)
 }
 

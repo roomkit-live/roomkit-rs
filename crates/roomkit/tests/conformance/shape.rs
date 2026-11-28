@@ -71,7 +71,7 @@ const KIT: &[&str] = &[
 const RATE_LIMIT: &[&str] = &["max_per_second", "max_per_minute", "max_per_hour"];
 const PERSISTENCE_POLICY: &[&str] = &["persist_types", "exclude_types"];
 const MEDIA_RESOLVER: &[&str] = &["media"];
-const ATTACHED_MEDIA: &[&str] = &["key"];
+const ATTACHED_MEDIA: &[&str] = &["key", "fails_on"];
 const REFUSES: &[&str] = &[
     "status",
     "message",
@@ -115,6 +115,10 @@ const CHANNEL: &[&str] = &[
     "on_event",
     "deliver",
     "streams",
+    "default_deliver_stream",
+    "deliver_cut",
+    "steers_room_turns",
+    "serializes_room_turns",
     "reads_usage",
     "reads_loop_end",
     "deliver_stream",
@@ -162,9 +166,12 @@ const CHANNEL: &[&str] = &[
     "text_coalesce_chars",
     "publish_text_deltas",
     "tool_call_intents",
+    "tool_call_intents_required",
+    "tool_call_intents_only",
     "retry_policy",
     "fallback_model",
     "router",
+    "serving",
     "max_author_images",
     "evict_threshold_tokens",
     "describe_empty_event",
@@ -246,6 +253,8 @@ const MODEL: &[&str] = &[
     "deferred_tools",
     "response_schema",
     "response_schema_with_tools",
+    "stream_text_only",
+    "refuses_images",
 ];
 const MODEL_ROUND: &[&str] = &[
     "text",
@@ -415,6 +424,7 @@ const OUTPUT: &[&str] = &[
     "response_metadata",
     "error",
     "provider_result",
+    "responded",
 ];
 const PROVIDER_RESULT: &[&str] = &["success", "provider_message_id", "error", "metadata"];
 const RESULT: &[&str] = &[
@@ -509,7 +519,7 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
     if call == "skill_registry_session" {
         return Some(&["servers", "operations"]);
     }
-    base_arguments(call)
+    crate::channel_provider::arguments(call).or_else(|| base_arguments(call))
 }
 
 const CHANNEL_CALL: &[&str] = &[
@@ -1061,6 +1071,7 @@ fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
     }
 
     members(channel, CHANNEL, path, found);
+    crate::channel_declarations::check(channel, path, found);
     planning(channel, path, found);
     binding_update(channel, path, found);
     let human = &channel["human_input"];
@@ -1078,6 +1089,7 @@ fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
         "on_event",
         "deliver",
         "deliver_stream",
+        "deliver_cut",
         "on_room_attached",
         "on_room_detached",
         "close",
@@ -1311,15 +1323,15 @@ fn router(router: &Value, path: &str, found: &mut Vec<String>) {
 
 /// The unusable returns a hook's reaction may script: both on a SYNC
 /// `BEFORE_BROADCAST` hook, a MODIFY with no payload alone on a SYNC
-/// `ON_TOOL_CALL` one, whose typed callback returns no other (README,
-/// Reactions).
+/// `ON_TOOL_CALL` or `AFTER_TOOL_ROUND` one, whose typed callback returns no
+/// other (README, Reactions).
 fn invalid_return_kinds(hook: &Value) -> &'static [&'static str] {
     if hook.get("execution").is_some_and(|mode| mode != "sync") || hook.get("router").is_some() {
         return &[];
     }
     match hook["trigger"].as_str() {
         Some("before_broadcast") => &["no_result", "missing_payload"],
-        Some("on_tool_call") => &["missing_payload"],
+        Some("on_tool_call" | "after_tool_round") => &["missing_payload"],
         _ => &[],
     }
 }
@@ -1526,7 +1538,7 @@ fn outcome(outcome: &Value, path: &str, found: &mut Vec<String>) {
 /// A scripted agent's router (README, `router`): the models it adds, and
 /// its picks.
 fn ai_router(router: &Value, path: &str, found: &mut Vec<String>) {
-    optional(router, &["models", "turns", "retries"], path, found);
+    optional(router, &["models", "turns", "retries", "name"], path, found);
     for (name, model) in router["models"].as_object().into_iter().flatten() {
         scripted_model(model, &format!("{path}.models.{name}"), found);
     }
@@ -1541,6 +1553,7 @@ fn scripted_model(model: &Value, path: &str, found: &mut Vec<String>) {
     {
         found.push(format!("{path}.streaming: expected a boolean"));
     }
+    crate::channel_declarations::text_stream(model, path, found);
     for (index, round) in items(&model["rounds"]) {
         let round_path = format!("{path}.rounds[{index}]");
         members(round, MODEL_ROUND, &round_path, found);

@@ -129,9 +129,28 @@ impl Scripted for SpeakDecisionEvent {
             "decision":self.decision,"duration_ms":self.duration_ms,"asked_again":self.asked_again,
             "late":self.late,"thought":self.thought})
     }
+    /// The patch's decision, and the event decided on (a patch on it), the
+    /// room and the channel it names written in too (README, `speak_policy`).
     fn patched(mut self, patch: &Value) -> Result<Self, String> {
         shape::patch(patch)?;
         self.decision = decision(&patch["decision"])?;
+        if let Some(members) = patch["event"].as_object() {
+            let mut event =
+                serde_json::to_value(self.event.snapshot()).map_err(|e| e.to_string())?;
+            for (member, value) in members {
+                event[member] = value.clone();
+            }
+            let event = serde_json::from_value(event).map_err(|e| e.to_string())?;
+            self.event = roomkit_ai::speaking::SharedRoomEvent::new(event);
+        }
+        for (member, field) in [
+            ("room_id", &mut self.room_id),
+            ("channel_id", &mut self.channel_id),
+        ] {
+            if let Some(value) = patch[member].as_str() {
+                value.clone_into(field);
+            }
+        }
         Ok(self)
     }
 }

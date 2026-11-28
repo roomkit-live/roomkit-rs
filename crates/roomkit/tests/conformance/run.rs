@@ -203,6 +203,9 @@ pub(crate) struct Run {
     pub(crate) direct_channels:
         Mutex<BTreeMap<String, Arc<dyn crate::agents::direct_prompt::Prompt>>>,
     pub(crate) host_tool_readers: Mutex<BTreeMap<String, crate::extra_tools::Reader>>,
+    /// What each registered channel says serves it, read as it was
+    /// registered (README, `channel.provider`).
+    pub(crate) channel_providers: Mutex<BTreeMap<String, Value>>,
     pub(crate) model_methods: Mutex<BTreeMap<String, crate::agents::GenerationMethods>>,
     /// Whether each scripted model was closed, by its name, shared by the
     /// copies of a model as its script is (README: `model.fails_once_closed`).
@@ -301,6 +304,7 @@ impl Run {
             models: Mutex::default(),
             direct_channels: Mutex::default(),
             host_tool_readers: Mutex::default(),
+            channel_providers: Mutex::default(),
             model_methods: Mutex::default(),
             model_closed: Mutex::default(),
             acp_channels: Mutex::default(),

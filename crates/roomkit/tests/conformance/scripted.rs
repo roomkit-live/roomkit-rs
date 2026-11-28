@@ -388,6 +388,11 @@ pub(crate) struct ScriptedChannel {
     on_event: Reactions,
     deliver: Reactions,
     deliver_stream: Reactions,
+    /// The reactions of its `deliver_cut` (README, `deliver_cut`).
+    deliver_cut: Reactions,
+    /// What it declares of its room turns (README, `steers_room_turns`):
+    /// whether it steers them, and whether it serializes them.
+    room_turns: (bool, bool),
     on_room_attached: Reactions,
     on_room_detached: Reactions,
     close: Reactions,
@@ -455,6 +460,11 @@ impl ScriptedChannel {
             on_event: Reactions::new(spec.get("on_event")),
             deliver: Reactions::new(spec.get("deliver")),
             deliver_stream: Reactions::new(spec.get("deliver_stream")),
+            deliver_cut: Reactions::new(spec.get("deliver_cut")),
+            room_turns: (
+                spec["steers_room_turns"] == true,
+                spec["serializes_room_turns"] == true,
+            ),
             on_room_attached: Reactions::new(spec.get("on_room_attached")),
             on_room_detached: Reactions::new(spec.get("on_room_detached")),
             close: Reactions::new(spec.get("close")),
@@ -553,7 +563,12 @@ impl ScriptedChannel {
             Vec::new()
         };
         let mut dumped = side_effects(&output, &room_id, &channel_id);
-        dumped["responded"] = json!(respond && reaction.get("respond").is_some());
+        // Whether it answered the event, its responses re-entering only then
+        // (README, `output.responded`).
+        let answered = output["responded"]
+            .as_bool()
+            .unwrap_or_else(|| reaction.get("respond").is_some());
+        dumped["responded"] = json!(respond && answered);
         dumped["response_events"] = json!(responses);
         Ok(serde_json::from_value(dumped)?)
     }
@@ -625,6 +640,15 @@ impl Channel for ScriptedChannel {
 
     fn sender_is_participant(&self) -> bool {
         self.sender_is_participant
+    }
+
+    fn steers_room_turns(&self) -> bool {
+        self.room_turns.0
+    }
+
+    /// Declared with `steers_room_turns` (README, `steers_room_turns`).
+    fn serializes_room_turns(&self) -> bool {
+        self.room_turns.1
     }
 
     fn supports_streaming_delivery_for(&self, room_id: &RoomId) -> bool {
@@ -943,26 +967,31 @@ impl Channel for ScriptedChannel {
         Ok(serde_json::from_value(dumped)?)
     }
 
-    /// Records the end of a stream cut from outside, the row it is handed.
-    fn deliver_cut(
+    /// Records the end of a stream cut from outside, the row it is handed,
+    /// then reacts (README, `deliver_cut`).
+    async fn deliver_cut(
         &self,
         _event: RoomEvent,
         row: Option<RoomEvent>,
         binding: ChannelBinding,
         _context: RoomContext,
-    ) -> impl Future<Output = Result<(), ChannelError>> + Send {
-        if let Some(run) = self.run.upgrade() {
-            let row = row.map_or(Value::Null, |row| {
-                serde_json::to_value(&row).unwrap_or_default()
-            });
-            let room_id = binding.room_id.to_string();
-            run.record_streamed(
-                &room_id,
-                &self.declaration.channel_id,
-                json!({ "cut": row }),
-            );
+    ) -> Result<(), ChannelError> {
+        let Some(run) = self.run.upgrade() else {
+            return Ok(());
+        };
+        let row = row.map_or(Value::Null, |row| {
+            serde_json::to_value(&row).unwrap_or_default()
+        });
+        let room_id = binding.room_id.to_string();
+        run.record_streamed(
+            &room_id,
+            &self.declaration.channel_id,
+            json!({ "cut": row }),
+        );
+        if let Some(reaction) = self.deliver_cut.pick(&json!({ "room_id": room_id })) {
+            perform(&run, &reaction, &Scope::in_room(&room_id)).await?;
         }
-        std::future::ready(Ok(()))
+        Ok(())
     }
 }
 

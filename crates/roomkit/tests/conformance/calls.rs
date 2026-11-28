@@ -388,6 +388,9 @@ async fn other_call(
     if name == "agent.direct_prompt" {
         return agents::direct_prompt::call(run, spec).await;
     }
+    if name == "channel.provider" {
+        return crate::channel_provider::call(run, spec);
+    }
     if matches!(name, "agent.extra_tools" | "agent.replace_extra_tool") {
         return crate::extra_tools::call(run, name, spec);
     }
@@ -811,6 +814,14 @@ pub(crate) fn register_channel_with_skills(
     let Ok(id) = ChannelId::new(channel["id"].as_str().unwrap_or_default()) else {
         return Ok(Err(named("invalid_argument")));
     };
+    // A channel type the grammar refuses refuses the channel (RFC §6.2,
+    // README "Errors").
+    if channel["type"]
+        .as_str()
+        .is_some_and(|name| ChannelType::new(name).is_err())
+    {
+        return Ok(Err(named("invalid_argument")));
+    }
     // A country code the implementation refuses refuses the channel (RFC
     // §5.7, README `addressing`).
     if crate::scripted::country_code_refused(channel) {
@@ -835,9 +846,18 @@ pub(crate) fn register_channel_with_skills(
         crate::run::lock(&run.acp_pipes).insert(id.to_string(), pipe);
         register_built(run.kit(), declared, agent)
     } else if channel.get("model").is_some() {
-        let (agent, models) = agents::scripted_agent_with_skills(channel, run, false, skills)?;
+        // The implementation's refusal to build the agent is the call's
+        // invalid_argument (README, "Errors").
+        let (agent, models) = match agents::scripted_agent_with_skills(channel, run, false, skills)
+        {
+            Ok(built) => built,
+            Err(agents::Unbuilt::Refused(_)) => return Ok(Err(named("invalid_argument"))),
+            Err(agents::Unbuilt::Unreadable(error)) => return Err(error),
+        };
         crate::run::lock(&run.host_tool_readers)
             .insert(id.to_string(), crate::extra_tools::reader(&agent));
+        crate::run::lock(&run.channel_providers)
+            .insert(id.to_string(), crate::channel_provider::of_agent(&agent));
         crate::run::lock(&run.models).extend(models);
         let direct = (!declared).then(|| agents::direct_prompt::channel(&agent));
         let registered = match agent {
@@ -853,11 +873,29 @@ pub(crate) fn register_channel_with_skills(
         }
         registered
     } else {
-        register_built(run.kit(), declared, ScriptedChannel::new(channel, run)?)
+        let scripted = ScriptedChannel::new(channel, run)?;
+        let read = crate::channel_provider::of_channel(&scripted);
+        crate::run::lock(&run.channel_providers).insert(id.to_string(), read);
+        register_scripted(run.kit(), declared, scripted, channel)
     };
     Ok(finish(run, "register_channel", registered, |()| {
         Value::Null
     }))
+}
+
+/// Registers a scripted channel, keeping the implementation's default
+/// `deliver_stream` when it says so (README, `default_deliver_stream`).
+fn register_scripted(
+    kit: &crate::Kit,
+    declared: bool,
+    channel: ScriptedChannel,
+    spec: &Value,
+) -> Result<(), RoomKitError> {
+    if spec["default_deliver_stream"] == true {
+        register_built(kit, declared, crate::default_reader::DefaultReader(channel))
+    } else {
+        register_built(kit, declared, channel)
+    }
 }
 
 /// Build the scenario's actual channel before registering its advertisement,
@@ -899,7 +937,7 @@ pub(crate) fn register_process_channel(
             agents::Scripted::RoutedAgent(agent) => register_built(kit, declared, *agent),
         }
     } else {
-        register_built(kit, declared, ScriptedChannel::new(channel, run)?)
+        register_scripted(kit, declared, ScriptedChannel::new(channel, run)?, channel)
     };
     registered.map_err(|error| format!("register {channel}: {error}"))
 }

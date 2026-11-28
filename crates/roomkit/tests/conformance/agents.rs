@@ -32,9 +32,9 @@ use roomkit_ai::{
     FallbackRouter, FinishReason, HumanInputToolHandler, HumanInputToolHandlerOptions, ModelInfo,
     ModelPricing, ProviderError, ProviderErrorOptions, ProviderStream, RoleOverride,
     RoleOverrideOptions, RouteReason, RouteRequest, Routed, ServedCall, StreamDone, StreamEvent,
-    StreamTextDelta, StreamThinkingDelta, StreamToolCallDelta, StreamUsage, Tool, ToolContext,
-    ToolEntry, ToolError, ToolHandler, ToolPolicy, ToolPolicyOptions, ToolResult, ToolResultPart,
-    Tools, check_schema_answer, checked_stream, schema_for_generate,
+    StreamTextDelta, StreamThinkingDelta, StreamToolCallDelta, StreamUsage, TextStream, Tool,
+    ToolContext, ToolEntry, ToolError, ToolHandler, ToolPolicy, ToolPolicyOptions, ToolResult,
+    ToolResultPart, Tools, check_schema_answer, checked_stream, schema_for_generate,
 };
 use serde_json::{Value, json};
 
@@ -147,6 +147,7 @@ impl AiProvider for Paced {
         let (supported, with_tools) = self.whole.schema;
         if let Err(error) =
             schema_for_generate(context, supported, with_tools, &self.whole.provider_name)
+                .and_then(|_| self.whole.refuse_images(context))
         {
             return Box::pin(Refused(Some(error)));
         }
@@ -208,7 +209,16 @@ struct WholeModel {
     provider_name: String,
     schema: (bool, bool),
     methods: GenerationMethods,
+    /// Whether it streams text alone (README, `model.stream_text_only`).
+    text_stream: bool,
+    /// Whether its provider cannot send an author's image (README,
+    /// `model.refuses_images`).
+    refuses_images: bool,
 }
+
+/// What a model that cannot send an author's image refuses a request with
+/// (README, `model.refuses_images`).
+const IMAGE_REFUSED: &str = "the model's provider cannot send this image";
 
 pub(crate) type GenerationMethods = Arc<Mutex<Vec<&'static str>>>;
 
@@ -217,9 +227,45 @@ impl AiProvider for WholeModel {
         &self.model_name
     }
 
+    fn supports_streaming(&self) -> bool {
+        self.text_stream
+    }
+
+    /// The round's text in its deltas, the model waiting between two, held
+    /// at its gate first (README, `model.stream_text_only`).
+    fn generate_stream<'a>(&'a self, context: &'a AiContext) -> TextStream<'a> {
+        if let Err(error) = self.refuse_images(context) {
+            return Box::pin(Refused(Some(error)).map_text());
+        }
+        let (inner, gate) = {
+            let mut methods = crate::run::lock(&self.methods);
+            let position = self.script.requests().len();
+            let gate = self.gates.get(position).cloned().flatten();
+            let inner = self.script.generate_structured_stream(context);
+            methods.push("generate_stream");
+            (inner, gate)
+        };
+        let run = Weak::clone(&self.run);
+        let holding: Option<Pin<Box<dyn Future<Output = ()> + Send>>> = gate.map(|gate| {
+            let held: Pin<Box<dyn Future<Output = ()> + Send>> = Box::pin(async move {
+                if let Some(run) = run.upgrade() {
+                    run.gates.hold(&gate).await;
+                }
+            });
+            held
+        });
+        Box::pin(TextOnly {
+            inner,
+            holding,
+            held: None,
+            after_text: false,
+        })
+    }
+
     async fn generate(&self, context: &AiContext) -> Result<AiResponse, ProviderError> {
         let (supported, with_tools) = self.schema;
         schema_for_generate(context, supported, with_tools, &self.provider_name)?;
+        self.refuse_images(context)?;
         let (response, gate, served) = {
             // The script reserves synchronously. Keep that reservation and its
             // gate together, even when several rooms use the same provider.
@@ -248,6 +294,27 @@ impl AiProvider for WholeModel {
 }
 
 impl WholeModel {
+    /// Refuses, before the request is made or kept, a request carrying an
+    /// image the model's provider cannot send (README,
+    /// `model.refuses_images`): a refusal of the content, neither worth
+    /// another try nor before any request.
+    fn refuse_images(&self, context: &AiContext) -> Result<(), ProviderError> {
+        let carries_image = context.messages.iter().any(|message| {
+            matches!(&message.content, AiMessageContent::Parts(parts)
+                if parts.iter().any(|part| matches!(part, AiContentPart::Image(_))))
+        });
+        if self.refuses_images && carries_image {
+            return Err(ProviderError::new(
+                IMAGE_REFUSED,
+                ProviderErrorOptions {
+                    provider: self.provider_name.clone(),
+                    ..ProviderErrorOptions::default()
+                },
+            ));
+        }
+        Ok(())
+    }
+
     fn checked_response(
         &self,
         context: &AiContext,
@@ -296,6 +363,65 @@ impl Stream for Refused {
 
     fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         Poll::Ready(self.get_mut().0.take().map(Err))
+    }
+}
+
+impl Refused {
+    /// The failure as a text stream's.
+    fn map_text(self) -> RefusedText {
+        RefusedText(self.0)
+    }
+}
+
+/// A text stream failing once, with the refusal the request was given.
+struct RefusedText(Option<ProviderError>);
+
+impl Stream for RefusedText {
+    type Item = Result<String, ProviderError>;
+
+    fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Poll::Ready(self.get_mut().0.take().map(Err))
+    }
+}
+
+/// A scripted generation's text alone, held at its round's gate first, each
+/// delta that follows another held for one poll: what a provider that
+/// streams text alone yields (README, `model.stream_text_only`).
+struct TextOnly<'a> {
+    inner: ProviderStream<'a>,
+    holding: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
+    held: Option<Result<String, ProviderError>>,
+    after_text: bool,
+}
+
+impl Stream for TextOnly<'_> {
+    type Item = Result<String, ProviderError>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if let Some(holding) = this.holding.as_mut() {
+            ready!(holding.as_mut().poll(cx));
+            this.holding = None;
+        }
+        if let Some(held) = this.held.take() {
+            return Poll::Ready(Some(held));
+        }
+        loop {
+            let next = match ready!(this.inner.as_mut().poll_next(cx)) {
+                None => return Poll::Ready(None),
+                Some(Err(error)) => Err(error),
+                Some(Ok(StreamEvent::TextDelta(delta))) => Ok(delta.text),
+                Some(Ok(_)) => continue,
+            };
+            if next.is_ok() && this.after_text {
+                // The model waits before this delta: it goes on the next poll.
+                this.held = Some(next);
+                cx.waker().wake_by_ref();
+                return Poll::Pending;
+            }
+            this.after_text = next.is_ok();
+            return Poll::Ready(Some(next));
+        }
     }
 }
 
@@ -357,6 +483,38 @@ impl Stream for PacedStream<'_> {
     }
 }
 
+/// Why a scripted agent was not built (README, "Errors").
+#[derive(Debug)]
+pub(crate) enum Unbuilt {
+    /// The implementation refused to build it: a `register_channel` call's
+    /// `invalid_argument`.
+    Refused(String),
+    /// The runner could not read the scenario.
+    Unreadable(String),
+}
+
+impl From<String> for Unbuilt {
+    fn from(error: String) -> Self {
+        Self::Unreadable(error)
+    }
+}
+
+impl From<&str> for Unbuilt {
+    fn from(error: &str) -> Self {
+        Self::Unreadable(error.to_owned())
+    }
+}
+
+impl From<Unbuilt> for String {
+    /// What a caller with no call to answer reads: either is the runner's.
+    fn from(unbuilt: Unbuilt) -> Self {
+        match unbuilt {
+            Unbuilt::Refused(error) => format!("refused: {error}"),
+            Unbuilt::Unreadable(error) => error,
+        }
+    }
+}
+
 /// A scripted agent's models by the name `expect.models` gives them: its
 /// own under its id, its memory's summarizer under `<id>/summarizer`, its
 /// fallback under `<id>/fallback`, its router's under `<id>/<name>`.
@@ -372,7 +530,7 @@ pub(crate) fn scripted_agent_of(
     run: &Arc<Run>,
     process: bool,
 ) -> Result<(Scripted, Models), String> {
-    scripted_agent_with_skills(spec, run, process, None)
+    Ok(scripted_agent_with_skills(spec, run, process, None)?)
 }
 
 pub(crate) fn scripted_agent_with_skills(
@@ -380,7 +538,7 @@ pub(crate) fn scripted_agent_with_skills(
     run: &Arc<Run>,
     process: bool,
     skills: Option<roomkit_ai::SkillRegistry>,
-) -> Result<(Scripted, Models), String> {
+) -> Result<(Scripted, Models), Unbuilt> {
     let id = ChannelId::new(spec["id"].as_str().unwrap_or_default()).map_err(|e| e.to_string())?;
     let shared = |name: &str| {
         process
@@ -390,10 +548,10 @@ pub(crate) fn scripted_agent_with_skills(
     let (model, paced) = scripted_model(&spec["model"], run, id.as_str(), shared(id.as_str()))?;
     let servers = run.mcp.of(id.as_str());
     if spec.get("mcp_servers").is_some() && servers.is_empty() {
-        return Err("mcp_servers: only a setup channel's servers are connected".to_owned());
+        return Err("mcp_servers: only a setup channel's servers are connected".into());
     }
     let mut declared = crate::mcp_servers::declared(&servers)?;
-    declared.extend(Vec::<ToolEntry>::from(tools(spec, run)));
+    declared.extend(Vec::<ToolEntry>::from(tools(spec, run)?));
     let mut options = AiChannelOptions {
         tools: declared,
         skills,
@@ -476,25 +634,30 @@ pub(crate) fn scripted_agent_with_skills(
         options.human_input_handler = Some(human_input(human)?);
     }
     options.tools.extend(kit_tools(spec, run)?);
-    Ok((scripted(id, serving, options, spec.get("agent"))?, models))
+    let built = scripted(id, serving, options, spec.get("agent"));
+    Ok((
+        built.map_err(|error| Unbuilt::Refused(error.to_string()))?,
+        models,
+    ))
 }
 
 /// The scripted channel `id`, served by `serving`, as `options` configure
 /// it; an Agent with `identity` (README, "Scripted agents").
+/// The implementation's refusal to build it is its own (README, "Errors").
 fn scripted(
     id: ChannelId,
     serving: Serving,
     options: AiChannelOptions,
     identity: Option<&Value>,
-) -> Result<Scripted, String> {
+) -> Result<Scripted, AiError> {
     let Some(identity) = identity else {
         return Ok(match serving {
-            Serving::Model(paced) => Scripted::Channel(Box::new(
-                AiChannel::new(id, *paced, options).map_err(|e| e.to_string())?,
-            )),
-            Serving::Router(router) => Scripted::RoutedChannel(Box::new(
-                AiChannel::routed(id, Boxed(router), options).map_err(|e| e.to_string())?,
-            )),
+            Serving::Model(paced) => {
+                Scripted::Channel(Box::new(AiChannel::new(id, *paced, options)?))
+            }
+            Serving::Router(router) => {
+                Scripted::RoutedChannel(Box::new(AiChannel::routed(id, Boxed(router), options)?))
+            }
         });
     };
     let text = |key: &str| identity[key].as_str().map(str::to_owned);
@@ -512,12 +675,10 @@ fn scripted(
         ..AgentOptions::default()
     };
     Ok(match serving {
-        Serving::Model(paced) => Scripted::Agent(Box::new(
-            Agent::new(id, *paced, agent_options).map_err(|e| e.to_string())?,
-        )),
-        Serving::Router(router) => Scripted::RoutedAgent(Box::new(
-            Agent::routed(id, Boxed(router), agent_options).map_err(|e| e.to_string())?,
-        )),
+        Serving::Model(paced) => Scripted::Agent(Box::new(Agent::new(id, *paced, agent_options)?)),
+        Serving::Router(router) => {
+            Scripted::RoutedAgent(Box::new(Agent::routed(id, Boxed(router), agent_options)?))
+        }
     })
 }
 
@@ -559,13 +720,31 @@ fn scripted_router(
             models.push((name.clone(), model));
             pickable.push((name, Arc::new(paced)));
         }
-        router = Some(Box::new(ScriptedAiRouter::new(
-            script,
-            (id, pickable),
-            run,
-        )?));
+        let scripted = ScriptedAiRouter::new(script, (id, pickable), run)?;
+        router = Some(match script["name"].as_str() {
+            Some(name) => Box::new(NamedRouter(Box::new(scripted), name.to_owned())),
+            None => Box::new(scripted),
+        });
     }
     router.ok_or_else(|| "a scripted agent with no router".to_owned())
+}
+
+/// A router under the name the scenario gives it (README, `router.name`),
+/// which the channel's `provider_name` reads.
+struct NamedRouter(Box<dyn AiRouter>, String);
+
+impl AiRouter for NamedRouter {
+    fn route(&self, request: RouteRequest) -> AiRouterFuture<'_> {
+        self.0.route(request)
+    }
+
+    fn name(&self) -> &str {
+        &self.1
+    }
+
+    fn close(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        self.0.close()
+    }
 }
 
 /// What serves a scripted agent's turns: its own model, or its router
@@ -830,8 +1009,10 @@ pub(crate) fn scripted_model(
                 spec["response_schema_with_tools"] == true,
             ),
             methods,
+            text_stream: spec["stream_text_only"] == true,
+            refuses_images: spec["refuses_images"] == true,
         },
-        streaming: spec["streaming"] != false,
+        streaming: spec["streaming"] != false && spec["stream_text_only"] != true,
         vision: spec["vision"] == true,
         deferred_tools: spec["deferred_tools"] == true,
         pricing,
@@ -1273,6 +1454,7 @@ fn agent_settings(spec: &Value, options: &mut AiChannelOptions) -> Result<(), St
     options.publish_thinking_text = spec["publish_thinking_text"] == true;
     options.publish_tool_call_text = spec["publish_tool_call_text"] == true;
     options.tool_call_intents = spec["tool_call_intents"] == true;
+    call_intents(spec, options)?;
     if let Some(flush) = spec.get("text_coalesce_ms") {
         options.text_coalesce_ms = flush.as_f64().ok_or("text_coalesce_ms: no number")?;
     }
@@ -1287,6 +1469,17 @@ fn agent_settings(spec: &Value, options: &mut AiChannelOptions) -> Result<(), St
     }
     if let Some(enabled) = spec.get("enable_thinking") {
         options.enable_thinking = Some(enabled.as_bool().ok_or("enable_thinking: not a flag")?);
+    }
+    Ok(())
+}
+
+/// A scripted agent's call intents (README, `tool_call_intents`): whether
+/// the shown schemas require the property, and the tools they ask it of.
+fn call_intents(spec: &Value, options: &mut AiChannelOptions) -> Result<(), String> {
+    options.tool_call_intents_required = spec["tool_call_intents_required"] == true;
+    if let Some(only) = spec.get("tool_call_intents_only") {
+        options.tool_call_intents_only =
+            Some(serde_json::from_value(only.clone()).map_err(|e| e.to_string())?);
     }
     Ok(())
 }
@@ -1392,15 +1585,21 @@ fn turn_config(spec: &Value, run: &Arc<Run>) -> Result<AiChannelTurnConfig, Stri
 }
 
 /// The scripted tools of `spec` the agent declares, each answering every
-/// call one way, held at its `gate` first, `run`'s.
-fn tools(spec: &Value, run: &Arc<Run>) -> Tools {
+/// call one way, held at its `gate` first, `run`'s; a tool the
+/// implementation refuses to define refuses the agent (README, "Errors").
+fn tools(spec: &Value, run: &Arc<Run>) -> Result<Tools, Unbuilt> {
     let claims = super::report_claims::ReportClaims::default();
     spec["tools"]
         .as_array()
         .into_iter()
         .flatten()
         .filter(|tool| tool["declared"] != false)
-        .fold(Tools::new(), |tools, tool| {
+        .try_fold(Tools::new(), |tools, tool| {
+            let defined = AiTool::new(
+                tool["name"].as_str().unwrap_or_default(),
+                tool["description"].as_str().unwrap_or_default(),
+            )
+            .map_err(|error| Unbuilt::Refused(error.to_string()))?;
             let definition = AiTool {
                 parameters: tool
                     .get("parameters")
@@ -1414,42 +1613,41 @@ fn tools(spec: &Value, run: &Arc<Run>) -> Tools {
                     .map(str::to_owned)
                     .collect(),
                 changes_state: tool["changes_state"] == true,
-                ..AiTool::new(
-                    tool["name"].as_str().unwrap_or_default(),
-                    tool["description"].as_str().unwrap_or_default(),
-                )
-                .unwrap()
+                ..defined
             };
             let behaviour = tool.clone();
             let run = Arc::downgrade(run);
             let claims = claims.clone();
-            tools.tool(definition, move |_call: ToolCall, _context: ToolContext| {
-                let (behaviour, run) = (behaviour.clone(), Weak::clone(&run));
-                let claims = claims.clone();
-                note_executor_tool(&run, &behaviour);
-                async move {
-                    write_record(&behaviour);
-                    write_structured_content(&behaviour)?;
-                    post_progress(&behaviour, &run).await?;
-                    if behaviour["report_claim_probe"] == "claim_then_gate" {
-                        let claimed = super::report_claims::claim_then_gate(&behaviour, &run);
-                        return Ok(claimed.await);
+            Ok(
+                tools.tool(definition, move |_call: ToolCall, _context: ToolContext| {
+                    let (behaviour, run) = (behaviour.clone(), Weak::clone(&run));
+                    let claims = claims.clone();
+                    note_executor_tool(&run, &behaviour);
+                    async move {
+                        write_record(&behaviour);
+                        write_structured_content(&behaviour)?;
+                        post_progress(&behaviour, &run).await?;
+                        if behaviour["report_claim_probe"] == "claim_then_gate" {
+                            let claimed = super::report_claims::claim_then_gate(&behaviour, &run);
+                            return Ok(claimed.await);
+                        }
+                        if let (Some(gate), Some(run)) = (behaviour["gate"].as_str(), run.upgrade())
+                        {
+                            run.gates.hold(gate).await;
+                        }
+                        if let Some(script) = behaviour.get("host_calls") {
+                            let run = run
+                                .upgrade()
+                                .ok_or_else(|| ToolError::failed("scenario ended"))?;
+                            return crate::host_verbs::call_from_tool(script, &run).await;
+                        }
+                        match behaviour["report_claim_probe"].as_str() {
+                            Some(mode) => Ok(claims.answer(mode)),
+                            None => answer(&behaviour).await,
+                        }
                     }
-                    if let (Some(gate), Some(run)) = (behaviour["gate"].as_str(), run.upgrade()) {
-                        run.gates.hold(gate).await;
-                    }
-                    if let Some(script) = behaviour.get("host_calls") {
-                        let run = run
-                            .upgrade()
-                            .ok_or_else(|| ToolError::failed("scenario ended"))?;
-                        return crate::host_verbs::call_from_tool(script, &run).await;
-                    }
-                    match behaviour["report_claim_probe"].as_str() {
-                        Some(mode) => Ok(claims.answer(mode)),
-                        None => answer(&behaviour).await,
-                    }
-                }
-            })
+                }),
+            )
         })
 }
 

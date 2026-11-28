@@ -2,8 +2,8 @@
 //! `conformance/README.md`, "Setup"): `setup.kit.media_resolver` answers
 //! each reference it names with its bytes, written in base64, recording
 //! each call under `media_resolver`, and `setup.kit.attached_media` names
-//! as an event's media the media contents its metadata lists under `key`
-//! (RFC §6.4).
+//! as an event's media the media contents its metadata lists under `key`,
+//! and fails for an event whose metadata holds its `fails_on` (RFC §6.4).
 
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
@@ -42,7 +42,15 @@ pub(crate) fn kit_options<S>(
     }
     if let Some(key) = kit["attached_media"]["key"].as_str() {
         let key = key.to_owned();
+        let fails_on = kit["attached_media"]["fails_on"]
+            .as_str()
+            .map(str::to_owned);
         options.attached_media = Some(AttachedMedia::new(move |event| {
+            if let Some(fails_on) = &fails_on
+                && event.metadata.contains_key(fails_on)
+            {
+                return Err(format!("cannot read the media of {}", event.id).into());
+            }
             let records = event.metadata.get(&key).and_then(Value::as_array);
             Ok(records
                 .into_iter()
