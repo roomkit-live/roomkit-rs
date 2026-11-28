@@ -19,7 +19,7 @@ use serde_json::Value;
 
 use crate::channel::{AiChannel, AiChannelOptions};
 use crate::error::AiError;
-use crate::provider::AiProvider;
+use crate::provider::{AiContext, AiProvider, AiResponse, ProviderError};
 use crate::router::{AiRouter, Routed};
 use crate::steering::SteerOptions;
 use crate::tools::ToolHandler;
@@ -141,6 +141,44 @@ impl Agent<Routed> {
     }
 }
 
+/// The provider type of a configuration-only agent (RFC §19.1): it has
+/// none, holding its identity and its prompt for speech-to-speech channels,
+/// and its turns ask no model. Python's `Agent(channel_id)` given neither
+/// `provider` nor `router`, whose provider is a null one. No value of it
+/// exists.
+#[derive(Clone, Copy, Debug)]
+pub enum ConfigOnly {}
+
+impl AiProvider for ConfigOnly {
+    fn model_name(&self) -> &str {
+        match *self {}
+    }
+
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "no value of it exists, so it never generates"
+    )]
+    async fn generate(&self, _context: &AiContext) -> Result<AiResponse, ProviderError> {
+        match *self {}
+    }
+}
+
+impl Agent<ConfigOnly> {
+    /// The configuration-only agent `channel_id` (RFC §19.1): Python's
+    /// `Agent(channel_id, ...)` given neither `provider` nor `router`. It
+    /// holds its identity and its prompt, the configuration of the
+    /// speech-to-speech channels it serves; a turn of its own asks no model
+    /// and fails, as Python's null provider does, and a supervisor that is
+    /// one runs its sequential team unsupervised (RFC §19.7.3).
+    ///
+    /// # Errors
+    ///
+    /// Returns what [`AiChannel::new`] refuses `options.ai` with.
+    pub fn config_only(channel_id: ChannelId, options: AgentOptions) -> Result<Self, AiError> {
+        Self::of(options, |ai| AiChannel::config_only(channel_id, ai))
+    }
+}
+
 impl<P: AiProvider> Agent<P> {
     /// The agent `channel_id`, answering with `provider`.
     ///
@@ -223,6 +261,13 @@ impl<P: AiProvider> Agent<P> {
     /// `router`.
     pub fn router(&self) -> Option<&dyn AiRouter> {
         self.channel.router()
+    }
+
+    /// Whether the agent has no AI provider, a configuration for
+    /// speech-to-speech channels whose turns ask no model (RFC §19.1):
+    /// Python's `is_config_only`, true for [`Agent::config_only`]'s.
+    pub fn is_config_only(&self) -> bool {
+        self.channel.provider().is_none() && self.channel.router().is_none()
     }
 
     /// Replaces what every turn's system prompt opens with: Python's
@@ -479,6 +524,10 @@ impl<P: AiProvider> Channel for Agent<P> {
 
     fn steers_room_turns(&self) -> bool {
         Channel::steers_room_turns(&self.channel)
+    }
+
+    fn is_config_only(&self) -> bool {
+        Agent::is_config_only(self)
     }
 
     /// The AI channel's declaration, with the agent's identity (Python's

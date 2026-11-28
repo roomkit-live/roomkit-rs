@@ -641,7 +641,7 @@ reason = "the kit holds a room's strategy as a trait object, as its router: Orch
 rust = "roomkit_ai::Agent::new"
 params = ["provider"]
 approved = "2026-11-02"
-reason = "the provider is the channel's generic parameter: Agent::new takes it, and Python's provider=None, a config-only agent, is Agent::config_only, not in 0.x: it serves the realtime voice channel, left out (HITL 2af87061 item 5, HITL a9e5d1a3)"
+reason = "the provider is the channel's generic parameter: Agent::new takes it, and Python's provider=None with no router, a config-only agent, is Agent::config_only, an Agent<ConfigOnly> (HITL 2af87061 item 5, HITL 59992320)"
 
 [[exception]]
 rust = "roomkit_ai::AiChannel::new"
@@ -672,6 +672,23 @@ rust = "roomkit_ai::Agent"
 members = ["routed"]
 approved = "2026-11-10"
 reason = "Python's Agent(channel_id, router=router, ...), as AiChannel::routed (HITL 0bd7a643, RMK-1647)"
+
+[[exception]]
+rust = "roomkit_ai::Agent"
+members = ["config_only"]
+approved = "2026-11-28"
+reason = "Python's Agent(channel_id, ...) given neither provider nor router: the constructor of a configuration-only agent, an Agent<ConfigOnly>, as Agent::routed is a routed one's (HITL 59992320, RMK-2249)"
+
+[[exception]]
+rust = "roomkit_ai::ConfigOnly"
+approved = "2026-11-28"
+reason = "the provider type of a configuration-only agent, which has none: no value of it exists, as Routed (architecture: the Python names table; HITL 59992320, RMK-2249)"
+
+[[exception]]
+rust = "roomkit::Channel"
+members = ["is_config_only"]
+approved = "2026-11-28"
+reason = "Python's strategies read is_config_only of the Agent or the DeclaredChannel they hold. Rust needs a trait method across channel erasure, false by default, true for Agent::config_only's agent (HITL 59992320, as name, role and description, HITL 132f374b; RMK-2249)."
 
 [[exception]]
 rust = "roomkit_ai::Routed"
@@ -788,12 +805,6 @@ python = "roomkit.Channel"
 members = ["emit_trace", "on_trace", "resolve_trace_room", "trace_enabled"]
 scope = "tier1b"
 reason = "not in 0.x: protocol traces (tier 1b, RMK-1544)"
-
-[[missing]]
-python = "roomkit.Agent"
-members = ["is_config_only"]
-scope = "media"
-reason = "not in 0.x: the config-only agent, which serves the realtime voice channel (left out of the orchestration lots, HITL a9e5d1a3)"
 
 [[missing]]
 python = "roomkit.Loop.__init__"

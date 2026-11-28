@@ -26,6 +26,7 @@ use roomkit_core::rules::transcript::{
 use serde_json::{Map, Value};
 
 use crate::ContinuationPolicy;
+use crate::agent::ConfigOnly;
 use crate::agent::{IdentityPrompt, room_language};
 use crate::author_images::{
     AuthorImages, DEFAULT_MAX_AUTHOR_IMAGES, ImageResolver, RefusedImages, Resolver, SentImages,
@@ -657,15 +658,50 @@ impl<P> Clone for AiChannel<P> {
 enum Serving<P> {
     Provider(P),
     Router(Arc<dyn AiRouter>),
+    /// Neither: a configuration-only agent's channel (RFC §19.1).
+    Nothing,
 }
 
 impl<P> Serving<P> {
-    /// The channel's provider, or its router.
+    /// The channel's provider, or its router, or neither.
     fn split(self) -> (Option<Arc<P>>, Option<Arc<dyn AiRouter>>) {
         match self {
             Self::Provider(provider) => (Some(Arc::new(provider)), None),
             Self::Router(router) => (None, Some(router)),
+            Self::Nothing => (None, None),
         }
+    }
+}
+
+/// What a turn of a configuration-only agent fails with: Python's null
+/// provider's `RuntimeError` (RFC §19.1). It asks no model.
+const NO_PROVIDER: &str = "This Agent has no AI provider. Config-only agents are used with \
+                           RealtimeVoiceChannel for speech-to-speech orchestration.";
+
+/// Python's class of a configuration-only agent's turn failure.
+const RUNTIME_ERROR: &str = "builtins:RuntimeError";
+
+/// A configuration-only agent's turn failure: [`NO_PROVIDER`].
+#[derive(Debug)]
+struct NoProvider;
+
+impl fmt::Display for NoProvider {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(NO_PROVIDER)
+    }
+}
+
+impl std::error::Error for NoProvider {}
+
+impl AiChannel<ConfigOnly> {
+    /// The channel of a configuration-only agent (RFC §19.1): no provider
+    /// and no router, so that its turns ask no model and fail as Python's
+    /// null provider does.
+    pub(crate) fn config_only(
+        channel_id: ChannelId,
+        options: AiChannelOptions,
+    ) -> Result<Self, AiError> {
+        Self::built(channel_id, Serving::Nothing, options)
     }
 }
 
@@ -894,11 +930,12 @@ impl<P: AiProvider> AiChannel<P> {
     ) -> Result<Started, ChannelError> {
         let (provider, asked): (Arc<dyn DynAiProvider>, _) = match &self.resilience.router {
             None => {
-                let own = self.provider.clone();
-                (
-                    own.ok_or("an AI channel serves a provider or a router")?,
-                    None,
-                )
+                let Some(own) = self.provider.clone() else {
+                    // A configuration-only agent's turn asks no model (RFC
+                    // §19.1): Python's null provider refuses to generate.
+                    return Err(Box::new(ClassedError::new(RUNTIME_ERROR, NoProvider)));
+                };
+                (own, None)
             }
             Some(router) => {
                 let request = RouteRequest::turn(event, Some(&binding.room_id));

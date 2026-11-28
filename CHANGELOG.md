@@ -8,6 +8,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `Agent::config_only`, `Agent::is_config_only` and `roomkit_ai::ConfigOnly`:
+  the configuration-only agent (RFC §19.1), Python's `Agent(channel_id)`
+  given neither `provider` nor `router`. It holds its identity and its
+  prompt; a turn of its own asks no model and fails as Python's does.
+  `Channel::is_config_only` (false by default) is what a strategy reads of
+  an agent it holds: a `Supervisor` whose supervisor is configuration-only
+  runs its sequential team unsupervised, each worker given the task and
+  the work done before it, as Python's does (RFC §19.7.3, RMK-2249).
 - `roomkit_ai::image`: the image generation contract (RFC §25), Python's
   `roomkit.providers.image` (RMK-2218). `ImageProvider` (`generate`,
   `generate_with_options`, `available_models`, `catalog_entry`,

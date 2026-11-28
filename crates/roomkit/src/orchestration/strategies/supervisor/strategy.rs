@@ -225,9 +225,12 @@ impl Supervisor {
             kit.register_strategy_agents(self.workers())?;
         } else {
             // The supervised flow delegates to the supervisor to frame and
-            // validate each step: it is registered after the workers.
+            // validate each step: it is registered after the workers, unless
+            // it has no model to answer with (RFC §19.7.3).
             let mut agents = self.workers().to_vec();
-            agents.extend(self.named.first().cloned());
+            if !supervisor.config_only {
+                agents.extend(self.named.first().cloned());
+            }
             kit.register_strategy_agents(&agents)?;
         }
         let team = Arc::new(Team {

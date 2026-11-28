@@ -8,6 +8,7 @@ mod auto;
 mod per_worker;
 mod prompts;
 mod results;
+mod sequential;
 pub(crate) mod strategy;
 mod supervised;
 mod team;

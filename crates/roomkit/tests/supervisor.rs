@@ -745,3 +745,52 @@ async fn a_raise_after_the_first_pass_is_logged_once() {
         "{named:?}"
     );
 }
+
+// Python: tests/orchestration/test_supervisor_text_background.py::test_a_supervisor_without_a_model_lets_its_chain_run_unsupervised
+// Here on the room's own turns (auto_delegate, no first pass), as the
+// shared scenario
+// orchestration/a-supervisor-without-a-model-runs-its-sequential-team-unsupervised
+// runs it: the chain is the same in a voice session's background run.
+#[tokio::test]
+async fn a_supervisor_without_a_model_lets_its_chain_run_unsupervised() {
+    let identity = AgentOptions {
+        role: Some("Coordinator".to_owned()),
+        ..AgentOptions::default()
+    };
+    let boss = Agent::config_only(id("boss"), identity).unwrap();
+    let (analyst, writer) = (
+        model(vec![says("Numbers.")]),
+        model(vec![says("A report.")]),
+    );
+    let options = SupervisorOptions {
+        strategy: Some(WorkerStrategy::Sequential),
+        auto_delegate: true,
+        refine_task: false,
+        ..SupervisorOptions::default()
+    };
+    let workers = vec![
+        StrategyAgent::channel(agent("w1", "Analyst", analyst.clone())),
+        StrategyAgent::channel(agent("w2", "Writer", writer.clone())),
+    ];
+    let team = Supervisor::new(StrategyAgent::channel(boss), workers, options).unwrap();
+    let kit = kit_with_room(Some(Arc::new(team))).await;
+
+    let message = InboundMessage::new(id("sms"), "u1", TextContent::new("Look into Acme."));
+    kit.process_inbound(message, ProcessInboundOptions::default())
+        .await
+        .unwrap();
+    kit.close().await.unwrap();
+
+    let asked = |provider: &MockAiProvider| {
+        let requests = provider.calls();
+        assert_eq!(requests.len(), 1, "each worker once, framed by no one");
+        requests[0].messages.last().unwrap().text()
+    };
+    assert_eq!(asked(&analyst), "Look into Acme.");
+    let second = asked(&writer);
+    assert!(
+        second.starts_with("Original task:\n<task>\nLook into Acme.\n</task>")
+            && second.contains("[Analyst]\n<worker_output>\nNumbers.\n</worker_output>"),
+        "{second}"
+    );
+}

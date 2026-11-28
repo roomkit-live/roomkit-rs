@@ -286,6 +286,7 @@ mod tests {
             purpose: None,
             greeting: None,
             language: None,
+            config_only: false,
         }
     }
 

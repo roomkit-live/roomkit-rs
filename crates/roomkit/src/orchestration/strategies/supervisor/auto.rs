@@ -21,6 +21,7 @@ use serde_json::{Value, json};
 
 use super::prompts::task_heading;
 use super::results::{Presented, present_worker_results};
+use super::sequential::run_sequential;
 use super::supervised::run_supervised_sequential;
 use super::team::run_parallel;
 use super::{Team, WorkerStrategy};
@@ -208,7 +209,10 @@ fn one_pass_results(message: &str, results: &[Presented], asked_by: Option<&str>
 
 /// The team's results on `task`, as the install's strategy runs it: a
 /// sequential team supervised step by step, a parallel one at once
-/// (Python's `_run_workers`).
+/// (Python's `_run_workers`). A supervisor without a model (a
+/// configuration-only agent, as a voice supervisor often is) can neither
+/// frame nor judge a step: its sequential team runs unsupervised, each
+/// worker given the task and the work done before it (RFC §19.7.3).
 pub(super) async fn run_workers<S: ConversationStore>(
     kit: &RoomKit<S>,
     room_id: &RoomId,
@@ -217,6 +221,13 @@ pub(super) async fn run_workers<S: ConversationStore>(
     task: &str,
 ) -> Result<Vec<Presented>, RoomKitError> {
     Ok(match strategy {
+        WorkerStrategy::Sequential if team.supervisor.config_only => {
+            run_sequential(kit, room_id, team, task)
+                .await?
+                .into_iter()
+                .map(Presented::from)
+                .collect()
+        }
         WorkerStrategy::Sequential => run_supervised_sequential(kit, room_id, team, task)
             .await?
             .into_iter()

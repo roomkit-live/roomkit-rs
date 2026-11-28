@@ -5,9 +5,13 @@
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
 use roomkit::Channel;
-use roomkit::model::ChannelId;
+use roomkit::model::{
+    ChannelBinding, ChannelCategory, ChannelId, ChannelType, EventContent, EventSource, Room,
+    RoomContext, RoomEvent, RoomId, TextContent,
+};
 use roomkit_ai::{
-    Agent, AgentOptions, BuildIdentityBlockOptions, MockAiProvider, MockAiProviderOptions,
+    Agent, AgentOptions, AiChannelOptions, BuildIdentityBlockOptions, ConfigOnly, MockAiProvider,
+    MockAiProviderOptions,
 };
 
 fn agent(options: AgentOptions) -> Agent<MockAiProvider> {
@@ -179,4 +183,78 @@ fn an_agent_declares_its_identity() {
         "the AI channel's declaration"
     );
     assert_eq!(agent.channel().declaration().identity, None);
+}
+
+/// A configuration-only agent, given no provider nor router.
+fn config_only(options: AgentOptions) -> Agent<ConfigOnly> {
+    Agent::config_only(ChannelId::new("agent-test").unwrap(), options).unwrap()
+}
+
+// Python: tests/test_channels/test_agent.py::TestConfigOnly::test_config_only_no_provider
+// Python: tests/test_channels/test_agent.py::TestConfigOnly::test_config_only_with_provider_is_false
+#[test]
+fn an_agent_given_no_provider_is_configuration_only() {
+    let triage = config_only(AgentOptions {
+        role: Some("Triage".into()),
+        ..AgentOptions::default()
+    });
+    assert!(triage.is_config_only());
+    assert!(
+        Channel::is_config_only(&triage),
+        "what a strategy reads of it"
+    );
+    assert!(triage.provider().is_none() && triage.router().is_none());
+    let served = agent(AgentOptions::default());
+    assert!(!served.is_config_only());
+    assert!(!Channel::is_config_only(&served));
+}
+
+// Python: tests/test_channels/test_agent.py::TestConfigOnly::test_config_only_fields
+// Python: tests/test_channels/test_agent.py::TestConfigOnly::test_config_only_identity_block_works
+#[test]
+fn a_configuration_only_agent_holds_its_identity_and_its_prompt() {
+    let triage = config_only(AgentOptions {
+        role: Some("Triage".into()),
+        description: Some("Routes callers".into()),
+        scope: Some("Financial only".into()),
+        voice: Some("Aoede".into()),
+        ai: AiChannelOptions {
+            system_prompt: Some("Greet callers.".into()),
+            ..AiChannelOptions::default()
+        },
+        ..AgentOptions::default()
+    });
+    assert_eq!(triage.role(), Some("Triage"));
+    assert_eq!(triage.scope(), Some("Financial only"));
+    assert_eq!(triage.voice(), Some("Aoede"));
+    assert_eq!(triage.system_prompt().as_deref(), Some("Greet callers."));
+    let block = triage
+        .build_identity_block(BuildIdentityBlockOptions::default())
+        .unwrap();
+    assert!(block.contains("Role: Triage") && block.contains("Description: Routes callers"));
+    let identity = triage.declaration().identity.unwrap();
+    assert_eq!(identity.voice.as_deref(), Some("Aoede"));
+}
+
+// Python: tests/test_channels/test_agent.py::TestConfigOnly::test_config_only_generate_raises
+#[tokio::test]
+async fn a_configuration_only_agent_s_turn_asks_no_model_and_fails() {
+    let triage = config_only(AgentOptions::default());
+    let room = RoomId::new("r1").unwrap();
+    let event = RoomEvent::new(
+        room.clone(),
+        EventSource::new(ChannelId::new("sms1").unwrap(), ChannelType::SMS),
+        EventContent::Text(TextContent::new("hello")),
+    );
+    let binding = ChannelBinding {
+        category: ChannelCategory::Intelligence,
+        ..ChannelBinding::new(
+            ChannelId::new("agent-test").unwrap(),
+            room.clone(),
+            ChannelType::AI,
+        )
+    };
+    let context = RoomContext::new(Room::new(room));
+    let error = triage.on_event(event, binding, context).await.unwrap_err();
+    assert!(error.to_string().contains("no AI provider"), "{error}");
 }

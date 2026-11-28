@@ -124,7 +124,7 @@ mod turn_config;
 mod turn_notes;
 mod turn_settings;
 
-pub use self::agent::{Agent, AgentOptions, BuildIdentityBlockOptions};
+pub use self::agent::{Agent, AgentOptions, BuildIdentityBlockOptions, ConfigOnly};
 pub use self::channel::{AiChannel, AiChannelOptions};
 #[doc(inline)]
 pub use self::classifiers::{

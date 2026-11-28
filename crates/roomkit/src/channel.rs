@@ -245,6 +245,15 @@ pub trait Channel: Send + Sync + 'static {
             .and_then(|identity| identity.description)
     }
 
+    /// Whether the channel is an agent with no AI provider, a configuration
+    /// for speech-to-speech channels that makes no generation call (RFC
+    /// §19.1): Python's `is_config_only`, which a strategy reads of the
+    /// agents it holds; false by default, and for an agent the kit holds by
+    /// its declaration alone, whose executor builds it with its provider.
+    fn is_config_only(&self) -> bool {
+        false
+    }
+
     /// Python's class attribute `channel_type`: the channel's type, an open
     /// name (RFC §6.2).
     fn channel_type(&self) -> ChannelType;
@@ -807,6 +816,8 @@ pub(crate) trait DynChannel: Send + Sync {
 
     fn description(&self) -> Option<String>;
 
+    fn is_config_only(&self) -> bool;
+
     fn normalize_address(&self, address: &str) -> String;
 
     fn recipient_address(&self, binding: &ChannelBinding) -> Option<String>;
@@ -936,6 +947,10 @@ impl<C: Channel> DynChannel for C {
 
     fn description(&self) -> Option<String> {
         Channel::description(self)
+    }
+
+    fn is_config_only(&self) -> bool {
+        Channel::is_config_only(self)
     }
 
     fn normalize_address(&self, address: &str) -> String {

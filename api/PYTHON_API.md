@@ -179,6 +179,8 @@ the mapping and its tests. The check does not generate or update this document.
 | `roomkit_ai::AiChannel` | — | `routed` |
 | `roomkit_ai::Agent` | — | `routed` |
 | `roomkit_ai::Routed` | — | Whole type |
+| `roomkit_ai::Agent` | `roomkit.Agent.__init__` with neither `provider` nor `router` | `config_only`: a configuration-only agent, an `Agent<ConfigOnly>` (HITL 59992320) |
+| `roomkit_ai::ConfigOnly` | — | Whole type: the provider type of a configuration-only agent, no value of it exists |
 | `roomkit_ai::AiRouterFuture` | — | Whole type |
 | `roomkit_ai::Agent::channel` | — | Whole type |
 | `roomkit::orchestration::StrategyAgent` | — | Whole type |
@@ -191,6 +193,7 @@ the mapping and its tests. The check does not generate or update this document.
 | `roomkit::RoomKit::identity_hook` | — | `handler` |
 | `roomkit::Channel` | — | `sender_is_participant` |
 | `roomkit::Channel` | Optional local attributes read by Python Discussion | `name`, `role`, `description`: `Option<String>` across channel erasure; ACP's declaration remains without an Agent identity (HITL 132f374b) |
+| `roomkit::Channel` | `roomkit.Agent.is_config_only`, `roomkit.channels.DeclaredChannel.is_config_only`, read by Python's strategies | `is_config_only`: `bool` across channel erasure, false by default (HITL 59992320) |
 | `roomkit::ChannelOf` | — | Whole type |
 | `roomkit::RegisteredChannel` | — | Whole type |
 | `roomkit::testing::Environment` | — | Whole type |

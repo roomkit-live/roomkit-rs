@@ -11,8 +11,8 @@ use crate::orchestration::StrategyAgent;
 use crate::store::ConversationStore;
 
 /// A strategy's agent as it reads it: its channel id, and the role, the
-/// description and the purpose its identity gives it, Python's
-/// `HeldAgent`.
+/// description and the purpose its identity gives it, and whether it is an
+/// agent with no AI provider (RFC §19.1), Python's `HeldAgent`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct HeldAgent {
     pub(crate) channel_id: ChannelId,
@@ -21,6 +21,8 @@ pub(crate) struct HeldAgent {
     pub(crate) purpose: Option<String>,
     pub(crate) greeting: Option<String>,
     pub(crate) language: Option<String>,
+    /// Python's `is_config_only`: it can neither frame nor judge a step.
+    pub(crate) config_only: bool,
 }
 
 impl HeldAgent {
@@ -51,12 +53,16 @@ pub(crate) fn held<S: ConversationStore>(
     let channel_id = agent.channel_id().clone();
     if let Some(live) = agent.live() {
         let identity = live.channel.declaration().identity.unwrap_or_default();
-        return Ok(HeldAgent::of(channel_id, identity));
+        return Ok(HeldAgent::of(
+            channel_id,
+            identity,
+            live.channel.is_config_only(),
+        ));
     }
-    let declaration = kit
+    let (declaration, config_only) = kit
         .inner
         .channel(&channel_id)
-        .map(|channel| channel.declaration())
+        .map(|channel| (channel.declaration(), channel.is_config_only()))
         .ok_or_else(|| RoomKitError::ChannelNotRegistered {
             channel_id: channel_id.clone(),
             message: format!(
@@ -75,12 +81,17 @@ pub(crate) fn held<S: ConversationStore>(
              its id only then"
         )));
     };
-    Ok(HeldAgent::of(channel_id, identity))
+    Ok(HeldAgent::of(channel_id, identity, config_only))
 }
 
 impl HeldAgent {
-    /// The agent `channel_id` as its `identity` describes it.
-    fn of(channel_id: ChannelId, identity: crate::channel::AgentIdentity) -> Self {
+    /// The agent `channel_id` as its `identity` describes it, configuration
+    /// only or not.
+    fn of(
+        channel_id: ChannelId,
+        identity: crate::channel::AgentIdentity,
+        config_only: bool,
+    ) -> Self {
         Self {
             channel_id,
             role: identity.role,
@@ -88,6 +99,7 @@ impl HeldAgent {
             purpose: identity.purpose,
             greeting: identity.greeting,
             language: identity.language,
+            config_only,
         }
     }
 }
@@ -107,6 +119,7 @@ pub(crate) mod tests {
             purpose: None,
             greeting: None,
             language: None,
+            config_only: false,
         }
     }
 
