@@ -63,6 +63,7 @@ const KIT: &[&str] = &[
     "store_faults",
     "store_spans",
     "store_owner",
+    "task_runner",
     "shared_realtime",
     "turn_backend_faults",
     "executor_catalogue",
@@ -501,6 +502,7 @@ const EXPECT: &[&str] = &[
     "tool_audit",
     "session_audit",
     "own_audit",
+    "completions",
 ];
 const NEW_ROOM: &[&str] = &["id", "organization_id", "metadata", "timers"];
 const STEPS: &[(&str, &[&str])] = &[
@@ -740,6 +742,12 @@ pub(crate) fn unknown_members(scenario: &Value) -> Vec<String> {
         &mut found,
     );
     let kit = &setup["kit"];
+    optional(
+        &kit["task_runner"],
+        crate::task_runner::TASK_RUNNER,
+        "setup.kit.task_runner",
+        &mut found,
+    );
     optional(
         &kit["inbound_rate_limit"],
         RATE_LIMIT,
@@ -1508,6 +1516,12 @@ fn call(call: &Value, extra: &[&str], path: &str, found: &mut Vec<String>) {
             crate::host_verbs::handler_shape(&call["handler"], &format!("{path}.handler"), found);
         }
         "create_room" => members(&call["room"], NEW_ROOM, &format!("{path}.room"), found),
+        "delegate" => optional(
+            &call["on_complete"],
+            crate::task_runner::ON_COMPLETE,
+            &format!("{path}.on_complete"),
+            found,
+        ),
         "register_channel" => channel(&call["channel"], &format!("{path}.channel"), found),
         "register_hook" => hook(&call["hook"], &format!("{path}.hook"), found),
         "kit_executor.hook" | "kit_executor.room_hook" => {

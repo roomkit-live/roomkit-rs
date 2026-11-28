@@ -87,7 +87,7 @@ fn delivery_backend(kit: &Value) -> Option<roomkit::InMemoryDeliveryBackend> {
 /// The kit's options a scenario's setup names, over `options`: its
 /// chain-depth limit, its `process_timeout`, its router, its inbound rate
 /// limit and its persistence policy.
-fn kit_options<S>(
+fn kit_options<S: ConversationStore>(
     mut options: RoomKitOptions<S>,
     kit: &Value,
     slot: &RunSlot,
@@ -117,6 +117,9 @@ fn kit_options<S>(
     }
     if let Some(grace) = kit["close_grace_ms"].as_u64() {
         options.close_grace = Duration::from_millis(grace);
+    }
+    if let Some(runner) = crate::task_runner::task_runner(kit) {
+        options.task_runner = Some(runner);
     }
     if let Some(limit) = kit.get("inbound_rate_limit") {
         // A limit the model refuses is a broken fixture, as Python's runner

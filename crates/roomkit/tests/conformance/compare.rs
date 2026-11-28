@@ -363,6 +363,19 @@ impl Comparison<'_> {
             let calls = Value::Array(self.observed.media_resolver.clone());
             self.check(expected, Some(&calls), "media_resolver");
         }
+        for (name, expected) in expect["completions"].as_object().into_iter().flatten() {
+            let calls = self
+                .observed
+                .completions
+                .get(name)
+                .cloned()
+                .unwrap_or_default();
+            self.check(
+                expected,
+                Some(&Value::Array(calls)),
+                &format!("completions.{name}"),
+            );
+        }
         for (kind, entries) in [
             ("tool_audit", &self.observed.tool_audit),
             ("session_audit", &self.observed.session_audit),

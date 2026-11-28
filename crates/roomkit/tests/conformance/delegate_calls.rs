@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use roomkit::model::{ChannelId, Metadata, RoomId};
-use roomkit::tasks::{CompletedTaskCache, DelegateHandler, DelegateHandlerOptions};
+use roomkit::tasks::{CompletedTaskCache, DelegateHandler, DelegateHandlerOptions, PutOptions};
 use roomkit_ai::tasks::{SetupDelegationOptions, build_delegate_tool, setup_delegation};
 use serde_json::Value;
 
@@ -29,6 +29,9 @@ pub(crate) fn arguments(name: &str) -> Option<&'static [&'static str]> {
         ]),
         "setup_delegation" => Some(&["agent_id", "handler", "targets"]),
         "delegate.handle" => Some(&["handler", "room_id", "calling_agent_id", "arguments"]),
+        "task_cache.put" => Some(&[
+            "handler", "room_id", "agent_id", "task", "result", "context",
+        ]),
         _ => None,
     }
 }
@@ -57,12 +60,25 @@ pub(crate) async fn call(
     Ok(match name {
         "delegate_handler" => {
             let defaults = DelegateHandlerOptions::<crate::Store>::default();
+            let named = field::<String>(spec, "handler")?;
+            let cache = optional::<bool>(spec, "cache")?
+                .unwrap_or_default()
+                .then(CompletedTaskCache::default);
+            if let Some(cache) = &cache {
+                // Its time to live and its bound on the scenario's clock
+                // (README, `virtual_clock`).
+                if let Some(clock) = &run.clock {
+                    roomkit::testing::set_cache_clock(
+                        cache,
+                        Arc::<crate::clock::VirtualClock>::clone(clock),
+                    );
+                }
+                lock(&run.delegate_caches).insert(named.clone(), cache.clone());
+            }
             let options = DelegateHandlerOptions {
                 notify: optional(spec, "notify")?,
                 default_share_channels: optional(spec, "default_share_channels")?,
-                cache: optional::<bool>(spec, "cache")?
-                    .unwrap_or_default()
-                    .then(CompletedTaskCache::default),
+                cache,
                 serialize_per_room: optional(spec, "serialize_per_room")?
                     .unwrap_or(defaults.serialize_per_room),
                 max_conversation: optional(spec, "max_conversation")?
@@ -74,7 +90,6 @@ pub(crate) async fn call(
                 ..defaults
             };
             let built = DelegateHandler::new(run.kit(), options);
-            let named = field::<String>(spec, "handler")?;
             lock(&run.delegate_handlers).insert(named, built);
             (Ok(Value::Null), None)
         }
@@ -86,6 +101,24 @@ pub(crate) async fn call(
             };
             let outcome = setup_delegation(agent, &handler(run, spec)?, options);
             (finish(run, name, outcome, |()| Value::Null), None)
+        }
+        "task_cache.put" => {
+            let named = field::<String>(spec, "handler")?;
+            let cache = lock(&run.delegate_caches)
+                .get(&named)
+                .cloned()
+                .ok_or_else(|| format!("handler {named:?} was made with no cache"))?;
+            let (room, agent, task): (RoomId, ChannelId, String) = (
+                field(spec, "room_id")?,
+                field(spec, "agent_id")?,
+                field(spec, "task")?,
+            );
+            let result: Metadata = field(spec, "result")?;
+            let options = PutOptions {
+                context: optional(spec, "context")?,
+            };
+            cache.put(&room, &agent, &task, result, options);
+            (Ok(Value::Null), None)
         }
         _ => {
             let (room, calling): (RoomId, ChannelId) =

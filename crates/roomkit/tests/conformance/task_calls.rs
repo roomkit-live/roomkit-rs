@@ -79,6 +79,7 @@ pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
             "require_structured_result",
             "max_result_retries",
             "max_result_chars",
+            "on_complete",
         ],
         "task.wait" | "cancel_task" => &["task_id"],
         "host.wait_task" => &["task_id", "timeout_ms"],
@@ -113,7 +114,7 @@ pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
             "conversation",
             "hand_back",
         ],
-        "host.room_tasks" | "host.room_context" => &[],
+        "host.room_tasks" | "host.room_context" | "task_runner.close" => &[],
         _ => return None,
     })
 }
@@ -273,6 +274,11 @@ pub(crate) async fn call(
             let outcome = task.wait(roomkit::tasks::WaitOptions::default()).await;
             (finish(run, name, outcome, dump), None)
         }
+        "task_runner.close" => {
+            // The kit's task runner's own close, the kit left open.
+            kit.task_runner().close().await;
+            (Ok(Value::Null), None)
+        }
         "cancel_task" => {
             let task_id: String = field(spec, "task_id")?;
             let options = CancelTaskOptions {
@@ -303,6 +309,7 @@ async fn delegate(run: &Arc<Run>, spec: &Value) -> Result<(Called, Option<String
         max_result_retries: optional(spec, "max_result_retries")?
             .unwrap_or(defaults.max_result_retries),
         organization_id: organization_id(spec),
+        on_complete: crate::task_runner::completion_callback(run, &spec["on_complete"]),
         ..DelegateOptions::default()
     };
     let (room, agent, task): (RoomId, ChannelId, String) = (

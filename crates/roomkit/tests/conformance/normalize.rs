@@ -118,6 +118,9 @@ pub(crate) struct Observed {
     pub(crate) tool_audit: Vec<Value>,
     pub(crate) session_audit: Vec<Value>,
     pub(crate) own_audit: Vec<Value>,
+    /// Per scripted completion callback, by its name, each of its calls
+    /// that ended: `{status, cut}`.
+    pub(crate) completions: BTreeMap<String, Vec<Value>>,
 }
 
 impl Observed {

@@ -170,6 +170,11 @@ pub(crate) fn error_of(error: &RoomKitError) -> Option<Value> {
         {
             named("already_set_up")
         }
+        // The scripted task runner's own failure: a submit that refused its
+        // task (RFC §23.1, §23.3).
+        RoomKitError::Runtime(message) if message.starts_with(crate::task_runner::REFUSED) => {
+            named("runner_failed")
+        }
         // A human-input request given up before an answer, as its waiter
         // reads it: withdrawn with its turn, or released (RFC §10.6.5).
         RoomKitError::Runtime(message) if message == "Released before an answer arrived" => {

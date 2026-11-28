@@ -237,6 +237,9 @@ pub(crate) struct Run {
     pub(crate) handoff_handlers: Mutex<HashMap<String, roomkit::HandoffHandler<crate::Store>>>,
     pub(crate) delegate_handlers:
         Mutex<HashMap<String, roomkit::tasks::DelegateHandler<crate::Store>>>,
+    /// The cache each `delegate_handler` made with one keeps (README,
+    /// `task_cache.put`).
+    pub(crate) delegate_caches: Mutex<HashMap<String, roomkit::tasks::CompletedTaskCache>>,
     /// The run's tool and session auditors (README, "Setup").
     pub(crate) auditors: crate::audits::Auditors,
     /// The directories of the scripted agents' skills.
@@ -333,6 +336,7 @@ impl Run {
             status_callbacks: Mutex::default(),
             handoff_handlers: Mutex::default(),
             delegate_handlers: Mutex::default(),
+            delegate_caches: Mutex::default(),
             auditors: crate::audits::Auditors::default(),
             skills: crate::skills::SkillDirectories::default(),
             sandboxes: crate::sandbox::Sandboxes::default(),
