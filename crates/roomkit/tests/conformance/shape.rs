@@ -314,7 +314,7 @@ const MCP_SERVER: &[&str] = &[
     "server_name",
     "instructions",
     "propagate_trace_context",
-    "stdio",
+    "process",
 ];
 const MCP_TOOL: &[&str] = &[
     "name",
@@ -1056,10 +1056,10 @@ fn mcp_servers(servers: &Value, path: &str, found: &mut Vec<String>) {
     for (index, server) in items(servers) {
         let server_path = format!("{path}.mcp_servers[{index}]");
         members(server, MCP_SERVER, &server_path, found);
-        if let Some(stdio) = server.get("stdio") {
-            members(stdio, &["args"], &format!("{server_path}.stdio"), found);
+        if let Some(fixture) = server.get("process") {
+            members(fixture, &["args"], &format!("{server_path}.process"), found);
             if server.get("label").is_none() {
-                found.push(format!("{server_path}.stdio: needs a label"));
+                found.push(format!("{server_path}.process: needs a label"));
             }
         }
         for (position, tool) in items(&server["tools"]) {

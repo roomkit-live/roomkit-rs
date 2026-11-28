@@ -131,13 +131,9 @@ pub(crate) fn build(channel: &Value, id: ChannelId, run: &Arc<Run>) -> Result<Bu
         .ok_or_else(|| "acp.cwd: an absolute path".to_owned())?;
     let name = id.to_string();
     let report = run.fixtures.report(&name)?;
-    let (command, env, inherit_env) = fixture_command(spec, &report)?;
     let options = AcpChannelOptions {
-        command: Some(command),
-        env,
-        inherit_env,
-        authentication_method: crate::calls::optional(spec, "authentication_method")?,
-        ..AcpChannelOptions::default()
+        command: Some(fixture_command(spec, &report)?.0),
+        ..shared_options(spec, &id, run)?
     };
     Ok(match AcpChannel::new(id, cwd, options) {
         Ok(channel) => Built::Process(channel, report),
@@ -233,6 +229,11 @@ pub(crate) fn scripted_acp_channel(
     id: ChannelId,
     run: &Arc<Run>,
 ) -> Result<(AcpChannel<ScriptedTransport>, Wire, Arc<AgentPipe>), Unreadable> {
+    // One fixture agent per channel the run's kit holds (README,
+    // `acp.process`).
+    if channel["acp"].get("process").is_some() {
+        return Err("acp.process: no executor builds a fixture agent".into());
+    }
     match over_transport(channel, id, run)? {
         Built::Scripted(channel, wire, pipe) => Ok((channel, wire, pipe)),
         Built::Process(..) | Built::Refused => {
@@ -275,10 +276,29 @@ fn over_transport(channel: &Value, id: ChannelId, run: &Arc<Run>) -> Result<Buil
     } else {
         None
     };
-    let (env, inherit_env) = spawn_env(spec)?;
     let options = AcpChannelOptions {
         transport: (reach != Some("neither")).then_some(transport),
         command,
+        ..shared_options(spec, &id, run)?
+    };
+    // The constructor's refusal is register_channel's invalid_argument.
+    Ok(match AcpChannel::new(id, cwd, options) {
+        Ok(channel) => Built::Scripted(channel, wire, pipe),
+        Err(_refused) => Built::Refused,
+    })
+}
+
+/// The constructor's options `spec` sets, whatever reaches the agent: no
+/// command and no transport, which each path sets as `reach` says.
+fn shared_options<T>(
+    spec: &Value,
+    id: &ChannelId,
+    run: &Arc<Run>,
+) -> Result<AcpChannelOptions<T>, Unreadable> {
+    let (env, inherit_env) = spawn_env(spec)?;
+    Ok(AcpChannelOptions {
+        command: None,
+        transport: None,
         env,
         inherit_env,
         authentication_method: crate::calls::optional(spec, "authentication_method")?,
@@ -297,11 +317,6 @@ fn over_transport(channel: &Value, id: ChannelId, run: &Arc<Run>) -> Result<Buil
             .get("session_config")
             .and_then(Value::as_object)
             .cloned(),
-    };
-    // The constructor's refusal is register_channel's invalid_argument.
-    Ok(match AcpChannel::new(id, cwd, options) {
-        Ok(channel) => Built::Scripted(channel, wire, pipe),
-        Err(_refused) => Built::Refused,
     })
 }
 

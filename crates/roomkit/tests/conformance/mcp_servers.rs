@@ -1,7 +1,7 @@
 //! A scripted agent's MCP servers (roomkit-specs conformance/README.md,
 //! "Scripted agents", `mcp_servers`): each one served in process over
 //! streamable HTTP, or as the runner's fixture process over stdio
-//! (`stdio`), and reached through roomkit-mcp's own provider, connected
+//! (`process`), and reached through roomkit-mcp's own provider, connected
 //! before the run, its tools listed then, and closed after it.
 
 use std::collections::{BTreeMap, HashMap};
@@ -148,11 +148,11 @@ pub(crate) fn handlers(servers: &[Arc<Server>]) -> Result<Vec<ToolHandler>, Stri
 }
 
 /// `spec`'s server, connected: the runner's fixture process when the spec
-/// names `stdio` (its report under the server's label), served in process
+/// names `process` (its report under the server's label), served in process
 /// over HTTP at a port of its own otherwise.
 async fn serve(spec: &Value, reports: &ProcessReports) -> Result<Server, String> {
-    if let Some(stdio) = spec.get("stdio") {
-        return serve_stdio(spec, stdio, reports).await;
+    if let Some(fixture) = spec.get("process") {
+        return serve_fixture(spec, fixture, reports).await;
     }
     let calls = Calls::default();
     let app = Router::new()
@@ -188,22 +188,22 @@ async fn serve(spec: &Value, reports: &ProcessReports) -> Result<Server, String>
 
 /// `spec`'s server as the runner's fixture process, started by the
 /// provider's public command constructor from the fixture's program and
-/// its own arguments, then each of `stdio`'s `args`.
-async fn serve_stdio(
+/// its own arguments, then each of `process`'s `args`.
+async fn serve_fixture(
     spec: &Value,
-    stdio: &Value,
+    fixture: &Value,
     reports: &ProcessReports,
 ) -> Result<Server, String> {
     let label = spec["label"]
         .as_str()
-        .ok_or("mcp_servers: stdio needs a label")?;
+        .ok_or("mcp_servers: process needs a label")?;
     let report = reports.report(label)?;
     let own = json!({ "mode": "mcp", "server": spec, "env": [] });
     let mut args = vec![report.clone().into_os_string(), own.to_string().into()];
-    for arg in stdio["args"].as_array().into_iter().flatten() {
+    for arg in fixture["args"].as_array().into_iter().flatten() {
         args.push(
             arg.as_str()
-                .ok_or("mcp_servers: stdio args are texts")?
+                .ok_or("mcp_servers: process args are texts")?
                 .into(),
         );
     }

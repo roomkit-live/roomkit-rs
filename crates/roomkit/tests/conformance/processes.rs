@@ -42,12 +42,15 @@ impl ProcessReports {
     pub(crate) fn report(&self, name: &str) -> Result<PathBuf, String> {
         let mut directory = lock(&self.directory);
         if directory.is_none() {
+            // A name of its own, drawn at random, created anew: never a
+            // directory another process prepared.
+            let drawn = getrandom::u64().map_err(|error| error.to_string())?;
             let created = std::env::temp_dir().join(format!(
-                "roomkit-conformance-{}-{}",
+                "roomkit-conformance-{}-{}-{drawn:016x}",
                 std::process::id(),
                 RUNS.fetch_add(1, Ordering::Relaxed)
             ));
-            std::fs::create_dir_all(&created).map_err(|error| error.to_string())?;
+            std::fs::create_dir(&created).map_err(|error| error.to_string())?;
             *directory = Some(created);
         }
         let mut paths = lock(&self.paths);
@@ -81,6 +84,14 @@ impl ProcessReports {
         if let Some(directory) = lock(&self.directory).take() {
             let _removed = std::fs::remove_dir_all(directory);
         }
+    }
+}
+
+/// A run that returns before its observation, its setup failing, still
+/// removes its reports.
+impl Drop for ProcessReports {
+    fn drop(&mut self) {
+        self.close();
     }
 }
 
