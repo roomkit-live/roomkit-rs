@@ -211,10 +211,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   caller's do not replace, and over HTTP with `Mcp-Method`, `Mcp-Name` and
   the `Mcp-Param-*` headers of the arguments a tool's listing annotates
   with `x-mcp-header`; a tool whose annotations are invalid is left out. A
-  server that refuses the probe, answers it with no revision both speak, or
-  leaves it unanswered for 10 seconds is reached through the `initialize`
-  handshake, all within `connect_timeout`; legacy SSE always takes the
-  handshake. A listing is read off the wire, its cache hints ignored, where
+  server that refuses the probe (over HTTP, any status of 400 or more),
+  answers it with no revision both speak, or leaves it unanswered for 10
+  seconds is reached through the `initialize` handshake, and a handshake
+  refused with `-32022` naming 2026-07-28 probes again, each probe bounded
+  on its own, as Python's SDK negotiates, all within `connect_timeout`;
+  legacy SSE always takes the handshake. A listing is read off the wire, its cache hints ignored, where
   rmcp's model refused a page whose `cacheScope` it did not know.
 
 ### Removed

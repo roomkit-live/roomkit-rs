@@ -534,13 +534,14 @@ probes MCP 2026-07-28's `server/discover` over stdio and Streamable HTTP and
 falls back to the `initialize` handshake, `"legacy"` goes straight to it, and
 any other value is a `McpError::Configuration` at construction. The handshake
 advertises MCP 2025-11-25 and accepts the same initialize-based revisions as
-Python's pinned SDK; a discovery agrees on 2026-07-28. rmcp's `Auto`
-lifecycle runs the probe and its 10-second bound; where Python's SDK falls
-back and rmcp would fail (a discovery result it cannot read or that names no
-revision both speak, a `-32022` naming a handshake revision, `-32020` or
-`-32021`), the capture shows rmcp a refusal it falls back on. A handshake
-answered with `-32022` after a probe that timed out fails the connection,
-where Python's SDK probes again: rmcp offers no such step. On 2026-07-28 the
+Python's pinned SDK; a discovery agrees on 2026-07-28. roomkit-mcp runs
+Python's SDK's `negotiate_auto` itself on the raw transport (each probe
+bounded by 10 seconds of its own, the `-32022` retry, the fallback, a second
+probe after a handshake refused with `-32022`; over HTTP a status of 400 or
+more reads as a JSON-RPC error), then rmcp opens the connection by
+`Discover` or `Initialize`, its own negotiation request answered with the
+server's answer: rmcp's `Auto` lifecycle bounds every probe together, fails
+connections Python's SDK falls back from, and never probes again. On 2026-07-28 the
 `Mcp-Name` and `Mcp-Param-*` headers and the `x-mcp-header` checks are
 Python's SDK's (`mcp.shared.inbound`), written by roomkit-mcp: rmcp keeps its
 own crate-private and they differ at the edges. `propagate_trace_context`
