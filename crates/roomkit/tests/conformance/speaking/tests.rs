@@ -74,5 +74,8 @@ fn a_scripted_answer_the_question_cannot_take_is_a_problem_not_a_fallback() {
         );
     }
     let fitting = json!({"hush": 0.9, "level": 1, "pick": "b"});
-    assert!(super::classifier::answer_problems(&fitting, &questions).is_empty());
+    assert_eq!(
+        super::classifier::answer_problems(&fitting, &questions),
+        Vec::<String>::new()
+    );
 }
