@@ -1,0 +1,234 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "memory/a-summary-reads-a-location-and-a-template-by-their-text-form",
+  "title": "A memory's summary reads a location, a template with or without a body, and a composite's location part by their text form",
+  "rules": [
+    "§6.6",
+    "§6.4"
+  ],
+  "requirements": [
+    "RK-6.6-029"
+  ],
+  "notes": "A location, a template with a body, a template without one and a composite of a text and a location are stored before the three questions, which push the compacting memory past its budget: the summarizer reads the older turns, each quoted after its role. A memory's summary, the exception among the readers outside a channel, reads every content of a message by its text form: the location as [Location: Office (45.5, -73.6)], a template by its body, else as [Template: reminder], the composite's parts in order, its location too. Python: memory/_summary.py summary_text (RMK-2241); roomkit-rs: roomkit-ai memory/summary.rs summary_text. Not observed: a rich text, read by its plain text; an edit, a delete and a tool call's row, which a room's ordinary context does not hand a memory, a tool call's row keeping its arguments and result; SummarizingMemory, which reads its lines the same way.",
+  "setup": {
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport"
+      },
+      {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "text": "Answer 1."
+            },
+            {
+              "text": "Answer 2."
+            },
+            {
+              "text": "Answer 3."
+            }
+          ]
+        },
+        "memory": {
+          "compacting": {
+            "max_context_tokens": 800,
+            "summary_ratio": 0.05,
+            "min_events": 2
+          },
+          "summarizer": {
+            "rounds": [
+              {
+                "text": "The person asked a first question."
+              }
+            ]
+          }
+        },
+        "max_tokens": 250
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "agent",
+            "category": "intelligence"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "commit_event",
+      "room_id": "room-1",
+      "event": {
+        "type": "message",
+        "source": {
+          "channel_id": "ws",
+          "channel_type": "websocket",
+          "direction": "inbound",
+          "participant_id": "alice"
+        },
+        "content": {
+          "type": "location",
+          "latitude": 45.5,
+          "longitude": -73.6,
+          "label": "Office"
+        }
+      }
+    },
+    {
+      "call": "commit_event",
+      "room_id": "room-1",
+      "event": {
+        "type": "message",
+        "source": {
+          "channel_id": "ws",
+          "channel_type": "websocket",
+          "direction": "inbound",
+          "participant_id": "alice"
+        },
+        "content": {
+          "type": "template",
+          "template_id": "welcome",
+          "body": "Welcome aboard"
+        }
+      }
+    },
+    {
+      "call": "commit_event",
+      "room_id": "room-1",
+      "event": {
+        "type": "message",
+        "source": {
+          "channel_id": "ws",
+          "channel_type": "websocket",
+          "direction": "inbound",
+          "participant_id": "alice"
+        },
+        "content": {
+          "type": "template",
+          "template_id": "reminder"
+        }
+      }
+    },
+    {
+      "call": "commit_event",
+      "room_id": "room-1",
+      "event": {
+        "type": "message",
+        "source": {
+          "channel_id": "ws",
+          "channel_type": "websocket",
+          "direction": "inbound",
+          "participant_id": "alice"
+        },
+        "content": {
+          "type": "composite",
+          "parts": [
+            {
+              "type": "text",
+              "body": "Meet"
+            },
+            {
+              "type": "location",
+              "latitude": 45.0,
+              "longitude": -73.6
+            }
+          ]
+        }
+      }
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "Question 1: word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "error": null
+        }
+      }
+    },
+    {
+      "idle": true
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "Question 2: word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "error": null
+        }
+      }
+    },
+    {
+      "idle": true
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "Question 3: word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "error": null
+        }
+      }
+    },
+    {
+      "idle": true
+    }
+  ],
+  "expect": {
+    "models": {
+      "agent/summarizer": [
+        {
+          "messages": [
+            {
+              "text": {
+                "$contains": [
+                  "[user]: “[Location: Office (45.5, -73.6)]”",
+                  "[user]: “Welcome aboard”",
+                  "[user]: “[Template: reminder]”",
+                  "[user]: “Meet [Location: (45.0, -73.6)]”"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,140 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "acp/a-catch-up-reads-no-location-and-no-template",
+  "title": "An ACP agent's catch-up reads a rich text by its plain text and a composite by its text part, and nothing of a location or a template: a message holding only one is left out",
+  "rules": [
+    "§6.6"
+  ],
+  "notes": "Four messages address no one, so coder receives none of them: a rich text, a location, a template, and a composite of a text and a location. Its next prompt's catch-up reads them as text outside the channel: the rich text by its plain text, the composite's text part alone, and nothing of the location and the template, so the catch-up counts two messages. A media's label and a composite's parts in order are shown by acp/a-catch-up-reads-each-message-by-its-text-form; a memory's summary, the one reader that reads a location and a template, by memory/a-summary-reads-a-location-and-a-template-by-their-text-form. Python and roomkit-rs read such a message by its content text, which holds a text, a rich text, a media's label and a composite's parts, and nothing of another content. Not observed: the other readers outside a channel (a delegated task's brief, a speak classifier, a discussion's dispatch and notes, a scoring query).",
+  "setup": {
+    "kit": {
+      "persistence_policy": {
+        "persist_types": [
+          "message"
+        ]
+      }
+    },
+    "channels": [
+      {
+        "id": "chat",
+        "type": "chat",
+        "category": "transport",
+        "capabilities": {
+          "media_types": [
+            "text",
+            "media",
+            "location",
+            "template",
+            "rich"
+          ]
+        }
+      },
+      {
+        "id": "coder",
+        "type": "ai",
+        "acp": {
+          "cwd": "/srv/project",
+          "agent": {}
+        }
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "chat"
+          },
+          {
+            "channel_id": "coder",
+            "category": "intelligence"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "send_event",
+      "room_id": "room-1",
+      "channel_id": "chat",
+      "addressed_to": [],
+      "content": {
+        "type": "rich",
+        "body": "**Hi** there",
+        "format": "markdown",
+        "plain_text": "Hi there"
+      }
+    },
+    {
+      "call": "send_event",
+      "room_id": "room-1",
+      "channel_id": "chat",
+      "addressed_to": [],
+      "content": {
+        "type": "location",
+        "latitude": 45.5,
+        "longitude": -73.6,
+        "label": "Office"
+      }
+    },
+    {
+      "call": "send_event",
+      "room_id": "room-1",
+      "channel_id": "chat",
+      "addressed_to": [],
+      "content": {
+        "type": "template",
+        "template_id": "welcome",
+        "body": "Welcome aboard"
+      }
+    },
+    {
+      "call": "send_event",
+      "room_id": "room-1",
+      "channel_id": "chat",
+      "addressed_to": [],
+      "content": {
+        "type": "composite",
+        "parts": [
+          {
+            "type": "text",
+            "body": "Meet"
+          },
+          {
+            "type": "location",
+            "latitude": 45.0,
+            "longitude": -73.6
+          }
+        ]
+      }
+    },
+    {
+      "call": "send_event",
+      "room_id": "room-1",
+      "channel_id": "chat",
+      "addressed_to": [
+        "coder"
+      ],
+      "content": {
+        "type": "text",
+        "body": "Where?"
+      }
+    },
+    {
+      "idle": true
+    }
+  ],
+  "expect": {
+    "acp_prompts": {
+      "coder": [
+        {
+          "text": "[Room context — 2 messages you did not receive. Context only; the request follows.]\n[1] @chat: “Hi there”\n[2] @chat: “Meet”\n[End of room context]\n\nWhere?"
+        }
+      ]
+    }
+  },
+  "requirements": [
+    "RK-6.6-029"
+  ]
+}
