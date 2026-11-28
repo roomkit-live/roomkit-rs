@@ -216,8 +216,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   seconds is reached through the `initialize` handshake, and a handshake
   refused with `-32022` naming 2026-07-28 probes again, each probe bounded
   on its own, as Python's SDK negotiates, all within `connect_timeout`;
-  legacy SSE always takes the handshake. A listing is read off the wire, its cache hints ignored, where
-  rmcp's model refused a page whose `cacheScope` it did not know.
+  legacy SSE always takes the handshake. A listing is read off the wire,
+  its cache hints ignored, where rmcp's model refused a page whose
+  `cacheScope` it did not know.
 
 ### Removed
 

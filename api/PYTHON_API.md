@@ -541,13 +541,13 @@ probe after a handshake refused with `-32022`; over HTTP a status of 400 or
 more reads as a JSON-RPC error), then rmcp opens the connection by
 `Discover` or `Initialize`, its own negotiation request answered with the
 server's answer: rmcp's `Auto` lifecycle bounds every probe together, fails
-connections Python's SDK falls back from, and never probes again. On 2026-07-28 the
-`Mcp-Name` and `Mcp-Param-*` headers and the `x-mcp-header` checks are
-Python's SDK's (`mcp.shared.inbound`), written by roomkit-mcp: rmcp keeps its
-own crate-private and they differ at the edges. `propagate_trace_context`
-reads the kit's current span through its telemetry provider's
-`inject_context`, roomkit-rs having no OpenTelemetry context of its own
-(HITL 8dff5e28). The existing serde and url versions are direct
+connections Python's SDK falls back from, and never probes again. On
+2026-07-28 the `Mcp-Name` and `Mcp-Param-*` headers and the `x-mcp-header`
+checks are Python's SDK's (`mcp.shared.inbound`), written by roomkit-mcp: rmcp
+keeps its own crate-private and they differ at the edges.
+`propagate_trace_context` reads the kit's current span through its telemetry
+provider's `inject_context`, roomkit-rs having no OpenTelemetry context of its
+own (HITL 8dff5e28). The existing serde and url versions are direct
 dependencies for lossless serialization and URI parsing (HITL 04bbf03c).
 No arbitrary request is replayed after a timeout or session loss.
 
