@@ -107,6 +107,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   orders by `follows_index`, else `index`, then `index`, shows a text above a
   record the room received while its generation was under way
   (`examples/conversation_order.rs`).
+- `protocol: "auto"` on `McpToolProviderOptions`, `FromCommandOptions` and
+  `FromUrlOptions` (RFC §21.2, RMK-2211), Python's: `"auto"` probes
+  `server/discover` and falls back to the `initialize` handshake;
+  `"legacy"` goes straight to the handshake, for a server that fails on the
+  probe or leaves it unanswered; any other value is refused at construction.
+- `propagate_trace_context: false` on the same three (RFC §21.2,
+  RK-21.2-057, RMK-2211), Python's: `true` carries the kit's current span
+  (`traceparent`, `tracestate`, `baggage`, as its telemetry provider names
+  it to another process) in each request's `_meta`, unless a `request`'s
+  caller wrote a trace context of its own there, which goes whole instead.
 
 ### Changed
 
@@ -193,6 +203,19 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   refused); and a request given up past its deadline or dropped tells the
   server with `notifications/cancelled`. A call given a zero timeout sends
   nothing, on every transport.
+- An MCP provider speaks MCP 2026-07-28 with a server that does, as Python's
+  (RFC §21.2, RK-21.2-056, RMK-2211): over stdio and Streamable HTTP it
+  probes `server/discover` when it connects, reads `instructions`,
+  `server_info` (its `_meta`) and the extensions from that result, and
+  sends each request with the protocol's own `_meta` entries, which a
+  caller's do not replace, and over HTTP with `Mcp-Method`, `Mcp-Name` and
+  the `Mcp-Param-*` headers of the arguments a tool's listing annotates
+  with `x-mcp-header`; a tool whose annotations are invalid is left out. A
+  server that refuses the probe, answers it with no revision both speak, or
+  leaves it unanswered for 10 seconds is reached through the `initialize`
+  handshake, all within `connect_timeout`; legacy SSE always takes the
+  handshake. A listing is read off the wire, its cache hints ignored, where
+  rmcp's model refused a page whose `cacheScope` it did not know.
 
 ### Removed
 

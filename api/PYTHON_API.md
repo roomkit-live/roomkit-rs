@@ -529,9 +529,24 @@ sent nulls, validate their known model fields and normalize URIs. A malformed
 resource input/result returns `McpError::Validation`, the representation of
 Python's Pydantic validation error.
 
-The connection advertises MCP 2025-11-25 and accepts the same initialize-based
-protocol versions as Python's pinned SDK. Protocol 2026 is deferred for joint
-support (HITL 9496ae52). The existing serde and url versions are direct
+`protocol` is Python's string, as `transport` is: `"auto"` (the default)
+probes MCP 2026-07-28's `server/discover` over stdio and Streamable HTTP and
+falls back to the `initialize` handshake, `"legacy"` goes straight to it, and
+any other value is a `McpError::Configuration` at construction. The handshake
+advertises MCP 2025-11-25 and accepts the same initialize-based revisions as
+Python's pinned SDK; a discovery agrees on 2026-07-28. rmcp's `Auto`
+lifecycle runs the probe and its 10-second bound; where Python's SDK falls
+back and rmcp would fail (a discovery result it cannot read or that names no
+revision both speak, a `-32022` naming a handshake revision, `-32020` or
+`-32021`), the capture shows rmcp a refusal it falls back on. A handshake
+answered with `-32022` after a probe that timed out fails the connection,
+where Python's SDK probes again: rmcp offers no such step. On 2026-07-28 the
+`Mcp-Name` and `Mcp-Param-*` headers and the `x-mcp-header` checks are
+Python's SDK's (`mcp.shared.inbound`), written by roomkit-mcp: rmcp keeps its
+own crate-private and they differ at the edges. `propagate_trace_context`
+reads the kit's current span through its telemetry provider's
+`inject_context`, roomkit-rs having no OpenTelemetry context of its own
+(HITL 8dff5e28). The existing serde and url versions are direct
 dependencies for lossless serialization and URI parsing (HITL 04bbf03c).
 No arbitrary request is replayed after a timeout or session loss.
 
