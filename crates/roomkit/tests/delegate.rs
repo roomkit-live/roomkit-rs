@@ -1222,11 +1222,10 @@ impl DeliveryStrategy for RecordsInstructions {
     }
 }
 
-// Python: tests/tasks/test_delegation_result_delivery.py::test_the_kit_s_delivery_strategy_carries_the_result
-// RFC §23.3 step 8: a background task's result is handed back through
-// `deliver()`, as an instruction, by the kit's strategy.
-#[tokio::test]
-async fn the_kit_s_strategy_hands_a_task_s_result_back_as_an_instruction() {
+/// A background task whose worker answers `reply`, notifying an agent of
+/// its room through the kit's strategy: how the task ended, and what the
+/// strategy was asked to deliver, by each delivery's `instruction` flag.
+async fn handed_back(reply: &'static str) -> (TaskStatus, Vec<bool>) {
     let strategy = Arc::new(RecordsInstructions::default());
     let shared: Arc<dyn DeliveryStrategy> = Arc::<RecordsInstructions>::clone(&strategy);
     let kit = RoomKit::new(RoomKitOptions {
@@ -1239,7 +1238,7 @@ async fn the_kit_s_strategy_hands_a_task_s_result_back_as_an_instruction() {
         RecordingTransportOptions::default(),
     );
     kit.register_channel(text).unwrap();
-    for (id, reply) in [("assistant", "ok"), ("worker", "Findings.")] {
+    for (id, reply) in [("assistant", "ok"), ("worker", reply)] {
         let agent = EchoAgent::new(channel(id), reply, EchoAgentOptions::default());
         kit.register_channel(agent).unwrap();
     }
@@ -1266,15 +1265,36 @@ async fn the_kit_s_strategy_hands_a_task_s_result_back_as_an_instruction() {
         .delegate(&room(), &channel("worker"), "task", delegation)
         .await
         .unwrap();
-    task.wait(WaitOptions {
-        timeout: Some(BOUND),
-    })
-    .await
-    .unwrap();
+    let result = task
+        .wait(WaitOptions {
+            timeout: Some(BOUND),
+        })
+        .await
+        .unwrap();
     idle(&kit).await;
-
-    assert_eq!(*strategy.given.lock().unwrap(), vec![true]);
     kit.close().await.unwrap();
+    let given = strategy.given.lock().unwrap().clone();
+    (result.status, given)
+}
+
+// Python: tests/tasks/test_delegation_result_delivery.py::test_the_kit_s_delivery_strategy_carries_the_result
+// RFC §23.3 step 8: a background task's result is handed back through
+// `deliver()`, as an instruction, by the kit's strategy.
+#[tokio::test]
+async fn the_kit_s_strategy_hands_a_task_s_result_back_as_an_instruction() {
+    assert_eq!(
+        handed_back("Findings.").await,
+        (TaskStatus::Completed, vec![true])
+    );
+}
+
+// Python: tests/tasks/test_delegation_result_delivery.py::test_a_completed_task_with_nothing_to_say_is_not_handed_back
+// RFC §23.3 step 8: a worker that answers only blanks completes its task
+// with nothing to say, so nothing is handed back, as a posted result posts
+// nothing.
+#[tokio::test]
+async fn a_completed_task_with_nothing_to_say_is_not_handed_back() {
+    assert_eq!(handed_back(" \n\t ").await, (TaskStatus::Completed, vec![]));
 }
 
 /// A subscriber that keeps the message of every event logged while it is

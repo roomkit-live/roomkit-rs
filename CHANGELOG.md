@@ -271,6 +271,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A background task whose worker answered only blanks no longer wakes the
+  notified agent (RFC §23.3 step 8, RMK-2219): it completed with nothing to
+  say, which a relayed hand-back read as something to say, so the agent was
+  handed a blank result and opened a turn on it, while a posted one already
+  posted nothing. Both now skip it, as Python does.
+
 - A discussion turn whose end is recorded as its driver stops still tells
   `TurnEnded`, once (RFC §19.7.5 rules 6 and 17, RMK-2191), where a stop
   (an uninstall, the kit closing) that landed while the driver recorded the

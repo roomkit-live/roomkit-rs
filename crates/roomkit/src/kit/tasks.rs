@@ -914,8 +914,9 @@ impl<S: ConversationStore> RoomKit<S> {
     /// room, at `chain_depth`, through `deliver()` (RFC §23.3 step 8): an
     /// intelligence channel is told it as an instruction addressed to it,
     /// any other channel is delivered it. A completed task with nothing to
-    /// say is not handed back, nor one whose notified channel the room
-    /// does not bind.
+    /// say, its output empty or only blanks as a posted result reads it, is
+    /// not handed back, nor one whose notified channel the room does not
+    /// bind.
     async fn hand_back(
         &self,
         result: &DelegatedTaskResult,
@@ -925,7 +926,7 @@ impl<S: ConversationStore> RoomKit<S> {
         max_result_chars: std::num::NonZeroUsize,
     ) {
         if result.status == TaskStatus::Completed
-            && result.output.as_deref().unwrap_or("").is_empty()
+            && result.output.as_deref().unwrap_or("").trim().is_empty()
         {
             return;
         }
