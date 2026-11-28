@@ -1,0 +1,86 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "tasks/a-completion-callback-still-running-past-the-close-s-grace-is-cut",
+  "title": "A task's completion callback still running once the kit's close ran out its grace is cut, and the close ends",
+  "rules": [
+    "§23.3",
+    "§12.10.4"
+  ],
+  "requirements": [
+    "RK-23.3-086"
+  ],
+  "notes": "Python: tests/tasks/test_cancelled_delegation.py; tasks/memory.py _complete (the callback held as the kit's channel work, which the close cuts after its grace). The callback holds at a gate no step opens; the kit's grace is 200 ms. Cited in part: the grace given is tasks/a-completion-callback-running-as-the-kit-closes-is-given-the-close-s-grace; a callback that ignores its cut, abandoned once the unwind ran out, and the log line that names it are not observed.",
+  "setup": {
+    "kit": {
+      "close_grace_ms": 200
+    },
+    "channels": [
+      {
+        "id": "sms",
+        "type": "sms",
+        "category": "transport"
+      },
+      {
+        "id": "worker",
+        "type": "ai",
+        "category": "intelligence",
+        "on_event": [
+          {
+            "when": {
+              "text": "Count."
+            },
+            "respond": [
+              {
+                "content": {
+                  "type": "text",
+                  "body": "Done."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "sms"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "delegate",
+      "room_id": "room-1",
+      "agent_id": "worker",
+      "task": "Count.",
+      "on_complete": {
+        "name": "done",
+        "gate": "ending"
+      }
+    },
+    {
+      "wait_for": "ending"
+    },
+    {
+      "call": "close",
+      "expect": {
+        "result": null
+      }
+    }
+  ],
+  "expect": {
+    "completions": {
+      "done": [
+        {
+          "status": "completed",
+          "cut": true
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,107 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "tasks/a-delegation-whose-child-room-was-never-written-creates-none-to-record-its-end",
+  "title": "A delegation whose child room's creation failed before anything was written raises that failure to its caller, and creates no room to record that its task ended",
+  "rules": [
+    "§23.3"
+  ],
+  "requirements": [
+    "RK-23.3-102"
+  ],
+  "notes": "Python: tests/tasks/test_delegation_preparation_creation.py; tasks/_child_status.py record_task_end (unannounced: the child read, never written). The store refuses the child room's creation. Cited in part: a room of another task under the child's id, which a refused creation may find, is not observed, since the implementation names the child.",
+  "setup": {
+    "kit": {
+      "store_faults": true
+    },
+    "channels": [
+      {
+        "id": "sms",
+        "type": "sms",
+        "category": "transport"
+      },
+      {
+        "id": "worker",
+        "type": "ai",
+        "category": "intelligence",
+        "on_event": [
+          {
+            "when": {
+              "text": "Count."
+            },
+            "respond": [
+              {
+                "content": {
+                  "type": "text",
+                  "body": "Done."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "sms"
+          }
+        ]
+      }
+    ],
+    "hooks": [
+      {
+        "name": "delegated",
+        "trigger": "on_task_delegated",
+        "execution": "async"
+      },
+      {
+        "name": "completed",
+        "trigger": "on_task_completed",
+        "execution": "async"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "store_fault": "create_room",
+      "fail": "the store is down"
+    },
+    {
+      "call": "delegate",
+      "room_id": "room-1",
+      "agent_id": "worker",
+      "task": "Count.",
+      "wait": true,
+      "expect": {
+        "error": "store_failed"
+      }
+    },
+    {
+      "idle": true
+    },
+    {
+      "call": "store.list_rooms",
+      "expect": {
+        "result": [
+          {
+            "id": "room-1"
+          }
+        ]
+      }
+    },
+    {
+      "call": "status.recent",
+      "expect": {
+        "result": []
+      }
+    }
+  ],
+  "expect": {
+    "hooks": {
+      "delegated": [],
+      "completed": []
+    }
+  }
+}

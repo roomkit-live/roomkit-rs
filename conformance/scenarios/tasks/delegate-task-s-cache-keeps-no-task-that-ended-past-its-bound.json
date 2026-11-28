@@ -1,0 +1,137 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "tasks/delegate-task-s-cache-keeps-no-task-that-ended-past-its-bound",
+  "title": "A handler's cache keeps no task that ended past the bound it waits for an end, 600 s: a repeat of it runs again",
+  "rules": [
+    "§23.4"
+  ],
+  "requirements": [
+    "RK-23.4-030"
+  ],
+  "notes": "Python: tests/tasks/test_cache.py; tasks/delegate.py _remember_when_completed (the wait for the task's end bounded at 600 s), on the clock the virtual clock moves. The worker's first turn holds at a gate while 600.001 s pass, then the task completes. Cited in part: the time to live is tasks/delegate-task-s-cache-keeps-a-task-for-its-time-to-live-from-its-end.",
+  "setup": {
+    "virtual_clock": true,
+    "channels": [
+      {
+        "id": "sms",
+        "type": "sms",
+        "category": "transport"
+      },
+      {
+        "id": "worker",
+        "type": "ai",
+        "category": "intelligence",
+        "on_event": [
+          {
+            "when": {
+              "source_channel_id": "system"
+            },
+            "gate": "working",
+            "respond": [
+              {
+                "content": {
+                  "type": "text",
+                  "body": "Done."
+                }
+              }
+            ]
+          },
+          {
+            "when": {
+              "source_channel_id": "system"
+            },
+            "respond": [
+              {
+                "content": {
+                  "type": "text",
+                  "body": "Done."
+                }
+              }
+            ],
+            "repeat": true
+          }
+        ]
+      },
+      {
+        "id": "assistant",
+        "type": "ai",
+        "category": "intelligence"
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "sms"
+          },
+          {
+            "channel_id": "assistant"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "delegate_handler",
+      "handler": "tool",
+      "cache": true
+    },
+    {
+      "call": "delegate.handle",
+      "handler": "tool",
+      "room_id": "room-1",
+      "calling_agent_id": "assistant",
+      "arguments": {
+        "agent": "worker",
+        "task": "Count."
+      },
+      "expect": {
+        "result": {
+          "status": "delegated",
+          "agent_id": "worker",
+          "from_cache": {
+            "$absent": true
+          }
+        }
+      }
+    },
+    {
+      "wait_for": "working"
+    },
+    {
+      "call": "clock.advance",
+      "ms": 600001,
+      "waiters": 1
+    },
+    {
+      "open": "working"
+    },
+    {
+      "idle": true
+    },
+    {
+      "call": "delegate.handle",
+      "handler": "tool",
+      "room_id": "room-1",
+      "calling_agent_id": "assistant",
+      "arguments": {
+        "agent": "worker",
+        "task": "Count."
+      },
+      "expect": {
+        "result": {
+          "status": "delegated",
+          "agent_id": "worker",
+          "from_cache": {
+            "$absent": true
+          }
+        }
+      }
+    },
+    {
+      "idle": true
+    }
+  ]
+}

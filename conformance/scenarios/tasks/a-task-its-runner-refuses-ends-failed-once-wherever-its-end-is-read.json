@@ -1,0 +1,190 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "tasks/a-task-its-runner-refuses-ends-failed-once-wherever-its-end-is-read",
+  "title": "A background task its runner refuses to take ends failed once, as a task that ran does: ON_TASK_COMPLETED, the status bus, its child room, its completion callback and its span say so, and its caller receives the runner's error with nothing handed back",
+  "rules": [
+    "§23.1",
+    "§23.3"
+  ],
+  "requirements": [
+    "RK-23.1-005",
+    "RK-23.3-095",
+    "RK-23.3-096",
+    "RK-23.3-097"
+  ],
+  "notes": "Python: tests/tasks/test_delegation_ends_failed.py::test_a_task_its_runner_refuses_ends_failed; core/mixins/delegation.py delegate (a submit that raises leaves the task to its delegation, _end_cut). The kit's task runner is a scripted one whose submit raises without taking the task: the runner never ends it, the delegation does, once. Cited in part: the implementation's own runner is not made to refuse here (RK-23.1-005); a run that raised outside its turn's outcome, inline or in the background, which only an exception no outcome holds makes (RK-23.3-095, RK-23.3-097); and the task's waiters, since its caller holds no task to wait on (RK-23.3-096).",
+  "setup": {
+    "kit": {
+      "task_runner": {
+        "refuses": "the task runner is full"
+      },
+      "telemetry": true
+    },
+    "channels": [
+      {
+        "id": "sms",
+        "type": "sms",
+        "category": "transport"
+      },
+      {
+        "id": "worker",
+        "type": "ai",
+        "category": "intelligence",
+        "on_event": [
+          {
+            "when": {
+              "text": "Count."
+            },
+            "respond": [
+              {
+                "content": {
+                  "type": "text",
+                  "body": "Done."
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "speaker",
+        "type": "ai",
+        "category": "intelligence"
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "sms"
+          },
+          {
+            "channel_id": "speaker"
+          }
+        ]
+      }
+    ],
+    "hooks": [
+      {
+        "name": "delegated",
+        "trigger": "on_task_delegated",
+        "execution": "async"
+      },
+      {
+        "name": "completed",
+        "trigger": "on_task_completed",
+        "execution": "async"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "delegate",
+      "room_id": "room-1",
+      "agent_id": "worker",
+      "task": "Count.",
+      "notify": "speaker",
+      "on_complete": {
+        "name": "done"
+      },
+      "expect": {
+        "error": "runner_failed"
+      }
+    },
+    {
+      "idle": true
+    },
+    {
+      "call": "status.recent",
+      "agent_id": "worker",
+      "expect": {
+        "result": [
+          {
+            "status": "pending",
+            "action": "task",
+            "detail": "Count.",
+            "metadata": {
+              "child_room_id": "$r1"
+            }
+          },
+          {
+            "status": "failed",
+            "action": "task",
+            "metadata": {
+              "room_id": "room-1",
+              "task_status": "failed",
+              "child_room_id": "$r1"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "call": "telemetry.spans",
+      "site": "owner",
+      "kind": "delegation",
+      "expect": {
+        "result": [
+          {
+            "status": "error",
+            "room_id": "room-1",
+            "channel_id": "worker"
+          }
+        ]
+      }
+    }
+  ],
+  "expect": {
+    "rooms": {
+      "$r1": {
+        "metadata": {
+          "parent_room_id": "room-1",
+          "task_status": "failed",
+          "task_result": null
+        }
+      }
+    },
+    "hooks": {
+      "delegated": [
+        {
+          "trigger": "on_task_delegated",
+          "room_id": "room-1"
+        }
+      ],
+      "completed": [
+        {
+          "trigger": "on_task_completed",
+          "room_id": "room-1",
+          "event": {
+            "type": "task_completed",
+            "metadata": {
+              "agent_id": "worker",
+              "task_status": "failed",
+              "child_room_id": "$r1"
+            }
+          }
+        }
+      ]
+    },
+    "completions": {
+      "done": [
+        {
+          "status": "failed",
+          "cut": false
+        }
+      ]
+    },
+    "turns": {
+      "$r1": {
+        "worker": []
+      },
+      "room-1": {
+        "speaker": []
+      }
+    },
+    "timeline": {
+      "room-1": []
+    }
+  }
+}

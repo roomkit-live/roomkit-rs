@@ -1,0 +1,144 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "tasks/an-unannounced-child-s-terminal-write-outlives-its-caller-and-holds-the-close",
+  "title": "A failed preparation's write that marks its child failed goes on to its end though its caller is cancelled meanwhile, the kit's close having begun",
+  "rules": [
+    "§23.3",
+    "§12.10.4"
+  ],
+  "requirements": [
+    "RK-23.3-104"
+  ],
+  "notes": "Python: tests/tasks/test_delegation_preparation.py; core/mixins/delegation.py _end_preparation (run_to_its_end, held by the kit's close). A shared transport refuses its attachment, so the preparation fails before its task is announced; the store write that marks the child is held in its place at a gate, the kit's close starts, the delegation's caller is cancelled, then the write runs. Cited in part: a caller cancelled more than once is not observed, and that the close tracks the write within its grace is tasks/an-unannounced-child-s-terminal-write-still-held-past-the-close-s-grace-is-cut.",
+  "setup": {
+    "kit": {
+      "store_faults": true
+    },
+    "channels": [
+      {
+        "id": "sms",
+        "type": "sms",
+        "category": "transport"
+      },
+      {
+        "id": "worker",
+        "type": "ai",
+        "category": "intelligence",
+        "on_event": [
+          {
+            "when": {
+              "text": "Count."
+            },
+            "respond": [
+              {
+                "content": {
+                  "type": "text",
+                  "body": "Done."
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "broken",
+        "type": "sms",
+        "on_room_attached": [
+          {
+            "when": {
+              "room_id": "room-1"
+            }
+          },
+          {
+            "gate": "attaching",
+            "fail": "preparation refused"
+          }
+        ]
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "sms"
+          },
+          {
+            "channel_id": "broken"
+          }
+        ]
+      }
+    ],
+    "hooks": [
+      {
+        "name": "delegated",
+        "trigger": "on_task_delegated",
+        "execution": "async"
+      },
+      {
+        "name": "completed",
+        "trigger": "on_task_completed",
+        "execution": "async"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "delegate",
+      "room_id": "room-1",
+      "agent_id": "worker",
+      "task": "Count.",
+      "share_channels": [
+        "broken"
+      ],
+      "background": true,
+      "as": "d"
+    },
+    {
+      "wait_for": "attaching"
+    },
+    {
+      "store_fault": "patch_room_metadata",
+      "room_id": "$r1",
+      "gate": "marking",
+      "in_place": true
+    },
+    {
+      "open": "attaching"
+    },
+    {
+      "wait_for": "marking"
+    },
+    {
+      "close_while_pending": "d",
+      "as": "closing"
+    },
+    {
+      "cancel": "d"
+    },
+    {
+      "open": "marking"
+    },
+    {
+      "await": "closing",
+      "expect": {
+        "result": null
+      }
+    }
+  ],
+  "expect": {
+    "rooms": {
+      "$r1": {
+        "metadata": {
+          "parent_room_id": "room-1",
+          "task_status": "failed",
+          "task_result": null
+        }
+      }
+    },
+    "hooks": {
+      "delegated": [],
+      "completed": []
+    }
+  }
+}

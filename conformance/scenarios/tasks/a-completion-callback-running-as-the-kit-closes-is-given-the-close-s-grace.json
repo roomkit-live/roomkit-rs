@@ -1,0 +1,91 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "tasks/a-completion-callback-running-as-the-kit-closes-is-given-the-close-s-grace",
+  "title": "A task's completion callback still running as the kit's close begins is the kit's running work: the close gives it its grace, and the callback returns within it",
+  "rules": [
+    "§23.3",
+    "§12.10.4"
+  ],
+  "requirements": [
+    "RK-23.3-086"
+  ],
+  "notes": "Python: tests/tasks/test_cancelled_delegation.py; tasks/memory.py _complete (the callback held as the kit's channel work). The callback holds at a gate once called; the close starts, then the gate opens, well within the close's 5 s grace. A close whose cut ends the callback at once (roomkit) tells the grace apart from no grace; one that lets a cut callback go on through its unwind (roomkit-rs drops it only past the unwind) ends the same with no grace, so there the grace is not told apart. Cited in part: the cut once the grace passed is tasks/a-completion-callback-still-running-past-the-close-s-grace-is-cut; a callback that ignores its cut, abandoned once the unwind ran out, and the log line that names it are not observed.",
+  "setup": {
+    "channels": [
+      {
+        "id": "sms",
+        "type": "sms",
+        "category": "transport"
+      },
+      {
+        "id": "worker",
+        "type": "ai",
+        "category": "intelligence",
+        "on_event": [
+          {
+            "when": {
+              "text": "Count."
+            },
+            "respond": [
+              {
+                "content": {
+                  "type": "text",
+                  "body": "Done."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "sms"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "delegate",
+      "room_id": "room-1",
+      "agent_id": "worker",
+      "task": "Count.",
+      "on_complete": {
+        "name": "done",
+        "gate": "ending"
+      }
+    },
+    {
+      "wait_for": "ending"
+    },
+    {
+      "call": "close",
+      "background": true,
+      "as": "closing"
+    },
+    {
+      "open": "ending"
+    },
+    {
+      "await": "closing",
+      "expect": {
+        "result": null
+      }
+    }
+  ],
+  "expect": {
+    "completions": {
+      "done": [
+        {
+          "status": "completed",
+          "cut": false
+        }
+      ]
+    }
+  }
+}

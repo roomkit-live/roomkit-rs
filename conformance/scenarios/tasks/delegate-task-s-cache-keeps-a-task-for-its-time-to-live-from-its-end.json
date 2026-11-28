@@ -1,0 +1,163 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "tasks/delegate-task-s-cache-keeps-a-task-for-its-time-to-live-from-its-end",
+  "title": "A handler's cache keeps a completed task for its time to live counted from the task's end: a repeat within it is answered from the cache, one past it runs again",
+  "rules": [
+    "§23.4"
+  ],
+  "requirements": [
+    "RK-23.4-030"
+  ],
+  "notes": "Python: tests/tasks/test_cache.py; tasks/cache.py CompletedTaskCache (ttl_seconds=300), tasks/delegate.py _remember_when_completed, on the clock the virtual clock moves. The worker's first turn holds at a gate while 200 s pass, so the task ends 200 s after the call; the repeats come 250 s and then 300.001 s after that end. Cited in part: the bound past which a task is not kept is tasks/delegate-task-s-cache-keeps-no-task-that-ended-past-its-bound.",
+  "setup": {
+    "virtual_clock": true,
+    "channels": [
+      {
+        "id": "sms",
+        "type": "sms",
+        "category": "transport"
+      },
+      {
+        "id": "worker",
+        "type": "ai",
+        "category": "intelligence",
+        "on_event": [
+          {
+            "when": {
+              "source_channel_id": "system"
+            },
+            "gate": "working",
+            "respond": [
+              {
+                "content": {
+                  "type": "text",
+                  "body": "Done."
+                }
+              }
+            ]
+          },
+          {
+            "when": {
+              "source_channel_id": "system"
+            },
+            "respond": [
+              {
+                "content": {
+                  "type": "text",
+                  "body": "Done."
+                }
+              }
+            ],
+            "repeat": true
+          }
+        ]
+      },
+      {
+        "id": "assistant",
+        "type": "ai",
+        "category": "intelligence"
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "sms"
+          },
+          {
+            "channel_id": "assistant"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "delegate_handler",
+      "handler": "tool",
+      "cache": true
+    },
+    {
+      "call": "delegate.handle",
+      "handler": "tool",
+      "room_id": "room-1",
+      "calling_agent_id": "assistant",
+      "arguments": {
+        "agent": "worker",
+        "task": "Count."
+      },
+      "expect": {
+        "result": {
+          "status": "delegated",
+          "agent_id": "worker",
+          "from_cache": {
+            "$absent": true
+          }
+        }
+      }
+    },
+    {
+      "wait_for": "working"
+    },
+    {
+      "call": "clock.advance",
+      "ms": 200000,
+      "waiters": 1
+    },
+    {
+      "open": "working"
+    },
+    {
+      "idle": true
+    },
+    {
+      "call": "clock.advance",
+      "ms": 250000
+    },
+    {
+      "call": "delegate.handle",
+      "handler": "tool",
+      "room_id": "room-1",
+      "calling_agent_id": "assistant",
+      "arguments": {
+        "agent": "worker",
+        "task": "Count."
+      },
+      "expect": {
+        "result": {
+          "status": "completed",
+          "from_cache": true,
+          "agent_id": "worker",
+          "result": "Done."
+        }
+      }
+    },
+    {
+      "call": "clock.advance",
+      "ms": 50001
+    },
+    {
+      "call": "delegate.handle",
+      "handler": "tool",
+      "room_id": "room-1",
+      "calling_agent_id": "assistant",
+      "arguments": {
+        "agent": "worker",
+        "task": "Count."
+      },
+      "expect": {
+        "result": {
+          "status": "delegated",
+          "agent_id": "worker",
+          "from_cache": {
+            "$absent": true
+          }
+        }
+      }
+    },
+    {
+      "idle": true
+    }
+  ]
+}

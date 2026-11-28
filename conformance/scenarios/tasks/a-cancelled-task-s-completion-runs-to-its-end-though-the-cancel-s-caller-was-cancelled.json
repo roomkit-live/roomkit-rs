@@ -1,0 +1,141 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "tasks/a-cancelled-task-s-completion-runs-to-its-end-though-the-cancel-s-caller-was-cancelled",
+  "title": "A background task the kit cancels ends cancelled to its end, its completion callback returning and its waiters let go, though the caller of the cancel is cancelled while that completion runs",
+  "rules": [
+    "§23.1",
+    "§23.3"
+  ],
+  "requirements": [
+    "RK-23.1-006"
+  ],
+  "notes": "Python: tests/tasks/test_cancel_task.py, tests/tasks/test_runner.py::TestInMemoryTaskRunner::test_cancel_running_task; tasks/memory.py InMemoryTaskRunner.cancel (the end a cancel took runs on a run of its own, shielded). The worker's turn is held at a gate, so the task is running when it is cancelled; the task's completion callback holds at a second gate, and the cancel's caller is cancelled there.",
+  "setup": {
+    "channels": [
+      {
+        "id": "sms",
+        "type": "sms",
+        "category": "transport"
+      },
+      {
+        "id": "worker",
+        "type": "ai",
+        "category": "intelligence",
+        "on_event": [
+          {
+            "when": {
+              "text": "Count to a thousand."
+            },
+            "gate": "counting",
+            "respond": [
+              {
+                "content": {
+                  "type": "text",
+                  "body": "A thousand."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "sms"
+          }
+        ]
+      }
+    ],
+    "hooks": [
+      {
+        "name": "completed",
+        "trigger": "on_task_completed",
+        "execution": "async"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "delegate",
+      "room_id": "room-1",
+      "agent_id": "worker",
+      "task": "Count to a thousand.",
+      "on_complete": {
+        "name": "done",
+        "gate": "ending"
+      },
+      "as": "t"
+    },
+    {
+      "wait_for": "counting"
+    },
+    {
+      "call": "cancel_task",
+      "task_id": "$t",
+      "background": true,
+      "as": "cancelling"
+    },
+    {
+      "wait_for": "ending"
+    },
+    {
+      "cancel": "cancelling"
+    },
+    {
+      "open": "ending"
+    },
+    {
+      "open": "counting"
+    },
+    {
+      "idle": true
+    },
+    {
+      "call": "task.wait",
+      "task_id": "$t",
+      "expect": {
+        "result": {
+          "status": "cancelled",
+          "output": null,
+          "child_room_id": "$r1"
+        }
+      }
+    }
+  ],
+  "expect": {
+    "rooms": {
+      "$r1": {
+        "metadata": {
+          "task_status": "cancelled",
+          "task_result": null
+        }
+      }
+    },
+    "hooks": {
+      "completed": [
+        {
+          "trigger": "on_task_completed",
+          "room_id": "room-1",
+          "event": {
+            "type": "task_completed",
+            "metadata": {
+              "agent_id": "worker",
+              "task_status": "cancelled"
+            }
+          }
+        }
+      ]
+    },
+    "completions": {
+      "done": [
+        {
+          "status": "cancelled",
+          "cut": false
+        }
+      ]
+    }
+  }
+}

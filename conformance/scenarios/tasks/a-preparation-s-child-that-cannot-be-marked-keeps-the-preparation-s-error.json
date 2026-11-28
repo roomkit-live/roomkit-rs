@@ -1,0 +1,142 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "tasks/a-preparation-s-child-that-cannot-be-marked-keeps-the-preparation-s-error",
+  "title": "A failed preparation whose child cannot be marked to record its end still raises its own error to its caller, and announces no task",
+  "rules": [
+    "§23.3"
+  ],
+  "requirements": [
+    "RK-23.3-105"
+  ],
+  "notes": "Python: tests/tasks/test_delegation_preparation.py; tasks/_child_status.py record_task_end (a failure to write it is logged, never raised). A shared transport refuses its attachment; the store then fails the cleanup's mark of the child. Cited in part: the log line of the cleanup's failure is not observed.",
+  "setup": {
+    "kit": {
+      "store_faults": true
+    },
+    "channels": [
+      {
+        "id": "sms",
+        "type": "sms",
+        "category": "transport"
+      },
+      {
+        "id": "worker",
+        "type": "ai",
+        "category": "intelligence",
+        "on_event": [
+          {
+            "when": {
+              "text": "Count."
+            },
+            "respond": [
+              {
+                "content": {
+                  "type": "text",
+                  "body": "Done."
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "broken",
+        "type": "sms",
+        "on_room_attached": [
+          {
+            "when": {
+              "room_id": "room-1"
+            }
+          },
+          {
+            "gate": "attaching",
+            "fail": "preparation refused"
+          }
+        ]
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "sms"
+          },
+          {
+            "channel_id": "broken"
+          }
+        ]
+      }
+    ],
+    "hooks": [
+      {
+        "name": "delegated",
+        "trigger": "on_task_delegated",
+        "execution": "async"
+      },
+      {
+        "name": "completed",
+        "trigger": "on_task_completed",
+        "execution": "async"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "delegate",
+      "room_id": "room-1",
+      "agent_id": "worker",
+      "task": "Count.",
+      "share_channels": [
+        "broken"
+      ],
+      "background": true,
+      "as": "d"
+    },
+    {
+      "wait_for": "attaching"
+    },
+    {
+      "store_fault": "patch_room_metadata",
+      "room_id": "$r1",
+      "fail": "the child cannot be marked"
+    },
+    {
+      "open": "attaching"
+    },
+    {
+      "await": "d",
+      "expect": {
+        "error": "channel_failed"
+      }
+    },
+    {
+      "idle": true
+    },
+    {
+      "call": "status.recent",
+      "expect": {
+        "result": []
+      }
+    }
+  ],
+  "expect": {
+    "rooms": {
+      "$r1": {
+        "metadata": {
+          "parent_room_id": "room-1",
+          "task_status": "pending"
+        }
+      }
+    },
+    "hooks": {
+      "delegated": [],
+      "completed": []
+    },
+    "turns": {
+      "$r1": {
+        "worker": []
+      }
+    }
+  }
+}

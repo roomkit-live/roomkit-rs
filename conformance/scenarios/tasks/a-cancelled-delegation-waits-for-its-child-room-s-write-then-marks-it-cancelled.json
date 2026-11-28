@@ -1,0 +1,122 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "tasks/a-cancelled-delegation-waits-for-its-child-room-s-write-then-marks-it-cancelled",
+  "title": "A delegation cancelled while its child room's store write runs waits for that write before it reads the child, marks it cancelled with no result, and runs none of the creation's hooks",
+  "rules": [
+    "§23.3"
+  ],
+  "requirements": [
+    "RK-23.3-103"
+  ],
+  "notes": "Python: tests/tasks/test_delegation_preparation_creation.py; core/_preparing_room.py write_created_room (the decided creation run to its end). The store write of the child room is held in its place at a gate; the delegation's caller is cancelled there, then the write runs. The creation never announced its room, so the child is read by its parent's id.",
+  "setup": {
+    "kit": {
+      "store_faults": true
+    },
+    "channels": [
+      {
+        "id": "sms",
+        "type": "sms",
+        "category": "transport"
+      },
+      {
+        "id": "worker",
+        "type": "ai",
+        "category": "intelligence",
+        "on_event": [
+          {
+            "when": {
+              "text": "Count."
+            },
+            "respond": [
+              {
+                "content": {
+                  "type": "text",
+                  "body": "Done."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "sms"
+          }
+        ]
+      }
+    ],
+    "hooks": [
+      {
+        "name": "created",
+        "trigger": "on_room_created"
+      },
+      {
+        "name": "delegated",
+        "trigger": "on_task_delegated",
+        "execution": "async"
+      },
+      {
+        "name": "completed",
+        "trigger": "on_task_completed",
+        "execution": "async"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "store_fault": "create_room",
+      "gate": "writing",
+      "in_place": true
+    },
+    {
+      "call": "delegate",
+      "room_id": "room-1",
+      "agent_id": "worker",
+      "task": "Count.",
+      "background": true,
+      "as": "d"
+    },
+    {
+      "wait_for": "writing"
+    },
+    {
+      "cancel": "d"
+    },
+    {
+      "open": "writing"
+    },
+    {
+      "idle": true
+    },
+    {
+      "call": "store.find_rooms",
+      "metadata_filter": {
+        "parent_room_id": "room-1"
+      },
+      "expect": {
+        "result": [
+          {
+            "metadata": {
+              "parent_room_id": "room-1",
+              "task_input": "Count.",
+              "task_status": "cancelled",
+              "task_result": null
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "expect": {
+    "hooks": {
+      "created": [],
+      "delegated": [],
+      "completed": []
+    }
+  }
+}

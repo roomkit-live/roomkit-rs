@@ -1,0 +1,146 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "tasks/an-unannounced-child-s-terminal-write-still-held-past-the-close-s-grace-is-cut",
+  "title": "A failed preparation's write that marks its child failed is the kit's running work: still held once the close's grace passed, it is cut, and the child is never marked",
+  "rules": [
+    "§23.3",
+    "§12.10.4"
+  ],
+  "requirements": [
+    "RK-23.3-104"
+  ],
+  "notes": "Python: tests/tasks/test_delegation_preparation.py; core/mixins/delegation.py _end_preparation (run_to_its_end, held by the kit's close, which cuts it past its grace). A shared transport refuses its attachment; the store write that marks the child is held in its place at a gate no step opens before the close ends; the kit's grace is 200 ms, and the store is the integrator's, which the close leaves open. A write the close did not track would run once the gate opens, after the close. Cited in part: that the write goes on though its caller is cancelled is tasks/an-unannounced-child-s-terminal-write-outlives-its-caller-and-holds-the-close; a caller cancelled more than once and the unwind's budget are not observed.",
+  "setup": {
+    "kit": {
+      "store_faults": true,
+      "store_owner": "integrator",
+      "close_grace_ms": 200
+    },
+    "channels": [
+      {
+        "id": "sms",
+        "type": "sms",
+        "category": "transport"
+      },
+      {
+        "id": "worker",
+        "type": "ai",
+        "category": "intelligence",
+        "on_event": [
+          {
+            "when": {
+              "text": "Count."
+            },
+            "respond": [
+              {
+                "content": {
+                  "type": "text",
+                  "body": "Done."
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "broken",
+        "type": "sms",
+        "on_room_attached": [
+          {
+            "when": {
+              "room_id": "room-1"
+            }
+          },
+          {
+            "gate": "attaching",
+            "fail": "preparation refused"
+          }
+        ]
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "sms"
+          },
+          {
+            "channel_id": "broken"
+          }
+        ]
+      }
+    ],
+    "hooks": [
+      {
+        "name": "delegated",
+        "trigger": "on_task_delegated",
+        "execution": "async"
+      },
+      {
+        "name": "completed",
+        "trigger": "on_task_completed",
+        "execution": "async"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "delegate",
+      "room_id": "room-1",
+      "agent_id": "worker",
+      "task": "Count.",
+      "share_channels": [
+        "broken"
+      ],
+      "background": true,
+      "as": "d"
+    },
+    {
+      "wait_for": "attaching"
+    },
+    {
+      "store_fault": "patch_room_metadata",
+      "room_id": "$r1",
+      "gate": "marking",
+      "in_place": true
+    },
+    {
+      "open": "attaching"
+    },
+    {
+      "wait_for": "marking"
+    },
+    {
+      "close_while_pending": "d",
+      "as": "closing"
+    },
+    {
+      "cancel": "d"
+    },
+    {
+      "await": "closing",
+      "expect": {
+        "result": null
+      }
+    },
+    {
+      "open": "marking"
+    }
+  ],
+  "expect": {
+    "rooms": {
+      "$r1": {
+        "metadata": {
+          "parent_room_id": "room-1",
+          "task_status": "pending",
+          "task_result": null
+        }
+      }
+    },
+    "hooks": {
+      "delegated": [],
+      "completed": []
+    }
+  }
+}

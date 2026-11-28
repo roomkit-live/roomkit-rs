@@ -1,0 +1,143 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "tasks/a-re-prompted-turn-s-context-holds-the-child-room-s-conversation-alone",
+  "title": "A delegated turn's context holds its child room's conversation: on a re-prompt, its messages in order, and none of the tool rows the first turn left",
+  "rules": [
+    "§14.1",
+    "§23.3 step 6"
+  ],
+  "requirements": [
+    "RK-14.1-019"
+  ],
+  "notes": "Python: tests/tasks/test_structured_result.py::test_a_re_prompted_worker_reads_the_conversation_refused_rows_kept; core/mixins/_child_execution.py _child_context. The worker calls a tool, then answers without the result, and is re-prompted once. An agent shared into the child room is handed each turn's context, which it reads as a turn of the room. Cited in part: the read's default limit and cursor (store/a-conversation-read-takes-50-messages-by-default-a-refused-one-included), and a refused row, which the per-reader filter of §7.5 rule 8 may drop from a channel's context (RK-14.1-068).",
+  "setup": {
+    "channels": [
+      {
+        "id": "sms",
+        "type": "sms",
+        "category": "transport"
+      },
+      {
+        "id": "worker",
+        "type": "ai",
+        "tools": [
+          {
+            "name": "lookup",
+            "description": "Look it up.",
+            "returns": "found"
+          }
+        ],
+        "model": {
+          "rounds": [
+            {
+              "calls": [
+                {
+                  "id": "c1",
+                  "name": "lookup"
+                }
+              ]
+            },
+            {
+              "text": "First try."
+            },
+            {
+              "text": "Second try."
+            }
+          ]
+        }
+      },
+      {
+        "id": "observer",
+        "type": "ai",
+        "category": "intelligence"
+      }
+    ],
+    "rooms": [
+      {
+        "id": "parent",
+        "bindings": [
+          {
+            "channel_id": "sms"
+          },
+          {
+            "channel_id": "observer",
+            "category": "intelligence"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "delegate",
+      "room_id": "parent",
+      "agent_id": "worker",
+      "task": "Find the order.",
+      "share_channels": [
+        "observer"
+      ],
+      "require_structured_result": true,
+      "max_result_retries": 1,
+      "wait": true
+    },
+    {
+      "idle": true
+    }
+  ],
+  "expect": {
+    "contexts": {
+      "$r1": {
+        "observer": [
+          {
+            "call": "on_event",
+            "events": [
+              {
+                "type": "message",
+                "source": {
+                  "channel_id": "system"
+                },
+                "content": {
+                  "body": "Find the order."
+                }
+              }
+            ]
+          },
+          {
+            "call": "on_event",
+            "events": [
+              {
+                "type": "message",
+                "source": {
+                  "channel_id": "system"
+                },
+                "content": {
+                  "body": "Find the order."
+                }
+              },
+              {
+                "type": "message",
+                "source": {
+                  "channel_id": "worker"
+                },
+                "content": {
+                  "body": "First try."
+                }
+              },
+              {
+                "type": "message",
+                "source": {
+                  "channel_id": "system"
+                },
+                "content": {
+                  "body": {
+                    "$lacks": "Find the order."
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

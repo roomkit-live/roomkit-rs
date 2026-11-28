@@ -1,0 +1,213 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "tasks/a-task-the-host-wrote-into-the-cache-answers-any-agent-the-latest-kept-winning",
+  "title": "A task the host wrote into a handler's cache answers any agent's repeat; an agent that has its own kept too is answered the latest of the two",
+  "rules": [
+    "§23.4"
+  ],
+  "requirements": [
+    "RK-23.4-033"
+  ],
+  "notes": "Python: tests/tasks/test_cache.py; tasks/cache.py CompletedTaskCache.put and _answer_for (the agent's own entry or the host's, the latest). The assistant's own task holds at a gate while the host writes the same work; once it ends, the assistant's own is the latest, until the host writes again. Another agent never reads the assistant's own.",
+  "setup": {
+    "channels": [
+      {
+        "id": "sms",
+        "type": "sms",
+        "category": "transport"
+      },
+      {
+        "id": "worker",
+        "type": "ai",
+        "category": "intelligence",
+        "on_event": [
+          {
+            "when": {
+              "source_channel_id": "system"
+            },
+            "gate": "working",
+            "respond": [
+              {
+                "content": {
+                  "type": "text",
+                  "body": "Ran."
+                }
+              }
+            ]
+          },
+          {
+            "when": {
+              "source_channel_id": "system"
+            },
+            "respond": [
+              {
+                "content": {
+                  "type": "text",
+                  "body": "Ran."
+                }
+              }
+            ],
+            "repeat": true
+          }
+        ]
+      },
+      {
+        "id": "assistant",
+        "type": "ai",
+        "category": "intelligence"
+      },
+      {
+        "id": "other",
+        "type": "ai",
+        "category": "intelligence"
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "sms"
+          },
+          {
+            "channel_id": "assistant"
+          },
+          {
+            "channel_id": "other"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "delegate_handler",
+      "handler": "tool",
+      "cache": true
+    },
+    {
+      "call": "delegate.handle",
+      "handler": "tool",
+      "room_id": "room-1",
+      "calling_agent_id": "assistant",
+      "arguments": {
+        "agent": "worker",
+        "task": "Count."
+      },
+      "expect": {
+        "result": {
+          "status": "delegated",
+          "agent_id": "worker",
+          "from_cache": {
+            "$absent": true
+          }
+        }
+      }
+    },
+    {
+      "wait_for": "working"
+    },
+    {
+      "call": "task_cache.put",
+      "handler": "tool",
+      "room_id": "room-1",
+      "agent_id": "worker",
+      "task": "Count.",
+      "result": {
+        "status": "completed",
+        "agent_id": "worker",
+        "result": "Written by the host."
+      }
+    },
+    {
+      "call": "delegate.handle",
+      "handler": "tool",
+      "room_id": "room-1",
+      "calling_agent_id": "other",
+      "arguments": {
+        "agent": "worker",
+        "task": "Count."
+      },
+      "expect": {
+        "result": {
+          "status": "completed",
+          "from_cache": true,
+          "agent_id": "worker",
+          "result": "Written by the host."
+        }
+      }
+    },
+    {
+      "open": "working"
+    },
+    {
+      "idle": true
+    },
+    {
+      "call": "delegate.handle",
+      "handler": "tool",
+      "room_id": "room-1",
+      "calling_agent_id": "assistant",
+      "arguments": {
+        "agent": "worker",
+        "task": "Count."
+      },
+      "expect": {
+        "result": {
+          "status": "completed",
+          "from_cache": true,
+          "agent_id": "worker",
+          "result": "Ran."
+        }
+      }
+    },
+    {
+      "call": "delegate.handle",
+      "handler": "tool",
+      "room_id": "room-1",
+      "calling_agent_id": "other",
+      "arguments": {
+        "agent": "worker",
+        "task": "Count."
+      },
+      "expect": {
+        "result": {
+          "status": "completed",
+          "from_cache": true,
+          "agent_id": "worker",
+          "result": "Written by the host."
+        }
+      }
+    },
+    {
+      "call": "task_cache.put",
+      "handler": "tool",
+      "room_id": "room-1",
+      "agent_id": "worker",
+      "task": "Count.",
+      "result": {
+        "status": "completed",
+        "agent_id": "worker",
+        "result": "Written again."
+      }
+    },
+    {
+      "call": "delegate.handle",
+      "handler": "tool",
+      "room_id": "room-1",
+      "calling_agent_id": "assistant",
+      "arguments": {
+        "agent": "worker",
+        "task": "Count."
+      },
+      "expect": {
+        "result": {
+          "status": "completed",
+          "from_cache": true,
+          "agent_id": "worker",
+          "result": "Written again."
+        }
+      }
+    }
+  ]
+}
