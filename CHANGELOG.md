@@ -8,6 +8,19 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `roomkit_ai::image`: the image generation contract (RFC §25), Python's
+  `roomkit.providers.image` (RMK-2218). `ImageProvider` (`generate`,
+  `generate_with_options`, `available_models`, `catalog_entry`,
+  `supports_editing`, `close`) and `MockImageProvider`; `ImageResult`,
+  always a `data:` URI, `ImageAttempt` and `ImageGenerationError`, which
+  keeps every attempt and image of a failed generation; `ImageOptions`
+  and `ImageCapabilities`, whose `validate_request` refuses a request
+  before any billed call as Python does, on every model of Python's
+  OpenAI, Gemini and Meta catalogs; `ImageModelInfo`; `parse_size`,
+  `sniff_mime_type`, `payload_mime_type`, `parse_data_uri`,
+  `to_data_uri`. A generation fails with `ImageError::Value`, Python's
+  `ValueError`, or `ImageError::Provider`; a catalogue entry is an
+  `ImageCatalogEntry`, Python's `ModelInfo` or `ImageModelInfo`.
 - `testing::check_conversation_store(open)`: the store contract (RFC §14)
   as one check a store written outside this crate runs from its own tests
   (RMK-2011). `open` opens an empty store at each call, and gives the

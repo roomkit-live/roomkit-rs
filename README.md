@@ -15,6 +15,8 @@ and conversation state.
 - A provider contract the model providers implement: OpenAI-compatible Chat
   Completions and Responses, native Anthropic Messages and others live in
   [roomkit-providers](https://github.com/roomkit-live/roomkit-providers).
+- An image generation contract of its own (RFC §25), beside the model
+  providers': results, attempts, options checked before any billed request.
 - MCP tools over stdio or Streamable HTTP, plus an Agent Client Protocol adapter.
 - In-memory, SQLite and PostgreSQL storage, with lifecycle and cancellation handling.
 - A core without I/O, separated from the Tokio runtime and external adapters.

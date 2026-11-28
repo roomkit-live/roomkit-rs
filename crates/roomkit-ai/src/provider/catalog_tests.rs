@@ -193,6 +193,107 @@ fn cost_for_rejects_invalid_usage_counters() {
     }
 }
 
+/// Python's `_pricing()` of `test_image.py`: text and image rates.
+fn image_pricing() -> ModelPricing {
+    ModelPricing {
+        image_input_per_million: Some(2.0),
+        image_output_per_million: Some(120.0),
+        ..ModelPricing::new(2.0, 12.0, Date::new(2026, 8, 7).unwrap()).unwrap()
+    }
+}
+
+// Python: tests/test_providers/test_image.py::test_cost_for_prices_image_tokens_on_their_own_meter
+#[test]
+fn cost_for_prices_image_tokens_on_their_own_meter() {
+    let cost = image_pricing()
+        .cost_for(&usage(json!({
+            "input_tokens": 1_000_000,
+            "input_image_tokens": 1_000_000,
+            "output_tokens": 1_000_000,
+            "output_image_tokens": 1_000_000,
+        })))
+        .unwrap();
+    approx(cost, 2.0 + 2.0 + 12.0 + 120.0);
+}
+
+// Python: tests/test_providers/test_image.py::test_cost_for_prices_one_nano_banana_pro_image
+#[test]
+fn cost_for_prices_one_nano_banana_pro_image() {
+    let cost = image_pricing()
+        .cost_for(&usage(json!({"output_image_tokens": 1120})))
+        .unwrap();
+    approx(cost, 0.1344);
+}
+
+// Python: tests/test_providers/test_image.py::test_cost_for_ignores_image_counters_without_rates
+#[test]
+fn cost_for_ignores_image_counters_without_rates() {
+    let pricing = ModelPricing {
+        image_input_per_million: None,
+        image_output_per_million: None,
+        ..image_pricing()
+    };
+    let counted = json!({"input_image_tokens": 10_000, "output_image_tokens": 10_000});
+    approx(pricing.cost_for(&usage(counted)).unwrap(), 0.0);
+}
+
+// Python: tests/test_providers/test_image.py::test_cost_for_is_unchanged_for_text_only_usage
+#[test]
+fn cost_for_is_unchanged_for_text_only_usage() {
+    let pricing = ModelPricing {
+        cache_read_per_million: Some(0.5),
+        ..ModelPricing::new(5.0, 30.0, day()).unwrap()
+    };
+    let counted =
+        json!({"input_tokens": 1000, "output_tokens": 500, "cache_read_input_tokens": 2000});
+    let cost = pricing.cost_for(&usage(counted)).unwrap();
+    approx(
+        cost,
+        (1000.0 * 5.0 + 500.0 * 30.0 + 2000.0 * 0.5) / 1_000_000.0,
+    );
+}
+
+// Python: tests/test_providers/test_image.py::test_image_input_tokens_count_toward_the_long_context_threshold
+#[test]
+fn image_input_tokens_count_toward_the_long_context_threshold() {
+    let pricing = ModelPricing {
+        long_context_threshold_tokens: Some(100),
+        long_context_input_multiplier: 2.0,
+        long_context_output_multiplier: 1.5,
+        ..image_pricing()
+    };
+    let counted = json!({"input_image_tokens": 200, "output_image_tokens": 100});
+    let cost = pricing.cost_for(&usage(counted)).unwrap();
+    approx(
+        cost,
+        (200.0 * 2.0 * 2.0 + 100.0 * 120.0 * 1.5) / 1_000_000.0,
+    );
+}
+
+// Python: tests/test_providers/test_image.py::test_image_counters_must_be_non_negative_integers
+#[test]
+fn image_counters_must_be_non_negative_integers() {
+    let refused = image_pricing()
+        .cost_for(&usage(json!({"output_image_tokens": -1})))
+        .unwrap_err();
+    assert!(
+        refused.to_string().contains("output_image_tokens"),
+        "{refused}"
+    );
+}
+
+// Python: tests/test_providers/test_image.py::test_image_rates_reject_negative_values
+#[test]
+fn image_rates_reject_negative_values() {
+    let pricing = ModelPricing {
+        image_output_per_million: Some(-1.0),
+        ..image_pricing()
+    };
+    assert!(pricing.cost_for(&Metadata::new()).is_err());
+    let written = serde_json::to_value(&pricing).unwrap();
+    assert!(serde_json::from_value::<ModelPricing>(written).is_err());
+}
+
 /// A provider no catalogue carries, as Python's `_Bare`.
 struct Bare;
 

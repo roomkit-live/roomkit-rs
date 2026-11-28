@@ -110,7 +110,7 @@ roomkit_acp = ["roomkit"]
 # What an image result, a size or a data: URI does not read: Python's
 # validators' and parsers' `ValueError` (RFC §25).
 "roomkit_ai::image::ImageResultError" = { python = "ValueError" }
-"roomkit_ai::image::SizeError" = { python = "ValueError" }
+"roomkit_ai::image::ImageRequestError" = { python = "ValueError", members = ["new"] }
 "roomkit_ai::image::DataUriError" = { python = "ValueError" }
 # Served-entry constructor integers and a missing frontmatter accessor key (HITL 450fa510).
 "roomkit_ai::SkillResourceSize" = { python = "int" }
@@ -151,6 +151,13 @@ roomkit_acp = ["roomkit"]
 "roomkit_ai::ToolDeclarationOrigin" = { field = "roomkit.DeclaredTool.__init__(origin)", values = ["always", "pinned", "sticky", "revealed"] }
 "roomkit_ai::ResponseSchemaFailure" = { field = "roomkit.ResponseSchemaError.__init__(reason)", values = ["unsupported", "refusal", "truncated", "invalid_json"] }
 "roomkit_ai::image::ImageAttemptStatus" = { field = "roomkit.ImageAttempt.__init__(status)", values = ["started", "preview", "succeeded", "failed", "unknown"] }
+"roomkit_ai::image::ImageQuality" = { field = "roomkit.ImageOptions.__init__(quality)", values = ["auto", "low", "medium", "high", "xhigh", "max"] }
+"roomkit_ai::image::ImageBackground" = { field = "roomkit.ImageOptions.__init__(background)", values = ["auto", "opaque", "transparent"] }
+"roomkit_ai::image::ImageOutputFormat" = { field = "roomkit.ImageOptions.__init__(output_format)", values = ["png", "jpeg", "webp"] }
+"roomkit_ai::image::ImageModeration" = { field = "roomkit.ImageOptions.__init__(moderation)", values = ["auto", "low"] }
+"roomkit_ai::image::ImageInputFidelity" = { field = "roomkit.ImageOptions.__init__(input_fidelity)", values = ["low", "high"] }
+"roomkit_ai::image::ImageThinkingLevel" = { field = "roomkit.ImageOptions.__init__(thinking_level)", values = ["minimal", "medium", "high"] }
+"roomkit_ai::image::ImageSearchType" = { field = "roomkit.ImageOptions.__init__(search_types)", values = ["web_search", "image_search"] }
 
 # The Python exception classes each error enum's variants stand for, by the
 # enum's path, read from the Python source (the snapshot holds no class's
@@ -1225,6 +1232,27 @@ rust = "roomkit_ai::knowledge::MockKnowledgeSource"
 members = ["search_calls", "index_calls", "closed"]
 approved = "2026-11-02"
 reason = "Python's instance attributes search_calls, index_calls and closed, as MockMemoryProvider's (HITL 01cca70d, RMK-1178; architecture: Tools)"
+
+[[exception]]
+rust = "roomkit_ai::image::ImageSize"
+approved = "2026-11-28"
+reason = "language: the values of Python's Literal of ImageOptions.image_size, '512', '1K', '2K' and '4K', are no Rust names: variants Tier512, Tier1K, Tier2K and Tier4K, written as Python writes the values"
+
+[[exception]]
+rust = "roomkit_ai::image::ImageCatalogEntry"
+approved = "2026-11-28"
+reason = "language: Python's image catalogue is a list[ModelInfo] holding ModelInfo and its subclass ImageModelInfo, which a Rust list cannot hold: one variant each, available_models and catalog_entry returning it (HITL 4071eaf1)"
+
+[[exception]]
+rust = "roomkit_ai::image::ImageError"
+approved = "2026-11-28"
+reason = "language: a generation raises Python's ValueError or ProviderError, two classes a Rust result holds as one enum of two variants, Value and Provider (HITL 0e571af4)"
+
+[[exception]]
+rust = "roomkit_ai::image::MockImageProvider"
+members = ["calls"]
+approved = "2026-11-28"
+reason = "Python's instance attribute `calls`, what the mock was asked, which the snapshot lists no attribute of: a method of the same name, each call a tuple (architecture: Tools)"
 
 [[exception]]
 rust = "roomkit_ai::image::ImageGenerationError"

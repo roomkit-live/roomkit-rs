@@ -7,19 +7,32 @@
 //! takes as it is, so it enters a room, or comes back as the next edit's
 //! reference, without conversion.
 
+mod capabilities;
+mod catalog;
+mod failure;
 mod geometry;
+mod mock;
+mod options;
+mod provider;
+mod refusal;
 mod result;
 
 use roomkit_core::rules::transcript;
 
+pub use self::capabilities::ImageCapabilities;
+pub use self::catalog::{ImageCatalogEntry, ImageModelInfo};
+pub use self::failure::{ImageGenerationError, ImageProgressCallback, notify_image_progress};
 pub use self::geometry::{
-    PayloadMimeTypeOptions, SizeError, SniffMimeTypeOptions, parse_size, payload_mime_type,
-    sniff_mime_type,
+    PayloadMimeTypeOptions, SniffMimeTypeOptions, parse_size, payload_mime_type, sniff_mime_type,
 };
-pub use self::result::{
-    ImageAttempt, ImageAttemptStatus, ImageGenerationError, ImageProgressCallback, ImageResult,
-    ImageResultError, notify_image_progress,
+pub use self::mock::{MockImageProvider, MockImageProviderOptions};
+pub use self::options::{
+    ImageBackground, ImageInputFidelity, ImageModeration, ImageOptions, ImageOutputFormat,
+    ImageQuality, ImageSearchType, ImageSize, ImageThinkingLevel,
 };
+pub use self::provider::{GenerateOptions, GenerateWithOptionsOptions, ImageError, ImageProvider};
+pub use self::refusal::ImageRequestError;
+pub use self::result::{ImageAttempt, ImageAttemptStatus, ImageResult, ImageResultError};
 pub use roomkit_core::rules::transcript::DataUriError;
 
 /// The capability tag of an image-generating model's catalog entry:

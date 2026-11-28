@@ -855,3 +855,43 @@ fn an_image_s_media_type_falls_back_to_png_by_default() {
     let kind = parse_data_uri("data:;base64,QUJD", ParseDataUriOptions::default());
     assert_eq!(kind.map(|(kind, _)| kind), Ok("image/png".to_owned()));
 }
+
+#[test]
+fn an_image_generation_asks_one_image_of_the_model_s_size_by_default() {
+    use roomkit_ai::image::{GenerateOptions, GenerateWithOptionsOptions};
+    let generate = GenerateOptions::default();
+    // roomkit.ImageProvider.generate(size) = None
+    assert!(generate.size.is_none());
+    // roomkit.ImageProvider.generate(n) = 1
+    assert_eq!(generate.n, 1);
+    // roomkit.ImageProvider.generate(reference_images) = None
+    assert_eq!(generate.reference_images, Vec::new());
+    let with_options = GenerateWithOptionsOptions::default();
+    // roomkit.ImageProvider.generate_with_options(size) = None
+    assert!(with_options.size.is_none());
+    // roomkit.ImageProvider.generate_with_options(n) = 1
+    assert_eq!(with_options.n, 1);
+    // roomkit.ImageProvider.generate_with_options(reference_images) = None
+    assert_eq!(with_options.reference_images, Vec::new());
+    // roomkit.ImageProvider.generate_with_options(options) = None
+    assert!(with_options.options.is_none());
+    // roomkit.ImageProvider.generate_with_options(mask) = None
+    assert!(with_options.mask.is_none());
+    // roomkit.ImageProvider.generate_with_options(on_progress) = None
+    assert!(with_options.on_progress.is_none());
+}
+
+#[test]
+fn the_mock_image_provider_draws_a_png_with_mock_image_by_default() {
+    let options = roomkit_ai::image::MockImageProviderOptions::default();
+    // roomkit.MockImageProvider.__init__(images) = None
+    assert_eq!(options.images, Vec::<Vec<u8>>::new());
+    // roomkit.MockImageProvider.__init__(model) = 'mock-image'
+    assert_eq!(options.model, "mock-image");
+    // roomkit.MockImageProvider.__init__(mime_type) = 'image/png'
+    assert_eq!(options.mime_type, "image/png");
+    // roomkit.MockImageProvider.__init__(supports_editing) = True
+    assert!(options.supports_editing);
+    // roomkit.MockImageProvider.__init__(revised_prompt) = None
+    assert!(options.revised_prompt.is_none());
+}

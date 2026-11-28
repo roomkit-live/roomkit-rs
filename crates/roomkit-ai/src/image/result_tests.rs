@@ -4,7 +4,10 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::json;
 
 use super::*;
-use crate::image::to_data_uri;
+use crate::ProviderError;
+use crate::image::{
+    ImageGenerationError, ImageProgressCallback, notify_image_progress, to_data_uri,
+};
 
 /// A one-pixel PNG, Python's `PNG` of `test_image.py`.
 fn png() -> Vec<u8> {

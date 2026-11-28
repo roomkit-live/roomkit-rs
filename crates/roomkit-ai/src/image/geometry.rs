@@ -2,9 +2,9 @@
 //! bytes: Python's `parse_size`, `sniff_mime_type` and `payload_mime_type`
 //! (`roomkit.providers.image`).
 
-use std::fmt;
-
 use base64::{Engine, engine::general_purpose::STANDARD};
+
+use super::ImageRequestError;
 
 /// The media type an image whose bytes say nothing is given.
 const FALLBACK: &str = "image/png";
@@ -43,54 +43,33 @@ impl Default for PayloadMimeTypeOptions {
     }
 }
 
-/// Why a size does not read: Python's `ValueError` of `parse_size`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SizeError {
-    /// The size given.
-    size: String,
-    /// Whether it named its two dimensions, one of them not positive.
-    not_positive: bool,
-}
-
-impl fmt::Display for SizeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let size = &self.size;
-        if self.not_positive {
-            write!(f, "size must have positive dimensions, got '{size}'")
-        } else {
-            write!(
-                f,
-                "size must be 'WIDTHxHEIGHT' (e.g. '1024x1024'), got '{size}'"
-            )
-        }
-    }
-}
-
-impl std::error::Error for SizeError {}
-
 /// The width and the height `size` names: two whole numbers joined by `x`
 /// (in either case), the whitespace around them ignored.
 ///
 /// # Errors
 ///
-/// [`SizeError`] for anything else, or a dimension that is not positive.
-pub fn parse_size(size: &str) -> Result<(u32, u32), SizeError> {
-    let refused = |not_positive| SizeError {
-        size: size.to_owned(),
-        not_positive,
+/// [`ImageRequestError`] for anything else, or a dimension that is not
+/// positive.
+pub fn parse_size(size: &str) -> Result<(u32, u32), ImageRequestError> {
+    let unread = || {
+        ImageRequestError::new(format!(
+            "size must be 'WIDTHxHEIGHT' (e.g. '1024x1024'), got '{size}'"
+        ))
     };
     let written = size.trim().to_lowercase();
-    let (width, height) = written.split_once('x').ok_or_else(|| refused(false))?;
+    let (width, height) = written.split_once('x').ok_or_else(unread)?;
     let digits = |text: &str| !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit());
     if !digits(width) || !digits(height) {
-        return Err(refused(false));
+        return Err(unread());
     }
     // Digits that overflow are still digits: Python reads them, and the
     // dimension is positive.
     let read = |text: &str| text.parse::<u32>().unwrap_or(u32::MAX);
     let (width, height) = (read(width), read(height));
     if width == 0 || height == 0 {
-        return Err(refused(true));
+        return Err(ImageRequestError::new(format!(
+            "size must have positive dimensions, got '{size}'"
+        )));
     }
     Ok((width, height))
 }
