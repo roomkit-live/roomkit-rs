@@ -52,6 +52,10 @@ const LEVEL_0_EVENTS: [&str; 21] = [
     "identity_timeout",
 ];
 
+/// The framework events of a channel's circuit breaker (RFC §8.2, §13.1),
+/// which name no room.
+const BREAKER_EVENTS: [&str; 2] = ["circuit_breaker_opened", "circuit_breaker_closed"];
+
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -146,6 +150,9 @@ pub(crate) trait WorkerControl: Send + Sync {
 /// One run of one scenario.
 pub(crate) struct Run {
     kit: crate::Kit,
+    /// The virtual clock the kit's breakers and retries read, when the
+    /// scenario sets `setup.virtual_clock` (`crate::clock`).
+    pub(crate) clock: Option<Arc<crate::clock::VirtualClock>>,
     pub(crate) workers: Option<Arc<dyn WorkerControl>>,
     /// Which actual executor handled a scripted turn, including after its channel was rebuilt.
     pub(crate) telemetry: Mutex<BTreeMap<String, Arc<roomkit::telemetry::MockTelemetryProvider>>>,
@@ -258,6 +265,7 @@ impl Run {
             .chain(&crate::verification_calls::VERIFICATION_EVENTS)
             .chain(&crate::ai_hooks::AI_EVENTS)
             .chain(&crate::locks::LOCK_EVENTS)
+            .chain(&BREAKER_EVENTS)
             .copied()
             .collect();
         let events = EventTap::on(&kit, &tapped);
@@ -267,6 +275,7 @@ impl Run {
             .unwrap_or_default();
         Self {
             kit,
+            clock: None,
             processes: Mutex::default(),
             closed: Mutex::default(),
             store,

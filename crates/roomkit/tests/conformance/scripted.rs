@@ -308,6 +308,19 @@ fn refusal(reaction: &Value) -> Option<roomkit::RoomKitError> {
     Some(roomkit::RoomKitError::ProviderDelivery { result })
 }
 
+/// The built-in error a reaction's `raises` names (README, Reactions),
+/// raised under its Python class, as roomkit's runner raises the class
+/// itself, with its message.
+fn raised(reaction: &Value) -> Option<ChannelError> {
+    let raises = reaction.get("raises")?;
+    let kind = raises["kind"].as_str().unwrap_or_default();
+    let message = raises["message"].as_str().unwrap_or_default().to_owned();
+    Some(Box::new(roomkit::ClassedError::new(
+        kind,
+        ScriptedFailure(message),
+    )))
+}
+
 /// `event` with a parse reaction's `parsed` patch: its members replace the
 /// event's, those of its `source` the event's source's.
 fn parsed_event(event: RoomEvent, patch: &Value) -> Result<RoomEvent, ScriptedFailure> {
@@ -516,6 +529,9 @@ impl ScriptedChannel {
         perform(&run, &reaction, &scope).await?;
         if let Some(refusal) = refusal(&reaction) {
             return Err(Box::new(refusal));
+        }
+        if let Some(raised) = raised(&reaction) {
+            return Err(raised);
         }
         let output = reaction.get("output").cloned().unwrap_or_default();
         let channel_id = self.declaration.channel_id.to_string();

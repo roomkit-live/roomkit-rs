@@ -226,6 +226,7 @@ pub(crate) async fn run_with(
     let snapshot_store = crate::observer_store(&store, &store_file).await;
     let mut run = Run::new(kit, store, snapshot_store, scenario);
     run.workers = workers;
+    run.clock = crate::clock::of(&setup, run.kit());
     if let Some(recorder) = telemetry {
         lock(&run.telemetry).insert("owner".to_owned(), recorder);
     }

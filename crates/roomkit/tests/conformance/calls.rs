@@ -233,6 +233,7 @@ pub(crate) async fn call(
             (crate::routing_calls::call(run, name, spec).await?, None)
         }
         "delivery.cancel" | "delivery.wait" => (handle_call(run, name, spec).await?, None),
+        "clock.advance" => (crate::clock::advance(run, spec).await, None),
         "regenerate_response" | "regenerate_target" => regenerate_call(run, name, spec).await?,
         _ => (other_call(run, name, spec).await?, None),
     })

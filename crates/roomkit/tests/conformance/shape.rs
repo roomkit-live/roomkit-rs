@@ -35,6 +35,7 @@ const SETUP: &[&str] = &[
     "processes",
     "executors",
     "event_handlers",
+    "virtual_clock",
 ];
 const PROCESS: &[&str] = &["id"];
 const EVENT_HANDLER: &[&str] = &["event", "reactions"];
@@ -390,6 +391,7 @@ const REACTION: &[&str] = &[
     "writes_record",
     "parsed",
     "refuse",
+    "raises",
     "after_turn",
     "on_cut",
     "spawn",
@@ -397,6 +399,8 @@ const REACTION: &[&str] = &[
 /// A task the call starts and does not wait for (README, Reactions).
 const SPAWN: &[&str] = &["gate", "delay_ms", "do", "after_do_gate"];
 const REFUSE: &[&str] = &["error", "code", "retryable", "provider_message_id"];
+/// The built-in errors a reaction's `raises` names (README, Reactions).
+const RAISED_KINDS: &[&str] = &["TimeoutError"];
 const WHEN: &[&str] = &[
     "room_id",
     "text",
@@ -527,6 +531,7 @@ fn base_arguments(call: &str) -> Option<&'static [&'static str]> {
         "process_inbound" => &["message", "room_id", "defer_delivery"],
         "delivery.cancel" => &["of", "reason", "timeout_ms"],
         "delivery.wait" => &["of"],
+        "clock.advance" => &["ms", "waiters"],
         "regenerate_response" => &["room_id", "trigger_id"],
         "send_event" => &[
             "room_id",
@@ -1360,6 +1365,19 @@ fn reaction_with_return(reaction: &Value, path: &str, found: &mut Vec<String>, k
         &format!("{path}.refuse"),
         found,
     );
+    optional(
+        &reaction["raises"],
+        RAISES,
+        &format!("{path}.raises"),
+        found,
+    );
+    if let Some(kind) = reaction.get("raises").map(|raises| &raises["kind"])
+        && !kind
+            .as_str()
+            .is_some_and(|kind| RAISED_KINDS.contains(&kind))
+    {
+        found.push(format!("{path}.raises.kind: {kind}"));
+    }
     optional(
         &reaction["output"],
         OUTPUT,

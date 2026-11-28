@@ -26,6 +26,7 @@ mod below_kit;
 mod calls;
 mod channel_verbs;
 mod chat_wire;
+mod clock;
 mod compare;
 mod continuation;
 mod delegate_calls;
