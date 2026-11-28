@@ -1,0 +1,140 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "mcp-host/a-url-the-transports-cannot-reach-as-given-is-refused-at-construction",
+  "title": "A provider given a URL that is not HTTP(S), names no host, or carries credentials or a fragment is refused at construction, by either constructor; an HTTP(S) URL with a host is not",
+  "rules": [
+    "§21.2"
+  ],
+  "requirements": [
+    "RK-21.2-010"
+  ],
+  "notes": "Python: tools/mcp.py _check_endpoint, tests/test_mcp_constructor.py; roomkit-rs: roomkit-mcp provider/construction.rs. Each refusal is the call's invalid_argument, raised by the public constructor before any operation, so the peer is never reached. The last call builds a provider on a URL no peer serves and only reads connected, which opens nothing.",
+  "steps": [
+    {
+      "call": "mcp_session",
+      "constructor": "direct",
+      "url": "ftp://127.0.0.1/mcp",
+      "discover": false,
+      "peer": {
+        "replies": []
+      },
+      "operations": [
+        {
+          "method": "connect"
+        }
+      ],
+      "expect": {
+        "error": "invalid_argument"
+      }
+    },
+    {
+      "call": "mcp_session",
+      "constructor": "from_url",
+      "url": "file:///srv/mcp",
+      "discover": false,
+      "peer": {
+        "replies": []
+      },
+      "operations": [
+        {
+          "method": "connect"
+        }
+      ],
+      "expect": {
+        "error": "invalid_argument"
+      }
+    },
+    {
+      "call": "mcp_session",
+      "constructor": "from_url",
+      "url": "http:///mcp",
+      "discover": false,
+      "peer": {
+        "replies": []
+      },
+      "operations": [
+        {
+          "method": "connect"
+        }
+      ],
+      "expect": {
+        "error": "invalid_argument"
+      }
+    },
+    {
+      "call": "mcp_session",
+      "constructor": "direct",
+      "url": "http://alice:secret@127.0.0.1/mcp",
+      "discover": false,
+      "peer": {
+        "replies": []
+      },
+      "operations": [
+        {
+          "method": "connect"
+        }
+      ],
+      "expect": {
+        "error": "invalid_argument"
+      }
+    },
+    {
+      "call": "mcp_session",
+      "constructor": "from_url",
+      "url": "https://alice@127.0.0.1/mcp",
+      "discover": false,
+      "peer": {
+        "replies": []
+      },
+      "operations": [
+        {
+          "method": "connect"
+        }
+      ],
+      "expect": {
+        "error": "invalid_argument"
+      }
+    },
+    {
+      "call": "mcp_session",
+      "constructor": "from_url",
+      "url": "http://127.0.0.1/mcp#tools",
+      "discover": false,
+      "peer": {
+        "replies": []
+      },
+      "operations": [
+        {
+          "method": "connect"
+        }
+      ],
+      "expect": {
+        "error": "invalid_argument"
+      }
+    },
+    {
+      "call": "mcp_session",
+      "constructor": "direct",
+      "url": "https://127.0.0.1:9/mcp?tenant=a",
+      "discover": false,
+      "peer": {
+        "replies": []
+      },
+      "operations": [
+        {
+          "method": "connected"
+        }
+      ],
+      "expect": {
+        "result": {
+          "results": [
+            {
+              "result": false
+            }
+          ],
+          "requests": []
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,129 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "mcp-host/the-instructions-a-server-publishes-are-kept-from-the-negotiated-result",
+  "title": "The instructions a server publishes when it connects are the provider's, from its handshake or its discovery, and null from a server that published none",
+  "rules": [
+    "§21.2"
+  ],
+  "requirements": [
+    "RK-21.2-033",
+    "RK-21.2-034"
+  ],
+  "notes": "Python: tools/mcp.py MCPToolProvider.instructions, tests/test_mcp_server_instructions.py::test_the_provider_keeps_what_the_server_published; roomkit-rs: roomkit-mcp provider.rs instructions. The public instructions property read after connect, from an initialize result (MCP 2025-11-25) and from a server/discover result (MCP 2026-07-28). RK-21.2-034's server_info part is cited by mcp-host/handshake-copies and the discovery scenarios.",
+  "steps": [
+    {
+      "call": "mcp_session",
+      "discover": false,
+      "peer": {
+        "server_info": {
+          "name": "docs",
+          "version": "1"
+        },
+        "instructions": "Search the index before you read a file.",
+        "replies": []
+      },
+      "operations": [
+        {
+          "method": "connect"
+        },
+        {
+          "method": "instructions"
+        },
+        {
+          "method": "close"
+        }
+      ],
+      "expect": {
+        "result": {
+          "results": [
+            {
+              "result": null
+            },
+            {
+              "result": "Search the index before you read a file."
+            },
+            {
+              "result": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "call": "mcp_session",
+      "discover": false,
+      "peer": {
+        "era": "2026-07-28",
+        "server_info": {
+          "name": "docs",
+          "version": "1"
+        },
+        "instructions": "Name the file you read.",
+        "replies": []
+      },
+      "operations": [
+        {
+          "method": "connect"
+        },
+        {
+          "method": "instructions"
+        },
+        {
+          "method": "close"
+        }
+      ],
+      "expect": {
+        "result": {
+          "results": [
+            {
+              "result": null
+            },
+            {
+              "result": "Name the file you read."
+            },
+            {
+              "result": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "call": "mcp_session",
+      "discover": false,
+      "peer": {
+        "server_info": {
+          "name": "docs",
+          "version": "1"
+        },
+        "replies": []
+      },
+      "operations": [
+        {
+          "method": "connect"
+        },
+        {
+          "method": "instructions"
+        },
+        {
+          "method": "close"
+        }
+      ],
+      "expect": {
+        "result": {
+          "results": [
+            {
+              "result": null
+            },
+            {
+              "result": null
+            },
+            {
+              "result": null
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

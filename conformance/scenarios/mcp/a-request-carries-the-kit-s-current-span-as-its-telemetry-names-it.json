@@ -1,0 +1,178 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "mcp/a-request-carries-the-kit-s-current-span-as-its-telemetry-names-it",
+  "title": "A provider given propagate_trace_context carries, on a call made under the kit's current span, the traceparent, tracestate and baggage the kit's telemetry provider gives when it names that span, and none of its other keys; a provider not given it carries none",
+  "rules": [
+    "§21.2",
+    "§15.7"
+  ],
+  "requirements": [
+    "RK-21.2-057"
+  ],
+  "notes": "Python: tools/_mcp_capture.py (_host_trace, _TRACE_KEYS); roomkit-rs: roomkit-mcp trace.rs. The kit's recording telemetry names the span it is handed by its id under traceparent, tracestate, baggage and span. The call carries the three trace keys of one span id the kit's provider named, whichever span that is, and not span, outside them; the same call on a provider not given it carries none. Not observed: that the span named is the kit's current one, which span is current as a tool runs being left to each implementation by the RFC (roomkit's is its broadcast's); a caller's own trace context written in a request's _meta (no step makes a request under a kit's span), nor the application's own span or what an MCP library writes from it, which needs a tracing library.",
+  "setup": {
+    "kit": {
+      "telemetry": true,
+      "injects_context": true
+    },
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport"
+      },
+      {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "calls": [
+                {
+                  "id": "call-1",
+                  "name": "mcp__traced__lookup",
+                  "arguments": {
+                    "query": "q"
+                  }
+                },
+                {
+                  "id": "call-2",
+                  "name": "mcp__plain__lookup",
+                  "arguments": {
+                    "query": "q"
+                  }
+                }
+              ]
+            },
+            {
+              "text": "Done."
+            }
+          ]
+        },
+        "mcp_servers": [
+          {
+            "label": "traced",
+            "tools": [
+              {
+                "name": "lookup",
+                "description": "Look up.",
+                "input_schema": {
+                  "type": "object",
+                  "properties": {
+                    "query": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "query"
+                  ]
+                },
+                "returns": "traced found"
+              }
+            ],
+            "propagate_trace_context": true,
+            "declare": "aliases"
+          },
+          {
+            "label": "plain",
+            "tools": [
+              {
+                "name": "lookup",
+                "description": "Look up.",
+                "input_schema": {
+                  "type": "object",
+                  "properties": {
+                    "query": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "query"
+                  ]
+                },
+                "returns": "plain found"
+              }
+            ],
+            "declare": "aliases"
+          }
+        ]
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "agent",
+            "category": "intelligence"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "Look it up."
+        }
+      }
+    }
+  ],
+  "expect": {
+    "mcp_calls": {
+      "traced": [
+        {
+          "name": "lookup",
+          "arguments": {
+            "query": "q"
+          },
+          "_meta": {
+            "traceparent": {
+              "$as": "tool_span"
+            },
+            "tracestate": {
+              "$as": "tool_span"
+            },
+            "baggage": {
+              "$as": "tool_span"
+            },
+            "span": {
+              "$absent": true
+            }
+          }
+        }
+      ],
+      "plain": [
+        {
+          "name": "lookup",
+          "arguments": {
+            "query": "q"
+          },
+          "_meta": {
+            "traceparent": {
+              "$absent": true
+            },
+            "tracestate": {
+              "$absent": true
+            },
+            "baggage": {
+              "$absent": true
+            },
+            "span": {
+              "$absent": true
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,78 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "acp/a-channel-takes-a-command-or-a-transport-never-both",
+  "title": "An ACP channel is given a command, which spawns its agent, or a transport, which reaches one it does not spawn: given both, or neither, it is refused at construction",
+  "rules": [
+    "Appendix A.9.1"
+  ],
+  "requirements": [
+    "RK-A.9.1-011"
+  ],
+  "notes": "Python: channels/acp_transport.py _agent_transport, tests/test_channels/test_acp.py::TestACPChannel::test_command_and_transport_are_mutually_exclusive; roomkit-rs: crates/roomkit-acp/tests/acp/channel.rs::the_channel_takes_a_command_or_a_transport_and_an_absolute_cwd. Each refusal is register_channel's invalid_argument; a command alone and a transport alone are taken.",
+  "steps": [
+    {
+      "call": "register_channel",
+      "channel": {
+        "id": "coder",
+        "type": "ai",
+        "acp": {
+          "cwd": "/",
+          "process": {
+            "args": [],
+            "says": "x"
+          },
+          "reach": "both"
+        }
+      },
+      "expect": {
+        "error": "invalid_argument"
+      }
+    },
+    {
+      "call": "register_channel",
+      "channel": {
+        "id": "coder-2",
+        "type": "ai",
+        "acp": {
+          "cwd": "/",
+          "agent": {},
+          "reach": "neither"
+        }
+      },
+      "expect": {
+        "error": "invalid_argument"
+      }
+    },
+    {
+      "call": "register_channel",
+      "channel": {
+        "id": "coder-3",
+        "type": "ai",
+        "acp": {
+          "cwd": "/",
+          "process": {
+            "args": [],
+            "says": "x"
+          }
+        }
+      },
+      "expect": {
+        "result": null
+      }
+    },
+    {
+      "call": "register_channel",
+      "channel": {
+        "id": "coder-4",
+        "type": "ai",
+        "acp": {
+          "cwd": "/",
+          "agent": {}
+        }
+      },
+      "expect": {
+        "result": null
+      }
+    }
+  ]
+}

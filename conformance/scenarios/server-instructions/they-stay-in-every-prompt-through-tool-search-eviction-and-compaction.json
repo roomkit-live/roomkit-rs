@@ -1,0 +1,218 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "server-instructions/they-stay-in-every-prompt-through-tool-search-eviction-and-compaction",
+  "title": "The servers' instructions are the same in every prompt of every turn: Tool Search does not hide them, and neither a result's eviction nor a compaction between two rounds reaches them",
+  "rules": [
+    "§21.2",
+    "§6.4",
+    "§21.5"
+  ],
+  "requirements": [
+    "RK-21.2-039"
+  ],
+  "notes": "Python: channels/_ai_context.py, tests/test_mcp_server_instructions.py::test_tool_search_leaves_them_in_the_prompt; roomkit-rs: roomkit-ai channel.rs. The agent runs Tool Search, which hides its unpinned tools; a call's result past its eviction threshold reaches the model as a preview to read back with read_stored_result; and its memory compacts the history between the two rounds of the first turn; a second turn follows. Every request's system prompt is the same text, which holds the agent's own prompt then the servers' block (read on the first turn's generation hook). Not observed: what a provider caches, which the corpus's models do not.",
+  "setup": {
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport"
+      },
+      {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "calls": [
+                {
+                  "id": "call-1",
+                  "name": "report",
+                  "arguments": {}
+                }
+              ]
+            },
+            {
+              "text": "One."
+            },
+            {
+              "text": "Two."
+            }
+          ]
+        },
+        "system_prompt": "You are the files agent.",
+        "server_instructions": {
+          "files": "Search the index before you read a file."
+        },
+        "tools": [
+          {
+            "name": "report",
+            "description": "A long report.",
+            "parameters": {
+              "type": "object"
+            },
+            "returns": "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word "
+          },
+          {
+            "name": "tool_1",
+            "description": "Tool 1.",
+            "parameters": {
+              "type": "object"
+            },
+            "returns": "ok"
+          },
+          {
+            "name": "tool_2",
+            "description": "Tool 2.",
+            "parameters": {
+              "type": "object"
+            },
+            "returns": "ok"
+          },
+          {
+            "name": "tool_3",
+            "description": "Tool 3.",
+            "parameters": {
+              "type": "object"
+            },
+            "returns": "ok"
+          }
+        ],
+        "tool_search": true,
+        "tool_search_pinned": [
+          "report"
+        ],
+        "evict_threshold_tokens": 100,
+        "memory": {
+          "compacts": [
+            {
+              "messages": [
+                {
+                  "role": "user",
+                  "text": "Compacted history."
+                }
+              ],
+              "keep": 2
+            }
+          ]
+        }
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "agent",
+            "category": "intelligence"
+          }
+        ]
+      }
+    ],
+    "hooks": [
+      {
+        "name": "generation",
+        "trigger": "before_ai_generation"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "Report."
+        }
+      }
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "Again."
+        }
+      }
+    }
+  ],
+  "expect": {
+    "models": {
+      "agent": [
+        {
+          "system_prompt": {
+            "$as": "prompt"
+          },
+          "tools": {
+            "tool_1": {
+              "$absent": true
+            },
+            "find_tools": {
+              "$present": true
+            }
+          }
+        },
+        {
+          "system_prompt": {
+            "$as": "prompt"
+          },
+          "tool_results": [
+            {
+              "tool_call_id": "call-1",
+              "content": {
+                "$contains": "read_stored_result"
+              }
+            }
+          ],
+          "messages": [
+            {
+              "role": "user",
+              "text": {
+                "$starts_with": "Compacted history."
+              }
+            },
+            {
+              "role": "assistant"
+            },
+            {
+              "role": "tool"
+            }
+          ]
+        },
+        {
+          "system_prompt": {
+            "$as": "prompt"
+          }
+        }
+      ]
+    },
+    "hooks": {
+      "generation": [
+        {
+          "trigger": "before_ai_generation",
+          "generation": {
+            "system_prompt": {
+              "$contains": [
+                "You are the files agent.",
+                "files",
+                "<server_instructions>\nSearch the index before you read a file.\n</server_instructions>"
+              ]
+            }
+          }
+        },
+        {
+          "trigger": "before_ai_generation"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,132 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "acp/a-channel-given-a-command-spawns-its-agent-and-speaks-acp-over-its-stdio",
+  "title": "An ACP channel given a command, and no transport, spawns its agent from that argument vector, none of it expanded by a shell, and speaks ACP with it over the process's stdio",
+  "rules": [
+    "§6.4",
+    "Appendix A.9.1"
+  ],
+  "requirements": [
+    "RK-A.9.1-003",
+    "RK-A.9.1-004",
+    "RK-A.9.1-031"
+  ],
+  "notes": "Python: channels/acp_transport.py StdioACPTransport, tests/test_channels/test_acp.py; roomkit-rs: roomkit-acp stdio.rs, process.rs. The agent is the runner's fixture agent: it receives its arguments as written (a variable, a glob, a separator, a substitution, spaces), answers the prompt over its stdout, and ends once the kit closes the channel, which releases its process (RK-A.9.1-031, its process part: the sessions' part is cited elsewhere).",
+  "setup": {
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport"
+      },
+      {
+        "id": "coder",
+        "type": "ai",
+        "acp": {
+          "cwd": "/",
+          "process": {
+            "args": [
+              "$HOME",
+              "two words",
+              "*.txt",
+              "; echo injected",
+              "`id`",
+              "--flag=a b"
+            ],
+            "says": "Answered over stdio."
+          }
+        }
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "coder",
+            "category": "intelligence"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "Hello."
+        }
+      }
+    },
+    {
+      "idle": true
+    }
+  ],
+  "expect": {
+    "processes": {
+      "coder": [
+        {
+          "argv": [
+            "$HOME",
+            "two words",
+            "*.txt",
+            "; echo injected",
+            "`id`",
+            "--flag=a b"
+          ],
+          "exited": true
+        }
+      ]
+    },
+    "acp_wire": {
+      "coder": [
+        {
+          "method": "initialize"
+        },
+        {
+          "method": "session/new",
+          "params": {
+            "cwd": "/"
+          }
+        },
+        {
+          "method": "session/prompt",
+          "params": {
+            "sessionId": "session-1"
+          }
+        }
+      ]
+    },
+    "timeline": {
+      "room-1": [
+        {
+          "index": 0,
+          "type": "message",
+          "content": {
+            "type": "text",
+            "body": "Hello."
+          }
+        },
+        {
+          "index": 1,
+          "type": "message",
+          "source": {
+            "channel_id": "coder"
+          },
+          "content": {
+            "type": "text",
+            "body": "Answered over stdio."
+          }
+        }
+      ]
+    }
+  }
+}

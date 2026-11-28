@@ -1,0 +1,86 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "acp/an-authentication-method-is-sent-after-initialize",
+  "title": "An ACP channel given an authentication method authenticates with it once its agent is initialized, before it opens a session",
+  "rules": [
+    "Appendix A.9.1",
+    "§6.4"
+  ],
+  "requirements": [
+    "RK-A.9.1-014"
+  ],
+  "notes": "Python: channels/_acp_client.py (connection.authenticate after initialize); roomkit-rs: roomkit-acp channel/mod.rs, connector.rs. The scripted agent answers authenticate {}. The variables a spawned agent gets are acp/a-spawned-agent-gets-the-variables-the-channel-adds-and-the-host-s-it-names.",
+  "setup": {
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport"
+      },
+      {
+        "id": "coder",
+        "type": "ai",
+        "acp": {
+          "cwd": "/",
+          "agent": {},
+          "authentication_method": "token-login"
+        }
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "coder",
+            "category": "intelligence"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "Hello."
+        }
+      }
+    },
+    {
+      "idle": true
+    }
+  ],
+  "expect": {
+    "acp_wire": {
+      "coder": [
+        {
+          "method": "initialize"
+        },
+        {
+          "method": "authenticate",
+          "params": {
+            "methodId": "token-login"
+          }
+        },
+        {
+          "method": "session/new"
+        },
+        {
+          "method": "session/prompt",
+          "params": {
+            "sessionId": "session-1"
+          }
+        }
+      ]
+    }
+  }
+}

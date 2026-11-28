@@ -1,0 +1,99 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "server-instructions/a-server-the-host-does-not-name-or-names-with-no-text-adds-nothing",
+  "title": "A server the host names with null or blank text adds nothing to the prompt, and a connected server that published instructions adds nothing unless the host names it",
+  "rules": [
+    "§21.2"
+  ],
+  "requirements": [
+    "RK-21.2-042"
+  ],
+  "notes": "Python: channels/_server_instructions.py server_instructions_block, tests/test_mcp_server_instructions.py::test_a_server_that_published_nothing_adds_nothing; roomkit-rs: roomkit-ai server_instructions.rs. The agent serves docs, which publishes instructions when it connects, and the host names files with null, crm with blank text and wiki with empty text: the system prompt is the agent's own, whole.",
+  "setup": {
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport"
+      },
+      {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "text": "Hello."
+            }
+          ]
+        },
+        "system_prompt": "You are the files agent.",
+        "server_instructions": {
+          "files": null,
+          "crm": "  \n  ",
+          "wiki": ""
+        },
+        "mcp_servers": [
+          {
+            "label": "docs",
+            "instructions": "Read the table of contents first.",
+            "tools": [
+              {
+                "name": "lookup",
+                "description": "Look up.",
+                "input_schema": {
+                  "type": "object",
+                  "properties": {
+                    "query": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "query"
+                  ]
+                },
+                "returns": "found"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "agent",
+            "category": "intelligence"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "Hi."
+        }
+      }
+    }
+  ],
+  "expect": {
+    "models": {
+      "agent": [
+        {
+          "system_prompt": "You are the files agent."
+        }
+      ]
+    }
+  }
+}

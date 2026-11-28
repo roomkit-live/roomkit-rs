@@ -1,0 +1,185 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "mcp/a-result-the-model-sees-an-image-of-holds-its-texts-within-100000-characters",
+  "title": "A result the model sees an image of holds its texts within 100,000 characters in all: the text past the bound cut, with a note of its length when the note fits, and the texts after it left out",
+  "rules": [
+    "§21.2"
+  ],
+  "requirements": [
+    "RK-21.2-053"
+  ],
+  "notes": "Python: tools/_mcp_result.py _bounded_parts (_RESULT_TEXT_LIMIT) and tools/result.py cut_result; roomkit-rs: roomkit-mcp results.rs. The bound is the reference implementation's, which the unit names. Each result holds a text of 99,990 or 99,900 characters x, kept whole, an image the model sees, then a text the bound cuts and one after it. In the first the 10 characters left hold no note, so the text is cut bare at the bound; in the second the note fits in the 100 left, and names the cut text's length. The note's words are the implementation's: only its length, 300, is asserted. The agent's eviction threshold is set past the results, so that eviction (§21.5) does not reach them.",
+  "setup": {
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport"
+      },
+      {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "calls": [
+                {
+                  "id": "call-1",
+                  "name": "bare_cut",
+                  "arguments": {}
+                },
+                {
+                  "id": "call-2",
+                  "name": "noted_cut",
+                  "arguments": {}
+                }
+              ]
+            },
+            {
+              "text": "Done."
+            }
+          ],
+          "vision": true
+        },
+        "mcp_servers": [
+          {
+            "label": "files",
+            "tools": [
+              {
+                "name": "bare_cut",
+                "description": "A long result.",
+                "content": [
+                  {
+                    "type": "text",
+                    "text_chars": 99990
+                  },
+                  {
+                    "type": "image",
+                    "data": "AAAA",
+                    "mimeType": "image/png"
+                  },
+                  {
+                    "type": "text",
+                    "text": "0123456789ABCDEFGHIJ"
+                  },
+                  {
+                    "type": "text",
+                    "text": "after the bound"
+                  }
+                ]
+              },
+              {
+                "name": "noted_cut",
+                "description": "A long result.",
+                "content": [
+                  {
+                    "type": "text",
+                    "text_chars": 99900
+                  },
+                  {
+                    "type": "image",
+                    "data": "AAAA",
+                    "mimeType": "image/png"
+                  },
+                  {
+                    "type": "text",
+                    "text": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+                  },
+                  {
+                    "type": "text",
+                    "text": "after the bound"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "evict_threshold_tokens": 10000000
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "agent",
+            "category": "intelligence"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "Read both."
+        }
+      }
+    }
+  ],
+  "expect": {
+    "models": {
+      "agent": [
+        {
+          "tool_results": []
+        },
+        {
+          "tool_results": [
+            {
+              "tool_call_id": "call-1",
+              "name": "bare_cut",
+              "is_error": false,
+              "content": [
+                {
+                  "text": {
+                    "$starts_with": "xxxxxxxxxx"
+                  }
+                },
+                {
+                  "image": "data:image/png;base64,AAAA",
+                  "mime_type": "image/png"
+                },
+                {
+                  "text": "0123456789"
+                }
+              ]
+            },
+            {
+              "tool_call_id": "call-2",
+              "name": "noted_cut",
+              "is_error": false,
+              "content": [
+                {
+                  "text": {
+                    "$starts_with": "xxxxxxxxxx"
+                  }
+                },
+                {
+                  "image": "data:image/png;base64,AAAA",
+                  "mime_type": "image/png"
+                },
+                {
+                  "text": {
+                    "$contains": [
+                      "yyyyyyyyyy",
+                      "300"
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

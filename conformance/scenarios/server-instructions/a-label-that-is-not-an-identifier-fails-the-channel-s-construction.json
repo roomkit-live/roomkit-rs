@@ -1,0 +1,95 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "server-instructions/a-label-that-is-not-an-identifier-fails-the-channel-s-construction",
+  "title": "An AI channel given server instructions under a label that is not an identifier is refused at construction, whether or not that server published any",
+  "rules": [
+    "§21.2"
+  ],
+  "requirements": [
+    "RK-21.2-037"
+  ],
+  "notes": "Python: channels/_server_instructions.py server_instructions_block and _checked, tests/test_mcp_server_instructions.py::test_a_label_that_is_not_an_identifier_is_refused; roomkit-rs: roomkit-ai server_instructions.rs. The refusal is register_channel's invalid_argument. The last call shows an identifier is taken.",
+  "steps": [
+    {
+      "call": "register_channel",
+      "channel": {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "text": "Hello."
+            }
+          ]
+        },
+        "server_instructions": {
+          "bad label": "Use the files server."
+        }
+      },
+      "expect": {
+        "error": "invalid_argument"
+      }
+    },
+    {
+      "call": "register_channel",
+      "channel": {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "text": "Hello."
+            }
+          ]
+        },
+        "server_instructions": {
+          "files": "Use the files server.",
+          "crm/files": null
+        }
+      },
+      "expect": {
+        "error": "invalid_argument"
+      }
+    },
+    {
+      "call": "register_channel",
+      "channel": {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "text": "Hello."
+            }
+          ]
+        },
+        "server_instructions": {
+          "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx": "Too long a label."
+        }
+      },
+      "expect": {
+        "error": "invalid_argument"
+      }
+    },
+    {
+      "call": "register_channel",
+      "channel": {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "text": "Hello."
+            }
+          ]
+        },
+        "server_instructions": {
+          "files.v2-x_1": "Use the files server."
+        }
+      },
+      "expect": {
+        "result": null
+      }
+    }
+  ]
+}

@@ -1,0 +1,157 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "mcp/a-result-shows-the-model-four-images-at-most-each-past-as-its-note",
+  "title": "A result shows the model at most four of its images: each image past them reaches it as its note, which counts as a text",
+  "rules": [
+    "§21.2"
+  ],
+  "requirements": [
+    "RK-21.2-054"
+  ],
+  "notes": "Python: tools/_mcp_result.py _bounded_parts (_MODEL_IMAGES_MAX, _MODEL_IMAGE_BYTES_MAX); roomkit-rs: roomkit-mcp results.rs. The bounds are the reference implementation's, which the unit names. gallery holds a text of 99,990 characters, then five images: four are shown, the fifth is its note, which the 10 characters left of the texts' bound cut. The note's words are the reference's (RK-21.2-051). The agent's eviction threshold is set past the result. Not observed: the 5 MiB of data URL in all, which no result reaches on roomkit-rs, which bounds every MCP message at 4 MiB.",
+  "setup": {
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport"
+      },
+      {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "calls": [
+                {
+                  "id": "call-1",
+                  "name": "gallery",
+                  "arguments": {}
+                }
+              ]
+            },
+            {
+              "text": "Done."
+            }
+          ],
+          "vision": true
+        },
+        "mcp_servers": [
+          {
+            "label": "files",
+            "tools": [
+              {
+                "name": "gallery",
+                "description": "Images.",
+                "content": [
+                  {
+                    "type": "text",
+                    "text_chars": 99990
+                  },
+                  {
+                    "type": "image",
+                    "data": "AAAA",
+                    "mimeType": "image/png"
+                  },
+                  {
+                    "type": "image",
+                    "data": "AAAA",
+                    "mimeType": "image/png"
+                  },
+                  {
+                    "type": "image",
+                    "data": "AAAA",
+                    "mimeType": "image/png"
+                  },
+                  {
+                    "type": "image",
+                    "data": "AAAA",
+                    "mimeType": "image/png"
+                  },
+                  {
+                    "type": "image",
+                    "data": "AAAA",
+                    "mimeType": "image/png"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "evict_threshold_tokens": 10000000
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "agent",
+            "category": "intelligence"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "Show them."
+        }
+      }
+    }
+  ],
+  "expect": {
+    "models": {
+      "agent": [
+        {
+          "tool_results": []
+        },
+        {
+          "tool_results": [
+            {
+              "tool_call_id": "call-1",
+              "name": "gallery",
+              "is_error": false,
+              "content": [
+                {
+                  "text": {
+                    "$starts_with": "xxxxxxxxxx"
+                  }
+                },
+                {
+                  "image": "data:image/png;base64,AAAA",
+                  "mime_type": "image/png"
+                },
+                {
+                  "image": "data:image/png;base64,AAAA",
+                  "mime_type": "image/png"
+                },
+                {
+                  "image": "data:image/png;base64,AAAA",
+                  "mime_type": "image/png"
+                },
+                {
+                  "image": "data:image/png;base64,AAAA",
+                  "mime_type": "image/png"
+                },
+                {
+                  "text": "[image con"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

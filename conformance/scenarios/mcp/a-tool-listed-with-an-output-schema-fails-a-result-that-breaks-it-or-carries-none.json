@@ -1,0 +1,260 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "mcp/a-tool-listed-with-an-output-schema-fails-a-result-that-breaks-it-or-carries-none",
+  "title": "Each tool keeps the output schema it was listed with: a successful result whose structured content holds to it succeeds, one that breaks it or carries none fails the call, failed and not refused",
+  "rules": [
+    "§9.3",
+    "§21.2"
+  ],
+  "requirements": [
+    "RK-21.2-022",
+    "RK-21.2-030"
+  ],
+  "notes": "Python: tools/mcp.py (_output_schemas) and _mcp_result.check_structured_content, tests/test_mcp_listing.py::test_a_listed_tool_that_breaks_its_output_schema_fails; roomkit-rs does not implement it yet (RMK-2255). Four tools, listed once at connect, two schemas: other's result would break the schema the three others were listed with, so its success shows each tool keeps its own. The server sends each result as scripted, validating nothing. What the model reads of a failure is the implementation's; that it fails, and is no refusal, is observed.",
+  "setup": {
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport"
+      },
+      {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "calls": [
+                {
+                  "id": "call-1",
+                  "name": "valid",
+                  "arguments": {}
+                },
+                {
+                  "id": "call-2",
+                  "name": "missing",
+                  "arguments": {}
+                },
+                {
+                  "id": "call-3",
+                  "name": "broken",
+                  "arguments": {}
+                },
+                {
+                  "id": "call-4",
+                  "name": "other",
+                  "arguments": {}
+                }
+              ]
+            },
+            {
+              "text": "Done."
+            }
+          ]
+        },
+        "mcp_servers": [
+          {
+            "label": "count",
+            "tools": [
+              {
+                "name": "valid",
+                "description": "Count.",
+                "output_schema": {
+                  "type": "object",
+                  "properties": {
+                    "n": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "n"
+                  ]
+                },
+                "returns": "n is 1",
+                "structured_content": {
+                  "n": 1
+                }
+              },
+              {
+                "name": "missing",
+                "description": "Count.",
+                "output_schema": {
+                  "type": "object",
+                  "properties": {
+                    "n": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "n"
+                  ]
+                },
+                "returns": "no structure"
+              },
+              {
+                "name": "broken",
+                "description": "Count.",
+                "output_schema": {
+                  "type": "object",
+                  "properties": {
+                    "n": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "n"
+                  ]
+                },
+                "returns": "n is one",
+                "structured_content": {
+                  "n": "one"
+                }
+              },
+              {
+                "name": "other",
+                "description": "Count.",
+                "output_schema": {
+                  "type": "object",
+                  "properties": {
+                    "m": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "m"
+                  ]
+                },
+                "returns": "m is 2",
+                "structured_content": {
+                  "m": 2
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "agent",
+            "category": "intelligence"
+          }
+        ]
+      }
+    ],
+    "hooks": [
+      {
+        "name": "audit",
+        "trigger": "on_tool_call",
+        "execution": "async"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "Count them."
+        }
+      }
+    }
+  ],
+  "expect": {
+    "models": {
+      "agent": [
+        {
+          "tool_results": []
+        },
+        {
+          "tool_results": [
+            {
+              "tool_call_id": "call-1",
+              "name": "valid",
+              "content": "n is 1",
+              "is_error": false
+            },
+            {
+              "tool_call_id": "call-2",
+              "name": "missing",
+              "is_error": true
+            },
+            {
+              "tool_call_id": "call-3",
+              "name": "broken",
+              "is_error": true
+            },
+            {
+              "tool_call_id": "call-4",
+              "name": "other",
+              "content": "m is 2",
+              "is_error": false
+            }
+          ]
+        }
+      ]
+    },
+    "hooks": {
+      "audit": {
+        "$unordered": [
+          {
+            "trigger": "on_tool_call",
+            "room_id": "room-1",
+            "tool_call": {
+              "name": "valid",
+              "tool_call_id": "call-1",
+              "result": "n is 1",
+              "is_error": false,
+              "refused": false,
+              "cancelled": false
+            }
+          },
+          {
+            "trigger": "on_tool_call",
+            "room_id": "room-1",
+            "tool_call": {
+              "name": "missing",
+              "tool_call_id": "call-2",
+              "is_error": true,
+              "refused": false,
+              "cancelled": false
+            }
+          },
+          {
+            "trigger": "on_tool_call",
+            "room_id": "room-1",
+            "tool_call": {
+              "name": "broken",
+              "tool_call_id": "call-3",
+              "is_error": true,
+              "refused": false,
+              "cancelled": false
+            }
+          },
+          {
+            "trigger": "on_tool_call",
+            "room_id": "room-1",
+            "tool_call": {
+              "name": "other",
+              "tool_call_id": "call-4",
+              "result": "m is 2",
+              "is_error": false,
+              "refused": false,
+              "cancelled": false
+            }
+          }
+        ]
+      }
+    }
+  }
+}

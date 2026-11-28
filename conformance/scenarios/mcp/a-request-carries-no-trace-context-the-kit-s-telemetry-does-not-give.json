@@ -1,0 +1,122 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "mcp/a-request-carries-no-trace-context-the-kit-s-telemetry-does-not-give",
+  "title": "A provider given propagate_trace_context carries no trace context on a call made under the kit's current span when the kit's telemetry provider gives nothing for it",
+  "rules": [
+    "§21.2",
+    "§15.7"
+  ],
+  "requirements": [
+    "RK-21.2-057"
+  ],
+  "notes": "Python: tools/_mcp_capture.py _host_trace; roomkit-rs: roomkit-mcp trace.rs. The kit's recording telemetry gives an empty mapping for every span, as a provider whose spans stay in its process does. The other cases of the unit are mcp/a-request-carries-the-kit-s-current-span-as-its-telemetry-names-it.",
+  "setup": {
+    "kit": {
+      "telemetry": true
+    },
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport"
+      },
+      {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "calls": [
+                {
+                  "id": "call-1",
+                  "name": "lookup",
+                  "arguments": {
+                    "query": "q"
+                  }
+                }
+              ]
+            },
+            {
+              "text": "Done."
+            }
+          ]
+        },
+        "mcp_servers": [
+          {
+            "label": "traced",
+            "tools": [
+              {
+                "name": "lookup",
+                "description": "Look up.",
+                "input_schema": {
+                  "type": "object",
+                  "properties": {
+                    "query": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "query"
+                  ]
+                },
+                "returns": "traced found"
+              }
+            ],
+            "propagate_trace_context": true
+          }
+        ]
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "agent",
+            "category": "intelligence"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "Look it up."
+        }
+      }
+    }
+  ],
+  "expect": {
+    "mcp_calls": {
+      "traced": [
+        {
+          "name": "lookup",
+          "arguments": {
+            "query": "q"
+          },
+          "_meta": {
+            "traceparent": {
+              "$absent": true
+            },
+            "tracestate": {
+              "$absent": true
+            },
+            "baggage": {
+              "$absent": true
+            }
+          }
+        }
+      ]
+    }
+  }
+}

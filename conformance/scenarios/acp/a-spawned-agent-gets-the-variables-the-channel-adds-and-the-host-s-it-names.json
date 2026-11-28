@@ -1,0 +1,87 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "acp/a-spawned-agent-gets-the-variables-the-channel-adds-and-the-host-s-it-names",
+  "title": "An ACP channel's spawned agent gets the variables its env adds and the host variables its inherit_env names",
+  "rules": [
+    "Appendix A.9.1"
+  ],
+  "requirements": [
+    "RK-A.9.1-014"
+  ],
+  "notes": "Python: channels/acp_transport.py _resolve_spawn_env; roomkit-rs: roomkit-acp stdio.rs. The fixture agent reports the variables the scenario names: the two env adds, with their values, and PATH, which inherit_env names. Not observed: a host variable given only because inherit_env names it, as no variable outside a spawn's default environment holds in every runner's host. authentication_method is acp/an-authentication-method-is-sent-after-initialize.",
+  "setup": {
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport"
+      },
+      {
+        "id": "coder",
+        "type": "ai",
+        "acp": {
+          "cwd": "/",
+          "process": {
+            "args": [],
+            "says": "Done."
+          },
+          "env": {
+            "ROOMKIT_FIXTURE_ADDED": "added",
+            "ROOMKIT_FIXTURE_SPACED": "a b; c"
+          },
+          "inherit_env": [
+            "PATH"
+          ]
+        }
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "coder",
+            "category": "intelligence"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "Hello."
+        }
+      }
+    },
+    {
+      "idle": true
+    }
+  ],
+  "expect": {
+    "processes": {
+      "coder": [
+        {
+          "argv": [],
+          "env": {
+            "ROOMKIT_FIXTURE_ADDED": "added",
+            "ROOMKIT_FIXTURE_SPACED": "a b; c",
+            "PATH": {
+              "$present": true
+            }
+          },
+          "exited": true
+        }
+      ]
+    }
+  }
+}

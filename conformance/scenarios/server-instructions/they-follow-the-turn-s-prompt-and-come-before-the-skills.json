@@ -1,0 +1,170 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "server-instructions/they-follow-the-turn-s-prompt-and-come-before-the-skills",
+  "title": "An AI channel adds the servers' instructions to every system prompt it composes, after the prompt the turn reads (its own, its binding's or its configuration's) and before the skills' preamble",
+  "rules": [
+    "§21.2",
+    "§24"
+  ],
+  "requirements": [
+    "RK-21.2-038"
+  ],
+  "notes": "Python: channels/_ai_context.py (with_server_instructions before _add_skills), tests/test_mcp_server_instructions.py::test_they_come_before_the_skills; roomkit-rs: roomkit-ai channel.rs. Three rooms, each turn reading another prompt: the agent's own, its binding's metadata and its per-turn configuration's. The skills' preamble is the one that lists the available skills.",
+  "setup": {
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport"
+      },
+      {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "text": "One."
+            },
+            {
+              "text": "Two."
+            },
+            {
+              "text": "Three."
+            }
+          ]
+        },
+        "system_prompt": "You are the files agent.",
+        "skills": [
+          {
+            "name": "summary",
+            "description": "Summarize a file.",
+            "instructions": "Summarize it."
+          }
+        ],
+        "server_instructions": {
+          "files": "Search the index before you read a file."
+        },
+        "config_provider": {
+          "room-3": {
+            "system_prompt": "Configured prompt."
+          }
+        }
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "agent",
+            "category": "intelligence"
+          }
+        ]
+      },
+      {
+        "id": "room-2",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "agent",
+            "category": "intelligence",
+            "metadata": {
+              "system_prompt": "Bound prompt."
+            }
+          }
+        ]
+      },
+      {
+        "id": "room-3",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "agent",
+            "category": "intelligence"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "Hi."
+        }
+      }
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-2",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "Hi."
+        }
+      }
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-3",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "Hi."
+        }
+      }
+    }
+  ],
+  "expect": {
+    "models": {
+      "agent": [
+        {
+          "system_prompt": {
+            "$contains": [
+              "You are the files agent.",
+              "files",
+              "<server_instructions>\nSearch the index before you read a file.\n</server_instructions>",
+              "<available_skills>"
+            ]
+          }
+        },
+        {
+          "system_prompt": {
+            "$contains": [
+              "Bound prompt.",
+              "files",
+              "<server_instructions>\nSearch the index before you read a file.\n</server_instructions>",
+              "<available_skills>"
+            ]
+          }
+        },
+        {
+          "system_prompt": {
+            "$contains": [
+              "Configured prompt.",
+              "files",
+              "<server_instructions>\nSearch the index before you read a file.\n</server_instructions>",
+              "<available_skills>"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

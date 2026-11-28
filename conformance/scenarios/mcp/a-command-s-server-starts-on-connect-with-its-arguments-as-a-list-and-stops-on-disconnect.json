@@ -1,0 +1,141 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "mcp/a-command-s-server-starts-on-connect-with-its-arguments-as-a-list-and-stops-on-disconnect",
+  "title": "A server named by a command is started when its provider connects, with its arguments as a list, none expanded by a shell, and is stopped when it disconnects",
+  "rules": [
+    "§21.2"
+  ],
+  "requirements": [
+    "RK-21.2-005",
+    "RK-21.2-006"
+  ],
+  "notes": "Python: tools/mcp.py MCPToolProvider.from_command, tests/test_mcp_constructor.py::test_direct_stdio_copies_arguments_and_reads_the_retained_environment_on_entry; roomkit-rs: roomkit-mcp command.rs, process.rs. The server is the runner's fixture process, started once, as its provider is built and connected before the run, serving the turn's call, and ended once the provider disconnects after it: a start at construction is not told apart from one at connect. Its arguments carry what a shell would expand or split (a variable, a glob, a separator, a substitution, quotes and spaces), received as written. The grace before a stop terminates the process is RK-21.2-009's.",
+  "setup": {
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport"
+      },
+      {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "calls": [
+                {
+                  "id": "call-1",
+                  "name": "lookup",
+                  "arguments": {
+                    "query": "q"
+                  }
+                }
+              ]
+            },
+            {
+              "text": "Done."
+            }
+          ]
+        },
+        "mcp_servers": [
+          {
+            "label": "files",
+            "process": {
+              "args": [
+                "$HOME",
+                "two words",
+                "*.txt",
+                "; echo injected",
+                "`id`",
+                "--flag=a b",
+                "'quoted'"
+              ]
+            },
+            "tools": [
+              {
+                "name": "lookup",
+                "description": "Look up.",
+                "input_schema": {
+                  "type": "object",
+                  "properties": {
+                    "query": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "query"
+                  ]
+                },
+                "returns": "found"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "agent",
+            "category": "intelligence"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "Look it up."
+        }
+      }
+    }
+  ],
+  "expect": {
+    "models": {
+      "agent": [
+        {
+          "tool_results": []
+        },
+        {
+          "tool_results": [
+            {
+              "tool_call_id": "call-1",
+              "name": "lookup",
+              "content": "found",
+              "is_error": false
+            }
+          ]
+        }
+      ]
+    },
+    "processes": {
+      "files": [
+        {
+          "argv": [
+            "$HOME",
+            "two words",
+            "*.txt",
+            "; echo injected",
+            "`id`",
+            "--flag=a b",
+            "'quoted'"
+          ],
+          "exited": true
+        }
+      ]
+    }
+  }
+}

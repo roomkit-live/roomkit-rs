@@ -1,0 +1,181 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "mcp-host/a-label-that-cannot-name-its-server-in-an-alias-is-refused-at-construction",
+  "title": "A provider given a label that is not an identifier of letters, digits, _ . and -, is past 64 characters, holds __ or ends with _ is refused at construction; an identifier is not",
+  "rules": [
+    "§21.2"
+  ],
+  "requirements": [
+    "RK-21.2-012"
+  ],
+  "notes": "Python: tools/mcp.py _check_label and _text.is_label, tests/test_mcp_alias_policy.py::test_a_label_that_is_not_an_identifier_is_refused; roomkit-rs: roomkit-mcp error.rs. Each refusal is the call's invalid_argument, before any operation. That the label is the host's name and never the one the server gives itself is mcp/an-alias-reads-the-host-s-label-never-the-name-the-server-gives-itself.",
+  "steps": [
+    {
+      "call": "mcp_session",
+      "constructor": "from_url",
+      "label": "bad label",
+      "discover": false,
+      "peer": {
+        "replies": []
+      },
+      "operations": [
+        {
+          "method": "connect"
+        }
+      ],
+      "expect": {
+        "error": "invalid_argument"
+      }
+    },
+    {
+      "call": "mcp_session",
+      "constructor": "from_url",
+      "label": "crm__files",
+      "discover": false,
+      "peer": {
+        "replies": []
+      },
+      "operations": [
+        {
+          "method": "connect"
+        }
+      ],
+      "expect": {
+        "error": "invalid_argument"
+      }
+    },
+    {
+      "call": "mcp_session",
+      "constructor": "from_url",
+      "label": "crm_",
+      "discover": false,
+      "peer": {
+        "replies": []
+      },
+      "operations": [
+        {
+          "method": "connect"
+        }
+      ],
+      "expect": {
+        "error": "invalid_argument"
+      }
+    },
+    {
+      "call": "mcp_session",
+      "constructor": "from_url",
+      "label": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "discover": false,
+      "peer": {
+        "replies": []
+      },
+      "operations": [
+        {
+          "method": "connect"
+        }
+      ],
+      "expect": {
+        "error": "invalid_argument"
+      }
+    },
+    {
+      "call": "mcp_session",
+      "constructor": "from_url",
+      "label": "",
+      "discover": false,
+      "peer": {
+        "replies": []
+      },
+      "operations": [
+        {
+          "method": "connect"
+        }
+      ],
+      "expect": {
+        "error": "invalid_argument"
+      }
+    },
+    {
+      "call": "mcp_session",
+      "constructor": "from_url",
+      "label": "files\n",
+      "discover": false,
+      "peer": {
+        "replies": []
+      },
+      "operations": [
+        {
+          "method": "connect"
+        }
+      ],
+      "expect": {
+        "error": "invalid_argument"
+      }
+    },
+    {
+      "call": "mcp_session",
+      "constructor": "from_url",
+      "label": "crm/files",
+      "discover": false,
+      "peer": {
+        "replies": []
+      },
+      "operations": [
+        {
+          "method": "connect"
+        }
+      ],
+      "expect": {
+        "error": "invalid_argument"
+      }
+    },
+    {
+      "call": "mcp_session",
+      "constructor": "direct",
+      "label": "files.v2-x_1",
+      "discover": false,
+      "peer": {
+        "replies": []
+      },
+      "operations": [
+        {
+          "method": "connected"
+        }
+      ],
+      "expect": {
+        "result": {
+          "results": [
+            {
+              "result": false
+            }
+          ],
+          "requests": []
+        }
+      }
+    },
+    {
+      "call": "mcp_session",
+      "constructor": "from_url",
+      "label": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "discover": false,
+      "peer": {
+        "replies": []
+      },
+      "operations": [
+        {
+          "method": "connected"
+        }
+      ],
+      "expect": {
+        "result": {
+          "results": [
+            {
+              "result": false
+            }
+          ],
+          "requests": []
+        }
+      }
+    }
+  ]
+}
