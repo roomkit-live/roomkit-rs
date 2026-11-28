@@ -271,6 +271,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The ASYNC hooks of `OnSpeakDecision` observe the event decided on, the
+  room and the channel as the channel holds them, with the decision that
+  stands (RFC §6.4, RMK-2246): a SYNC hook's MODIFY whose payload named
+  another event, room or channel had those reach them. Only the decision is
+  read off a MODIFY, as Python does.
+
 - A binding's retry policy reads a failed send's Python class chain as
   Python does (RFC §13.2, RMK-2243): an error a channel raises under a
   class (`ClassedError`) is matched by that class, where it read as
