@@ -46,8 +46,9 @@ const CONVERSATION_ARGUMENT: &str = "conversation";
 /// What the tool says of its `agent`.
 const AGENT_DESCRIPTION: &str = "Target agent ID for the delegated task";
 
-/// How long the handler watches a task's end for its cache: a task running
-/// past it is not kept. Python's `task.wait(timeout=600.0)`.
+/// How long the handler watches a task's end for its cache, on the cache's
+/// clock: a task running past it is not kept. Python's `_REMEMBER_WITHIN`,
+/// waited out on `roomkit._clock`.
 const REMEMBER_WITHIN: Duration = Duration::from_secs(600);
 
 /// How many of the calling agent's previous tasks its worker is handed:
@@ -662,11 +663,12 @@ async fn remember_when_completed(
     call: Call,
     caller: ChannelId,
 ) {
-    let waited = task
-        .wait(WaitOptions {
-            timeout: Some(REMEMBER_WITHIN),
-        })
-        .await;
+    let bound = cache.clock().sleep(REMEMBER_WITHIN);
+    let waited = tokio::select! {
+        biased;
+        waited = task.wait(WaitOptions::default()) => waited,
+        () = bound => return,
+    };
     let Ok(ended) = waited else {
         return;
     };
@@ -902,6 +904,93 @@ mod tests {
             assert_eq!(passed_context(Some(&passed)), object(read), "{passed}");
         }
         assert_eq!(passed_context(None), Metadata::new());
+    }
+
+    /// A clock whose waits end at once, past their bound, or never.
+    #[derive(Debug)]
+    struct Bound {
+        past: bool,
+        slept: Mutex<Vec<Duration>>,
+    }
+
+    impl crate::clock::Clock for Bound {
+        fn now(&self) -> tokio::time::Instant {
+            tokio::time::Instant::now()
+        }
+
+        fn sleep(&self, duration: Duration) -> crate::clock::Sleep {
+            self.slept
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(duration);
+            if self.past {
+                Box::pin(std::future::ready(()))
+            } else {
+                Box::pin(std::future::pending())
+            }
+        }
+    }
+
+    // Python: tests/tasks/test_cache.py::test_a_task_is_kept_once_it_ends_within_600_s_on_roomkit_s_clock
+    #[tokio::test]
+    async fn a_task_is_kept_once_it_ends_within_600_s_on_the_cache_s_clock() {
+        let (room, worker) = (
+            RoomId::new("room-1").expect("a room id"),
+            ChannelId::new("worker").expect("a channel id"),
+        );
+        let caller = ChannelId::new("caller").expect("a channel id");
+        for (past, kept) in [(false, true), (true, false)] {
+            let cache = CompletedTaskCache::default();
+            let clock = Arc::new(Bound {
+                past,
+                slept: Mutex::default(),
+            });
+            cache.set_clock(Arc::<Bound>::clone(&clock));
+            let task = DelegatedTask::new(
+                "t1",
+                RoomId::new("child-1").expect("a room id"),
+                room.clone(),
+                worker.clone(),
+                "t",
+                super::super::DelegatedTaskOptions::default(),
+            );
+            let call = Call {
+                agent: worker.clone(),
+                task: "t".to_owned(),
+                passed: Metadata::new(),
+                count: 0,
+                share_channels: Vec::new(),
+            };
+            let receipt = Metadata::from_iter([("agent_id".to_owned(), json!("worker"))]);
+            let remembering = tokio::spawn(remember_when_completed(
+                cache.clone(),
+                task.clone(),
+                receipt,
+                call,
+                caller.clone(),
+            ));
+            tokio::task::yield_now().await;
+            let mut ended = DelegatedTaskResult::of(&task, TaskStatus::Completed);
+            ended.output = Some("Done.".to_owned());
+            task.set_result(ended);
+            remembering.await.expect("the cache's wait");
+            let named = Kept {
+                room_id: &room,
+                agent_id: &worker,
+                task: "t",
+                context: Some(&Metadata::new()),
+            };
+            let slept = clock
+                .slept
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            assert_eq!(
+                (slept, cache.answer_for(&named, &caller).is_some()),
+                (vec![REMEMBER_WITHIN], kept),
+                "past the bound: {past}"
+            );
+        }
     }
 
     // Python: tests/tasks/test_cache.py::TestDelegateHandlerSerialization::test_a_room_that_stopped_delegating_keeps_no_lock

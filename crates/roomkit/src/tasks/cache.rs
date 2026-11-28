@@ -5,7 +5,10 @@
 //! returned under the room, the worker, the task and what the call passed
 //! with it: another context is other work. An entry also keeps the agent
 //! whose call ran it, whose repeat alone it answers. Entries expire after a
-//! configurable time to live.
+//! configurable time to live, counted from when an entry is kept on the
+//! cache's clock: tokio's, unless a test set another
+//! ([`set_cache_clock`](crate::testing::set_cache_clock)), as Python's reads
+//! `roomkit._clock`.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -17,6 +20,7 @@ use tokio::time::Instant;
 
 use super::json::{json_line, sorted_keys};
 use super::text::is_python_space;
+use crate::clock::{Clock, TokioClock};
 
 /// What [`CompletedTaskCache::new`] takes: Python's
 /// `CompletedTaskCache(ttl_seconds=300.0)`.
@@ -88,10 +92,23 @@ struct CacheEntry {
     task_text: String,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct Entries {
     held: HashMap<CacheKey, CacheEntry>,
     kept: u64,
+    /// The clock an entry's time to live is counted on, which its clones
+    /// share.
+    clock: Arc<dyn Clock>,
+}
+
+impl Default for Entries {
+    fn default() -> Self {
+        Self {
+            held: HashMap::new(),
+            kept: 0,
+            clock: Arc::new(TokioClock),
+        }
+    }
 }
 
 /// An in-memory cache of completed delegation results, each for a time to
@@ -160,11 +177,12 @@ impl CompletedTaskCache {
         let mut entries = self.lock();
         entries.kept += 1;
         let order = entries.kept;
+        let created_at = entries.clock.now();
         entries.held.insert(
             key,
             CacheEntry {
                 result,
-                created_at: Instant::now(),
+                created_at,
                 order,
                 task_text: kept.task.to_owned(),
             },
@@ -271,10 +289,22 @@ impl CompletedTaskCache {
     }
 
     fn drop_expired(&self, entries: &mut Entries) {
-        let ttl = self.ttl;
+        let (ttl, now) = (self.ttl, entries.clock.now());
         entries
             .held
-            .retain(|_, entry| entry.created_at.elapsed() <= ttl);
+            .retain(|_, entry| now.saturating_duration_since(entry.created_at) <= ttl);
+    }
+
+    /// The clock its entries' time to live is counted on, which the
+    /// delegation tool's wait for a task's end reads too.
+    pub(crate) fn clock(&self) -> Arc<dyn Clock> {
+        Arc::clone(&self.lock().clock)
+    }
+
+    /// Counts its entries' time to live on `clock` from now on, its clones'
+    /// too: [`set_cache_clock`](crate::testing::set_cache_clock).
+    pub(crate) fn set_clock(&self, clock: Arc<dyn Clock>) {
+        self.lock().clock = clock;
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Entries> {
@@ -369,18 +399,51 @@ mod tests {
         assert_eq!(get(&cache, &room("room-1"), "unknown task"), None);
     }
 
-    // Python: tests/tasks/test_cache.py::TestCompletedTaskCache::test_get_returns_none_when_expired
-    #[tokio::test(start_paused = true)]
-    async fn get_returns_none_when_expired() {
-        let cache = CompletedTaskCache::new(CompletedTaskCacheOptions {
-            ttl: Duration::from_millis(10),
+    /// A clock that reads what the test sets.
+    #[derive(Debug)]
+    struct SetClock {
+        start: Instant,
+        moved: Mutex<Duration>,
+    }
+
+    impl Clock for SetClock {
+        fn now(&self) -> Instant {
+            self.start + *self.moved.lock().unwrap_or_else(PoisonError::into_inner)
+        }
+
+        fn sleep(&self, _duration: Duration) -> crate::clock::Sleep {
+            Box::pin(std::future::ready(()))
+        }
+    }
+
+    // Python: tests/tasks/test_cache.py::TestCompletedTaskCache::test_a_kept_task_expires_past_its_time_to_live_on_roomkit_s_clock
+    #[test]
+    fn a_kept_task_expires_past_its_time_to_live_on_the_cache_s_clock() {
+        let clock = Arc::new(SetClock {
+            start: Instant::now(),
+            moved: Mutex::default(),
         });
+        let cache = CompletedTaskCache::new(CompletedTaskCacheOptions {
+            ttl: Duration::from_secs(300),
+        });
+        cache.set_clock(Arc::<SetClock>::clone(&clock));
+        let read = |cache: &CompletedTaskCache| {
+            (
+                get(cache, &room("room-1"), "task"),
+                cache.recent_context(&room("room-1"), RecentContextOptions::default()),
+            )
+        };
         put(&cache, &room("room-1"), "task", done("done"));
-        tokio::time::advance(Duration::from_millis(20)).await;
-        assert_eq!(get(&cache, &room("room-1"), "task"), None);
+        *clock.moved.lock().unwrap() = Duration::from_secs(300);
+        let kept = read(&cache);
+        *clock.moved.lock().unwrap() = Duration::from_millis(300_001);
+        let gone = read(&cache);
         assert_eq!(
-            cache.recent_context(&room("room-1"), RecentContextOptions::default()),
-            Vec::<String>::new()
+            (kept, gone),
+            (
+                (Some(done("done")), vec!["task".to_owned()]),
+                (None, Vec::new())
+            )
         );
     }
 

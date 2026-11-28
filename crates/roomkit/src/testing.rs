@@ -54,6 +54,15 @@ pub fn set_clock<S>(kit: &RoomKit<S>, clock: Arc<dyn Clock>) {
     kit.inner.sends.set_clock(clock);
 }
 
+/// Has `cache` count its completed tasks' time to live, and the delegation
+/// tool bound its wait for a task's end, on `clock` instead of tokio's (RFC
+/// §23.4); its clones share it. A test seam outside the public API, as
+/// [`set_clock`] is: Python's private `roomkit._clock.installed`.
+#[doc(hidden)]
+pub fn set_cache_clock(cache: &crate::tasks::CompletedTaskCache, clock: Arc<dyn Clock>) {
+    cache.set_clock(clock);
+}
+
 /// Waits until `kit` runs nothing in the background: no observer hook
 /// running after the fact (RFC §9.3), and no inbound call running, whether
 /// its caller waits for it, was answered at its decision (RFC §10.1 step

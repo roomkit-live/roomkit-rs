@@ -7,6 +7,12 @@
 //! test sets a clock of its own on a kit with
 //! [`set_clock`](crate::testing::set_clock) to drive those paths without
 //! waiting real time. The kit's other durations stay on tokio's clock.
+//!
+//! The delegation tool's cache counts a completed task's time to live, and
+//! bounds its wait for a task's end, on a clock of its own that a test sets
+//! with [`set_cache_clock`](crate::testing::set_cache_clock) (RFC §23.4): a
+//! cache is made apart from any kit, which Python's process-wide seam does
+//! not need to say.
 
 use std::fmt;
 use std::future::Future;
