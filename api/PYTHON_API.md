@@ -339,7 +339,6 @@ use `..SkillMetadata::new(name, description)` (approved in HITL ed472959).
 | `roomkit_ai::AiError` | `ValueError`; members: none |
 | `roomkit_ai::image::ImageResultError` | `ValueError`; members: none |
 | `roomkit_ai::image::ImageRequestError` | `ValueError`; members: `new` |
-| `roomkit_ai::image::DataUriError` | `ValueError`; members: none |
 | `roomkit::DeliveryStream` | `AsyncIterator`; members: `next`, `cut` |
 | `roomkit::ResponseStream` | `AsyncIterator`; members: none |
 | `roomkit::StreamItem` | `str`; members: none |

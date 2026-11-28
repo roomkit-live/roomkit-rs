@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use super::options::written;
 use super::{ImageBackground, ImageOptions, ImageOutputFormat, ImageRequestError};
-use crate::Date;
+use crate::{Date, decimal_digits};
 
 /// The controls verified for one model on its image endpoint: Python's
 /// `ImageCapabilities`. An absent entry is unknown, never a neighbouring
@@ -311,8 +311,10 @@ fn refuse_combinations(
 }
 
 /// The two edges `size` names as Python's `(\d+)[xX](\d+)` reads them,
-/// an edge too long for a `u64` read as the largest, which no bound takes.
+/// of the decimal digits of any script, an edge too long for a `u64` read
+/// as the largest, which no bound takes.
 fn edges(size: &str) -> Option<(u64, u64)> {
+    let size = decimal_digits::ascii(size);
     let (width, height) = size.split_once(['x', 'X'])?;
     let edge = |text: &str| {
         let digits = !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit());

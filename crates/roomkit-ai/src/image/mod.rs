@@ -17,7 +17,7 @@ mod provider;
 mod refusal;
 mod result;
 
-use roomkit_core::rules::transcript;
+use roomkit_core::rules::transcript::{self, DataUriError};
 
 pub use self::capabilities::ImageCapabilities;
 pub use self::catalog::{ImageCatalogEntry, ImageModelInfo};
@@ -33,7 +33,6 @@ pub use self::options::{
 pub use self::provider::{GenerateOptions, GenerateWithOptionsOptions, ImageError, ImageProvider};
 pub use self::refusal::ImageRequestError;
 pub use self::result::{ImageAttempt, ImageAttemptStatus, ImageResult, ImageResultError};
-pub use roomkit_core::rules::transcript::DataUriError;
 
 /// The capability tag of an image-generating model's catalog entry:
 /// Python's `IMAGE_GEN_CAPABILITY`. The image catalog and the conversational
@@ -62,14 +61,23 @@ pub struct ParseDataUriOptions {
 ///
 /// # Errors
 ///
-/// [`DataUriError`] for a URL that is no `data:` URI, carries no payload,
-/// or whose payload is no base64.
+/// [`ImageRequestError`], Python's message, for a URL that is no `data:`
+/// URI, carries no payload, or whose payload is no base64.
 pub fn parse_data_uri(
     url: &str,
     options: ParseDataUriOptions,
-) -> Result<(String, Vec<u8>), DataUriError> {
+) -> Result<(String, Vec<u8>), ImageRequestError> {
     let ParseDataUriOptions { fallback_mime } = options;
-    transcript::parse_data_uri(url, fallback_mime.as_deref())
+    transcript::parse_data_uri(url, fallback_mime.as_deref()).map_err(|unread| match unread {
+        // Python names what the URL is: its text up to its first colon.
+        DataUriError::NotADataUri => {
+            let scheme = url.split(':').next().unwrap_or_default();
+            ImageRequestError::new(format!("expected a data: URI, got a {scheme} URL"))
+        }
+        DataUriError::NoPayload | DataUriError::NotBase64 => {
+            ImageRequestError::new(unread.to_string())
+        }
+    })
 }
 
 /// The `data:` URI of `data`, of the media type `mime_type`: Python's
@@ -102,6 +110,36 @@ mod tests {
             kind("data:;base64,QUJD", ParseDataUriOptions::default()),
             Ok("image/png".into())
         );
+    }
+
+    // Python: tests/test_providers/test_image.py::test_parse_data_uri_refuses_what_it_cannot_repair,
+    // each refusal with Python's whole message
+    #[test]
+    fn parse_data_uri_refuses_what_it_cannot_repair() {
+        for (url, message) in [
+            (
+                "https://example.com/a.png",
+                "expected a data: URI, got a https URL",
+            ),
+            ("nothing", "expected a data: URI, got a nothing URL"),
+            ("data:image/png;base64,", "data URI carries no payload"),
+            ("data:image/png;base64,  \n ", "data URI carries no payload"),
+            (
+                "data:image/png;base64,not*base64",
+                "data URI payload is not valid base64",
+            ),
+            (
+                "data:image/png;base64,QUJDM",
+                "data URI payload is not valid base64",
+            ),
+            (
+                "data:image/png;base64,QUJD-_==",
+                "data URI payload is not valid base64",
+            ),
+        ] {
+            let refused = parse_data_uri(url, ParseDataUriOptions::default()).unwrap_err();
+            assert_eq!(refused.to_string(), message, "{url}");
+        }
     }
 
     // Python: tests/test_providers/test_image.py::test_to_data_uri_round_trips

@@ -127,13 +127,25 @@ fn a_generation_error_keeps_every_outcome_and_is_final() {
     assert_eq!(source, Some(&failed));
 }
 
+/// What a host's storage fails a callback with.
+#[derive(Debug)]
+struct StorageDown;
+
+impl fmt::Display for StorageDown {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("storage unavailable")
+    }
+}
+
+impl std::error::Error for StorageDown {}
+
 fn recording(seen: Arc<Mutex<Vec<ImageAttempt>>>, fails: bool) -> ImageProgressCallback {
     Arc::new(move |attempt| {
         let seen = Arc::clone(&seen);
         Box::pin(async move {
             seen.lock().expect("not poisoned").push(attempt);
             if fails {
-                return Err("storage unavailable".into());
+                return Err(StorageDown.into());
             }
             Ok(())
         })
@@ -160,8 +172,13 @@ async fn callback_failure_keeps_the_vendor_result() {
     assert_eq!(failed.provider, "GeminiImageProvider");
     assert_eq!(failed.attempts, vec![succeeded.clone()]);
     assert_eq!(failed.results.len(), 1);
-    let cause = std::error::Error::source(&failed).map(ToString::to_string);
-    assert_eq!(cause.as_deref(), Some("storage unavailable"));
+    // Python's `__cause__`: the callback's error, of its own type.
+    let cause = std::error::Error::source(&failed);
+    assert!(
+        cause
+            .and_then(|cause| cause.downcast_ref::<StorageDown>())
+            .is_some()
+    );
     assert!(!ProviderError::from(failed).retryable);
     assert_eq!(*seen.lock().expect("not poisoned"), vec![succeeded]);
 }

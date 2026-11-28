@@ -121,23 +121,6 @@ type Progress = BoxFuture<'static, Result<(), Box<dyn Error + Send + Sync>>>;
 /// generation, its outcome kept, and repeats no request.
 pub type ImageProgressCallback = Arc<dyn Fn(ImageAttempt) -> Progress + Send + Sync>;
 
-/// The failure of a callback, as the source of the generation it fails:
-/// the callback's error itself, which a box does not make an `Error`.
-#[derive(Debug)]
-struct CallbackFailed(Box<dyn Error + Send + Sync>);
-
-impl fmt::Display for CallbackFailed {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl Error for CallbackFailed {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        self.0.source()
-    }
-}
-
 /// Tells `callback`, when there is one, of `attempt`: Python's
 /// `notify_image_progress`. For a provider.
 ///
@@ -155,11 +138,10 @@ pub async fn notify_image_progress(
         return Ok(());
     };
     callback(attempt.clone()).await.map_err(|failed| {
-        ImageGenerationError::new(
-            format!("Image progress callback failed: {failed}"),
-            provider,
-            vec![attempt.clone()],
-        )
-        .with_source(CallbackFailed(failed))
+        let message = format!("Image progress callback failed: {failed}");
+        let mut generation = ImageGenerationError::new(message, provider, vec![attempt.clone()]);
+        // The callback's error itself, its type kept: Python's `__cause__`.
+        generation.source = Some(Arc::from(failed));
+        generation
     })
 }

@@ -10,9 +10,9 @@
 use std::fmt;
 
 use roomkit::model::Metadata;
-use roomkit_core::rules::transcript::{DataUriError, parse_data_uri};
 use serde::{Deserialize, Serialize};
 
+use super::{ImageRequestError, ParseDataUriOptions, parse_data_uri};
 use crate::AiImagePart;
 
 /// Why a result's image is not one: Python's `ValidationError` of
@@ -156,10 +156,13 @@ impl ImageResult {
     ///
     /// # Errors
     ///
-    /// [`DataUriError`] for a payload that is no base64: a corrupted
+    /// [`ImageRequestError`] for a payload that is no base64: a corrupted
     /// result fails where it is read.
-    pub fn decoded(&self) -> Result<Vec<u8>, DataUriError> {
-        parse_data_uri(&self.data, Some(&self.mime_type)).map(|(_, bytes)| bytes)
+    pub fn decoded(&self) -> Result<Vec<u8>, ImageRequestError> {
+        let options = ParseDataUriOptions {
+            fallback_mime: Some(self.mime_type.clone()),
+        };
+        parse_data_uri(&self.data, options).map(|(_, bytes)| bytes)
     }
 
     /// The image as a message part: an AI's input, or the next edit's

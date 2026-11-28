@@ -7,6 +7,7 @@ use base64::alphabet::STANDARD as ALPHABET;
 use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig};
 
 use super::ImageRequestError;
+use crate::decimal_digits;
 
 /// Python's `b64decode(..., validate=True)`: the standard alphabet, its
 /// padding, and the bits past the last byte ignored as Python ignores
@@ -54,9 +55,9 @@ impl Default for PayloadMimeTypeOptions {
 }
 
 /// The width and the height `size` names: two whole numbers joined by `x`
-/// (in either case), the whitespace around them ignored. Two of Python's
-/// readings are not followed: its digits of other scripts (`١٠x16`), and
-/// a dimension past `u32`, which reads as `u32::MAX`.
+/// (in either case), of the decimal digits of any script, the whitespace
+/// around them ignored. A dimension past `u32`, which Python reads whole,
+/// reads as `u32::MAX`.
 ///
 /// # Errors
 ///
@@ -71,7 +72,8 @@ pub fn parse_size(size: &str) -> Result<(u32, u32), ImageRequestError> {
     // Python's `strip()`: Unicode's whitespace and the separators U+001C
     // to U+001F.
     let space = |c: char| c.is_whitespace() || matches!(c, '\u{1c}'..='\u{1f}');
-    let written = size.trim_matches(space).to_lowercase();
+    // Python's `\d` and `int()` read the decimal digits of every script.
+    let written = decimal_digits::ascii(&size.trim_matches(space).to_lowercase());
     let (width, height) = written.split_once('x').ok_or_else(unread)?;
     let digits = |text: &str| !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit());
     if !digits(width) || !digits(height) {
@@ -144,6 +146,8 @@ mod tests {
             (" 512x512 ", (512, 512)),
             // Python's `strip()` takes the separators U+001C to U+001F.
             ("\u{1c}1024x1024\u{1f}", (1024, 1024)),
+            // Python's `\d` reads the decimal digits of every script.
+            ("\u{661}\u{660}x16", (10, 16)),
         ] {
             assert_eq!(parse_size(value), Ok(expected), "{value}");
         }

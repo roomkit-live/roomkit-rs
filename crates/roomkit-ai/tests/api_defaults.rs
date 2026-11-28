@@ -923,8 +923,18 @@ fn image_models_default_as_python() {
         assert!(capabilities.retirement_date.is_none());
         // roomkit.ImageCapabilities.__init__(options) = <factory>
         assert_eq!(capabilities.options, Vec::<String>::new());
-        assert_eq!(capabilities.sizes, Vec::<String>::new());
-        assert_eq!(capabilities.search_types, Vec::<String>::new());
+        for listed in [
+            &capabilities.qualities,
+            &capabilities.formats,
+            &capabilities.backgrounds,
+            &capabilities.aspect_ratios,
+            &capabilities.image_sizes,
+            &capabilities.thinking_levels,
+            &capabilities.sizes,
+            &capabilities.search_types,
+        ] {
+            assert_eq!(listed, &Vec::<String>::new());
+        }
     }
     let attempt = ImageAttempt::default();
     // roomkit.ImageAttempt.__init__(index) = 0
@@ -939,7 +949,8 @@ fn image_models_default_as_python() {
     assert!(attempt.error.is_none());
     // roomkit.ImageAttempt.__init__(status_code) = None
     assert!(attempt.status_code.is_none());
-    assert!(attempt.usage.is_empty());
+    assert!(attempt.usage.is_empty() && attempt.raw_usage.is_empty());
+    assert!(attempt.effective_options.is_empty() && attempt.metadata.is_empty());
     let entry = ImageModelInfo::new("gpt-image-2", ImageCapabilities::new(verified));
     // roomkit.ImageModelInfo.__init__(deprecated) = False
     assert!(!entry.deprecated);
@@ -957,6 +968,8 @@ fn image_models_default_as_python() {
     assert!(result.usage.is_empty());
     // roomkit.ImageResult.__init__(attempt_id) = None
     assert!(result.attempt_id.is_none());
+    assert!(result.provider_request_id.is_none() && result.raw_usage.is_empty());
+    assert!(result.effective_options.is_empty() && result.metadata.is_empty());
     // roomkit.ImageResult.__init__(width) = None
     assert!(result.width.is_none() && result.height.is_none());
     // roomkit.ImageOptions.__init__(quality) = None, and every other control

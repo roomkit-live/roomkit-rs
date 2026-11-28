@@ -107,11 +107,10 @@ roomkit_acp = ["roomkit"]
 # An AI channel's and a tool definition's refusal, Python's constructors'
 # `ValueError` (a tool name two tools take, `ToolNameCollisionError`, is one).
 "roomkit_ai::AiError" = { python = "ValueError" }
-# What an image result, a size or a data: URI does not read: Python's
+# What an image result, a request or a data: URI does not read: Python's
 # validators' and parsers' `ValueError` (RFC §25).
 "roomkit_ai::image::ImageResultError" = { python = "ValueError" }
 "roomkit_ai::image::ImageRequestError" = { python = "ValueError", members = ["new"] }
-"roomkit_ai::image::DataUriError" = { python = "ValueError" }
 # Served-entry constructor integers and a missing frontmatter accessor key (HITL 450fa510).
 "roomkit_ai::SkillResourceSize" = { python = "int" }
 "roomkit_ai::SkillEntryKeyError" = { python = "KeyError", members = ["key"] }
