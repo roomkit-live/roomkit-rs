@@ -15,6 +15,9 @@ pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
     match call {
         "agent.extra_tools" => Some(&["channel_id"]),
         "agent.replace_extra_tool" => Some(&["channel_id", "index", "definition"]),
+        // A scripted agent's identity block, read by calls.rs (README,
+        // `agent.build_identity_block`).
+        "agent.build_identity_block" => Some(&["channel_id", "language"]),
         _ => None,
     }
 }

@@ -588,7 +588,6 @@ fn base_arguments(call: &str) -> Option<&'static [&'static str]> {
         "set_room_timers" => &["room_id", "timers"],
         "set_agent_response_policy" => &["room_id", "policy"],
         "send_greeting" => &["room_id", "channel_id", "agent_id", "greeting"],
-        "agent.build_identity_block" => &["channel_id", "language"],
         "register_channel" => &["channel"],
         "unregister_channel" | "acp.close" | "release_channel" => &["channel_id"],
         "register_hook" | "kit_executor.hook" | "kit_executor.room_hook" => &["hook"],
