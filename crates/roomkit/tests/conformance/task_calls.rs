@@ -265,6 +265,20 @@ pub(crate) async fn call(
         "delegate" => delegate(run, spec).await?,
         "start_task" => start_task(run, spec).await?,
         "setup_background" | "setup_task_tools" => setup_tools(run, name, spec)?,
+        "task.wait" | "task_runner.close" | "cancel_task" => task_call(run, name, spec).await?,
+        verb => host_call(run, verb, spec).await?,
+    })
+}
+
+/// A call on a task the run delegated, or on the kit's task runner: its
+/// wait, its cancel, the runner's own close (the kit left open).
+async fn task_call(
+    run: &Arc<Run>,
+    name: &str,
+    spec: &Value,
+) -> Result<(Called, Option<String>), Unreadable> {
+    let kit = run.kit();
+    Ok(match name {
         "task.wait" => {
             let task_id: String = field(spec, "task_id")?;
             let task = lock(&run.tasks)
@@ -275,11 +289,10 @@ pub(crate) async fn call(
             (finish(run, name, outcome, dump), None)
         }
         "task_runner.close" => {
-            // The kit's task runner's own close, the kit left open.
             kit.task_runner().close().await;
             (Ok(Value::Null), None)
         }
-        "cancel_task" => {
+        _ => {
             let task_id: String = field(spec, "task_id")?;
             let options = CancelTaskOptions {
                 organization_id: organization_id(spec),
@@ -287,7 +300,6 @@ pub(crate) async fn call(
             let cancelled = kit.cancel_task(&task_id, options).await;
             (Ok(Value::Bool(cancelled)), None)
         }
-        verb => host_call(run, verb, spec).await?,
     })
 }
 
