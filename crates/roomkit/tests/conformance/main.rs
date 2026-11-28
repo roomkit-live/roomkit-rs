@@ -71,9 +71,11 @@ mod store_calls;
 mod store_faults;
 mod store_records;
 mod store_rooms;
+mod store_spans;
 mod strategy_calls;
 mod subscription_calls;
 mod task_calls;
+mod telemetry_calls;
 mod templates;
 mod verification_calls;
 

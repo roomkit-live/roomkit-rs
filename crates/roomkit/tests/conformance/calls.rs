@@ -412,24 +412,13 @@ async fn other_call(
         return Ok(Ok(json!(value)));
     }
     if name == "telemetry.spans" {
-        let site: String = field(spec, "site")?;
-        let kind: roomkit::telemetry::SpanKind = field(spec, "kind")?;
-        let attributes: Metadata = optional(spec, "attributes")?.unwrap_or_default();
-        let recorders = crate::run::lock(&run.telemetry);
-        let recorder = recorders
-            .get(&site)
-            .ok_or_else(|| format!("no telemetry at {site}"))?;
-        let spans: Vec<_> = recorder
-            .get_spans(kind)
-            .into_iter()
-            .filter(|span| {
-                attributes
-                    .iter()
-                    .all(|(key, value)| span.attributes.get(key) == Some(value))
-            })
-            .map(|s| json!({"name":s.name,"span_id":s.id,"parent_id":s.parent_id}))
-            .collect();
-        return Ok(Ok(json!(spans)));
+        return crate::telemetry_calls::spans(run, spec);
+    }
+    if name == "telemetry.reset" {
+        return crate::telemetry_calls::reset(run, spec);
+    }
+    if name == "session_audit.record" {
+        return crate::audits::record(run, spec);
     }
     if name == "channel_call" {
         return crate::channel_verbs::call(run, spec).await;

@@ -289,10 +289,14 @@ pub(crate) async fn run_with(
 }
 
 /// What the setup says of the kit's store: its faults declared
-/// (`kit.store_faults`), who owns it (`kit.store_owner`).
+/// (`kit.store_faults`), its cursor traced (`kit.store_spans`), who owns it
+/// (`kit.store_owner`).
 fn declare_store(store: &crate::Store, kit: &Value) {
     if kit["store_faults"] == Value::Bool(true) {
         store.faults().declare();
+    }
+    if kit["store_spans"] == Value::Bool(true) {
+        store.cursor_spans().declare();
     }
     if let Some(owner) = kit["store_owner"].as_str() {
         store.faults().own(owner);
@@ -349,7 +353,8 @@ async fn open_process(
 }
 
 async fn set_up(run: &Arc<Run>, setup: &Value) -> Result<(), String> {
-    run.auditors.set_up(&setup["session_auditor"], run.kit())?;
+    run.auditors
+        .set_up(&setup["session_auditor"], &setup["audit_files"], run.kit())?;
     run.mcp.connect(&setup["channels"]).await?;
     for channel in setup["channels"].as_array().into_iter().flatten() {
         calls::register_channel(run, channel)?
@@ -796,6 +801,7 @@ async fn observe(run: &Arc<Run>, step_outcomes: Vec<Value>) -> Observed {
         observed.acp_wire.insert(channel.clone(), received);
     }
     (observed.tool_audit, observed.session_audit) = run.auditors.observe(&mut problems);
+    observed.own_audit = run.auditors.own_entries();
     lock(&run.problems).extend(problems);
     for ((room_key, timeline), room) in timelines.into_iter().zip(&rooms) {
         observed.timelines.insert(room_key.clone(), timeline);

@@ -31,6 +31,7 @@ const SETUP: &[&str] = &[
     "identities",
     "strategies",
     "session_auditor",
+    "audit_files",
     "processes",
     "executors",
     "event_handlers",
@@ -59,6 +60,7 @@ const KIT: &[&str] = &[
     "inbound_rate_limit",
     "persistence_policy",
     "store_faults",
+    "store_spans",
     "store_owner",
     "shared_realtime",
     "turn_backend_faults",
@@ -474,6 +476,7 @@ const EXPECT: &[&str] = &[
     "media_resolver",
     "tool_audit",
     "session_audit",
+    "own_audit",
 ];
 const NEW_ROOM: &[&str] = &["id", "organization_id", "metadata", "timers"];
 const STEPS: &[(&str, &[&str])] = &[
@@ -585,7 +588,9 @@ fn base_arguments(call: &str) -> Option<&'static [&'static str]> {
             "chain_depth",
             "instruction",
         ],
-        "telemetry.spans" => &["site", "kind", "attributes"],
+        "telemetry.spans" => &["site", "kind", "attributes", "name", "distinct"],
+        "telemetry.reset" => &["site"],
+        "session_audit.record" => &["entry"],
         "channel_call" => CHANNEL_CALL,
         "cancel_delivery" => &["key", "reason"],
         "steer" => &["channel_id", "directive", "room_id"],

@@ -107,6 +107,7 @@ pub(crate) struct Observed {
     /// The run's tool auditor's entries, and its session auditor's.
     pub(crate) tool_audit: Vec<Value>,
     pub(crate) session_audit: Vec<Value>,
+    pub(crate) own_audit: Vec<Value>,
 }
 
 impl Observed {

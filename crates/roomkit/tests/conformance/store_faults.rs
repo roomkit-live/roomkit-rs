@@ -40,6 +40,8 @@ use roomkit::store::{
     UnlinkAddressOptions,
 };
 use roomkit::telemetry::TelemetryProvider;
+
+use crate::store_spans::CursorSpans;
 use roomkit::{ConversationStore, StoreError};
 use serde_json::Value;
 
@@ -296,10 +298,12 @@ impl StoreFaults {
 }
 
 /// `inner`, each operation of its interface run as its own, unless a fault
-/// of its [`StoreFaults`] takes the call.
+/// of its [`StoreFaults`] takes the call; its cursor traced once
+/// `kit.store_spans` declares it ([`CursorSpans`]).
 pub(crate) struct FaultingStore<S> {
     inner: S,
     faults: StoreFaults,
+    cursor_spans: CursorSpans,
 }
 
 impl<S> FaultingStore<S> {
@@ -308,12 +312,18 @@ impl<S> FaultingStore<S> {
         Self {
             inner,
             faults: StoreFaults::default(),
+            cursor_spans: CursorSpans::default(),
         }
     }
 
     /// The faults the steps arm on it.
     pub(crate) fn faults(&self) -> &StoreFaults {
         &self.faults
+    }
+
+    /// Whether, and to which provider, it traces its cursor.
+    pub(crate) fn cursor_spans(&self) -> &CursorSpans {
+        &self.cursor_spans
     }
 }
 
@@ -348,6 +358,7 @@ impl<S: ConversationStore> ConversationStore for FaultingStore<S> {
     }
 
     fn set_telemetry(&self, provider: Arc<dyn TelemetryProvider>, record_sensitive_data: bool) {
+        self.cursor_spans.set_provider(Arc::clone(&provider));
         self.inner.set_telemetry(provider, record_sensitive_data);
     }
 
@@ -530,13 +541,12 @@ impl<S: ConversationStore> ConversationStore for FaultingStore<S> {
     }
 
     async fn get_delivered_index(&self, room_id: &RoomId) -> Result<i64, StoreError> {
-        self.faults
-            .run(
-                "get_delivered_index",
-                Some(room_id),
-                Box::pin(self.inner.get_delivered_index(room_id)),
-            )
-            .await
+        let read = self.faults.run(
+            "get_delivered_index",
+            Some(room_id),
+            Box::pin(self.inner.get_delivered_index(room_id)),
+        );
+        self.cursor_spans.spanned("get_delivered_index", read).await
     }
 
     async fn advance_delivered_index(
@@ -545,12 +555,13 @@ impl<S: ConversationStore> ConversationStore for FaultingStore<S> {
         index: u64,
         options: AdvanceDeliveredIndexOptions,
     ) -> Result<bool, StoreError> {
-        self.faults
-            .run(
-                "advance_delivered_index",
-                Some(room_id),
-                Box::pin(self.inner.advance_delivered_index(room_id, index, options)),
-            )
+        let write = self.faults.run(
+            "advance_delivered_index",
+            Some(room_id),
+            Box::pin(self.inner.advance_delivered_index(room_id, index, options)),
+        );
+        self.cursor_spans
+            .spanned("advance_delivered_index", write)
             .await
     }
 

@@ -330,6 +330,7 @@ impl Comparison<'_> {
         for (kind, entries) in [
             ("tool_audit", &self.observed.tool_audit),
             ("session_audit", &self.observed.session_audit),
+            ("own_audit", &self.observed.own_audit),
         ] {
             if let Some(expected) = expect.get(kind) {
                 self.check(expected, Some(&Value::Array(entries.clone())), kind);
