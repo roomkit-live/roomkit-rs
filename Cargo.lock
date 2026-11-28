@@ -1588,6 +1588,7 @@ version = "0.3.0"
 dependencies = [
  "agent-client-protocol-schema",
  "axum",
+ "base64 0.23.1",
  "futures-core",
  "getrandom 0.4.3",
  "jiff 0.2.38",

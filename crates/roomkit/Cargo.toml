@@ -52,6 +52,8 @@ roomkit-acp.workspace = true
 # Shared public MCP host scenarios over JSON and SSE.
 roomkit-mcp = { workspace = true, features = ["http"] }
 axum.workspace = true
+# The MCP peer decodes a header MCP 2026-07-28 wraps in base64.
+base64.workspace = true
 # The turn backend's liveness, tested on tokio's paused clock.
 tokio = { workspace = true, features = ["test-util", "net", "io-util"] }
 

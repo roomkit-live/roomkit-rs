@@ -1,6 +1,8 @@
 //! A scripted JSON/SSE peer, never a replacement client implementation.
 #[path = "peer/legacy.rs"]
 mod legacy;
+#[path = "peer/modern.rs"]
+mod modern;
 use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
@@ -20,6 +22,8 @@ struct State {
     tool_call: bool,
     requests: Vec<Value>,
     problems: Vec<String>,
+    /// The arguments each listed tool mirrors into a header (2026-07-28).
+    mirrored: modern::Mirrored,
 }
 
 pub(super) struct Peer {
@@ -47,6 +51,7 @@ impl Peer {
             tool_call: false,
             requests: vec![],
             problems: vec![],
+            mirrored: modern::Mirrored::default(),
         }));
         let shared = Arc::clone(&state);
         let (stop, mut stopped) = oneshot::channel();
@@ -136,14 +141,23 @@ impl Drop for Peer {
 }
 
 impl State {
+    /// Whether the peer is a server of MCP 2026-07-28 (`era`).
+    fn modern(&self) -> bool {
+        self.spec["era"] == modern::MODERN
+    }
+
     fn reply(&mut self, message: &Value) -> Option<Value> {
         let method = message["method"].as_str().unwrap_or_default();
-        if method == "initialize" {
-            self.requests.push(json!({"method":method}));
-            return Some(
-                json!({"jsonrpc":"2.0","id":message["id"],"result":self.initialization()}),
-            );
+        if matches!(method, "initialize" | "server/discover") {
+            return Some(self.negotiation(method, message));
         }
+        let stripped;
+        let message = if self.modern() {
+            stripped = modern::without_protocol_meta(message, &mut self.problems);
+            &stripped
+        } else {
+            message
+        };
         let mut observed = json!({"method":method});
         if let Some(params) = message.get("params") {
             observed["params"] = params.clone();
@@ -194,7 +208,29 @@ impl State {
         } else {
             "result"
         };
+        if method == "tools/list" && field == "result" {
+            self.mirrored.remember(&reply["result"]);
+        }
         Some(json!({"jsonrpc":"2.0","id":message["id"],field:reply[field]}))
+    }
+
+    /// The answer to a request that negotiates the protocol, recorded by its
+    /// method only: a server of an earlier revision knows no discovery and
+    /// the client falls back to the handshake; a 2026-07-28 server answers
+    /// discovery and takes no handshake.
+    fn negotiation(&mut self, method: &str, message: &Value) -> Value {
+        self.requests.push(json!({"method":method}));
+        let id = &message["id"];
+        if method == "server/discover" {
+            let result = modern::discovery(self.initialization());
+            return json!({"jsonrpc":"2.0","id":id,"result":result});
+        }
+        if !self.modern() {
+            return json!({"jsonrpc":"2.0","id":id,"result":self.initialization()});
+        }
+        self.problems
+            .push("MCP 2026-07-28 peer received an initialize".into());
+        json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"Method not found"}})
     }
 
     fn initialization(&mut self) -> Value {
@@ -231,20 +267,36 @@ async fn exchange(mut socket: TcpStream, shared: &Arc<Mutex<State>>) -> Result<(
         return legacy::exchange(socket, &head, &message, shared).await;
     }
     if !head.starts_with("POST ") {
-        return send(
-            &mut socket,
-            if head.starts_with("DELETE ") {
-                200
-            } else {
-                405
-            },
-            "",
-            false,
-        )
-        .await;
+        let status = if head.starts_with("DELETE ") {
+            200
+        } else {
+            405
+        };
+        return send(&mut socket, status, "", false, true).await;
     }
+    let modern = {
+        let mut state = shared.lock().unwrap();
+        let modern = state.modern();
+        if modern {
+            let State {
+                mirrored, problems, ..
+            } = &mut *state;
+            modern::check_headers(&modern::headers(&head), &message, mirrored, problems);
+        }
+        modern
+    };
+    // A 2026-07-28 server keeps no session.
+    let session = !modern;
     if message.get("id").is_none() {
-        return send(&mut socket, 202, "", false).await;
+        return send(&mut socket, 202, "", false, session).await;
+    }
+    if message["method"] == "server/discover" && !modern {
+        let (status, body) = {
+            let mut state = shared.lock().unwrap();
+            state.requests.push(json!({"method":"server/discover"}));
+            modern::refusal(&state.spec, &message["id"])
+        };
+        return send(&mut socket, status, &body.to_string(), false, false).await;
     }
     let (reply, sse) = {
         let mut state = shared.lock().unwrap();
@@ -256,7 +308,7 @@ async fn exchange(mut socket: TcpStream, shared: &Arc<Mutex<State>>) -> Result<(
         } else {
             reply.to_string()
         };
-        send(&mut socket, 200, &body, sse).await
+        send(&mut socket, 200, &body, sse, session).await
     } else {
         let mut byte = [0];
         let _closed = socket.read(&mut byte).await;
@@ -297,14 +349,25 @@ async fn request(socket: &mut TcpStream) -> Result<Option<(String, Value)>, Stri
     )))
 }
 
-async fn send(socket: &mut TcpStream, status: u16, body: &str, sse: bool) -> Result<(), String> {
+async fn send(
+    socket: &mut TcpStream,
+    status: u16,
+    body: &str,
+    sse: bool,
+    session: bool,
+) -> Result<(), String> {
     let kind = if sse {
         "text/event-stream"
     } else {
         "application/json"
     };
+    let held = if session {
+        "Mcp-Session-Id: conformance-session\r\n"
+    } else {
+        ""
+    };
     let message = format!(
-        "HTTP/1.1 {status} Response\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\nMcp-Session-Id: conformance-session\r\n\r\n{body}",
+        "HTTP/1.1 {status} Response\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n{held}\r\n{body}",
         body.len()
     );
     socket
@@ -327,6 +390,7 @@ mod tests {
             tool_call: false,
             requests: vec![],
             problems: vec![],
+            mirrored: modern::Mirrored::default(),
         }
     }
 

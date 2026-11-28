@@ -84,6 +84,8 @@ fn peer(value: &Value, path: &str, found: &mut Vec<String>) {
             "instructions",
             "replies",
             "framing",
+            "era",
+            "refuse_discovery",
             "initializations",
             "endpoint_on_connections",
         ],
@@ -91,6 +93,15 @@ fn peer(value: &Value, path: &str, found: &mut Vec<String>) {
         found,
     ) {
         return;
+    }
+    if value.get("era").is_some_and(|era| era != "2026-07-28") {
+        found.push(format!("{path}.era: expected 2026-07-28"));
+    }
+    if value
+        .get("refuse_discovery")
+        .is_some_and(|refusal| refusal != "http")
+    {
+        found.push(format!("{path}.refuse_discovery: expected http"));
     }
     initialization(value, path, found);
     if value
@@ -266,6 +277,8 @@ mod tests {
             json!({"peer":{"replies":[{"method":"read","hold":false}]}}),
             json!({"peer":{"replies":[{"method":"read","error":{"code":true,"message":"x"}}]}}),
             json!({"peer":{"replies":[],"framing":"later"}}),
+            json!({"peer":{"replies":[],"era":"2025-11-25"}}),
+            json!({"peer":{"replies":[],"refuse_discovery":"jsonrpc"}}),
             json!({"peer":{"replies":[],"initializations":[]}}),
             json!({"peer":{"replies":[],"initializations":[{"server_info":false}]}}),
             json!({"peer":{"replies":[],"initializations":[{"instruction":"unknown"}]}}),

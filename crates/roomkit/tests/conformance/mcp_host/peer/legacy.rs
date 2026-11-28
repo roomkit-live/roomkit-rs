@@ -65,7 +65,7 @@ pub(super) async fn exchange(
                 let reply = message.get("id").and_then(|_| state.reply(message));
                 (sender, reply)
             };
-            super::send(&mut socket, 202, "", false).await?;
+            super::send(&mut socket, 202, "", false, true).await?;
             if let Some(reply) = reply {
                 sender
                     .send(reply)
