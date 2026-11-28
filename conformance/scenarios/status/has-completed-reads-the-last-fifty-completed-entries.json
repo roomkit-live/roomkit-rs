@@ -1,0 +1,446 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "status/has-completed-reads-the-last-fifty-completed-entries",
+  "title": "has_completed says whether a completed entry, of the agent it names when it names one, is among the bus's last 50 completed entries: entries of other levels count for nothing, and the 51st newest completed one is out",
+  "rules": [
+    "§19.8"
+  ],
+  "requirements": [
+    "RK-19.8-008"
+  ],
+  "notes": "a's completed entry is the 50th newest completed one once b posted 49, ten info entries after them changing nothing; b's 50th completed entry leaves it 51st, out of the read. c posted no completed entry. Python: orchestration/status_bus.py StatusBus.has_completed (recent(50, status=\"completed\"), then the agent).",
+  "steps": [
+    {
+      "call": "status.has_completed",
+      "expect": {
+        "result": false
+      }
+    },
+    {
+      "call": "status.has_completed",
+      "agent_id": "a",
+      "expect": {
+        "result": false
+      }
+    },
+    {
+      "call": "status.post",
+      "agent_id": "a",
+      "action": "report",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "start",
+      "status": "ok"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 1",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 2",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 3",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 4",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 5",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 6",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 7",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 8",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 9",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 10",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 11",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 12",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 13",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 14",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 15",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 16",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 17",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 18",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 19",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 20",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 21",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 22",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 23",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 24",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 25",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 26",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 27",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 28",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 29",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 30",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 31",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 32",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 33",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 34",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 35",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 36",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 37",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 38",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 39",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 40",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 41",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 42",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 43",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 44",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 45",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 46",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 47",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 48",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 49",
+      "status": "completed"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "c",
+      "action": "note 1",
+      "status": "info"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "c",
+      "action": "note 2",
+      "status": "info"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "c",
+      "action": "note 3",
+      "status": "info"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "c",
+      "action": "note 4",
+      "status": "info"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "c",
+      "action": "note 5",
+      "status": "info"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "c",
+      "action": "note 6",
+      "status": "info"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "c",
+      "action": "note 7",
+      "status": "info"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "c",
+      "action": "note 8",
+      "status": "info"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "c",
+      "action": "note 9",
+      "status": "info"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "c",
+      "action": "note 10",
+      "status": "info"
+    },
+    {
+      "call": "status.has_completed",
+      "agent_id": "a",
+      "expect": {
+        "result": true
+      }
+    },
+    {
+      "call": "status.has_completed",
+      "expect": {
+        "result": true
+      }
+    },
+    {
+      "call": "status.has_completed",
+      "agent_id": "c",
+      "expect": {
+        "result": false
+      }
+    },
+    {
+      "call": "status.post",
+      "agent_id": "b",
+      "action": "step 50",
+      "status": "completed"
+    },
+    {
+      "call": "status.has_completed",
+      "agent_id": "a",
+      "expect": {
+        "result": false
+      }
+    },
+    {
+      "call": "status.has_completed",
+      "agent_id": "b",
+      "expect": {
+        "result": true
+      }
+    },
+    {
+      "call": "status.has_completed",
+      "expect": {
+        "result": true
+      }
+    },
+    {
+      "call": "status.has_completed",
+      "agent_id": null,
+      "expect": {
+        "result": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,186 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "orchestration/a-router-rule-s-custom-predicate-reads-the-event-its-context-and-the-state",
+  "title": "A router rule's custom predicate is handed the event, the room's context and the conversation state, and its answer decides whether the rule selects its agent",
+  "rules": [
+    "§19.4"
+  ],
+  "requirements": [
+    "RK-19.4-013"
+  ],
+  "notes": "The predicate answers false, then true (README, Setup, `conditions.custom`): the first message goes to the router's default agent, the second to the rule's. Python: orchestration/router.py RoutingConditions.custom, ConversationRouter._matches (conditions.custom(event, context, state)).",
+  "setup": {
+    "channels": [
+      {
+        "id": "sms",
+        "type": "sms",
+        "category": "transport"
+      },
+      {
+        "id": "vip",
+        "type": "ai",
+        "agent": {
+          "role": "VIP desk"
+        },
+        "model": {
+          "rounds": [
+            {
+              "text": "VIP here."
+            }
+          ]
+        }
+      },
+      {
+        "id": "desk",
+        "type": "ai",
+        "agent": {
+          "role": "Front desk"
+        },
+        "model": {
+          "rounds": [
+            {
+              "text": "Desk here."
+            }
+          ]
+        }
+      }
+    ],
+    "rooms": [
+      {
+        "id": "r1",
+        "bindings": [
+          {
+            "channel_id": "sms"
+          },
+          {
+            "channel_id": "vip"
+          },
+          {
+            "channel_id": "desk"
+          }
+        ]
+      }
+    ],
+    "hooks": [
+      {
+        "name": "router",
+        "trigger": "before_broadcast",
+        "router": {
+          "rules": [
+            {
+              "agent_id": "vip",
+              "conditions": {
+                "custom": {
+                  "name": "is_vip",
+                  "answers": [
+                    false,
+                    true
+                  ]
+                }
+              }
+            }
+          ],
+          "default_agent_id": "desk"
+        }
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "process_inbound",
+      "room_id": "r1",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "u1",
+        "content": {
+          "type": "text",
+          "body": "Hello."
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "error": null
+        }
+      }
+    },
+    {
+      "idle": true
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "r1",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "u1",
+        "content": {
+          "type": "text",
+          "body": "I am a VIP."
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "error": null
+        }
+      }
+    },
+    {
+      "idle": true
+    }
+  ],
+  "expect": {
+    "custom_conditions": {
+      "is_vip": [
+        {
+          "event_id": "r1#0",
+          "room_id": "r1",
+          "phase": "intake",
+          "active_agent_id": null
+        },
+        {
+          "event_id": "r1#2",
+          "room_id": "r1",
+          "phase": "intake",
+          "active_agent_id": null
+        }
+      ]
+    },
+    "timeline": {
+      "r1": [
+        {
+          "content": {
+            "body": "Hello."
+          },
+          "metadata": {
+            "_routed_to": "desk"
+          }
+        },
+        {
+          "source": {
+            "channel_id": "desk"
+          },
+          "content": {
+            "body": "Desk here."
+          }
+        },
+        {
+          "content": {
+            "body": "I am a VIP."
+          },
+          "metadata": {
+            "_routed_to": "vip"
+          }
+        },
+        {
+          "source": {
+            "channel_id": "vip"
+          },
+          "content": {
+            "body": "VIP here."
+          }
+        }
+      ]
+    }
+  }
+}

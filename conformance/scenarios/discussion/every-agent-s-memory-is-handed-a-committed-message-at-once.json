@@ -1,0 +1,136 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "discussion/every-agent-s-memory-is-handed-a-committed-message-at-once",
+  "title": "A discussion hands a committed message to every agent's memory at once: each memory holds it while the other is handed it too, and the commit waits for both",
+  "rules": [
+    "§19.7.5"
+  ],
+  "requirements": [
+    "RK-19.7.5-037"
+  ],
+  "notes": "Each scripted memory holds at its own gate once it was handed an event (README, Scripted agents, `memory.ingest_gate`). The person's message addresses no one in an addressed_only discussion, so no turn follows: both memories reach their gates while the other still holds, which a hand-off made one memory after the other never does, and the inbound call is pending until both opened. Python: orchestration/strategies/discussion/_room.py _hand_to_memories (asyncio.gather over the agents).",
+  "setup": {
+    "channels": [
+      {
+        "id": "ops",
+        "type": "websocket",
+        "category": "transport"
+      },
+      {
+        "id": "sre",
+        "type": "ai",
+        "model": {
+          "rounds": []
+        },
+        "memory": {
+          "ingest_gate": "sre-ingest"
+        }
+      },
+      {
+        "id": "dev",
+        "type": "ai",
+        "model": {
+          "rounds": []
+        },
+        "memory": {
+          "ingest_gate": "dev-ingest"
+        }
+      }
+    ],
+    "rooms": [
+      {
+        "id": "r1",
+        "bindings": [
+          {
+            "channel_id": "ops"
+          }
+        ]
+      }
+    ],
+    "strategies": [
+      {
+        "id": "d",
+        "discussion": {
+          "agents": [
+            "sre",
+            "dev"
+          ],
+          "addressed_only": true
+        }
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "install_strategy",
+      "room_id": "r1",
+      "strategy": "d"
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "r1",
+      "message": {
+        "channel_id": "ops",
+        "sender_id": "oncall",
+        "content": {
+          "type": "text",
+          "body": "the customer is Acme"
+        }
+      },
+      "background": true,
+      "as": "inbound"
+    },
+    {
+      "wait_for": "sre-ingest",
+      "pending": "inbound"
+    },
+    {
+      "wait_for": "dev-ingest",
+      "pending": "inbound"
+    },
+    {
+      "open": "sre-ingest"
+    },
+    {
+      "open": "dev-ingest"
+    },
+    {
+      "await": "inbound",
+      "expect": {
+        "result": {
+          "blocked": false,
+          "error": null
+        }
+      }
+    },
+    {
+      "idle": true
+    }
+  ],
+  "expect": {
+    "ingested": {
+      "r1": {
+        "sre": [
+          {
+            "source": {
+              "channel_id": "ops"
+            },
+            "content": {
+              "body": "the customer is Acme"
+            }
+          }
+        ],
+        "dev": [
+          {
+            "source": {
+              "channel_id": "ops"
+            },
+            "content": {
+              "body": "the customer is Acme"
+            }
+          }
+        ]
+      }
+    }
+  }
+}

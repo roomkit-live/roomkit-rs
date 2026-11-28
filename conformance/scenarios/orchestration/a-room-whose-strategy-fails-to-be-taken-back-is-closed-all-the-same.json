@@ -1,0 +1,87 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "orchestration/a-room-whose-strategy-fails-to-be-taken-back-is-closed-all-the-same",
+  "title": "A room's close takes its strategy back, and a strategy whose uninstall fails leaves the room closed all the same",
+  "rules": [
+    "§19.7"
+  ],
+  "requirements": [
+    "RK-19.7-055"
+  ],
+  "notes": "The scripted strategy's uninstall step posts a status, then raises (README, Setup, `strategies`, `uninstall.do` and `uninstall.fail`): the close took the strategy back, its step ran, and its failure leaves the room closed. Cited in part: the failure is logged, which no scenario reads. Python: core/framework.py _uninstall_closed (logs the failure and goes on).",
+  "setup": {
+    "channels": [
+      {
+        "id": "sms",
+        "type": "sms",
+        "category": "transport"
+      }
+    ],
+    "rooms": [
+      {
+        "id": "r1",
+        "bindings": [
+          {
+            "channel_id": "sms"
+          }
+        ]
+      }
+    ],
+    "strategies": [
+      {
+        "id": "s",
+        "uninstall": {
+          "do": [
+            {
+              "call": "status.post",
+              "agent_id": "s",
+              "action": "uninstall",
+              "status": "info"
+            }
+          ],
+          "fail": "cleanup failed"
+        }
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "install_strategy",
+      "room_id": "r1",
+      "strategy": "s"
+    },
+    {
+      "call": "close_room",
+      "room_id": "r1",
+      "expect": {
+        "result": {
+          "id": "r1",
+          "status": "closed"
+        }
+      }
+    },
+    {
+      "call": "get_room",
+      "room_id": "r1",
+      "expect": {
+        "result": {
+          "id": "r1",
+          "status": "closed"
+        }
+      }
+    },
+    {
+      "call": "status.recent",
+      "agent_id": "s",
+      "expect": {
+        "result": [
+          {
+            "agent_id": "s",
+            "action": "uninstall",
+            "status": "info"
+          }
+        ]
+      }
+    }
+  ]
+}

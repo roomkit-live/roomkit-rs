@@ -1,0 +1,155 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "orchestration/a-handoff-s-summary-reaches-its-target-s-next-turn-under-the-caller-s-id",
+  "title": "The summary a handoff carries reaches its target's next turn through the handoff memory, set apart as a summary of the conversation under the previous agent's id kept to an identifier's characters",
+  "rules": [
+    "§19.6",
+    "§6.4"
+  ],
+  "requirements": [
+    "RK-19.6-026"
+  ],
+  "notes": "The target's memory is the handoff memory wrapping its scripted memory (README, Scripted agents, `memory.handoff`). The caller's id, `front desk`, holds a space, which an identifier does not: the context names it `front-desk`. The handed-on context opens the target's first user message, joined to the turn after it; the rest of the conversation is not asserted. Python: orchestration/handoff.py HandoffMemoryProvider.retrieve (HANDED_ON_CONTEXT, identifier, fence of CONVERSATION_SUMMARY_TAG).",
+  "setup": {
+    "channels": [
+      {
+        "id": "sms",
+        "type": "sms",
+        "category": "transport"
+      },
+      {
+        "id": "front desk",
+        "type": "ai",
+        "agent": {
+          "role": "Sales"
+        },
+        "model": {
+          "rounds": [
+            {
+              "calls": [
+                {
+                  "id": "c1",
+                  "name": "handoff_conversation",
+                  "arguments": {
+                    "target": "billing",
+                    "reason": "Needs billing.",
+                    "summary": "Wants a refund for order 42."
+                  }
+                }
+              ]
+            },
+            {
+              "text": "One moment."
+            }
+          ]
+        }
+      },
+      {
+        "id": "billing",
+        "type": "ai",
+        "agent": {
+          "role": "Billing"
+        },
+        "model": {
+          "rounds": [
+            {
+              "text": "Billing here."
+            }
+          ]
+        },
+        "memory": {
+          "handoff": true
+        }
+      }
+    ],
+    "rooms": [
+      {
+        "id": "r1",
+        "bindings": [
+          {
+            "channel_id": "sms"
+          },
+          {
+            "channel_id": "front desk"
+          },
+          {
+            "channel_id": "billing"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "install_router",
+      "handler": "h",
+      "router": {
+        "default_agent_id": "front desk"
+      },
+      "agents": [
+        "front desk",
+        "billing"
+      ]
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "r1",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "u1",
+        "content": {
+          "type": "text",
+          "body": "I want my money back."
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "error": null
+        }
+      }
+    },
+    {
+      "idle": true
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "r1",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "u1",
+        "content": {
+          "type": "text",
+          "body": "Hello?"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "error": null
+        }
+      }
+    },
+    {
+      "idle": true
+    }
+  ],
+  "expect": {
+    "models": {
+      "billing": [
+        {
+          "messages": [
+            {
+              "role": "user",
+              "text": {
+                "$starts_with": "[Context from previous agent (front-desk)]\n<conversation_summary>\nWants a refund for order 42.\n</conversation_summary>"
+              }
+            },
+            "$any",
+            "$any"
+          ]
+        }
+      ]
+    }
+  }
+}

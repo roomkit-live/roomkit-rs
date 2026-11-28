@@ -1,0 +1,85 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "status/a-post-returns-before-its-subscribers-ran-and-a-post-async-once-they-did",
+  "title": "The bus's post returns its entry while a subscriber it was handed to still holds; post_async returns only once its subscribers ran",
+  "rules": [
+    "§19.8"
+  ],
+  "requirements": [
+    "RK-19.8-003"
+  ],
+  "notes": "A subscriber holds at g1 once it recorded an entry. The non-awaiting post (wait false) has returned when the subscriber reaches the gate it then holds at; post_async, started in the background, is still pending while the subscriber holds the entry it was handed, and returns its entry once the gate opens. Python: orchestration/status_bus.py StatusBus.post (a task publishes), post_async (awaits the backend's publish, which awaits each subscriber).",
+  "steps": [
+    {
+      "call": "status.subscribe",
+      "subscriber": "s1",
+      "gate": "g1"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "a1",
+      "action": "first",
+      "status": "info",
+      "wait": false,
+      "expect": {
+        "result": {
+          "agent_id": "a1",
+          "action": "first",
+          "status": "info",
+          "detail": "",
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "wait_for": "g1"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "a1",
+      "action": "second",
+      "status": "info",
+      "background": true,
+      "as": "p2"
+    },
+    {
+      "wait_for": "g1",
+      "pending": "p2"
+    },
+    {
+      "open": "g1"
+    },
+    {
+      "await": "p2",
+      "expect": {
+        "result": {
+          "agent_id": "a1",
+          "action": "second",
+          "status": "info",
+          "detail": "",
+          "metadata": {}
+        }
+      }
+    }
+  ],
+  "expect": {
+    "status_subscribers": {
+      "s1": [
+        {
+          "agent_id": "a1",
+          "action": "first",
+          "status": "info",
+          "detail": "",
+          "metadata": {}
+        },
+        {
+          "agent_id": "a1",
+          "action": "second",
+          "status": "info",
+          "detail": "",
+          "metadata": {}
+        }
+      ]
+    }
+  }
+}

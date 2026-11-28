@@ -1,0 +1,261 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "memory/a-turn-s-footprint-is-readable-to-its-memory-as-it-reads",
+  "title": "An AI channel measures its turn before it reads its memory, and the memory reads the measure as it reads: the input measured, the reply budget the turn asks, zero when the channel sets none, and each round of calls its history replays as its index, its turn and its tokens",
+  "rules": [
+    "§20.3"
+  ],
+  "requirements": [
+    "RK-20.3-040"
+  ],
+  "notes": "The scripted memory records current_turn_footprint() at each read (README, Scripted agents, `memory.records_footprint`). The agent's first turn calls a tool; its second turn's history replays that round of calls, the turn of its rows. The second turn's history replays the first turn's round of calls at index 1, its tool_call_start, under the correlation id of the first turn's rows, for 19 tokens. The second agent sets no max_tokens: its reply budget is 0. The inputs measured, 552 and 268, are the system prompt, the tools declared and the room's notes as the implementation estimates them (a quarter of the characters, plus one, §21.5). Python: tools/context.py current_turn_footprint, channels/ai.py (the footprint measured before memory.retrieve); tests/test_turn_footprint.py::test_the_footprint_is_the_turn_as_round_0_sends_it. Rust: crates/roomkit-ai/tests/turn_footprint.rs::the_footprint_is_the_turn_as_its_first_round_sends_it.",
+  "setup": {
+    "channels": [
+      {
+        "id": "sms",
+        "type": "sms",
+        "category": "transport"
+      },
+      {
+        "id": "agent",
+        "type": "ai",
+        "system_prompt": "Answer in one line.",
+        "max_tokens": 100,
+        "tools": [
+          {
+            "name": "lookup",
+            "description": "Looks an order up.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "order": {
+                  "type": "string"
+                }
+              }
+            },
+            "returns": "Order 42 shipped."
+          }
+        ],
+        "model": {
+          "rounds": [
+            {
+              "calls": [
+                {
+                  "id": "c1",
+                  "name": "lookup",
+                  "arguments": {
+                    "order": "42"
+                  }
+                }
+              ]
+            },
+            {
+              "text": "It shipped."
+            },
+            {
+              "text": "You are welcome."
+            }
+          ]
+        },
+        "memory": {
+          "records_footprint": true
+        }
+      },
+      {
+        "id": "plain",
+        "type": "ai",
+        "system_prompt": "Answer in one line.",
+        "model": {
+          "rounds": [
+            {
+              "text": "Hi."
+            }
+          ]
+        },
+        "memory": {
+          "records_footprint": true
+        }
+      }
+    ],
+    "rooms": [
+      {
+        "id": "r1",
+        "bindings": [
+          {
+            "channel_id": "sms"
+          },
+          {
+            "channel_id": "agent",
+            "category": "intelligence"
+          }
+        ]
+      },
+      {
+        "id": "r2",
+        "bindings": [
+          {
+            "channel_id": "sms"
+          },
+          {
+            "channel_id": "plain",
+            "category": "intelligence"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "process_inbound",
+      "room_id": "r1",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "u1",
+        "content": {
+          "type": "text",
+          "body": "Where is order 42?"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "error": null
+        }
+      }
+    },
+    {
+      "idle": true
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "r1",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "u1",
+        "content": {
+          "type": "text",
+          "body": "Thanks."
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "error": null
+        }
+      }
+    },
+    {
+      "idle": true
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "r2",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "u1",
+        "content": {
+          "type": "text",
+          "body": "Hello."
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "error": null
+        }
+      }
+    },
+    {
+      "idle": true
+    }
+  ],
+  "expect": {
+    "footprints": {
+      "r1": {
+        "agent": [
+          {
+            "input_tokens": 552,
+            "reply_tokens": 100,
+            "replayed": []
+          },
+          {
+            "input_tokens": 552,
+            "reply_tokens": 100,
+            "replayed": [
+              [
+                1,
+                {
+                  "$as": "first-turn"
+                },
+                19
+              ]
+            ]
+          }
+        ]
+      },
+      "r2": {
+        "plain": [
+          {
+            "input_tokens": 268,
+            "reply_tokens": 0,
+            "replayed": []
+          }
+        ]
+      }
+    },
+    "timeline": {
+      "r1": [
+        {
+          "source": {
+            "channel_id": "sms"
+          },
+          "content": {
+            "body": "Where is order 42?"
+          }
+        },
+        {
+          "type": "tool_call_start",
+          "source": {
+            "channel_id": "agent"
+          },
+          "correlation_id": {
+            "$as": "first-turn"
+          }
+        },
+        {
+          "type": "tool_call_end",
+          "source": {
+            "channel_id": "agent"
+          },
+          "correlation_id": {
+            "$as": "first-turn"
+          }
+        },
+        {
+          "source": {
+            "channel_id": "agent"
+          },
+          "content": {
+            "body": "It shipped."
+          }
+        },
+        {
+          "source": {
+            "channel_id": "sms"
+          },
+          "content": {
+            "body": "Thanks."
+          }
+        },
+        {
+          "source": {
+            "channel_id": "agent"
+          },
+          "content": {
+            "body": "You are welcome."
+          }
+        }
+      ]
+    }
+  }
+}

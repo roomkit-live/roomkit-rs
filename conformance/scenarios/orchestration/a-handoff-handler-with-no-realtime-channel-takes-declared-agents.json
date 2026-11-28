@@ -1,0 +1,78 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "orchestration/a-handoff-handler-with-no-realtime-channel-takes-declared-agents",
+  "title": "A handoff handler whose event channel is no realtime channel takes the agents it is given, one the kit holds by its declaration alone among them",
+  "rules": [
+    "§19.6",
+    "§10.6.2"
+  ],
+  "requirements": [
+    "RK-19.6-046"
+  ],
+  "notes": "The handler's event channel is the room's text transport. Its agents are a live agent and one the kit holds by its declaration alone, which only a realtime handler refuses (RK-19.6-044, Python-only scenarios). Python: orchestration/handoff.py HandoffHandler.agents setter (require_live_agents only for a realtime event channel).",
+  "setup": {
+    "channels": [
+      {
+        "id": "sms",
+        "type": "sms",
+        "category": "transport"
+      },
+      {
+        "id": "front",
+        "type": "ai",
+        "agent": {
+          "role": "Front desk"
+        },
+        "model": {
+          "rounds": []
+        }
+      },
+      {
+        "id": "billing",
+        "type": "ai",
+        "agent": {
+          "role": "Billing"
+        },
+        "model": {
+          "rounds": []
+        },
+        "declared": true
+      }
+    ],
+    "rooms": [
+      {
+        "id": "r1",
+        "bindings": [
+          {
+            "channel_id": "sms"
+          },
+          {
+            "channel_id": "front",
+            "category": "intelligence"
+          },
+          {
+            "channel_id": "billing",
+            "category": "intelligence"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "handoff_handler",
+      "handler": "h",
+      "router": {
+        "default_agent_id": "front"
+      },
+      "event_channel_id": "sms",
+      "agents": [
+        "front",
+        "billing"
+      ],
+      "expect": {
+        "result": null
+      }
+    }
+  ]
+}

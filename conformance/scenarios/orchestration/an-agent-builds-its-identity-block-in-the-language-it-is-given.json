@@ -1,0 +1,71 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "orchestration/an-agent-builds-its-identity-block-in-the-language-it-is-given",
+  "title": "An agent's build_identity_block gives its role, description and scope, then the language it is given over its own; an agent whose identity sets none of them has none",
+  "rules": [
+    "§19.1"
+  ],
+  "requirements": [
+    "RK-19.1-009"
+  ],
+  "notes": "Python: channels/agent.py Agent.build_identity_block, _build_identity_block (the language given, else the agent's own; None when no line is set). The block a turn's system prompt ends with is orchestration/an-agent-s-turn-prompt-ends-with-its-identity.",
+  "setup": {
+    "channels": [
+      {
+        "id": "sales",
+        "type": "ai",
+        "agent": {
+          "role": "Sales",
+          "description": "Sells plans",
+          "scope": "Plans and prices",
+          "language": "English"
+        },
+        "model": {
+          "rounds": []
+        }
+      },
+      {
+        "id": "bob",
+        "type": "ai",
+        "agent": {
+          "name": "Bob"
+        },
+        "model": {
+          "rounds": []
+        }
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "agent.build_identity_block",
+      "channel_id": "sales",
+      "expect": {
+        "result": "\n--- Agent Identity ---\nRole: Sales\nDescription: Sells plans\nScope: Plans and prices\nLanguage: Always respond in English"
+      }
+    },
+    {
+      "call": "agent.build_identity_block",
+      "channel_id": "sales",
+      "language": "French",
+      "expect": {
+        "result": "\n--- Agent Identity ---\nRole: Sales\nDescription: Sells plans\nScope: Plans and prices\nLanguage: Always respond in French"
+      }
+    },
+    {
+      "call": "agent.build_identity_block",
+      "channel_id": "bob",
+      "expect": {
+        "result": null
+      }
+    },
+    {
+      "call": "agent.build_identity_block",
+      "channel_id": "bob",
+      "language": "French",
+      "expect": {
+        "result": "\n--- Agent Identity ---\nLanguage: Always respond in French"
+      }
+    }
+  ]
+}

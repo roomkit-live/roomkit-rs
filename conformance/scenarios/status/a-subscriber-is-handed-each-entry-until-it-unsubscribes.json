@@ -1,0 +1,89 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "status/a-subscriber-is-handed-each-entry-until-it-unsubscribes",
+  "title": "A subscriber of the bus is handed every entry posted after it subscribed, in order, and none once it unsubscribed; another subscriber goes on being handed them",
+  "rules": [
+    "§19.8"
+  ],
+  "requirements": [
+    "RK-19.8-004",
+    "RK-19.8-005"
+  ],
+  "notes": "Python: orchestration/status_bus.py InMemoryStatusBackend.publish (every subscriber, in order), subscribe, unsubscribe.",
+  "steps": [
+    {
+      "call": "status.subscribe",
+      "subscriber": "s1"
+    },
+    {
+      "call": "status.subscribe",
+      "subscriber": "s2"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "a1",
+      "action": "one",
+      "status": "ok"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "a2",
+      "action": "two",
+      "status": "failed",
+      "detail": "It broke."
+    },
+    {
+      "call": "status.unsubscribe",
+      "subscriber": "s1"
+    },
+    {
+      "call": "status.post",
+      "agent_id": "a1",
+      "action": "three",
+      "status": "completed"
+    }
+  ],
+  "expect": {
+    "status_subscribers": {
+      "s1": [
+        {
+          "agent_id": "a1",
+          "action": "one",
+          "status": "ok",
+          "detail": "",
+          "metadata": {}
+        },
+        {
+          "agent_id": "a2",
+          "action": "two",
+          "status": "failed",
+          "detail": "It broke.",
+          "metadata": {}
+        }
+      ],
+      "s2": [
+        {
+          "agent_id": "a1",
+          "action": "one",
+          "status": "ok",
+          "detail": "",
+          "metadata": {}
+        },
+        {
+          "agent_id": "a2",
+          "action": "two",
+          "status": "failed",
+          "detail": "It broke.",
+          "metadata": {}
+        },
+        {
+          "agent_id": "a1",
+          "action": "three",
+          "status": "completed",
+          "detail": "",
+          "metadata": {}
+        }
+      ]
+    }
+  }
+}

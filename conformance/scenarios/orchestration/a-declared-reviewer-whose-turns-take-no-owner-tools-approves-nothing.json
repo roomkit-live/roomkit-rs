@@ -1,0 +1,161 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "orchestration/a-declared-reviewer-whose-turns-take-no-owner-tools-approves-nothing",
+  "title": "A loop's reviewer whose turns take no owner tools is never given submit_review, and whatever its text holds, a verdict's JSON included, approves nothing: the loop runs to its last iteration unapproved",
+  "rules": [
+    "§19.7.4",
+    "§10.6.5"
+  ],
+  "requirements": [
+    "RK-19.7.4-007"
+  ],
+  "notes": "The reviewer is held by its declaration, which says its turns take no owner tools (README, Setup, `takes_owner_tools`), and runs on an executor. It is asked once per iteration: its first review says APPROVED and its second a verdict's JSON, and neither approves. Python: orchestration/strategies/loop.py (judged only for a reviewer that takes owner tools); tests/test_declared_strategies.py::test_a_reviewer_whose_turns_take_no_owner_tools_approves_nothing. Rust: crates/roomkit/tests/review_loop.rs::a_reviewer_whose_turns_take_no_owner_tools_approves_nothing.",
+  "setup": {
+    "channels": [
+      {
+        "id": "sms",
+        "type": "sms",
+        "category": "transport"
+      },
+      {
+        "id": "writer",
+        "type": "ai",
+        "agent": {
+          "role": "Writer"
+        },
+        "model": {
+          "rounds": [
+            {
+              "text": "Draft one."
+            },
+            {
+              "text": "Draft two."
+            }
+          ]
+        }
+      },
+      {
+        "id": "critic",
+        "type": "ai",
+        "agent": {
+          "role": "Critic"
+        },
+        "model": {
+          "rounds": [
+            {
+              "text": "APPROVED"
+            },
+            {
+              "text": "{\"approved\": true, \"feedback\": \"\"}"
+            }
+          ]
+        },
+        "declared": true,
+        "takes_owner_tools": false
+      }
+    ],
+    "executors": [
+      {
+        "id": "critic_host",
+        "hosts": [
+          "critic"
+        ]
+      }
+    ],
+    "rooms": [
+      {
+        "id": "r1",
+        "bindings": [
+          {
+            "channel_id": "sms"
+          }
+        ]
+      }
+    ],
+    "strategies": [
+      {
+        "id": "loop",
+        "loop": {
+          "agent": "writer",
+          "reviewer": "critic",
+          "max_iterations": 2
+        }
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "install_strategy",
+      "room_id": "r1",
+      "strategy": "loop"
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "r1",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "u1",
+        "content": {
+          "type": "text",
+          "body": "Write it."
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "error": null
+        }
+      }
+    },
+    {
+      "idle": true
+    }
+  ],
+  "expect": {
+    "timeline": {
+      "r1": [
+        {
+          "source": {
+            "channel_id": "sms"
+          },
+          "content": {
+            "type": "text",
+            "body": "Write it."
+          }
+        },
+        {
+          "source": {
+            "channel_id": "writer",
+            "channel_type": "ai"
+          },
+          "content": {
+            "type": "text",
+            "body": "Draft two."
+          },
+          "metadata": {
+            "approved": false,
+            "iteration": 2
+          }
+        }
+      ]
+    },
+    "models": {
+      "critic": [
+        {
+          "tools": {
+            "submit_review": {
+              "$absent": true
+            }
+          }
+        },
+        {
+          "tools": {
+            "submit_review": {
+              "$absent": true
+            }
+          }
+        }
+      ]
+    }
+  }
+}
