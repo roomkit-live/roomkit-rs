@@ -3,7 +3,9 @@
 //! answer, a status of 400 or more as a JSON-RPC error (the server's own
 //! in a JSON body, else `-32601` for a 404 and `-32603` for any other), so
 //! that a probe a server or a gateway refuses that way falls back to the
-//! handshake; the session the handshake opens is kept for rmcp's worker.
+//! handshake; the session the handshake opens is kept for rmcp's worker,
+//! from its response's headers on. Only the handshake's refusal is a
+//! diagnostic of the connection: a probe's status never outlives the probe.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,7 +29,6 @@ const INVALID_REQUEST: i64 = -32600;
 pub(super) struct Negotiating {
     client: Client,
     uri: Arc<str>,
-    session: Option<String>,
 }
 
 impl Client {
@@ -36,17 +37,11 @@ impl Client {
         Negotiating {
             client: self.clone(),
             uri,
-            session: None,
         }
     }
 }
 
 impl Negotiating {
-    /// The session the handshake opened, if the server opened one.
-    pub(super) fn session(&self) -> Option<String> {
-        self.session.clone()
-    }
-
     /// `request` posted, and its answer as Python's SDK reads it.
     async fn post(&mut self, request: ClientJsonRpcMessage) -> Result<Value, String> {
         let ClientJsonRpcMessage::Request(sent) = &request else {
@@ -93,26 +88,30 @@ impl Negotiating {
             ));
         }
         if status.as_u16() >= 400 {
-            return Ok(self.refusal(response, &id).await);
+            return Ok(self.refusal(response, &id, handshake).await);
         }
-        if handshake {
-            self.session = response
+        if handshake
+            && let Some(session) = response
                 .headers()
                 .get("mcp-session-id")
                 .and_then(|value| value.to_str().ok())
                 .filter(|session| !session.is_empty() && session.len() <= 1024)
-                .map(str::to_owned);
+        {
+            self.client.capture.open_session(session.to_owned());
         }
         self.answer(response, &id).await
     }
 
     /// The JSON-RPC error a status of 400 or more reads as: the server's own,
-    /// in a JSON body, else Python's SDK's stand-in.
-    async fn refusal(&self, response: Response, id: &Value) -> Value {
+    /// in a JSON body, else Python's SDK's stand-in. The handshake's status
+    /// is what a connection it fails reports.
+    async fn refusal(&self, response: Response, id: &Value, handshake: bool) -> Value {
         let status = response.status().as_u16();
-        self.client
-            .failure
-            .record(Some(status), "HTTP request rejected");
+        if handshake {
+            self.client
+                .failure
+                .record(Some(status), "HTTP request rejected");
+        }
         if content_type(&response, "application/json")
             && let Ok(body) = self.client.body(response).await
             && let Ok(answer) = serde_json::from_slice::<Value>(&body)

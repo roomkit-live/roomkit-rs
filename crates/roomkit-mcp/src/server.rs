@@ -306,7 +306,7 @@ where
         let settled = crate::negotiation::negotiate_auto(&mut transport)
             .await
             .map_err(refused)?;
-        capture.settle(&settled, None);
+        capture.settle(&settled);
     }
     let service = crate::protocol::serve(transport, capture.modern())
         .await

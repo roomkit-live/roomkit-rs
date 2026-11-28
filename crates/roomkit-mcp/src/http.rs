@@ -11,10 +11,11 @@ use crate::protocol::Protocol;
 use crate::raw::Capture;
 use crate::server::{MESSAGE_LIMIT, McpServer};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use rmcp::transport::streamable_http_client::StreamableHttpClient;
 use rmcp::transport::{
     StreamableHttpClientTransport, streamable_http_client::StreamableHttpClientTransportConfig,
 };
-use std::{fmt, future::Future, time::Duration};
+use std::{collections::HashMap, fmt, future::Future, sync::Arc, time::Duration};
 
 /// A remote MCP endpoint using Streamable HTTP or legacy SSE (RFC §21.2).
 /// Streamable requests accept JSON or SSE replies, without redirects or replay
@@ -119,16 +120,20 @@ impl McpHttp {
             .control_request_timeout(Duration::from_secs(3));
         let transport = StreamableHttpClientTransport::with_client(client.clone(), config);
         let stop = transport.cancel_token();
-        let url = self.url.as_str().into();
+        let url: Arc<str> = self.url.as_str().into();
+        let cleanup = client.clone();
         let connecting = async {
             // The worker posts nothing before rmcp opens the connection,
             // which the negotiation's settled answer opens.
             if protocol.probe {
-                let mut link = client.negotiating(url);
-                let settled = crate::negotiation::negotiate_auto(&mut link)
-                    .await
-                    .map_err(|_| failure.error("MCP handshake failed"))?;
-                capture.settle(&settled, link.session());
+                let settled =
+                    crate::negotiation::negotiate_auto(&mut client.negotiating(Arc::clone(&url)))
+                        .await
+                        .map_err(|_| failure.error("MCP handshake failed"))?;
+                capture.settle(&settled);
+                // What the negotiation got past is no diagnostic of the
+                // connection (a probe refused with 400, say).
+                failure.clear();
             }
             drop(client);
             session::open(transport, &failure, &capture, filter.as_ref(), discover).await
@@ -138,6 +143,16 @@ impl McpHttp {
             () = cancelled => Err(McpError::Cancelled),
             result = bounded(self.timeout, connecting) => result,
         };
+        if connected.is_err()
+            && let Some(session) = capture.unclaimed_session()
+        {
+            // A session the negotiation's handshake opened, which rmcp's
+            // worker never took: deleted as the worker deletes its own.
+            let _deleted = cleanup
+                .delete_session(url, session.into(), None, HashMap::new())
+                .await;
+        }
+        drop(cleanup);
         match connected {
             Ok((service, tools)) => Ok(McpServer::from_http(
                 service, tools, capture, finished, None,

@@ -99,6 +99,44 @@ fn record(shared: &Shared, name: &str, headers: &HeaderMap) {
     }
 }
 
+/// The answer a mode scripts for the negotiation and the listing, when it
+/// scripts one: the probe refused by its status, a handshake refused beside
+/// its session or whose body never comes, a listing refused.
+fn scripted(mode: &str, name: &str, id: &Value) -> Option<Response> {
+    if name == "server/discover" {
+        let status = match mode {
+            "discover-500" => StatusCode::INTERNAL_SERVER_ERROR,
+            "discover-502" => StatusCode::BAD_GATEWAY,
+            _ => StatusCode::BAD_REQUEST,
+        };
+        return Some((status, "Legacy server").into_response());
+    }
+    if name == "initialize" && mode == "initialize-error" {
+        let refused = json!({"jsonrpc":"2.0","id":id,"error":{"code":-32603,"message":"no"}});
+        let headers = [
+            ("content-type", "application/json"),
+            ("mcp-session-id", "s-err"),
+        ];
+        return Some((headers, refused.to_string()).into_response());
+    }
+    if name == "initialize" && mode == "initialize-hang" {
+        return Some(
+            Response::builder()
+                .header("content-type", "application/json")
+                .header("mcp-session-id", "s-slow")
+                .body(Body::from_stream(futures_util::stream::pending::<
+                    Result<Bytes, std::io::Error>,
+                >()))
+                .unwrap(),
+        );
+    }
+    if name == "tools/list" && mode == "listing-error" {
+        let refused =
+            json!({"jsonrpc":"2.0","id":id,"error":{"code":-32603,"message":"listing broke"}});
+        return Some(([("content-type", "application/json")], refused.to_string()).into_response());
+    }
+    None
+}
 async fn handle(
     State(shared): State<Arc<Shared>>,
     method: Method,
@@ -129,13 +167,8 @@ async fn handle(
         return StatusCode::ACCEPTED.into_response();
     }
     let id = request.get("id").unwrap();
-    if name == "server/discover" {
-        let status = match shared.mode {
-            "discover-500" => StatusCode::INTERNAL_SERVER_ERROR,
-            "discover-502" => StatusCode::BAD_GATEWAY,
-            _ => StatusCode::BAD_REQUEST,
-        };
-        return (status, "Legacy server").into_response();
+    if let Some(response) = scripted(shared.mode, name, id) {
+        return response;
     }
     if name == "tools/list" {
         shared.listing.notify_one();
@@ -229,6 +262,38 @@ async fn roundtrip(mode: &'static str) {
 #[tokio::test]
 async fn json_replies_and_session_cleanup() {
     roundtrip("json").await;
+}
+/// RFC §21.2: a probe refused with 400, as an mcp 1.x server refuses it, is
+/// no diagnostic of the connection: a listing or a handshake that fails
+/// after it says nothing of that status.
+#[tokio::test]
+async fn a_refused_probe_s_status_is_not_what_a_later_failure_reports() {
+    for (mode, reason) in [
+        ("listing-error", "MCP tool discovery failed"),
+        ("initialize-error", "MCP handshake failed"),
+    ] {
+        let fixture = Fixture::start(mode).await;
+        let error = fixture.client().connect().await.unwrap_err();
+        assert!(
+            matches!(error, McpError::Http { status: None, reason: said } if said == reason),
+            "{mode}: {error:?}"
+        );
+    }
+}
+/// RFC §21.2, RK-21.2-008: a session the negotiation's handshake opened is
+/// deleted when the connection fails, whether the handshake refused (a
+/// JSON-RPC error beside its session) or the connect bound ended while its
+/// body was still on its way, as Python's SDK deletes it.
+#[tokio::test]
+async fn a_session_the_handshake_opened_is_deleted_when_connecting_fails() {
+    for mode in ["initialize-error", "initialize-hang"] {
+        let fixture = Fixture::start(mode).await;
+        let server = fixture
+            .client()
+            .with_connect_timeout(Duration::from_millis(300));
+        assert!(server.connect().await.is_err(), "{mode}");
+        assert_eq!(fixture.shared.seen.lock().unwrap().deleted, 1, "{mode}");
+    }
 }
 /// RFC §21.2, RK-21.2-056: a probe a server or a gateway answers with a
 /// 5xx status reads as Python's SDK reads it, a JSON-RPC error (`-32603`),

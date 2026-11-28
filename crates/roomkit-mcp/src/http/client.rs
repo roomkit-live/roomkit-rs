@@ -49,6 +49,12 @@ impl Failure {
             reason: detail.map_or(fallback, |e| e.reason),
         }
     }
+    /// Forgets what failed: what the negotiation met and got past.
+    pub(super) fn clear(&self) {
+        if let Ok(mut value) = self.0.lock() {
+            *value = None;
+        }
+    }
     pub(super) fn record(&self, status: Option<u16>, reason: &'static str) -> HttpFailure {
         let error = HttpFailure { status, reason };
         if let Ok(mut value) = self.0.lock() {

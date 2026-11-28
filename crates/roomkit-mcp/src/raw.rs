@@ -31,9 +31,11 @@ struct State {
     initialization: Option<RequestId>,
     /// Whether a discovery agreed on MCP 2026-07-28.
     modern: bool,
-    /// What rmcp's own negotiation request is answered with, once, and the
-    /// HTTP session the negotiation's handshake opened.
-    replay: Option<(Value, Option<String>)>,
+    /// What rmcp's own negotiation request is answered with, once.
+    replay: Option<Value>,
+    /// The HTTP session the negotiation's handshake opened, until rmcp's
+    /// worker takes it with the replay or the failed connection deletes it.
+    opened_session: Option<String>,
     handshake: Value,
     /// The `tools/call` requests sent, neither answered nor cancelled.
     calls: HashSet<RequestId>,
@@ -119,9 +121,8 @@ impl Capture {
 
     /// Keeps what the negotiation settled: the server's answer as it sent
     /// it, and the copy of it rmcp is shown in answer to its own negotiation
-    /// request, which rmcp's model reads, with the HTTP `session` its
-    /// handshake opened.
-    pub(crate) fn settle(&self, settled: &Settled, session: Option<String>) {
+    /// request, which rmcp's model reads.
+    pub(crate) fn settle(&self, settled: &Settled) {
         let mut shown = json!({ "jsonrpc": "2.0", "result": settled.result() });
         crate::protocol::compatible_handshake(&mut shown);
         if settled.is_modern()
@@ -132,7 +133,21 @@ impl Capture {
         let mut state = lock(&self.0);
         state.handshake = settled.result().clone();
         state.modern = settled.is_modern();
-        state.replay = shown.get("result").cloned().map(|result| (result, session));
+        state.replay = shown.get("result").cloned();
+    }
+
+    /// Keeps the HTTP session the negotiation's handshake opened, as soon as
+    /// its response's headers say so.
+    #[cfg(feature = "http")]
+    pub(crate) fn open_session(&self, session: String) {
+        lock(&self.0).opened_session = Some(session);
+    }
+
+    /// The session the negotiation's handshake opened that rmcp never took,
+    /// for a connection that failed to delete.
+    #[cfg(feature = "http")]
+    pub(crate) fn unclaimed_session(&self) -> Option<String> {
+        lock(&self.0).opened_session.take()
     }
 
     /// The answer to rmcp's own negotiation request `message`, which goes
@@ -148,7 +163,9 @@ impl Capture {
         ) {
             return None;
         }
-        let (result, session) = lock(&self.0).replay.take()?;
+        let mut state = lock(&self.0);
+        let result = state.replay.take()?;
+        let session = state.opened_session.take();
         Some((
             json!({ "jsonrpc": "2.0", "id": request.id, "result": result }),
             session,
