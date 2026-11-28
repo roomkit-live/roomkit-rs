@@ -1038,7 +1038,9 @@ pub(crate) fn scripted_model(
     let paced = Paced {
         text: (spec["stream_text_only"] == true).then(|| TextModel(whole.clone())),
         whole,
-        streaming: spec["streaming"] != false,
+        // A model that streams text alone streams no structured stream, as
+        // Python's says (`supports_structured_streaming`).
+        streaming: spec["streaming"] != false && spec["stream_text_only"] != true,
         vision: spec["vision"] == true,
         deferred_tools: spec["deferred_tools"] == true,
         pricing,

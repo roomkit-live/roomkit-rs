@@ -881,11 +881,10 @@ fn register_agent(
         Err(agents::Unbuilt::Unreadable(error)) => return Err(error),
     };
     let declared = channel["declared"] == true;
-    crate::run::lock(&run.host_tool_readers)
-        .insert(id.to_string(), crate::extra_tools::reader(&agent));
     crate::run::lock(&run.models).extend(models);
     let direct = (!declared).then(|| agents::direct_prompt::channel(&agent));
     let read = crate::channel_provider::of_agent(&agent);
+    let host_tools = crate::extra_tools::reader(&agent);
     let registered = match agent {
         agents::Scripted::Channel(agent) => register_built(run.kit(), declared, *agent),
         agents::Scripted::Agent(agent) => register_built(run.kit(), declared, *agent),
@@ -894,6 +893,7 @@ fn register_agent(
     };
     if registered.is_ok() {
         crate::run::lock(&run.channel_providers).insert(id.to_string(), read);
+        crate::run::lock(&run.host_tool_readers).insert(id.to_string(), host_tools);
         if let Some(direct) = direct {
             crate::run::lock(&run.direct_channels).insert(id.to_string(), direct);
         }
