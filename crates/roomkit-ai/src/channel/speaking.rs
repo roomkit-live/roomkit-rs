@@ -155,20 +155,25 @@ pub(crate) async fn hooked(
     let Some(hooks) = callbacks else {
         return report.decision;
     };
+    // Only the decision is read off the hooks' payload: the event decided
+    // on, the room and the channel stay the channel's, which the ASYNC hooks
+    // then observe with the decision that stands (RFC §6.4). Python's
+    // `dataclasses.replace(event, decision=...)`.
+    let asked = report.clone();
     hooks
         .decide_and_observe(report, |chain| {
-            let mut standing = chain.payload;
-            if let Some((hook, _)) = chain.blocked {
-                standing.decision = SpeakDecision {
+            let decision = match chain.blocked {
+                Some((hook, _)) => SpeakDecision {
                     reason: if chain.failed_closed {
                         format!("hook_error:{hook}")
                     } else {
                         format!("blocked by {hook}")
                     },
                     ..SpeakMode::Silent.into()
-                };
-            }
-            standing
+                },
+                None => chain.payload.decision,
+            };
+            SpeakDecisionEvent { decision, ..asked }
         })
         .await
         .decision
