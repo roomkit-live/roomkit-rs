@@ -22,6 +22,10 @@ use roomkit_core::rules::addresses::{NormalizeOptions, addressing_of};
 use roomkit_core::rules::transcoding::text_of;
 
 pub use roomkit_core::ops::{Environment, SequentialEnvironment};
+// Outside the public API: the clock a kit's breakers and retries read,
+// which the conformance runner's virtual clock implements (`set_clock`).
+#[doc(hidden)]
+pub use crate::clock::{Clock, Sleep};
 pub use store::check_conversation_store;
 pub use turn_ports::{check_turn_broker, check_turn_registry};
 
@@ -38,6 +42,16 @@ pub fn kit_with_environment<S: ConversationStore>(
     environment: impl Environment + Send + Sync + 'static,
 ) -> RoomKit<S> {
     RoomKit::with_environment(options, Arc::new(environment))
+}
+
+/// Has `kit`'s circuit breakers measure their cooldown, and its bindings'
+/// retry policies wait out their delays, on `clock` instead of tokio's
+/// (RFC §13.1, §13.2). A test seam outside the public API: Python's
+/// private `roomkit._clock.installed`, scoped to one kit, as the tests of a
+/// process share it.
+#[doc(hidden)]
+pub fn set_clock<S>(kit: &RoomKit<S>, clock: Arc<dyn Clock>) {
+    kit.inner.sends.set_clock(clock);
 }
 
 /// Waits until `kit` runs nothing in the background: no observer hook

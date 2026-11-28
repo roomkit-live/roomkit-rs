@@ -14,8 +14,11 @@
 //!   waits for its token.
 //! - The retry policy sends again a failure that may be retried: the
 //!   error's own word first (`retryable`), then the policy's list of
-//!   classes, the error's class or a base of it; the delay doubles from
-//!   the policy's base, up to its most.
+//!   classes, the error's Python class or a base of it; the delay doubles
+//!   from the policy's base, up to its most.
+//!
+//! The breaker's cooldown and the retries' delays are read on the kit's
+//! clock (`crate::clock`), tokio's unless a test set its own.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -28,7 +31,9 @@ use roomkit_core::model::{
 use roomkit_core::ops::FrameworkEvent as CoreEvent;
 use tokio::time::Instant;
 
+use crate::ClassedError;
 use crate::channel::{ChannelError, DynChannel};
+use crate::clock::{Clock, TokioClock};
 use crate::error::RoomKitError;
 
 /// The failed sends in a row that open a channel's breaker.
@@ -45,11 +50,23 @@ const BURST_SECONDS: f64 = 1.0;
 /// message.
 pub(crate) const CIRCUIT_OPEN: (&str, &str) = ("DeliveryFailed", "circuit_breaker_open");
 
-/// The breakers and the buckets of the kit's transports, by channel.
-#[derive(Debug, Default)]
+/// The breakers and the buckets of the kit's transports, by channel, and
+/// the clock the breakers and the retries read.
+#[derive(Debug)]
 pub(crate) struct Sends {
     breakers: Mutex<HashMap<ChannelId, Breaker>>,
     buckets: Mutex<HashMap<ChannelId, Bucket>>,
+    clock: Mutex<Arc<dyn Clock>>,
+}
+
+impl Default for Sends {
+    fn default() -> Self {
+        Self {
+            breakers: Mutex::default(),
+            buckets: Mutex::default(),
+            clock: Mutex::new(Arc::new(TokioClock)),
+        }
+    }
 }
 
 /// Why a message past its channel's inbound rate is refused: Python's
@@ -104,7 +121,8 @@ impl Sends {
         emit: impl Fn(CoreEvent),
     ) -> Result<Result<ChannelOutput, ChannelError>, CircuitOpen> {
         let channel_id = binding.channel_id.clone();
-        let Some(admission) = self.breaker(&channel_id).entry().admit(Instant::now()) else {
+        let clock = self.clock();
+        let Some(admission) = self.breaker(&channel_id).entry().admit(clock.now()) else {
             tracing::warn!(target: "roomkit::delivery", channel_id = %channel_id, "the channel's circuit breaker is open: the send is skipped");
             return Err(CircuitOpen);
         };
@@ -114,7 +132,7 @@ impl Sends {
         let policy = binding.retry_policy.clone();
         let answered = match &policy {
             Some(policy) => {
-                retrying(policy, || {
+                retrying(policy, &*clock, || {
                     channel.deliver(event.clone(), binding.clone(), context.clone())
                 })
                 .await
@@ -132,7 +150,7 @@ impl Sends {
                         "Delivery to {channel_id} refused: the binding has no {recipient_key}");
                     None
                 } else {
-                    self.breaker(&channel_id).entry().failed(Instant::now())
+                    self.breaker(&channel_id).entry().failed(clock.now())
                 }
             }
         };
@@ -159,6 +177,15 @@ impl Sends {
             let wait = Duration::try_from_secs_f64(1.0 / rate).unwrap_or(Duration::MAX);
             tokio::time::sleep(wait).await;
         }
+    }
+
+    /// Has the breakers and the retries read `clock` from now on.
+    pub(crate) fn set_clock(&self, clock: Arc<dyn Clock>) {
+        *lock(&self.clock) = clock;
+    }
+
+    fn clock(&self) -> Arc<dyn Clock> {
+        Arc::clone(&lock(&self.clock))
     }
 
     fn breaker(&self, channel_id: &ChannelId) -> Guard<'_, Breaker> {
@@ -306,8 +333,13 @@ fn rate_per_second(limit: &RateLimit) -> Option<f64> {
 }
 
 /// `send`, tried again under `policy` while it fails with an error that may
-/// be retried (roomkit's `retry_with_backoff`); its last answer.
-async fn retrying<F, Fut>(policy: &RetryPolicy, mut send: F) -> Result<ChannelOutput, ChannelError>
+/// be retried (roomkit's `retry_with_backoff`), each retry waiting its delay
+/// on `clock`; its last answer.
+async fn retrying<F, Fut>(
+    policy: &RetryPolicy,
+    clock: &dyn Clock,
+    mut send: F,
+) -> Result<ChannelOutput, ChannelError>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<ChannelOutput, ChannelError>>,
@@ -329,7 +361,7 @@ where
             delay_seconds = delay.as_secs_f64(),
             "a send failed: it is tried again"
         );
-        tokio::time::sleep(delay).await;
+        clock.sleep(delay).await;
         attempt += 1;
     }
 }
@@ -361,19 +393,33 @@ fn retryable(error: &ChannelError, policy: &RetryPolicy) -> bool {
     let Some(classes) = &policy.retryable_errors else {
         return true;
     };
-    let class = kit_error.map_or_else(|| "ChannelError".to_owned(), RoomKitError::class_name);
-    let builtin = matches!(
-        kit_error,
-        Some(RoomKitError::Value(_) | RoomKitError::ExceptionGroup { .. })
-    );
-    let mut names = vec![class.as_str()];
-    if kit_error.is_some() && !builtin {
-        names.push("RoomKitError");
+    let names = class_names(error, kit_error);
+    classes.iter().any(|listed| names.contains(listed))
+}
+
+/// The names of `error`'s Python class and of the classes it derives from,
+/// as Python's retry reads its type's MRO: a kit error's class, or the one
+/// a [`ClassedError`] names, then the bases Python gives a class it knows
+/// (`TimeoutError` derives from `OSError`, a kit error's class from
+/// `RoomKitError`), then `Exception` and `BaseException`. A kit error of
+/// a class Python does not know derives from `RoomKitError`, but for a
+/// built-in group; an error of no class reads as `ChannelError`.
+fn class_names(error: &ChannelError, kit_error: Option<&RoomKitError>) -> Vec<String> {
+    let class = match (kit_error, error.downcast_ref::<ClassedError>()) {
+        (Some(kit), _) => kit.class_name(),
+        (None, Some(classed)) => classed.class().to_owned(),
+        (None, None) => "ChannelError".to_owned(),
+    };
+    let bases = crate::turns::wire::python_bases(&class);
+    let builtin = matches!(kit_error, Some(RoomKitError::ExceptionGroup { .. }));
+    let mut names = vec![class];
+    match bases {
+        Some(bases) => names.extend(bases.into_iter().map(str::to_owned)),
+        None if kit_error.is_some() && !builtin => names.push("RoomKitError".to_owned()),
+        None => {}
     }
-    names.extend(["Exception", "BaseException"]);
-    classes
-        .iter()
-        .any(|listed| names.contains(&listed.as_str()))
+    names.extend(["Exception".to_owned(), "BaseException".to_owned()]);
+    names
 }
 
 #[cfg(test)]

@@ -271,6 +271,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A binding's retry policy reads a failed send's Python class chain as
+  Python does (RFC §13.2, RMK-2243): an error a channel raises under a
+  class (`ClassedError`) is matched by that class, where it read as
+  `ChannelError`, and a built-in class by its built-in bases, so a
+  `TimeoutError` is retried under `OSError` and no longer under
+  `RoomKitError`, nor are `RuntimeError`, `TypeError` and `AssertionError`.
+
 - A memory's summary reads every content by its text form (RFC §6.6,
   RMK-2241), as Python's now does: the summarizer read a location as
   Python's `str()` of it (`type='location' latitude=45.5 …`), a template

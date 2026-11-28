@@ -13,8 +13,8 @@ mod carried_request;
 mod input_request;
 mod peer_errors;
 pub use input_request::InputRequest;
-pub(crate) use peer_errors::native_class;
 pub(crate) use peer_errors::peer_error_payload;
+pub(crate) use peer_errors::{native_class, python_bases};
 
 mod request;
 pub(crate) use request::RequestRest;

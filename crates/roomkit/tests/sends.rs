@@ -19,9 +19,9 @@ use roomkit::model::{
     DeliveryResultStatus, InboundMessage, Metadata, ProviderResult, RateLimit, RetryPolicy,
     RoomContext, RoomEvent, RoomId, TextContent,
 };
-use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
+use roomkit::testing::{Clock, RecordingTransport, RecordingTransportOptions, Sleep, set_clock};
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, FrameworkEvent,
+    AttachChannelOptions, Channel, ChannelError, ClassedError, CreateRoomOptions, FrameworkEvent,
     ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions,
 };
 use serde_json::json;
@@ -50,6 +50,11 @@ enum Failure {
     MissingOnProbe,
     /// The send's own cancel, Python's `CancelledError`.
     Cancelled,
+    /// An error raised as Python's built-in `TimeoutError`, which derives
+    /// from `OSError`, `timed out`.
+    ClassedTimeout,
+    /// The kit's own timeout, Python's `TimeoutError` too.
+    KitTimeout,
 }
 
 /// A transport whose first `failures` sends fail as `failure`, noting when
@@ -133,6 +138,10 @@ impl Channel for Flaky {
                 .into(),
                 Failure::Plain => "flaky".into(),
                 Failure::Cancelled => RoomKitError::Cancelled.into(),
+                Failure::ClassedTimeout => {
+                    ClassedError::new("TimeoutError", std::io::Error::other("timed out")).into()
+                }
+                Failure::KitTimeout => RoomKitError::Timeout.into(),
                 Failure::Refused => RoomKitError::ProviderDelivery {
                     result: ProviderResult {
                         error: Some("rejected".to_owned()),
@@ -192,7 +201,22 @@ async fn send_results(
     pause: impl Fn(usize) -> Duration,
     options: AttachChannelOptions,
 ) -> (Vec<DeliveryResult>, Vec<(String, Metadata)>) {
+    send_results_on(None, ws, messages, pause, options).await
+}
+
+/// [`send_results`] on a kit whose breakers and retries read `clock`, when
+/// one is given.
+async fn send_results_on(
+    clock: Option<Arc<dyn Clock>>,
+    ws: &Flaky,
+    messages: usize,
+    pause: impl Fn(usize) -> Duration,
+    options: AttachChannelOptions,
+) -> (Vec<DeliveryResult>, Vec<(String, Metadata)>) {
     let kit = RoomKit::new(RoomKitOptions::default());
+    if let Some(clock) = clock {
+        set_clock(&kit, clock);
+    }
     let breaker_events: Arc<Mutex<Vec<(String, Metadata)>>> = Arc::default();
     for name in ["circuit_breaker_opened", "circuit_breaker_closed"] {
         let noting = Arc::clone(&breaker_events);
@@ -246,6 +270,41 @@ async fn send_results(
     kit.close().await.unwrap();
     let events = breaker_events.lock().unwrap().clone();
     (read, events)
+}
+
+/// A clock the test sets (Python's `tests/media_clock.py` `SetClock`): it
+/// reads what the test moved it to, and each wait on it is recorded and
+/// ends at once.
+#[derive(Debug)]
+struct SetClock {
+    start: Instant,
+    moved: Mutex<Duration>,
+    slept: Mutex<Vec<Duration>>,
+}
+
+impl SetClock {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            start: Instant::now(),
+            moved: Mutex::default(),
+            slept: Mutex::default(),
+        })
+    }
+
+    fn advance(&self, by: Duration) {
+        *self.moved.lock().unwrap() += by;
+    }
+}
+
+impl Clock for SetClock {
+    fn now(&self) -> Instant {
+        self.start + *self.moved.lock().unwrap()
+    }
+
+    fn sleep(&self, duration: Duration) -> Sleep {
+        self.slept.lock().unwrap().push(duration);
+        Box::pin(ready(()))
+    }
 }
 
 fn retrying(policy: RetryPolicy) -> AttachChannelOptions {
@@ -320,6 +379,28 @@ async fn a_failed_send_is_tried_again_as_its_binding_s_policy_says() {
                 failed("CancelledError", &RoomKitError::Cancelled.to_string(), true),
             ),
         ),
+        // Python's class chain: a TimeoutError derives from OSError, not
+        // from RoomKitError, whether a channel raised it or the kit.
+        (
+            Flaky::new(1, Failure::ClassedTimeout),
+            policy(1, Some(&["TimeoutError"])),
+            (2, sent_ok()),
+        ),
+        (
+            Flaky::new(1, Failure::ClassedTimeout),
+            policy(1, Some(&["OSError"])),
+            (2, sent_ok()),
+        ),
+        (
+            Flaky::new(1, Failure::ClassedTimeout),
+            policy(1, Some(&["RoomKitError", "ValueError"])),
+            (1, failed("TimeoutError", "timed out", true)),
+        ),
+        (
+            Flaky::new(1, Failure::KitTimeout),
+            policy(1, Some(&["OSError"])),
+            (2, sent_ok()),
+        ),
     ];
     for (ws, policy, (sends, read)) in cases {
         let (reads, _) = sent(&ws, 1, Duration::ZERO, retrying(policy)).await;
@@ -380,6 +461,71 @@ async fn five_failed_sends_open_the_channel_s_breaker() {
                 ("circuit_breaker_opened".to_owned(), opened),
                 ("circuit_breaker_closed".to_owned(), closed)
             ]
+        )
+    );
+}
+
+/// RFC §13.1: the breaker's cooldown is read on the kit's clock, which a
+/// test sets: on a runtime whose own clock runs, one second short of the
+/// 60 seconds the breaker still skips the send, and once they passed it
+/// lets the probe through.
+#[tokio::test]
+async fn the_breaker_s_cooldown_is_read_on_the_kit_s_clock() {
+    let clock = SetClock::new();
+    let ws = Flaky::new(5, Failure::Plain);
+    let moving = Arc::clone(&clock);
+    let shared: Arc<dyn Clock> = clock;
+    let (reads, _) = send_results_on(
+        Some(shared),
+        &ws,
+        7,
+        move |n| {
+            match n {
+                5 => moving.advance(Duration::from_secs(59)),
+                6 => moving.advance(Duration::from_secs(1)),
+                _ => {}
+            }
+            Duration::ZERO
+        },
+        AttachChannelOptions::default(),
+    )
+    .await;
+    let statuses: Vec<DeliveryResultStatus> = reads.iter().map(|read| read.status).collect();
+    let open = reads[5].error.as_ref().map(|error| error.message.clone());
+    assert_eq!(
+        (ws.sends(), &statuses[5..], open),
+        (
+            6,
+            &[DeliveryResultStatus::Failed, DeliveryResultStatus::Sent][..],
+            Some("circuit_breaker_open".to_owned())
+        )
+    );
+}
+
+/// RFC §13.2: each retry waits its delay, `min(base * exponential_base ^
+/// attempt, max)`, on the kit's clock, which a test sets: 1, 2, then 3
+/// seconds, none of them waited for on the runtime's own clock.
+#[tokio::test]
+async fn a_retry_waits_its_delay_on_the_kit_s_clock() {
+    let clock = SetClock::new();
+    let ws = Flaky::new(3, Failure::Plain);
+    let grown = RetryPolicy {
+        max_retries: 3,
+        base_delay_seconds: 1.0,
+        exponential_base: 2.0,
+        max_delay_seconds: 3.0,
+        ..RetryPolicy::default()
+    };
+    let shared: Arc<dyn Clock> = Arc::<SetClock>::clone(&clock);
+    let (reads, _) =
+        send_results_on(Some(shared), &ws, 1, |_| Duration::ZERO, retrying(grown)).await;
+    let slept = clock.slept.lock().unwrap().clone();
+    assert_eq!(
+        (ws.sends(), reads[0].status, slept),
+        (
+            4,
+            DeliveryResultStatus::Sent,
+            [1, 2, 3].map(Duration::from_secs).to_vec()
         )
     );
 }

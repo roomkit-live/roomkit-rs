@@ -51,6 +51,7 @@ mod channel;
 #[doc(hidden)]
 pub mod channel_publication;
 mod classed;
+mod clock;
 mod content_logging;
 mod context;
 mod cursors;

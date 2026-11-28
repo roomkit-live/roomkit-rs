@@ -158,6 +158,24 @@ pub(crate) fn native_class<'a>(
     Some((package, name))
 }
 
+/// The short names of the classes Python gives `class` as its bases,
+/// nearest first, `Exception` and `BaseException` left out
+/// (`TimeoutError` derives from `OSError`, `NoRecipientError` from
+/// `ProviderDeliveryError` and `RoomKitError`); `None` for a class this
+/// table does not know.
+pub(crate) fn python_bases(class: &str) -> Option<Vec<&'static str>> {
+    let (package, name) = native_class(class, None)?;
+    let bases = ancestors(package, name)
+        .into_iter()
+        .map(|qualified| {
+            qualified
+                .rsplit_once(':')
+                .map_or(qualified, |(_, short)| short)
+        })
+        .collect();
+    Some(bases)
+}
+
 fn ancestors(package: &str, name: &str) -> Vec<&'static str> {
     match (package, name) {
         (
