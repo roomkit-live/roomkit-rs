@@ -113,7 +113,7 @@ fn decision(value: &Value) -> Result<SpeakDecision, String> {
 
 fn turn_record(turn: &SpeakTurn) -> Value {
     json!({"event":turn.event.snapshot(), "recent":turn.recent.iter().map(roomkit_ai::speaking::SharedRoomEvent::snapshot).collect::<Vec<_>>(),
-        "people":turn.people,"channel_id":turn.channel_id,"speakers":turn.speakers,"thought":turn.thought})
+        "people":turn.people,"channel_id":turn.channel_id,"speakers":turn.speakers,"thought":turn.thought,"cut":turn.cut})
 }
 
 fn context_record(context: &AiContext) -> Value {

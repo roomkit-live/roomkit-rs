@@ -54,6 +54,16 @@ impl Classifier for Scripted {
                 let failed: ChannelError = Box::new(ClassifierError::new(message));
                 return Err(failed);
             }
+            let found = answer_problems(&entry["answers"], questions);
+            if !found.is_empty() {
+                for problem in found {
+                    run.problem(format!("classifier call {count}: {problem}"));
+                }
+                let failed: ChannelError = Box::new(ClassifierError::new(
+                    "the scripted answers do not fit the questions asked",
+                ));
+                return Err(failed);
+            }
             let script: Script =
                 serde_json::from_value(entry["answers"].clone()).map_err(|e| e.to_string())?;
             let mock = MockClassifier::new(MockClassifierOptions {
@@ -63,6 +73,34 @@ impl Classifier for Scripted {
             mock.classify(state, questions).await
         })
     }
+}
+
+/// What in a call's script does not fit the questions it answers: a question
+/// not asked, a choice that is no option of it, a number for a choice or a
+/// name for a yes/no question or a score. The mock would fail the call, and
+/// the policy's fallback would hide the scenario's mistake.
+pub(super) fn answer_problems(script: &Value, questions: &Questions) -> Vec<String> {
+    let mut found = Vec::new();
+    for (name, value) in script.as_object().into_iter().flatten() {
+        match questions.get(name) {
+            None => found.push(format!(
+                "answers.{name}: no question of that name was asked"
+            )),
+            Some(Question::Choice(choice)) => {
+                if value
+                    .as_str()
+                    .is_none_or(|option| choice.options.get(option).is_none())
+                {
+                    found.push(format!("answers.{name}: not an option of the choice asked"));
+                }
+            }
+            Some(_) if !value.is_number() => {
+                found.push(format!("answers.{name}: the question asked takes a number"));
+            }
+            Some(_) => {}
+        }
+    }
+    found
 }
 
 /// A question as `expect.classifier_calls` reads it: its members as written.
@@ -77,6 +115,11 @@ pub(crate) fn scripted(
     run: &Arc<Run>,
 ) -> Result<Arc<dyn Classifier>, String> {
     super::shape::classifier(spec)?;
+    // The calls exist from the build on: `[]` proves the classifier was not asked.
+    lock(&run.observed)
+        .classifier_calls
+        .entry(id.to_owned())
+        .or_default();
     Ok(Arc::new(Scripted {
         calls: spec["calls"].as_array().ok_or("classifier calls")?.clone(),
         id: id.to_owned(),

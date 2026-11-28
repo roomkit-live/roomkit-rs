@@ -50,3 +50,29 @@ fn invalid_decision_patch_is_refused_before_a_hook_can_swallow_it() {
         );
     }
 }
+
+// Python: tests/conformance/test_speaking_fixture.py::test_a_scripted_answer_the_question_cannot_take_is_a_problem_not_a_fallback
+#[test]
+fn a_scripted_answer_the_question_cannot_take_is_a_problem_not_a_fallback() {
+    let questions: roomkit_ai::classifiers::Questions = serde_json::from_value(json!({
+        "hush": {"instructions": "Quiet?", "yes": null, "no": null},
+        "level": {"instructions": "How?", "levels": ["a", "b"]},
+        "pick": {"instructions": "Which?", "options": {"a": "", "b": ""}},
+    }))
+    .unwrap();
+    for answers in [
+        json!({"hush": "yes"}),
+        json!({"level": "high"}),
+        json!({"pick": "c"}),
+        json!({"pick": 1}),
+        json!({"husk": 0.9}),
+    ] {
+        assert_eq!(
+            super::classifier::answer_problems(&answers, &questions).len(),
+            1,
+            "{answers}"
+        );
+    }
+    let fitting = json!({"hush": 0.9, "level": 1, "pick": "b"});
+    assert!(super::classifier::answer_problems(&fitting, &questions).is_empty());
+}

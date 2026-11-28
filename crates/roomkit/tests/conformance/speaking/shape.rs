@@ -139,6 +139,22 @@ fn question(value: &Value) -> Result<(), String> {
     if !value["instructions"].is_string() || kinds > 1 || (kinds == 1 && described) {
         return Err("a question is a yes/no question, a choice or a score".into());
     }
+    let options = members.get("options").is_none_or(|options| {
+        options
+            .as_object()
+            .is_some_and(|m| m.len() >= 2 && m.values().all(Value::is_string))
+    });
+    let levels = members.get("levels").is_none_or(|levels| {
+        levels
+            .as_array()
+            .is_some_and(|l| l.len() >= 2 && l.iter().all(Value::is_string))
+    });
+    let told = ["yes", "no"]
+        .iter()
+        .all(|k| members.get(*k).is_none_or(|v| v.is_string() || v.is_null()));
+    if !(options && levels && told) {
+        return Err("malformed question member".into());
+    }
     Ok(())
 }
 
