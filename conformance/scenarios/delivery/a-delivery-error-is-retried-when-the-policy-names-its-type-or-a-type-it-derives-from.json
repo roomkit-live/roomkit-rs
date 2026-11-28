@@ -1,0 +1,254 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "delivery/a-delivery-error-is-retried-when-the-policy-names-its-type-or-a-type-it-derives-from",
+  "title": "A delivery error that says nothing of whether it may be retried, a TimeoutError, is retried when its binding's policy names its type, a type it derives from (OSError), or none (null), and fails on its first attempt when the policy names another type",
+  "rules": [
+    "§13.2"
+  ],
+  "requirements": [
+    "RK-13.2-006"
+  ],
+  "notes": "Each channel's first delivery raises TimeoutError, which derives from OSError, and its second succeeds. Each policy allows one retry.",
+  "setup": {
+    "channels": [
+      {
+        "id": "sms",
+        "type": "sms",
+        "category": "transport"
+      },
+      {
+        "id": "by-type",
+        "type": "websocket",
+        "category": "transport",
+        "deliver": [
+          {
+            "raises": {
+              "kind": "TimeoutError",
+              "message": "timed out"
+            }
+          }
+        ]
+      },
+      {
+        "id": "by-base",
+        "type": "websocket",
+        "category": "transport",
+        "deliver": [
+          {
+            "raises": {
+              "kind": "TimeoutError",
+              "message": "timed out"
+            }
+          }
+        ]
+      },
+      {
+        "id": "by-null",
+        "type": "websocket",
+        "category": "transport",
+        "deliver": [
+          {
+            "raises": {
+              "kind": "TimeoutError",
+              "message": "timed out"
+            }
+          }
+        ]
+      },
+      {
+        "id": "by-other",
+        "type": "websocket",
+        "category": "transport",
+        "deliver": [
+          {
+            "raises": {
+              "kind": "TimeoutError",
+              "message": "timed out"
+            }
+          }
+        ]
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "sms"
+          },
+          {
+            "channel_id": "by-type"
+          },
+          {
+            "channel_id": "by-base"
+          },
+          {
+            "channel_id": "by-null"
+          },
+          {
+            "channel_id": "by-other"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "store.update_binding",
+      "binding": {
+        "room_id": "room-1",
+        "channel_id": "by-type",
+        "channel_type": "websocket",
+        "category": "transport",
+        "retry_policy": {
+          "max_retries": 1,
+          "base_delay_seconds": 0.001,
+          "max_delay_seconds": 0.001,
+          "retryable_errors": [
+            "TimeoutError"
+          ]
+        }
+      }
+    },
+    {
+      "call": "store.update_binding",
+      "binding": {
+        "room_id": "room-1",
+        "channel_id": "by-base",
+        "channel_type": "websocket",
+        "category": "transport",
+        "retry_policy": {
+          "max_retries": 1,
+          "base_delay_seconds": 0.001,
+          "max_delay_seconds": 0.001,
+          "retryable_errors": [
+            "OSError"
+          ]
+        }
+      }
+    },
+    {
+      "call": "store.update_binding",
+      "binding": {
+        "room_id": "room-1",
+        "channel_id": "by-null",
+        "channel_type": "websocket",
+        "category": "transport",
+        "retry_policy": {
+          "max_retries": 1,
+          "base_delay_seconds": 0.001,
+          "max_delay_seconds": 0.001,
+          "retryable_errors": null
+        }
+      }
+    },
+    {
+      "call": "store.update_binding",
+      "binding": {
+        "room_id": "room-1",
+        "channel_id": "by-other",
+        "channel_type": "websocket",
+        "category": "transport",
+        "retry_policy": {
+          "max_retries": 1,
+          "base_delay_seconds": 0.001,
+          "max_delay_seconds": 0.001,
+          "retryable_errors": [
+            "ValueError"
+          ]
+        }
+      }
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "hello"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "delivery_results": {
+            "by-type": {
+              "status": "sent"
+            },
+            "by-base": {
+              "status": "sent"
+            },
+            "by-null": {
+              "status": "sent"
+            },
+            "by-other": {
+              "status": "failed",
+              "error": {
+                "code": "TimeoutError",
+                "message": "timed out"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "expect": {
+    "deliveries": {
+      "room-1": {
+        "by-type": [
+          {
+            "content": {
+              "type": "text",
+              "body": "hello"
+            }
+          },
+          {
+            "content": {
+              "type": "text",
+              "body": "hello"
+            }
+          }
+        ],
+        "by-base": [
+          {
+            "content": {
+              "type": "text",
+              "body": "hello"
+            }
+          },
+          {
+            "content": {
+              "type": "text",
+              "body": "hello"
+            }
+          }
+        ],
+        "by-null": [
+          {
+            "content": {
+              "type": "text",
+              "body": "hello"
+            }
+          },
+          {
+            "content": {
+              "type": "text",
+              "body": "hello"
+            }
+          }
+        ],
+        "by-other": [
+          {
+            "content": {
+              "type": "text",
+              "body": "hello"
+            }
+          }
+        ]
+      }
+    }
+  }
+}

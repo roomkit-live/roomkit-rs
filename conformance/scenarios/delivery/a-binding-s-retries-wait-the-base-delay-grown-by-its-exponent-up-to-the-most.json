@@ -1,0 +1,181 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "delivery/a-binding-s-retries-wait-the-base-delay-grown-by-its-exponent-up-to-the-most",
+  "title": "A delivery retried under its binding's retry policy waits min(base_delay * exponential_base ^ attempt, max_delay) before each retry: 1 s, 2 s, then 3 s where 4 s would pass the most",
+  "rules": [
+    "§13.2"
+  ],
+  "requirements": [
+    "RK-13.2-003"
+  ],
+  "notes": "On the virtual clock, the policy's base 1 s, exponent 2 and most 3 s: before each retry the delivery is still waiting 1 ms short of its delay (a wait is pending on the clock), and the retry starts once the delay passed. The breaker sees one failed delivery at most: the retries are its attempts.",
+  "setup": {
+    "virtual_clock": true,
+    "channels": [
+      {
+        "id": "sms",
+        "type": "sms",
+        "category": "transport"
+      },
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport",
+        "deliver": [
+          {
+            "fail": "down"
+          },
+          {
+            "gate": "second",
+            "fail": "down"
+          },
+          {
+            "gate": "third",
+            "fail": "down"
+          },
+          {
+            "gate": "fourth"
+          }
+        ]
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "sms"
+          },
+          {
+            "channel_id": "ws"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "store.update_binding",
+      "binding": {
+        "room_id": "room-1",
+        "channel_id": "ws",
+        "channel_type": "websocket",
+        "category": "transport",
+        "retry_policy": {
+          "max_retries": 3,
+          "base_delay_seconds": 1.0,
+          "exponential_base": 2.0,
+          "max_delay_seconds": 3.0,
+          "retryable_errors": null
+        }
+      }
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "hello"
+        }
+      },
+      "background": true,
+      "as": "sent"
+    },
+    {
+      "call": "clock.advance",
+      "ms": 999,
+      "waiters": 1
+    },
+    {
+      "call": "clock.advance",
+      "ms": 1,
+      "waiters": 1
+    },
+    {
+      "wait_for": "second"
+    },
+    {
+      "open": "second"
+    },
+    {
+      "call": "clock.advance",
+      "ms": 1999,
+      "waiters": 1
+    },
+    {
+      "call": "clock.advance",
+      "ms": 1,
+      "waiters": 1
+    },
+    {
+      "wait_for": "third"
+    },
+    {
+      "open": "third"
+    },
+    {
+      "call": "clock.advance",
+      "ms": 2999,
+      "waiters": 1
+    },
+    {
+      "call": "clock.advance",
+      "ms": 1,
+      "waiters": 1
+    },
+    {
+      "wait_for": "fourth"
+    },
+    {
+      "open": "fourth"
+    },
+    {
+      "await": "sent",
+      "expect": {
+        "result": {
+          "blocked": false,
+          "delivery_results": {
+            "ws": {
+              "status": "sent"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "expect": {
+    "deliveries": {
+      "room-1": {
+        "ws": [
+          {
+            "content": {
+              "type": "text",
+              "body": "hello"
+            }
+          },
+          {
+            "content": {
+              "type": "text",
+              "body": "hello"
+            }
+          },
+          {
+            "content": {
+              "type": "text",
+              "body": "hello"
+            }
+          },
+          {
+            "content": {
+              "type": "text",
+              "body": "hello"
+            }
+          }
+        ]
+      }
+    }
+  }
+}

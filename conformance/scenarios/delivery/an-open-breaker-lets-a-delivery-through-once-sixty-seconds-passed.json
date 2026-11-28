@@ -1,0 +1,265 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "delivery/an-open-breaker-lets-a-delivery-through-once-sixty-seconds-passed",
+  "title": "A channel's breaker, open, fails its deliveries fast until 60 seconds passed since it opened, then lets a delivery through to test the channel",
+  "rules": [
+    "§13.1"
+  ],
+  "requirements": [
+    "RK-13.1-009"
+  ],
+  "notes": "The breaker's threshold and cooldown are the RFC's defaults (§13.1), the only ones both implementations have. On the virtual clock: 59.999 s after the fifth failure the delivery is not sent; 60.001 s after it, it is, and succeeds.",
+  "setup": {
+    "virtual_clock": true,
+    "channels": [
+      {
+        "id": "sms",
+        "type": "sms",
+        "category": "transport"
+      },
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport",
+        "deliver": [
+          {
+            "fail": "down"
+          },
+          {
+            "fail": "down"
+          },
+          {
+            "fail": "down"
+          },
+          {
+            "fail": "down"
+          },
+          {
+            "fail": "down"
+          }
+        ]
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "sms"
+          },
+          {
+            "channel_id": "ws"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "hello"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "delivery_results": {
+            "ws": {
+              "status": "failed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "hello"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "delivery_results": {
+            "ws": {
+              "status": "failed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "hello"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "delivery_results": {
+            "ws": {
+              "status": "failed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "hello"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "delivery_results": {
+            "ws": {
+              "status": "failed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "hello"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "delivery_results": {
+            "ws": {
+              "status": "failed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "call": "clock.advance",
+      "ms": 59999
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "early"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "delivery_results": {
+            "ws": {
+              "status": "failed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "call": "clock.advance",
+      "ms": 2
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "probe"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "delivery_results": {
+            "ws": {
+              "status": "sent"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "expect": {
+    "deliveries": {
+      "room-1": {
+        "ws": [
+          {
+            "content": {
+              "type": "text",
+              "body": "hello"
+            }
+          },
+          {
+            "content": {
+              "type": "text",
+              "body": "hello"
+            }
+          },
+          {
+            "content": {
+              "type": "text",
+              "body": "hello"
+            }
+          },
+          {
+            "content": {
+              "type": "text",
+              "body": "hello"
+            }
+          },
+          {
+            "content": {
+              "type": "text",
+              "body": "hello"
+            }
+          },
+          {
+            "content": {
+              "type": "text",
+              "body": "probe"
+            }
+          }
+        ]
+      }
+    }
+  }
+}

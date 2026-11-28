@@ -1,0 +1,322 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "delivery/a-probe-that-fails-opens-the-breaker-again-for-another-cooldown",
+  "title": "A half-open breaker's probe that fails opens it again: the next delivery fails without being sent, and the next probe goes through 60 seconds after the failed one",
+  "rules": [
+    "§13.1"
+  ],
+  "requirements": [
+    "RK-13.1-011"
+  ],
+  "notes": "The breaker's threshold and cooldown are the RFC's defaults (§13.1), the only ones both implementations have. The first probe fails 60.001 s after the breaker opened. A delivery right after it, and one 59.999 s after it, are not sent; one 60.001 s after it is the next probe. Whether the probe's failure emits circuit_breaker_opened again the RFC does not say: the scenario does not read it.",
+  "setup": {
+    "virtual_clock": true,
+    "channels": [
+      {
+        "id": "sms",
+        "type": "sms",
+        "category": "transport"
+      },
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport",
+        "deliver": [
+          {
+            "fail": "down"
+          },
+          {
+            "fail": "down"
+          },
+          {
+            "fail": "down"
+          },
+          {
+            "fail": "down"
+          },
+          {
+            "fail": "down"
+          },
+          {
+            "fail": "down"
+          }
+        ]
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "sms"
+          },
+          {
+            "channel_id": "ws"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "hello"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "delivery_results": {
+            "ws": {
+              "status": "failed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "hello"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "delivery_results": {
+            "ws": {
+              "status": "failed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "hello"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "delivery_results": {
+            "ws": {
+              "status": "failed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "hello"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "delivery_results": {
+            "ws": {
+              "status": "failed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "hello"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "delivery_results": {
+            "ws": {
+              "status": "failed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "call": "clock.advance",
+      "ms": 60001
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "probe"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "delivery_results": {
+            "ws": {
+              "status": "failed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "early"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "delivery_results": {
+            "ws": {
+              "status": "failed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "call": "clock.advance",
+      "ms": 59999
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "early"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "delivery_results": {
+            "ws": {
+              "status": "failed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "call": "clock.advance",
+      "ms": 2
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "again"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "delivery_results": {
+            "ws": {
+              "status": "sent"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "expect": {
+    "deliveries": {
+      "room-1": {
+        "ws": [
+          {
+            "content": {
+              "type": "text",
+              "body": "hello"
+            }
+          },
+          {
+            "content": {
+              "type": "text",
+              "body": "hello"
+            }
+          },
+          {
+            "content": {
+              "type": "text",
+              "body": "hello"
+            }
+          },
+          {
+            "content": {
+              "type": "text",
+              "body": "hello"
+            }
+          },
+          {
+            "content": {
+              "type": "text",
+              "body": "hello"
+            }
+          },
+          {
+            "content": {
+              "type": "text",
+              "body": "probe"
+            }
+          },
+          {
+            "content": {
+              "type": "text",
+              "body": "again"
+            }
+          }
+        ]
+      }
+    }
+  }
+}

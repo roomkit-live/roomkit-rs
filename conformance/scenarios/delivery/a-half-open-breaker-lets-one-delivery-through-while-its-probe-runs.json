@@ -1,0 +1,289 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "delivery/a-half-open-breaker-lets-one-delivery-through-while-its-probe-runs",
+  "title": "A half-open breaker lets one delivery through, its probe: while the probe is being sent, another room's delivery on the channel fails without being sent",
+  "rules": [
+    "§13.1"
+  ],
+  "requirements": [
+    "RK-13.1-006"
+  ],
+  "notes": "The breaker's threshold and cooldown are the RFC's defaults (§13.1), the only ones both implementations have. The cooldown passed (60.001 s on the virtual clock), room-1's probe holds in the channel's deliver until room-2's message was processed; the breaker is the channel's, shared by both rooms.",
+  "setup": {
+    "virtual_clock": true,
+    "channels": [
+      {
+        "id": "sms",
+        "type": "sms",
+        "category": "transport"
+      },
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport",
+        "deliver": [
+          {
+            "fail": "down"
+          },
+          {
+            "fail": "down"
+          },
+          {
+            "fail": "down"
+          },
+          {
+            "fail": "down"
+          },
+          {
+            "fail": "down"
+          },
+          {
+            "gate": "probe"
+          }
+        ]
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "sms"
+          },
+          {
+            "channel_id": "ws"
+          }
+        ]
+      },
+      {
+        "id": "room-2",
+        "bindings": [
+          {
+            "channel_id": "sms"
+          },
+          {
+            "channel_id": "ws"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "hello"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "delivery_results": {
+            "ws": {
+              "status": "failed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "hello"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "delivery_results": {
+            "ws": {
+              "status": "failed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "hello"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "delivery_results": {
+            "ws": {
+              "status": "failed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "hello"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "delivery_results": {
+            "ws": {
+              "status": "failed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "hello"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "delivery_results": {
+            "ws": {
+              "status": "failed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "call": "clock.advance",
+      "ms": 60001
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "probe"
+        }
+      },
+      "background": true,
+      "as": "probe"
+    },
+    {
+      "wait_for": "probe"
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-2",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "beside"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "delivery_results": {
+            "ws": {
+              "status": "failed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "open": "probe"
+    },
+    {
+      "await": "probe",
+      "expect": {
+        "result": {
+          "blocked": false,
+          "delivery_results": {
+            "ws": {
+              "status": "sent"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "expect": {
+    "deliveries": {
+      "room-1": {
+        "ws": [
+          {
+            "content": {
+              "type": "text",
+              "body": "hello"
+            }
+          },
+          {
+            "content": {
+              "type": "text",
+              "body": "hello"
+            }
+          },
+          {
+            "content": {
+              "type": "text",
+              "body": "hello"
+            }
+          },
+          {
+            "content": {
+              "type": "text",
+              "body": "hello"
+            }
+          },
+          {
+            "content": {
+              "type": "text",
+              "body": "hello"
+            }
+          },
+          {
+            "content": {
+              "type": "text",
+              "body": "probe"
+            }
+          }
+        ]
+      },
+      "room-2": {
+        "ws": []
+      }
+    }
+  }
+}
