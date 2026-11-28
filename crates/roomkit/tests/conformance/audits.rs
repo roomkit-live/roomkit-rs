@@ -86,8 +86,11 @@ impl Auditors {
         });
         if self.file_setting("nested") == Some(&Value::Bool(true)) {
             // Directories of its own the auditor makes itself (§15.8.3).
-            let stem = name.split('.').next().unwrap_or(name);
-            return directory.join("missing").join(stem).join(name);
+            let stem = name.split_once('.').map_or(name, |(stem, _)| stem);
+            return directory
+                .join(format!("missing-{stem}"))
+                .join("one")
+                .join(name);
         }
         directory.join(name)
     }
