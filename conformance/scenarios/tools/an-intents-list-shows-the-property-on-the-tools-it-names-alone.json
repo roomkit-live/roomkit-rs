@@ -1,0 +1,145 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "tools/an-intents-list-shows-the-property-on-the-tools-it-names-alone",
+  "title": "With call intents limited to a list of tools, the schemas of the tools it names carry _roomkit_intent and the others are shown as their tools declared them",
+  "rules": [
+    "§6.4"
+  ],
+  "requirements": [
+    "RK-6.4-106"
+  ],
+  "notes": "Python: providers/ai/tool_intent.py presented_tools (only). RK-6.4-106 is cited in part: how a host renders the calls of the tools left out, from their arguments, is the host's and not observed.",
+  "setup": {
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport"
+      },
+      {
+        "id": "agent",
+        "type": "ai",
+        "tool_call_intents": true,
+        "tool_call_intents_only": [
+          "shell"
+        ],
+        "tools": [
+          {
+            "name": "shell",
+            "description": "Run a command.",
+            "parameters": {
+              "type": "object",
+              "required": [
+                "command"
+              ],
+              "properties": {
+                "command": {
+                  "type": "string"
+                }
+              }
+            },
+            "returns": "a.txt"
+          },
+          {
+            "name": "reader",
+            "description": "Read a file.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              }
+            },
+            "returns": "contents"
+          }
+        ],
+        "model": {
+          "rounds": [
+            {
+              "text": "Done."
+            }
+          ]
+        }
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "agent",
+            "category": "intelligence"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "go"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "error": null
+        }
+      }
+    },
+    {
+      "idle": true
+    }
+  ],
+  "expect": {
+    "models": {
+      "agent": [
+        {
+          "tool_definitions": {
+            "shell": {
+              "parameters": {
+                "required": [
+                  "command"
+                ],
+                "properties": {
+                  "command": {
+                    "type": "string"
+                  },
+                  "_roomkit_intent": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "reader": {
+              "parameters": {
+                "type": "object",
+                "required": {
+                  "$absent": true
+                },
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  },
+                  "_roomkit_intent": {
+                    "$absent": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

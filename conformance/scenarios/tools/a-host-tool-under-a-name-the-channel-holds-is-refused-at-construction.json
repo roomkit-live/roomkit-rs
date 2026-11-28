@@ -1,0 +1,101 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "tools/a-host-tool-under-a-name-the-channel-holds-is-refused-at-construction",
+  "title": "An agent given two host tools under one name, or a host tool under a name it serves itself, is refused as it is built, its registration with it",
+  "rules": [
+    "§21.1"
+  ],
+  "requirements": [
+    "RK-21.1-054"
+  ],
+  "notes": "Python: channels/_served_tools.py refuse_host_tools (refuse_given_twice, refuse_served_names), called by AIChannel's constructor; roomkit-rs: roomkit-ai tool_name_rule.rs, AiChannel::new (AiError::DuplicateTool). read_stored_result is the tool the channel serves itself to read back an evicted result (§21.5). RK-21.1-054 is cited in part: that the error names the tool is in its message, which no expectation compares.",
+  "setup": {
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "register_channel",
+      "channel": {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "text": "Hi."
+            }
+          ]
+        },
+        "tools": [
+          {
+            "name": "lookup",
+            "description": "Look it up.",
+            "returns": "found"
+          },
+          {
+            "name": "lookup",
+            "description": "Look it up again.",
+            "returns": "found"
+          }
+        ]
+      },
+      "expect": {
+        "error": "invalid_argument"
+      }
+    },
+    {
+      "call": "register_channel",
+      "channel": {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "text": "Hi."
+            }
+          ]
+        },
+        "tools": [
+          {
+            "name": "read_stored_result",
+            "description": "Read it.",
+            "returns": "found"
+          }
+        ]
+      },
+      "expect": {
+        "error": "invalid_argument"
+      }
+    },
+    {
+      "call": "register_channel",
+      "channel": {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "text": "Hi."
+            }
+          ]
+        },
+        "tools": [
+          {
+            "name": "lookup",
+            "description": "Look it up.",
+            "returns": "found"
+          }
+        ]
+      },
+      "expect": {
+        "result": null
+      }
+    }
+  ],
+  "expect": {}
+}

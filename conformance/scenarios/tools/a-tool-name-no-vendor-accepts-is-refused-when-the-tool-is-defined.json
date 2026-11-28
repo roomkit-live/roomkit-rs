@@ -1,0 +1,144 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "tools/a-tool-name-no-vendor-accepts-is-refused-when-the-tool-is-defined",
+  "title": "A tool whose name is empty or holds a character other than a letter, a digit, _, ., : or - is refused when it is defined, the agent's registration with it",
+  "rules": [
+    "§6.7"
+  ],
+  "requirements": [
+    "RK-6.7-094"
+  ],
+  "notes": "Python: providers/ai/base.py AITool (some_vendor_accepts_tool_name); roomkit-rs: roomkit-ai provider/tool_declaration.rs some_vendor_accepts_tool_name, AiTool::new. The last registration, of a name of every accepted kind, shows the refused ones left nothing registered. RK-6.7-094 is cited in part: that the name is refused as the tool is defined, rather than as the channel holding it is built, which refuses it too, is not told apart.",
+  "setup": {
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "register_channel",
+      "channel": {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "text": "Hi."
+            }
+          ]
+        },
+        "tools": [
+          {
+            "name": "",
+            "description": "Look it up.",
+            "returns": "found"
+          }
+        ]
+      },
+      "expect": {
+        "error": "invalid_argument"
+      }
+    },
+    {
+      "call": "register_channel",
+      "channel": {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "text": "Hi."
+            }
+          ]
+        },
+        "tools": [
+          {
+            "name": "look up",
+            "description": "Look it up.",
+            "returns": "found"
+          }
+        ]
+      },
+      "expect": {
+        "error": "invalid_argument"
+      }
+    },
+    {
+      "call": "register_channel",
+      "channel": {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "text": "Hi."
+            }
+          ]
+        },
+        "tools": [
+          {
+            "name": "look/up",
+            "description": "Look it up.",
+            "returns": "found"
+          }
+        ]
+      },
+      "expect": {
+        "error": "invalid_argument"
+      }
+    },
+    {
+      "call": "register_channel",
+      "channel": {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "text": "Hi."
+            }
+          ]
+        },
+        "tools": [
+          {
+            "name": "lookup()",
+            "description": "Look it up.",
+            "returns": "found"
+          }
+        ]
+      },
+      "expect": {
+        "error": "invalid_argument"
+      }
+    },
+    {
+      "call": "register_channel",
+      "channel": {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "text": "Hi."
+            }
+          ]
+        },
+        "tools": [
+          {
+            "name": "Look_up.v2:x-1",
+            "description": "Look it up.",
+            "returns": "found"
+          }
+        ]
+      },
+      "expect": {
+        "result": null
+      }
+    }
+  ],
+  "expect": {}
+}

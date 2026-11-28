@@ -1,0 +1,68 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "inbound/a-channel-type-holding-a-character-outside-the-grammar-is-refused",
+  "title": "A channel whose type holds a character outside lowercase ASCII letters, digits, _ and - is refused at its registration, and nothing is registered under its id",
+  "rules": [
+    "§6.2"
+  ],
+  "requirements": [
+    "RK-6.2-009"
+  ],
+  "notes": "Python: models/enums.py ChannelType._missing_ (_CHANNEL_TYPE_NAME); roomkit-rs: roomkit-core model/channel.rs ChannelType::new. The last registration, under the same id, shows the refused ones left nothing registered.",
+  "setup": {
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "register_channel",
+      "channel": {
+        "id": "kiosk",
+        "type": "Kiosk",
+        "category": "transport"
+      },
+      "expect": {
+        "error": "invalid_argument"
+      }
+    },
+    {
+      "call": "register_channel",
+      "channel": {
+        "id": "kiosk",
+        "type": "kiosk lobby",
+        "category": "transport"
+      },
+      "expect": {
+        "error": "invalid_argument"
+      }
+    },
+    {
+      "call": "register_channel",
+      "channel": {
+        "id": "kiosk",
+        "type": "kiosk.2",
+        "category": "transport"
+      },
+      "expect": {
+        "error": "invalid_argument"
+      }
+    },
+    {
+      "call": "register_channel",
+      "channel": {
+        "id": "kiosk",
+        "type": "kiosk-2",
+        "category": "transport"
+      },
+      "expect": {
+        "result": null
+      }
+    }
+  ],
+  "expect": {}
+}

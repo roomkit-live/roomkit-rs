@@ -1,0 +1,166 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "inbound/the-responses-of-a-channel-that-did-not-answer-do-not-re-enter",
+  "title": "An intelligence channel whose turn returns response events without having answered the event has none of them re-enter the room",
+  "rules": [
+    "§6.1"
+  ],
+  "requirements": [
+    "RK-6.1-018"
+  ],
+  "notes": "Python: core/event_router.py (response events only when output.responded); roomkit-rs: roomkit-core ops/inbound/delivery.rs. The second room's channel answers, its response re-entering. RK-6.1-018 is cited in part: ChannelOutput's default, false, is not observed, a scripted channel saying responded at each turn.",
+  "setup": {
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport"
+      },
+      {
+        "id": "bot",
+        "type": "ai",
+        "on_event": [
+          {
+            "when": {
+              "room_id": "room-1"
+            },
+            "respond": [
+              {
+                "content": {
+                  "type": "text",
+                  "body": "Not sent."
+                }
+              }
+            ],
+            "output": {
+              "responded": false
+            }
+          },
+          {
+            "when": {
+              "room_id": "room-2"
+            },
+            "respond": [
+              {
+                "content": {
+                  "type": "text",
+                  "body": "Sent."
+                }
+              }
+            ],
+            "output": {
+              "responded": true
+            }
+          }
+        ]
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "bot",
+            "category": "intelligence"
+          }
+        ]
+      },
+      {
+        "id": "room-2",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "bot",
+            "category": "intelligence"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "Hi."
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "error": null
+        }
+      }
+    },
+    {
+      "idle": true
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-2",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "Hi."
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "error": null
+        }
+      }
+    },
+    {
+      "idle": true
+    }
+  ],
+  "expect": {
+    "timeline": {
+      "room-1": [
+        {
+          "content": {
+            "body": "Hi."
+          }
+        }
+      ],
+      "room-2": [
+        {
+          "content": {
+            "body": "Hi."
+          }
+        },
+        {
+          "content": {
+            "body": "Sent."
+          }
+        }
+      ]
+    },
+    "deliveries": {
+      "room-1": {
+        "ws": []
+      },
+      "room-2": {
+        "ws": [
+          {
+            "content": {
+              "body": "Sent."
+            }
+          }
+        ]
+      }
+    }
+  }
+}

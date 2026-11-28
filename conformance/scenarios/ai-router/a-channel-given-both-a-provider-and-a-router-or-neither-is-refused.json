@@ -1,0 +1,107 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "ai-router/a-channel-given-both-a-provider-and-a-router-or-neither-is-refused",
+  "title": "An AI channel given both a provider and a router, or neither, is refused as it is built; one given its provider alone, or its router alone, registers",
+  "rules": [
+    "§6.4"
+  ],
+  "requirements": [
+    "RK-6.4-516"
+  ],
+  "requires_features": [
+    "serving_arguments"
+  ],
+  "notes": "Python: channels/ai.py AIChannel.__init__ (AIChannel takes a provider or a router, one of the two). roomkit-rs builds an AI channel with one of two constructors, AiChannel::new over a provider and AiChannel::routed over a router, so that its types refuse a channel given both or neither (api/mapping.toml, HITL 0bd7a643): it provides no serving_arguments.",
+  "setup": {
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "register_channel",
+      "channel": {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "text": "Hi."
+            }
+          ]
+        },
+        "router": {
+          "turns": [
+            "agent"
+          ]
+        },
+        "serving": "both"
+      },
+      "expect": {
+        "error": "invalid_argument"
+      }
+    },
+    {
+      "call": "register_channel",
+      "channel": {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "text": "Hi."
+            }
+          ]
+        },
+        "serving": "neither"
+      },
+      "expect": {
+        "error": "invalid_argument"
+      }
+    },
+    {
+      "call": "register_channel",
+      "channel": {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "text": "Hi."
+            }
+          ]
+        }
+      },
+      "expect": {
+        "result": null
+      }
+    },
+    {
+      "call": "register_channel",
+      "channel": {
+        "id": "routed",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "text": "Hi."
+            }
+          ]
+        },
+        "router": {
+          "turns": [
+            "routed"
+          ]
+        }
+      },
+      "expect": {
+        "result": null
+      }
+    }
+  ],
+  "expect": {}
+}

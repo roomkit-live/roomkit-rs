@@ -1,0 +1,48 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "steering/a-channel-that-steers-its-room-turns-without-serializing-them-is-refused",
+  "title": "Registering a channel that says it steers its room turns but does not serialize them fails and registers nothing; one that steers and serializes them registers",
+  "rules": [
+    "§6.4"
+  ],
+  "requirements": [
+    "RK-6.4-456"
+  ],
+  "notes": "Python: core/mixins/channel_ops.py _refuse_unserialized_steering; roomkit-rs: roomkit kit/registry.rs. RK-6.4-456 is cited in part: that serializes_room_turns defaults to steers_room_turns, a channel's own declaration, and that an owner holding a channel by a declaration that steers takes its turns as serialized, are not observed: each implementation's tests pin them (tests/test_room_turns_in_order.py::test_a_channel_that_steers_its_room_turns_says_it_serializes_them; roomkit-rs crates/roomkit/tests/turns/steering.rs::a_channel_that_steers_its_room_turns_says_it_serializes_them).",
+  "setup": {
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "register_channel",
+      "channel": {
+        "id": "bot",
+        "type": "ai",
+        "steers_room_turns": true,
+        "serializes_room_turns": false
+      },
+      "expect": {
+        "error": "invalid_argument"
+      }
+    },
+    {
+      "call": "register_channel",
+      "channel": {
+        "id": "bot",
+        "type": "ai",
+        "steers_room_turns": true,
+        "serializes_room_turns": true
+      },
+      "expect": {
+        "result": null
+      }
+    }
+  ],
+  "expect": {}
+}

@@ -1,0 +1,52 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "providers/a-channel-s-provider-name-is-its-provider-s-name-or-none",
+  "title": "A channel's provider_name is its provider's name, and none for a channel that has no provider",
+  "rules": [
+    "§6.1"
+  ],
+  "requirements": [
+    "RK-6.1-016"
+  ],
+  "notes": "Python: channels/base.py Channel.provider_name, channels/ai.py provider_name; roomkit-rs: roomkit channel.rs Channel::provider_name, roomkit-ai channel.rs. RK-6.1-016 is cited in part: the attribution the name serves (EventSource.provider) is not observed, the scripted agents' events naming no provider.",
+  "setup": {
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport"
+      },
+      {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "provider": "acme-local",
+          "rounds": []
+        }
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "channel.provider",
+      "channel_id": "agent",
+      "expect": {
+        "result": {
+          "provider": "acme-local",
+          "provider_name": "acme-local"
+        }
+      }
+    },
+    {
+      "call": "channel.provider",
+      "channel_id": "ws",
+      "expect": {
+        "result": {
+          "provider": null,
+          "provider_name": null
+        }
+      }
+    }
+  ],
+  "expect": {}
+}

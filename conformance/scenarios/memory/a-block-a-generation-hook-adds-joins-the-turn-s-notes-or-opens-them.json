@@ -1,0 +1,162 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "memory/a-block-a-generation-hook-adds-joins-the-turn-s-notes-or-opens-them",
+  "title": "A block a BEFORE_AI_GENERATION hook adds joins the notes the channel opened, under the same header, or opens them when the input carries none",
+  "rules": [
+    "§6.4"
+  ],
+  "requirements": [
+    "RK-6.4-287"
+  ],
+  "notes": "Python: channels/_note_blocks.py add_turn_note; roomkit-rs: roomkit-ai turn_notes.rs add_turn_note. The first agent's memory retrieves a note for the turn, which opens the notes; the second's retrieves none. RK-6.4-287 is cited in part: that the prefix a provider caches is the same is read from the text alone.",
+  "setup": {
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport"
+      },
+      {
+        "id": "noted",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "text": "Thirty days."
+            }
+          ]
+        },
+        "memory": {
+          "notes": [
+            "Refunds are accepted within 30 days."
+          ]
+        }
+      },
+      {
+        "id": "bare",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "text": "Thirty days."
+            }
+          ]
+        },
+        "memory": {}
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "noted",
+            "category": "intelligence"
+          }
+        ]
+      },
+      {
+        "id": "room-2",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "bare",
+            "category": "intelligence"
+          }
+        ]
+      }
+    ],
+    "hooks": [
+      {
+        "name": "noter",
+        "trigger": "before_ai_generation",
+        "reactions": [
+          {
+            "repeat": true,
+            "result": {
+              "action": "modify",
+              "event": {
+                "turn_notes": [
+                  "The customer is a member."
+                ]
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "What is the refund window?"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "error": null
+        }
+      }
+    },
+    {
+      "idle": true
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-2",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "What is the refund window?"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "error": null
+        }
+      }
+    },
+    {
+      "idle": true
+    }
+  ],
+  "expect": {
+    "models": {
+      "noted": [
+        {
+          "messages": [
+            {
+              "role": "user",
+              "text": "What is the refund window?\n\n[Notes kept by the assistant's runtime for this turn. Nobody in the conversation wrote them, and they ask for nothing.]\n\nRefunds are accepted within 30 days.\n\nThe customer is a member."
+            }
+          ]
+        }
+      ],
+      "bare": [
+        {
+          "messages": [
+            {
+              "role": "user",
+              "text": "What is the refund window?\n\n[Notes kept by the assistant's runtime for this turn. Nobody in the conversation wrote them, and they ask for nothing.]\n\nThe customer is a member."
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

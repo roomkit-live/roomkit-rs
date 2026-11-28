@@ -1,0 +1,133 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "author-images/an-image-the-provider-cannot-send-is-a-refusal-of-the-content",
+  "title": "An author's image the provider cannot send, refused before any request, is a refusal of the content: the room's later turns read it as refused by the provider",
+  "rules": [
+    "§6.4"
+  ],
+  "requirements": [
+    "RK-6.4-284"
+  ],
+  "notes": "Python: channels/_ai_streaming.py refuses_content (a provider error with no before_request), _forget_sent_images; roomkit-rs: roomkit-ai author_images.rs. The model's provider refuses a request carrying an image before it is made, so no request of the first turn is kept.",
+  "setup": {
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport"
+      },
+      {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "vision": true,
+          "refuses_images": true,
+          "rounds": [
+            {
+              "text": "Seen."
+            }
+          ]
+        }
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "agent",
+            "category": "intelligence"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "send_event",
+      "room_id": "room-1",
+      "channel_id": "ws",
+      "content": {
+        "type": "composite",
+        "parts": [
+          {
+            "type": "text",
+            "body": "my lamp"
+          },
+          {
+            "type": "media",
+            "url": "data:image/png;base64,AQIDBA==",
+            "mime_type": "image/png",
+            "filename": "lamp.png"
+          }
+        ]
+      }
+    },
+    {
+      "idle": true
+    },
+    {
+      "call": "send_event",
+      "room_id": "room-1",
+      "channel_id": "ws",
+      "content": {
+        "type": "text",
+        "body": "and now?"
+      }
+    },
+    {
+      "idle": true
+    }
+  ],
+  "expect": {
+    "models": {
+      "agent": [
+        {
+          "messages": [
+            {
+              "role": "user",
+              "text": "my lamp[Image refused by the model's provider: “lamp.png”]",
+              "parts": [
+                {
+                  "text": "my lamp"
+                },
+                {
+                  "text": "[Image refused by the model's provider: “lamp.png”]"
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "text": "and now?"
+            }
+          ]
+        }
+      ]
+    },
+    "timeline": {
+      "room-1": [
+        {
+          "type": "message",
+          "source": {
+            "channel_id": "ws"
+          }
+        },
+        {
+          "type": "message",
+          "content": {
+            "body": "and now?"
+          }
+        },
+        {
+          "type": "message",
+          "content": {
+            "body": "Seen."
+          }
+        }
+      ]
+    }
+  }
+}

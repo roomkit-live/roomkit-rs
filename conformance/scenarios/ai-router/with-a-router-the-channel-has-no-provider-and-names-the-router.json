@@ -1,0 +1,48 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "ai-router/with-a-router-the-channel-has-no-provider-and-names-the-router",
+  "title": "An AI channel a router serves has no provider of its own, and its provider_name is the router's name",
+  "rules": [
+    "§6.4"
+  ],
+  "requirements": [
+    "RK-6.4-525"
+  ],
+  "notes": "Python: channels/ai.py AIChannel.provider, provider_name; roomkit-rs: roomkit-ai channel.rs.",
+  "setup": {
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport"
+      },
+      {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "provider": "acme-local",
+          "rounds": []
+        },
+        "router": {
+          "name": "picker",
+          "turns": [
+            "agent"
+          ]
+        }
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "channel.provider",
+      "channel_id": "agent",
+      "expect": {
+        "result": {
+          "provider": null,
+          "provider_name": "picker"
+        }
+      }
+    }
+  ],
+  "expect": {}
+}

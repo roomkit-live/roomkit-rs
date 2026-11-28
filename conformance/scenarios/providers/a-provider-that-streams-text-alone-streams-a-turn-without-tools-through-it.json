@@ -1,0 +1,279 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "providers/a-provider-that-streams-text-alone-streams-a-turn-without-tools-through-it",
+  "title": "A provider that streams text alone streams a turn without tools through generate_stream, its deltas as they arrive; one with tools is answered whole, and a provider that does not stream answers whole",
+  "rules": [
+    "§6.4",
+    "§6.7"
+  ],
+  "requirements": [
+    "RK-6.4-399",
+    "RK-6.7-019",
+    "RK-6.7-110"
+  ],
+  "notes": "Python: providers/ai/base.py AIProvider.generate_structured_stream (the default adapter: generate_stream where the provider streams text and the turn has no tools, generate() otherwise); roomkit-rs: roomkit-ai provider/mod.rs. The provider of the agent whole keeps the contract's supports_streaming, false by default, and is never asked for generate_stream. RK-6.7-110 is cited in part: that the flag says whether generate_stream is implemented is each provider's own.",
+  "setup": {
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport",
+        "streams": true
+      },
+      {
+        "id": "texts",
+        "type": "ai",
+        "model": {
+          "stream_text_only": true,
+          "rounds": [
+            {
+              "deltas": [
+                "Hel",
+                "lo."
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": "whole",
+        "type": "ai",
+        "model": {
+          "streaming": false,
+          "rounds": [
+            {
+              "text": "Whole."
+            }
+          ]
+        }
+      },
+      {
+        "id": "tooled",
+        "type": "ai",
+        "tools": [
+          {
+            "name": "lookup",
+            "description": "Look it up.",
+            "returns": "found"
+          }
+        ],
+        "model": {
+          "stream_text_only": true,
+          "rounds": [
+            {
+              "text": "With tools."
+            }
+          ]
+        }
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "texts",
+            "category": "intelligence"
+          }
+        ]
+      },
+      {
+        "id": "room-2",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "whole",
+            "category": "intelligence"
+          }
+        ]
+      },
+      {
+        "id": "room-3",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "tooled",
+            "category": "intelligence"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "Hi."
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "error": null
+        }
+      }
+    },
+    {
+      "idle": true
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-2",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "Hi."
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "error": null
+        }
+      }
+    },
+    {
+      "idle": true
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-3",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "Hi."
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "error": null
+        }
+      }
+    },
+    {
+      "idle": true
+    }
+  ],
+  "expect": {
+    "models": {
+      "texts": [
+        {
+          "method": "generate_stream",
+          "tool_names": []
+        }
+      ],
+      "whole": [
+        {
+          "method": "generate",
+          "tool_names": []
+        }
+      ],
+      "tooled": [
+        {
+          "method": "generate",
+          "tools": {
+            "lookup": {
+              "$present": true
+            }
+          }
+        }
+      ]
+    },
+    "streamed": {
+      "room-1": {
+        "ws": [
+          {
+            "text": "Hel"
+          },
+          {
+            "text": "lo."
+          },
+          {
+            "row": {
+              "type": "message"
+            }
+          }
+        ]
+      },
+      "room-2": {
+        "ws": [
+          {
+            "text": "Whole."
+          },
+          {
+            "row": {
+              "type": "message"
+            }
+          }
+        ]
+      },
+      "room-3": {
+        "ws": [
+          {
+            "text": "With tools."
+          },
+          {
+            "row": {
+              "type": "message"
+            }
+          }
+        ]
+      }
+    },
+    "timeline": {
+      "room-1": [
+        {
+          "content": {
+            "body": "Hi."
+          }
+        },
+        {
+          "content": {
+            "body": "Hello."
+          }
+        }
+      ],
+      "room-2": [
+        {
+          "content": {
+            "body": "Hi."
+          }
+        },
+        {
+          "content": {
+            "body": "Whole."
+          }
+        }
+      ],
+      "room-3": [
+        {
+          "content": {
+            "body": "Hi."
+          }
+        },
+        {
+          "content": {
+            "body": "With tools."
+          }
+        }
+      ]
+    }
+  }
+}

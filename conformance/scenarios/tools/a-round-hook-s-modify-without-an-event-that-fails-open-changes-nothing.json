@@ -1,0 +1,143 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "tools/a-round-hook-s-modify-without-an-event-that-fails-open-changes-nothing",
+  "title": "An AFTER_TOOL_ROUND hook whose MODIFY returns no event, failing open, gives an unusable result that changes nothing: the hooks after it run, and the turn goes on",
+  "rules": [
+    "§6.4",
+    "§9.3"
+  ],
+  "requirements": [
+    "RK-6.4-259"
+  ],
+  "notes": "Python: core/hooks.py (a MODIFY that carries no payload is an unusable result, which blocks when the hook fails closed), turns/_wiring.py build_after_tool_round_hook. RK-6.4-259 is cited in part: the hook acting on its event in place is observed by steering/ and tools/ scenarios on withdrawn and messages; this one observes the MODIFY that returns none; tools/a-round-hook-s-modify-without-an-event-is-an-unusable-result shows the same hook failing closed.",
+  "setup": {
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport"
+      },
+      {
+        "id": "agent",
+        "type": "ai",
+        "tools": [
+          {
+            "name": "lookup",
+            "description": "Look it up.",
+            "returns": "found"
+          }
+        ],
+        "model": {
+          "rounds": [
+            {
+              "calls": [
+                {
+                  "id": "c1",
+                  "name": "lookup"
+                }
+              ]
+            },
+            {
+              "text": "Found."
+            }
+          ]
+        }
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "agent",
+            "category": "intelligence"
+          }
+        ]
+      }
+    ],
+    "hooks": [
+      {
+        "name": "unusable",
+        "trigger": "after_tool_round",
+        "priority": 0,
+        "fail_closed": false,
+        "reactions": [
+          {
+            "invalid_result": {
+              "kind": "missing_payload"
+            }
+          }
+        ]
+      },
+      {
+        "name": "after",
+        "trigger": "after_tool_round",
+        "priority": 1
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "Look it up."
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "error": null
+        }
+      }
+    },
+    {
+      "idle": true
+    }
+  ],
+  "expect": {
+    "hooks": {
+      "unusable": [
+        {
+          "trigger": "after_tool_round",
+          "room_id": "room-1"
+        }
+      ],
+      "after": [
+        {
+          "trigger": "after_tool_round",
+          "room_id": "room-1"
+        }
+      ]
+    },
+    "timeline": {
+      "room-1": [
+        {
+          "type": "message",
+          "content": {
+            "body": "Look it up."
+          }
+        },
+        {
+          "type": "tool_call_start"
+        },
+        {
+          "type": "tool_call_end"
+        },
+        {
+          "type": "message",
+          "content": {
+            "body": "Found."
+          }
+        }
+      ]
+    }
+  }
+}

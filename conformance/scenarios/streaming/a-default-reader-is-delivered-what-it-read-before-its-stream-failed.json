@@ -1,0 +1,103 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "streaming/a-default-reader-is-delivered-what-it-read-before-its-stream-failed",
+  "title": "A streaming channel that keeps the default deliver_stream, handed a stream that raises, is delivered the text it accumulated, once, before the failure goes on",
+  "rules": [
+    "§6.1",
+    "§12.2 step 13s"
+  ],
+  "requirements": [
+    "RK-6.1-007"
+  ],
+  "notes": "Python: channels/base.py Channel.deliver_stream (deliver what was accumulated, then raise); roomkit-rs: roomkit channel.rs Channel::deliver_stream. The text the stream carried is stored as the agent's message and not delivered to the channel again (RK-12.2-034). RK-6.1-007 is cited in part: that the reader then propagates the failure is not observed, the framework handing the response's failure to its caller even when a streaming channel swallows it (§12.2 step 13s).",
+  "setup": {
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport",
+        "streams": true,
+        "default_deliver_stream": true
+      },
+      {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "deltas": [
+                "Part",
+                "ial"
+              ],
+              "fails": "boom"
+            }
+          ]
+        }
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "agent",
+            "category": "intelligence"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "Hi."
+        }
+      }
+    },
+    {
+      "idle": true
+    }
+  ],
+  "expect": {
+    "deliveries": {
+      "room-1": {
+        "ws": [
+          {
+            "type": "message",
+            "content": {
+              "type": "text",
+              "body": "Partial"
+            }
+          }
+        ]
+      }
+    },
+    "timeline": {
+      "room-1": [
+        {
+          "content": {
+            "body": "Hi."
+          }
+        },
+        {
+          "type": "message",
+          "source": {
+            "channel_id": "agent"
+          },
+          "content": {
+            "body": "Partial"
+          }
+        }
+      ]
+    }
+  }
+}

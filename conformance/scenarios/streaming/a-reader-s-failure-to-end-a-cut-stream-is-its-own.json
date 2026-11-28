@@ -1,0 +1,192 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "streaming/a-reader-s-failure-to-end-a-cut-stream-is-its-own",
+  "title": "A streaming channel whose deliver_cut raises once it was handed the cut row fails nothing else: the cut goes on, the row stays stored, and the room's next message is answered",
+  "rules": [
+    "§6.1",
+    "§12.2 step 13s"
+  ],
+  "requirements": [
+    "RK-6.1-009"
+  ],
+  "notes": "Python: core/mixins/inbound_streaming.py _deliver_cut (what the channel raises is logged); roomkit-rs: roomkit stream/reader.rs deliver_cut. RK-6.1-009 is cited in part: the log line is not observed, nor the default deliver_cut, a no-op the scenario cannot tell from a channel that rendered what it was handed.",
+  "setup": {
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport",
+        "streams": true,
+        "deliver_stream": [
+          {
+            "when": {
+              "room_id": "room-1"
+            },
+            "hold_after": "Partial ",
+            "hold_gate": "read"
+          }
+        ],
+        "deliver_cut": [
+          {
+            "fail": "cut refused"
+          }
+        ]
+      },
+      {
+        "id": "web",
+        "type": "webhook",
+        "category": "transport"
+      },
+      {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "deltas": [
+                "Partial ",
+                "more."
+              ]
+            },
+            {
+              "text": "Again."
+            }
+          ]
+        }
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "web"
+          },
+          {
+            "channel_id": "agent",
+            "category": "intelligence"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "web",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "Go."
+        },
+        "delivery_key": "k1"
+      },
+      "background": true,
+      "as": "first"
+    },
+    {
+      "wait_for": "read"
+    },
+    {
+      "call": "cancel_delivery",
+      "key": "k1",
+      "expect": {
+        "result": 1
+      }
+    },
+    {
+      "open": "read"
+    },
+    {
+      "await": "first"
+    },
+    {
+      "idle": true
+    },
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "web",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "And now?"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "error": null
+        }
+      }
+    },
+    {
+      "idle": true
+    }
+  ],
+  "expect": {
+    "timeline": {
+      "room-1": [
+        {
+          "id": "room-1#0",
+          "content": {
+            "body": "Go."
+          }
+        },
+        {
+          "id": "room-1#1",
+          "status": "delivered",
+          "content": {
+            "body": "Partial "
+          },
+          "metadata": {
+            "cancelled": true
+          }
+        },
+        {
+          "id": "room-1#2",
+          "content": {
+            "body": "And now?"
+          }
+        },
+        {
+          "id": "room-1#3",
+          "content": {
+            "body": "Again."
+          }
+        }
+      ]
+    },
+    "streamed": {
+      "room-1": {
+        "ws": [
+          {
+            "text": "Partial "
+          },
+          {
+            "cut": {
+              "id": "room-1#1",
+              "metadata": {
+                "cancelled": true
+              }
+            }
+          },
+          {
+            "text": "Again."
+          },
+          {
+            "row": {
+              "id": "room-1#3"
+            }
+          }
+        ]
+      }
+    }
+  }
+}

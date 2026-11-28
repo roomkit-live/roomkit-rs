@@ -1,0 +1,159 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "author-images/an-attached-media-reader-that-fails-names-none-for-that-event",
+  "title": "An attached-media reader that fails for an event names no media for it, and the turn goes on with the media it names for the others",
+  "rules": [
+    "§6.4"
+  ],
+  "requirements": [
+    "RK-6.4-316"
+  ],
+  "notes": "Python: channels/_author_images.py with_attached_media; roomkit-rs: roomkit-ai author_images.rs. The reader fails for the event whose metadata holds broken.",
+  "setup": {
+    "kit": {
+      "attached_media": {
+        "key": "files",
+        "fails_on": "broken"
+      }
+    },
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport"
+      },
+      {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "vision": true,
+          "rounds": [
+            {
+              "text": "Seen."
+            },
+            {
+              "text": "Seen again."
+            }
+          ]
+        }
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "agent",
+            "category": "intelligence"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "send_event",
+      "room_id": "room-1",
+      "channel_id": "ws",
+      "content": {
+        "type": "text",
+        "body": "my lamp"
+      },
+      "metadata": {
+        "files": [
+          {
+            "type": "media",
+            "url": "https://cdn.example.com/lamp.png",
+            "mime_type": "image/png",
+            "filename": "lamp.png"
+          }
+        ]
+      }
+    },
+    {
+      "idle": true
+    },
+    {
+      "call": "send_event",
+      "room_id": "room-1",
+      "channel_id": "ws",
+      "content": {
+        "type": "text",
+        "body": "and this one"
+      },
+      "metadata": {
+        "broken": true,
+        "files": [
+          {
+            "type": "media",
+            "url": "https://cdn.example.com/chair.png",
+            "mime_type": "image/png",
+            "filename": "chair.png"
+          }
+        ]
+      }
+    },
+    {
+      "idle": true
+    }
+  ],
+  "expect": {
+    "models": {
+      "agent": [
+        {},
+        {
+          "messages": [
+            {
+              "role": "user",
+              "parts": [
+                {
+                  "text": "my lamp"
+                },
+                {
+                  "image": "https://cdn.example.com/lamp.png",
+                  "mime_type": "image/png"
+                }
+              ]
+            },
+            {
+              "role": "assistant",
+              "text": "Seen."
+            },
+            {
+              "role": "user",
+              "text": "and this one",
+              "parts": null
+            }
+          ]
+        }
+      ]
+    },
+    "timeline": {
+      "room-1": [
+        {
+          "content": {
+            "body": "my lamp"
+          }
+        },
+        {
+          "content": {
+            "body": "Seen."
+          }
+        },
+        {
+          "content": {
+            "body": "and this one"
+          }
+        },
+        {
+          "content": {
+            "body": "Seen again."
+          }
+        }
+      ]
+    }
+  }
+}

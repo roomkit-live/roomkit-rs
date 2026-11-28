@@ -1,0 +1,101 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "ai-router/a-router-that-names-no-model-for-a-turn-fails-the-turn",
+  "title": "A router that names no model at a turn's start fails the turn: no model is asked and nothing is answered",
+  "rules": [
+    "§6.4"
+  ],
+  "requirements": [
+    "RK-6.4-519"
+  ],
+  "notes": "Python: channels/ai.py _route_turn (router named no provider for a turn); roomkit-rs: roomkit-ai channel.rs start_turn (AiError::RouterNamedNone).",
+  "setup": {
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport"
+      },
+      {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "text": "Never."
+            }
+          ]
+        },
+        "router": {
+          "turns": [
+            null
+          ]
+        }
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "agent",
+            "category": "intelligence"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "Hello?"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "error": {
+            "$present": true
+          }
+        }
+      }
+    },
+    {
+      "idle": true
+    }
+  ],
+  "expect": {
+    "timeline": {
+      "room-1": [
+        {
+          "index": 0,
+          "source": {
+            "channel_id": "ws"
+          }
+        }
+      ]
+    },
+    "models": {
+      "agent": []
+    },
+    "ai_routes": {
+      "agent": [
+        {
+          "reason": "turn",
+          "text": "Hello?",
+          "previous": null,
+          "failed": null
+        }
+      ]
+    }
+  }
+}

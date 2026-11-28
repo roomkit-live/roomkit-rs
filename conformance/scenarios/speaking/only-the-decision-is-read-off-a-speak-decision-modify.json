@@ -1,0 +1,181 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "speaking/only-the-decision-is-read-off-a-speak-decision-modify",
+  "title": "Of an ON_SPEAK_DECISION hook's MODIFY, only the decision is read: the event decided on, the room and the channel the payload names stay the channel's",
+  "rules": [
+    "§6.4",
+    "§9.2"
+  ],
+  "requirements": [
+    "RK-6.4-146"
+  ],
+  "notes": "Python: turns/_wiring.py build_speak_decision_hook (the decision that stands replaces the payload's alone); roomkit-rs: roomkit-ai channel/speaking.rs. The hook's patch names another event, room and channel; the observer sees the channel's, and the agent answers its own event.",
+  "setup": {
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport"
+      },
+      {
+        "id": "agent",
+        "type": "ai",
+        "speak_policy": {
+          "decisions": [
+            {
+              "decision": {
+                "mode": "offer",
+                "reason": "from policy",
+                "judgments": {},
+                "notes": [],
+                "final": false
+              }
+            }
+          ]
+        },
+        "model": {
+          "rounds": [
+            {
+              "text": "Hi."
+            }
+          ]
+        }
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "agent",
+            "category": "intelligence"
+          }
+        ]
+      }
+    ],
+    "hooks": [
+      {
+        "name": "first",
+        "trigger": "on_speak_decision",
+        "reactions": [
+          {
+            "result": {
+              "action": "modify",
+              "event": {
+                "decision": {
+                  "mode": "speak",
+                  "reason": "given the floor",
+                  "judgments": {},
+                  "notes": [],
+                  "final": false
+                },
+                "event": {
+                  "content": {
+                    "type": "text",
+                    "body": "Something else."
+                  }
+                },
+                "room_id": "room-2",
+                "channel_id": "other"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "decision-observer",
+        "trigger": "on_speak_decision",
+        "execution": "async"
+      },
+      {
+        "name": "generated",
+        "trigger": "before_ai_generation"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "Nova, a question."
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "error": null
+        }
+      }
+    },
+    {
+      "idle": true
+    }
+  ],
+  "expect": {
+    "hooks": {
+      "decision-observer": [
+        {
+          "speak_decision": {
+            "room_id": "room-1",
+            "channel_id": "agent",
+            "event": {
+              "id": "room-1#0",
+              "content": {
+                "body": "Nova, a question."
+              }
+            },
+            "decision": {
+              "mode": "speak",
+              "reason": "given the floor",
+              "judgments": {},
+              "notes": [],
+              "final": false
+            }
+          }
+        }
+      ],
+      "generated": [
+        {
+          "generation": {
+            "channel_id": "agent",
+            "trigger": "room-1#0"
+          }
+        }
+      ]
+    },
+    "models": {
+      "agent": [
+        {
+          "messages": [
+            {
+              "role": "user",
+              "text": "Nova, a question."
+            }
+          ]
+        }
+      ]
+    },
+    "timeline": {
+      "room-1": [
+        {
+          "content": {
+            "body": "Nova, a question."
+          }
+        },
+        {
+          "content": {
+            "body": "Hi."
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,167 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "tools/a-required-intent-is-listed-in-each-schema-s-required-list",
+  "title": "With call intents required, each tool schema a request declares lists _roomkit_intent in its required list after its own, one with no list gets one, and a schema whose required is no list is shown as it is",
+  "rules": [
+    "§6.4"
+  ],
+  "requirements": [
+    "RK-6.4-104"
+  ],
+  "notes": "Python: providers/ai/tool_intent.py presented_tools, _presented, _takes_intent; tests/test_channels/test_tool_call_intents.py. roomkit-rs: roomkit-core rules/tool_intent.rs presented_parameters_with_requirement.",
+  "setup": {
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport"
+      },
+      {
+        "id": "agent",
+        "type": "ai",
+        "tool_call_intents": true,
+        "tool_call_intents_required": true,
+        "tools": [
+          {
+            "name": "shell",
+            "description": "Run a command.",
+            "parameters": {
+              "type": "object",
+              "required": [
+                "command"
+              ],
+              "properties": {
+                "command": {
+                  "type": "string"
+                }
+              }
+            },
+            "returns": "a.txt"
+          },
+          {
+            "name": "bare",
+            "description": "Do it.",
+            "parameters": {
+              "type": "object",
+              "properties": {}
+            },
+            "returns": "done"
+          },
+          {
+            "name": "odd",
+            "description": "A schema whose required is a text.",
+            "parameters": {
+              "type": "object",
+              "required": "command",
+              "properties": {
+                "command": {
+                  "type": "string"
+                }
+              }
+            },
+            "returns": "done"
+          }
+        ],
+        "model": {
+          "rounds": [
+            {
+              "text": "Done."
+            }
+          ]
+        }
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "agent",
+            "category": "intelligence"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "go"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "error": null
+        }
+      }
+    },
+    {
+      "idle": true
+    }
+  ],
+  "expect": {
+    "models": {
+      "agent": [
+        {
+          "tool_definitions": {
+            "shell": {
+              "parameters": {
+                "type": "object",
+                "required": {
+                  "$unordered": [
+                    "command",
+                    "_roomkit_intent"
+                  ]
+                },
+                "properties": {
+                  "command": {
+                    "type": "string"
+                  },
+                  "_roomkit_intent": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "bare": {
+              "parameters": {
+                "required": [
+                  "_roomkit_intent"
+                ],
+                "properties": {
+                  "_roomkit_intent": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "odd": {
+              "parameters": {
+                "type": "object",
+                "required": "command",
+                "properties": {
+                  "command": {
+                    "type": "string"
+                  },
+                  "_roomkit_intent": {
+                    "$absent": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

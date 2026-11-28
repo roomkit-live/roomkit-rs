@@ -1,0 +1,103 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "streaming/a-channel-that-keeps-the-default-reader-is-delivered-the-whole-text-once",
+  "title": "A streaming channel that keeps the default deliver_stream accumulates the text it is handed and is delivered it as one complete event through deliver",
+  "rules": [
+    "§6.1"
+  ],
+  "requirements": [
+    "RK-6.1-006"
+  ],
+  "notes": "Python: channels/base.py Channel.deliver_stream; roomkit-rs: roomkit channel.rs Channel::deliver_stream, the trait's default.",
+  "setup": {
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport",
+        "streams": true,
+        "default_deliver_stream": true
+      },
+      {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "deltas": [
+                "Hel",
+                "lo."
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "agent",
+            "category": "intelligence"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "Hi."
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "error": null
+        }
+      }
+    },
+    {
+      "idle": true
+    }
+  ],
+  "expect": {
+    "deliveries": {
+      "room-1": {
+        "ws": [
+          {
+            "type": "message",
+            "content": {
+              "type": "text",
+              "body": "Hello."
+            }
+          }
+        ]
+      }
+    },
+    "timeline": {
+      "room-1": [
+        {
+          "content": {
+            "body": "Hi."
+          }
+        },
+        {
+          "content": {
+            "body": "Hello."
+          }
+        }
+      ]
+    }
+  }
+}
