@@ -81,7 +81,10 @@ pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
         "store.list_verifications_in_force" => &[],
         "store.create_verification_request" | "store.update_verification_request" => &["request"],
         "store.get_verification_request" => &["request_id"],
-        _ => return None,
+        _ => {
+            return crate::store_rooms::arguments(call)
+                .or_else(|| crate::store_records::arguments(call));
+        }
     })
 }
 
@@ -111,7 +114,7 @@ const EVENT_FILTER: &[&str] = &[
 
 /// A record from `template`, the members `stamped` names written now when
 /// it leaves them out.
-fn stamped<T: serde::de::DeserializeOwned>(
+pub(crate) fn stamped<T: serde::de::DeserializeOwned>(
     template: &Value,
     stamped: &[&str],
     what: &str,
@@ -129,7 +132,10 @@ fn stamped<T: serde::de::DeserializeOwned>(
 /// `created_at` when it names none: a write of a partial room updates that
 /// room, it creates none, and a room is its id and its `created_at` (RFC
 /// §13.5).
-async fn kept_created_at(store: &crate::Store, template: &Value) -> Result<Value, Unreadable> {
+pub(crate) async fn kept_created_at(
+    store: &crate::Store,
+    template: &Value,
+) -> Result<Value, Unreadable> {
     let mut template = template.clone();
     if template.get("created_at").is_some() {
         return Ok(template);
@@ -159,8 +165,8 @@ fn event(spec: &Value, key: &str) -> Result<RoomEvent, Unreadable> {
 }
 
 /// The `event_filter` argument, Python's `EventFilter`.
-fn event_filter(spec: &Value) -> Result<Option<EventFilter>, Unreadable> {
-    let Some(filter) = spec.get("event_filter") else {
+pub(crate) fn event_filter(spec: &Value) -> Result<Option<EventFilter>, Unreadable> {
+    let Some(filter) = spec.get("event_filter").filter(|filter| !filter.is_null()) else {
         return Ok(None);
     };
     let unknown: Vec<&String> = filter
@@ -190,11 +196,16 @@ fn event_filter(spec: &Value) -> Result<Option<EventFilter>, Unreadable> {
 }
 
 /// A store call's outcome, its error named as a kit call's is, but a
-/// task's and a participant's, which no kit call meets.
-fn stored<T: serde::Serialize>(run: &Run, call: &str, outcome: Result<T, StoreError>) -> Called {
+/// task's, a participant's and an event's index, which no kit call meets.
+pub(crate) fn stored<T: serde::Serialize>(
+    run: &Run,
+    call: &str,
+    outcome: Result<T, StoreError>,
+) -> Called {
     match outcome {
         Err(StoreError::TaskNotFound(_)) => Err(named("task_not_found")),
         Err(StoreError::ParticipantExists { .. }) => Err(named("participant_exists")),
+        Err(StoreError::EventIndexTaken { .. }) => Err(named("event_index_taken")),
         Err(StoreError::ParticipantNotFound { .. }) => Err(named("participant_not_found")),
         outcome => finish(run, call, outcome.map_err(RoomKitError::from), dump),
     }
@@ -567,8 +578,20 @@ async fn identities(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Called, 
                 .await;
             stored(run, name, outcome)
         }
-        other => return Err(format!("no call {other}")),
+        other => return others(run, other, spec).await,
     })
+}
+
+/// The store's room operations and its reads and writes of a room's
+/// records that `store_rooms` and `store_records` make.
+async fn others(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Called, Unreadable> {
+    if let Some(called) = crate::store_rooms::call(run, name, spec).await {
+        return called;
+    }
+    match crate::store_records::call(run, name, spec).await {
+        Some(called) => called,
+        None => Err(format!("no call {name}")),
+    }
 }
 
 /// The kit's calls on a room's read markers, for the organization the call

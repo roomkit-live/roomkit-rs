@@ -69,6 +69,8 @@ mod skills;
 mod speaking;
 mod store_calls;
 mod store_faults;
+mod store_records;
+mod store_rooms;
 mod strategy_calls;
 mod subscription_calls;
 mod task_calls;
@@ -179,6 +181,12 @@ pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[
     (
         "discussion/a-result-s-post-that-comes-second-is-a-replay-and-stores-nothing",
         "RFC §19.7.5 rule 19 (RK-19.7.5-186): the kit posts a task's result at once, outside the \
+         discussion, never as a post entry of the speak queue kept in the room's \
+         private state until committed and keyed by the result's id (RMK-2193)",
+    ),
+    (
+        "discussion/a-result-to-post-is-kept-with-the-room-s-private-state-until-it-is-committed",
+        "RFC §19.7.5 rule 19 (RK-19.7.5-144): the kit posts a task's result at once, outside the \
          discussion, never as a post entry of the speak queue kept in the room's \
          private state until committed and keyed by the result's id (RMK-2193)",
     ),

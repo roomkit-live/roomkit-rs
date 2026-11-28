@@ -130,6 +130,7 @@ pub(crate) fn error_of(error: &RoomKitError) -> Option<Value> {
             named("invalid_argument")
         }
         RoomKitError::RoomNotFound(_) => named("room_not_found"),
+        RoomKitError::RoomAlreadyExists(_) => named("room_exists"),
         RoomKitError::ChannelNotRegistered { .. } => named("channel_not_registered"),
         RoomKitError::ChannelNotFound { .. } => named("channel_not_bound"),
         RoomKitError::ParticipantNotFound { .. } => named("participant_not_found"),
