@@ -794,3 +794,43 @@ async fn a_supervisor_without_a_model_lets_its_chain_run_unsupervised() {
         "{second}"
     );
 }
+
+// Python: orchestration/strategies/supervisor/core.py Supervisor._register_agents
+// (no Python test of it alone: tests/orchestration/test_supervisor_text_background.py
+// test_a_supervisor_without_a_model_lets_its_chain_run_unsupervised runs it)
+// In voice auto-delegation the supervisor is not in the room, and the
+// supervised flow delegates to it: it is registered beside the workers,
+// unless it has no model to answer with.
+#[tokio::test]
+async fn a_supervisor_out_of_the_room_is_registered_only_with_a_model() {
+    for config_only in [false, true] {
+        let identity = AgentOptions {
+            role: Some("Coordinator".to_owned()),
+            ..AgentOptions::default()
+        };
+        let boss = if config_only {
+            StrategyAgent::channel(Agent::config_only(id("boss"), identity).unwrap())
+        } else {
+            StrategyAgent::channel(agent("boss", "Coordinator", model(vec![says("ok")])))
+        };
+        let options = SupervisorOptions {
+            strategy: Some(WorkerStrategy::Sequential),
+            auto_delegate: true,
+            async_delivery: true,
+            ..SupervisorOptions::default()
+        };
+        let worker = StrategyAgent::channel(agent("w1", "Analyst", model(vec![says("Numbers.")])));
+        let team = Supervisor::new(boss, vec![worker], options).unwrap();
+        let kit = kit_with_room(Some(Arc::new(team))).await;
+        let registered = (
+            kit.get_channel(&id("boss")).is_some(),
+            kit.get_channel(&id("w1")).is_some(),
+        );
+        kit.close().await.unwrap();
+        assert_eq!(
+            registered,
+            (!config_only, true),
+            "config_only: {config_only}"
+        );
+    }
+}

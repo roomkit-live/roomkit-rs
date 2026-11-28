@@ -833,7 +833,9 @@ pub(crate) fn register_channel_with_skills(
         return Ok(Err(named("invalid_argument")));
     }
     let declared = Declared::of(channel);
-    if channel.get("agent").is_some() {
+    // An Agent the kit holds live: one held by its declaration is no Agent
+    // (README, `agent.build_identity_block`).
+    if channel.get("agent").is_some() && !declared.0 {
         crate::run::lock(&run.identity_blocks)
             .insert(id.to_string(), agents::identity_block(channel)?);
     }
