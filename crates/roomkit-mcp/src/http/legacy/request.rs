@@ -4,11 +4,11 @@
 //! marker therefore connects the caller's lifetime to the writer's rendezvous;
 //! it never changes JSON parameters or the SDK's result parsing.
 //!
-//! A caller that gives up on its request once it went to rmcp, at its
-//! deadline or dropped, tells the server with `notifications/cancelled`, as
-//! Python's SDK does for a request whose write began. The writer posts the
-//! cancellation before what it has queued, and skips the request when it had
-//! not taken it.
+//! A caller that gives up on its request once rmcp holds it, at its deadline
+//! or dropped, tells the server with `notifications/cancelled`, whether the
+//! request was posted or not, as Python's SDK does for a request whose write
+//! began. The cancellation joins the writer's queue behind what waits there
+//! already; the writer skips the request when it had not taken it.
 
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
@@ -18,8 +18,10 @@ use rmcp::model::{
     ClientRequest, GetExtensions, RequestId, ServerResult,
 };
 use rmcp::service::{Peer, PeerRequestOptions, RoleClient, ServiceError};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 use tokio::time::Instant;
+
+use super::writer::Queue;
 
 /// How long a cancellation waits for the writer at most, as Python's SDK
 /// bounds that courtesy write: past it, the cancellation is not sent.
@@ -52,6 +54,7 @@ impl Cancellation {
     pub(super) fn notification(self) -> Option<ClientJsonRpcMessage> {
         if self.since.elapsed() > CANCELLATION_WAIT {
             tracing::warn!(
+                target: "roomkit::mcp",
                 id = %self.id,
                 "MCP cancellation not sent: the legacy writer stayed busy"
             );
@@ -64,20 +67,10 @@ impl Cancellation {
     }
 }
 
-/// Where a connection's callers send the cancellations its writer posts.
-#[derive(Clone)]
-pub(crate) struct Cancellations(mpsc::UnboundedSender<Cancellation>);
-
-/// A connection's cancellations: the callers' end and the writer's.
-pub(super) fn cancellations() -> (Cancellations, mpsc::UnboundedReceiver<Cancellation>) {
-    let (sender, receiver) = mpsc::unbounded_channel();
-    (Cancellations(sender), receiver)
-}
-
 struct Caller {
     marker: Marker,
     peer: Peer<RoleClient>,
-    cancellations: Cancellations,
+    writer: Queue,
     /// The request while its caller waits for the answer.
     id: Option<RequestId>,
     runtime: Option<tokio::runtime::Handle>,
@@ -92,13 +85,13 @@ fn lock(marker: &Marker) -> MutexGuard<'_, Phase> {
 
 pub(crate) async fn send(
     peer: &Peer<RoleClient>,
-    cancellations: &Cancellations,
+    writer: &Queue,
     mut request: ClientRequest,
 ) -> Result<ServerResult, ServiceError> {
     let mut caller = Caller {
         marker: Marker::default(),
         peer: peer.clone(),
-        cancellations: cancellations.clone(),
+        writer: writer.clone(),
         id: None,
         runtime: tokio::runtime::Handle::try_current().ok(),
     };
@@ -122,8 +115,7 @@ impl Drop for Caller {
         let Some(id) = self.id.take() else {
             return;
         };
-        // A writer that ended has no server to tell.
-        let _queued = self.cancellations.0.send(Cancellation {
+        self.writer.cancel(Cancellation {
             id: id.clone(),
             since: Instant::now(),
         });

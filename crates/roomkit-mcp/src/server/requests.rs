@@ -11,9 +11,8 @@ impl McpServer {
         request: ClientRequest,
     ) -> Result<ServerResult, ServiceError> {
         #[cfg(feature = "http")]
-        if let Some(cancellations) = &self.inner.legacy {
-            return crate::http::legacy::request::send(&self.inner.peer, cancellations, request)
-                .await;
+        if let Some(writer) = &self.inner.legacy {
+            return crate::http::legacy::request::send(&self.inner.peer, writer, request).await;
         }
         self.inner.peer.send_request(request).await
     }
@@ -23,11 +22,10 @@ impl McpServer {
         params: CallToolRequestParams,
     ) -> Result<CallToolResult, ServiceError> {
         #[cfg(feature = "http")]
-        if let Some(cancellations) = &self.inner.legacy {
+        if let Some(writer) = &self.inner.legacy {
             let request = ClientRequest::CallToolRequest(rmcp::model::CallToolRequest::new(params));
             let result =
-                crate::http::legacy::request::send(&self.inner.peer, cancellations, request)
-                    .await?;
+                crate::http::legacy::request::send(&self.inner.peer, writer, request).await?;
             return if let ServerResult::CallToolResult(result) = result {
                 Ok(result)
             } else {

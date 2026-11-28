@@ -59,10 +59,10 @@ pub(crate) struct McpServer {
 
 struct Inner {
     program: String,
-    /// Where a legacy SSE connection's callers send their cancellations;
-    /// `None` on another transport.
+    /// A legacy SSE connection's writer queue, which its callers'
+    /// cancellations join; `None` on another transport.
     #[cfg(feature = "http")]
-    legacy: Option<crate::http::legacy::request::Cancellations>,
+    legacy: Option<crate::http::legacy::Queue>,
     peer: Peer<RoleClient>,
     tools: Listed,
     capture: Capture,
@@ -160,7 +160,7 @@ impl McpServer {
         tools: Listed,
         capture: Capture,
         finished: tokio::sync::oneshot::Receiver<()>,
-        legacy: Option<crate::http::legacy::request::Cancellations>,
+        legacy: Option<crate::http::legacy::Queue>,
     ) -> Self {
         let instructions = service
             .peer_info()

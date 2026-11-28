@@ -5,6 +5,8 @@ mod endpoint;
 pub(crate) mod request;
 mod writer;
 
+pub(crate) use writer::Queue;
+
 use std::sync::Arc;
 
 use futures_util::StreamExt;
@@ -38,13 +40,13 @@ pub(super) async fn connect(
     let (client, finished, failure) = Client::new(capture.clone())?;
     let interrupted = Arc::new(Notify::new());
     let writer_stop = Arc::clone(&interrupted);
-    let (cancellations, given_up) = request::cancellations();
+    let (queue, queued) = Queue::new();
+    let writer = WriterParts {
+        interrupted: writer_stop,
+        queue: (queue.clone(), queued),
+    };
     let connected = {
         let connecting = async move {
-            let writer = WriterParts {
-                interrupted: writer_stop,
-                given_up,
-            };
             let transport = Legacy::open(&url, headers, client, failure.clone(), writer)
                 .await
                 .map_err(|_| failure.error("MCP legacy transport failed"))?;
@@ -79,7 +81,7 @@ pub(super) async fn connect(
             tools,
             capture,
             finished,
-            Some(cancellations),
+            Some(queue),
         )),
         Err(error) => {
             let _finished = finished.await;
@@ -94,11 +96,10 @@ pub(super) struct Legacy {
     failure: Failure,
 }
 
-/// What the writer is stopped by and what it takes its callers'
-/// cancellations from.
+/// What the writer is stopped by and the queue it takes its messages from.
 pub(super) struct WriterParts {
     interrupted: Arc<Notify>,
-    given_up: tokio::sync::mpsc::UnboundedReceiver<request::Cancellation>,
+    queue: (Queue, tokio::sync::mpsc::UnboundedReceiver<writer::Queued>),
 }
 
 impl Legacy {
@@ -122,7 +123,7 @@ impl Legacy {
                 headers,
                 failure.clone(),
                 writer.interrupted,
-                writer.given_up,
+                writer.queue,
             ),
             failure,
         })

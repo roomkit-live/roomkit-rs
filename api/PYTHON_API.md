@@ -489,9 +489,10 @@ than five seconds. Legacy SSE uses owned Hyper/rustls I/O for those deadlines
 (approved in HITL 057d2d9a); Streamable HTTP retains its existing client.
 As on Python's SDK 2.3 (RMK-2203), the GET's `Content-Type` is read as a media
 type, an SSE event is bounded at 1 MiB, past which the connection ends, and a
-request given up once it went out has the writer post `notifications/cancelled`
-(reason `caller cancelled`) before what it has queued, unless the writer stays
-busy past five seconds. Python's `DeprecationWarning` for this transport is a
+request given up once rmcp holds it, posted or not, has the writer post
+`notifications/cancelled` (reason `caller cancelled`): the cancellation joins
+the writer's queue behind what waits there already, and is not sent once it
+waited past five seconds. Python's `DeprecationWarning` for this transport is a
 `tracing::warn!` (target `roomkit::mcp`) with the same text, at each
 construction on `sse` (HITL 5fd1217f).
 

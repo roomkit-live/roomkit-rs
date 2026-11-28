@@ -221,6 +221,60 @@ fn a_queued_future_can_be_dropped_outside_its_runtime() {
     });
 }
 
+// Python's order on the MCP SDK 2.3: its zero-buffer stream serves the
+// writes that wait in the order they came, a courtesy cancellation behind
+// the requests already waiting.
+#[tokio::test]
+async fn a_cancellation_waits_behind_the_requests_queued_before_it() {
+    let peer = Peer::start(Mode::HeldPost).await;
+    let provider = peer.provider(None, Duration::from_secs(3));
+    provider.connect().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(1), peer.shared.post_held.notified())
+        .await
+        .unwrap();
+    let mut first = Box::pin(invoke(
+        &provider,
+        Kind::Host,
+        "abandoned",
+        Duration::from_secs(30),
+    ));
+    let mut second = Box::pin(invoke(
+        &provider,
+        Kind::Host,
+        "kept",
+        Duration::from_secs(30),
+    ));
+    assert!(futures_util::poll!(&mut first).is_pending());
+    assert!(futures_util::poll!(&mut second).is_pending());
+    // rmcp hands both to the writer, which still holds the initialized POST.
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+    drop(first);
+    peer.shared.release_post.notify_one();
+    assert_eq!(second.await.unwrap(), Kind::Host.result());
+    provider.close().await;
+    peer.closed().await;
+    let seen = peer.shared.seen.lock().unwrap();
+    assert_eq!(
+        methods(&seen.messages),
+        [
+            "initialize",
+            "notifications/initialized",
+            "host/read",
+            "notifications/cancelled"
+        ]
+    );
+    assert_eq!(
+        seen.messages[2].pointer("/params/name"),
+        Some(&json!("kept"))
+    );
+    assert_ne!(
+        seen.messages[3].pointer("/params/requestId"),
+        seen.messages[2].get("id")
+    );
+}
+
 // Python: test_mcp_legacy_write_deadline.py::
 // test_concurrent_callers_wait_before_http_pool_acquisition.
 #[tokio::test]
