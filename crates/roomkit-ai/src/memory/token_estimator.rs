@@ -82,7 +82,9 @@ fn part_tokens(part: &AiContentPart) -> usize {
 /// transport sends, else a media as its label and a composite as its
 /// parts, never a `data:` URI or a reference, else the content as
 /// Python's `str()` writes it (a location, a tool call), which still costs
-/// tokens and belongs in a summary. Python's `extract_event_text`.
+/// tokens. A summary reads every content but a tool call's row by its text
+/// form instead, and a tool call's row by this rendering. Python's
+/// `extract_event_text`.
 pub fn extract_event_text(event: &RoomEvent) -> String {
     content_text(&event.content)
 }

@@ -6,9 +6,10 @@
 use std::collections::{BTreeSet, HashMap};
 
 use roomkit::model::{
-    ChannelId, ChannelType, EventId, EventType, Metadata, RoomContext, RoomEvent,
+    ChannelId, ChannelType, EventContent, EventId, EventType, Metadata, RoomContext, RoomEvent,
 };
 use roomkit_core::rules::discussion::people::labelled;
+use roomkit_core::rules::transcoding::text_of;
 use roomkit_core::rules::transcript::{
     RUNTIME_RECORD, SUMMARY_HEADER, fence, people_count, quoted, turn_labels, turn_sources,
     without_mark_copies,
@@ -179,7 +180,7 @@ impl SummaryLines<'_> {
     /// `event`'s line, after `label` when it has one and is not the
     /// agent's own.
     fn line(&self, event: &RoomEvent, label: Option<String>) -> String {
-        let mut text = extract_event_text(event);
+        let mut text = summary_text(event);
         // A copy of a runtime mark the summarizer could carry into the
         // summary is replaced at the source; the runtime's own records keep
         // theirs.
@@ -310,12 +311,96 @@ pub(super) fn unavailable(count: usize) -> String {
 /// What the summary reads when the summarizer answered nothing.
 pub(super) const SUMMARY_FAILED: &str = "[Summary generation failed]";
 
+/// What a summarizer reads of `event` (RFC §6.6): its content's text form,
+/// a location and a template included, a composite's parts in order; a tool
+/// call's row keeps the whole rendering the memory layer gives it, its
+/// arguments and result, so the summary keeps what the call did. Python's
+/// `summary_text`.
+fn summary_text(event: &RoomEvent) -> String {
+    if matches!(event.content, EventContent::ToolCall(_)) {
+        extract_event_text(event)
+    } else {
+        text_of(&event.content)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use roomkit::model::ParticipantId;
+    use roomkit::model::{
+        CompositeContent, EventContent, Latitude, LocationContent, Longitude, ParticipantId,
+        RichContent, RoomEvent, TemplateContent, TextContent, ToolCallContent,
+    };
+    use serde_json::Value;
 
     use super::SummaryLines;
     use crate::memory::testing::{context, event};
+
+    // Python: tests/test_summarizing_memory.py::TestTier2Summarization::test_a_summary_reads_each_content_by_its_text_form_a_tool_call_whole
+    #[test]
+    fn a_summary_reads_each_content_by_its_text_form_a_tool_call_whole() {
+        let context = context();
+        let with = |content: EventContent, id: &str| RoomEvent {
+            content,
+            ..event("", id)
+        };
+        let at = |latitude: f64, longitude: f64| {
+            LocationContent::new(
+                Latitude::new(latitude).unwrap(),
+                Longitude::new(longitude).unwrap(),
+            )
+        };
+        let office = LocationContent {
+            label: Some("Office".to_owned()),
+            ..at(45.5, -73.6)
+        };
+        let welcome = TemplateContent {
+            body: Some("Welcome aboard".to_owned()),
+            ..TemplateContent::new("welcome")
+        };
+        let meet = CompositeContent::new(vec![
+            EventContent::Text(TextContent::new("Meet")),
+            EventContent::Location(at(45.0, -73.6)),
+        ])
+        .unwrap();
+        let rich = RichContent {
+            plain_text: Some("Bold news".to_owned()),
+            ..RichContent::new("**Bold** news")
+        };
+        let call = ToolCallContent {
+            result: Value::from("order 42 shipped"),
+            ..ToolCallContent::new("lookup", "c1")
+        };
+        let lines = SummaryLines {
+            context: &context,
+            current: None,
+            channel_id: None,
+            kept: Vec::new(),
+        };
+        let read = lines.lines(&[
+            with(EventContent::Location(office), "e-loc"),
+            with(EventContent::Template(welcome), "e-tpl"),
+            with(
+                EventContent::Template(TemplateContent::new("reminder")),
+                "e-tpl2",
+            ),
+            with(EventContent::Composite(meet), "e-comp"),
+            with(EventContent::Rich(rich), "e-rich"),
+            with(EventContent::ToolCall(call), "e-tool"),
+        ]);
+        assert_eq!(
+            read[0],
+            "[user]: \u{201c}[Location: Office (45.5, -73.6)]\u{201d}"
+        );
+        assert_eq!(read[1], "[user]: \u{201c}Welcome aboard\u{201d}");
+        assert_eq!(read[2], "[user]: \u{201c}[Template: reminder]\u{201d}");
+        assert_eq!(
+            read[3],
+            "[user]: \u{201c}Meet [Location: (45.0, -73.6)]\u{201d}"
+        );
+        assert_eq!(read[4], "[user]: \u{201c}Bold news\u{201d}");
+        assert!(read[5].contains("tool_name='lookup'"), "{read:?}");
+        assert!(read[5].contains("order 42 shipped"), "{read:?}");
+    }
 
     // Python: tests/test_people_taking_part.py::TestEveryReaderCountsSources::test_two_senders_with_no_name_on_one_channel_are_labelled
     #[test]

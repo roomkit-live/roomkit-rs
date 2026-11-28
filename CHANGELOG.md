@@ -271,6 +271,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A memory's summary reads every content by its text form (RFC §6.6,
+  RMK-2241), as Python's now does: the summarizer read a location as
+  Python's `str()` of it (`type='location' latitude=45.5 …`), a template
+  without a body likewise, and a rich text as its markup; it now reads
+  `[Location: Office (45.5, -73.6)]`, a template's body or `[Template:
+  <id>]`, a rich text's plain text, an edit as `Correction: …` and a
+  delete as `[Message deleted]`, while a tool call's row keeps its
+  arguments and result.
+
 - A background task whose worker answered only blanks no longer wakes the
   notified agent (RFC §23.3 step 8, RMK-2219): it completed with nothing to
   say, which a relayed hand-back read as something to say, so the agent was
