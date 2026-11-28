@@ -193,6 +193,42 @@ mod tests {
         assert!(session(&spec).await.is_err());
     }
 
+    // Python: tests/test_mcp_discovery.py::test_a_tool_the_sdk_cannot_read_leaves_the_others_headers
+    /// A tool annotated with `x-mcp-header` whose input schema the SDK does
+    /// not read (no root `type`) is listed, and the tools beside it on the
+    /// page still mirror their arguments into headers, which the 2026-07-28
+    /// peer checks.
+    #[tokio::test]
+    async fn a_tool_the_sdk_cannot_read_leaves_the_others_headers() {
+        let envelope = json!({"resultType":"complete","ttlMs":0,"cacheScope":"private"});
+        let mut listing = json!({"tools":[
+            {"name":"routed","inputSchema":{"type":"object",
+                "properties":{"region":{"type":"string","x-mcp-header":"Region"}}}},
+            {"name":"odd","inputSchema":{"properties":{"zone":{"type":"string","x-mcp-header":"Zone"}}}},
+        ]});
+        let mut called = json!({"content":[{"type":"text","text":"eu"}],"isError":false});
+        for result in [&mut listing, &mut called] {
+            result
+                .as_object_mut()
+                .unwrap()
+                .extend(envelope.as_object().unwrap().clone());
+        }
+        let spec = json!({
+            "peer":{"era":"2026-07-28","replies":[
+                {"method":"tools/list","result":listing},
+                {"method":"tools/call","params":{"name":"routed","arguments":{"region":"eu"}},
+                    "result":called},
+            ]},
+            "operations":[{"method":"connect"},{"method":"tool_names"},
+                {"method":"call_tool","name":"routed","arguments":{"region":"eu"}},{"method":"close"}],
+        });
+        let observed = session(&spec).await.unwrap();
+        assert_eq!(
+            observed["results"],
+            json!([{"result":null},{"result":["routed","odd"]},{"result":"eu"},{"result":null}])
+        );
+    }
+
     #[tokio::test]
     async fn a_snapshot_mutation_cannot_create_a_missing_parent() {
         for path in [json!(["absent", "child"]), json!(["name", "child"])] {

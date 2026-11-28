@@ -41,6 +41,10 @@ fn from_command_options_defaults_as_python() {
     assert!(defaults.label.is_none());
     // roomkit.tools.MCPToolProvider.from_command(tool_filter) = None
     assert!(defaults.tool_filter.is_none());
+    // roomkit.tools.MCPToolProvider.from_command(protocol) = 'auto'
+    assert_eq!(defaults.protocol, "auto");
+    // roomkit.tools.MCPToolProvider.from_command(propagate_trace_context) = False
+    assert!(!defaults.propagate_trace_context);
 }
 
 #[cfg(feature = "http")]
@@ -59,6 +63,10 @@ fn from_url_options_defaults_as_python() {
     assert!(defaults.label.is_none());
     // roomkit.tools.MCPToolProvider.from_url(tool_filter) = None
     assert!(defaults.tool_filter.is_none());
+    // roomkit.tools.MCPToolProvider.from_url(protocol) = 'auto'
+    assert_eq!(defaults.protocol, "auto");
+    // roomkit.tools.MCPToolProvider.from_url(propagate_trace_context) = False
+    assert!(!defaults.propagate_trace_context);
 }
 
 #[test]
@@ -86,6 +94,10 @@ fn common_constructor_options_default_as_python() {
     assert!(defaults.label.is_none());
     // roomkit.tools.MCPToolProvider.__init__(connect_timeout) = None
     assert!(defaults.connect_timeout.is_none());
+    // roomkit.tools.MCPToolProvider.__init__(protocol) = 'auto'
+    assert_eq!(defaults.protocol, "auto");
+    // roomkit.tools.MCPToolProvider.__init__(propagate_trace_context) = False
+    assert!(!defaults.propagate_trace_context);
 }
 
 #[test]

@@ -25,6 +25,7 @@ use tokio::sync::RwLock;
 use crate::command::McpCommand;
 use crate::error::McpError;
 use crate::listing::ToolFilter;
+use crate::protocol::Protocol;
 use crate::results;
 use crate::server::{McpServer, check_label};
 
@@ -106,6 +107,7 @@ struct Inner {
     label: Option<String>,
     server: RwLock<Option<McpServer>>,
     discover: bool,
+    protocol: Protocol,
 }
 
 impl McpToolProvider {
@@ -125,8 +127,9 @@ impl McpToolProvider {
     /// # Errors
     ///
     /// Returns [`McpError::Configuration`] for a label that cannot name the
-    /// server in an alias, and [`McpError::Command`] for an empty command.
-    /// Other process options are checked when connecting, as in Python.
+    /// server in an alias or a `protocol` neither `"auto"` nor `"legacy"`,
+    /// and [`McpError::Command`] for an empty command. Other process options
+    /// are checked when connecting, as in Python.
     pub fn from_command(
         command: impl Into<OsString>,
         options: FromCommandOptions,
@@ -143,6 +146,8 @@ impl McpToolProvider {
                 label: options.label,
                 connect_timeout: Some(options.connect_timeout),
                 discover: options.discover,
+                protocol: options.protocol,
+                propagate_trace_context: options.propagate_trace_context,
                 ..Default::default()
             },
         )
@@ -151,7 +156,7 @@ impl McpToolProvider {
     /// The server at `url`, over Streamable HTTP by default or legacy SSE:
     /// Python's `MCPToolProvider.from_url`.
     ///
-    /// Its handshake and tool discovery are bounded by `connect_timeout`
+    /// Its negotiation and tool discovery are bounded by `connect_timeout`
     /// (60 seconds), as a command's: past them, [`connect`](Self::connect)
     /// fails after HTTP workers drain. Streamable HTTP deletes its negotiated
     /// session; legacy SSE closes its reader and writer. Legacy SSE is
@@ -161,9 +166,9 @@ impl McpToolProvider {
     /// # Errors
     ///
     /// Returns [`McpError::Configuration`] for a label that cannot name the
-    /// server in an alias, a URL that is no HTTP(S) endpoint or carries
-    /// credentials or a fragment, and a header that is invalid or the
-    /// transport's own.
+    /// server in an alias, a `protocol` neither `"auto"` nor `"legacy"`, a
+    /// URL that is no HTTP(S) endpoint or carries credentials or a fragment,
+    /// and a header that is invalid or the transport's own.
     #[cfg(feature = "http")]
     pub fn from_url(url: &str, options: FromUrlOptions) -> Result<Self, McpError> {
         Self::new(
@@ -175,6 +180,8 @@ impl McpToolProvider {
                 label: options.label,
                 connect_timeout: Some(options.connect_timeout),
                 discover: options.discover,
+                protocol: options.protocol,
+                propagate_trace_context: options.propagate_trace_context,
                 ..Default::default()
             },
         )
@@ -185,11 +192,12 @@ impl McpToolProvider {
     ///
     /// # Errors
     /// Returns the existing configuration/command refusal for unsupported or
-    /// crossed transport options, a missing endpoint/command, or invalid HTTP
-    /// settings. HTTP transports require the `http` feature; stdio does not.
+    /// crossed transport options, a `protocol` neither `"auto"` nor
+    /// `"legacy"`, a missing endpoint/command, or invalid HTTP settings. HTTP
+    /// transports require the `http` feature; stdio does not.
     pub fn new(url: Option<&str>, options: McpToolProviderOptions) -> Result<Self, McpError> {
         check_provider_label(options.label.as_deref())?;
-        let target = construction::target(url, &options)?;
+        let (target, protocol) = construction::target(url, &options)?;
         Ok(Self {
             inner: Arc::new(Inner {
                 target,
@@ -197,17 +205,19 @@ impl McpToolProvider {
                 label: options.label,
                 server: RwLock::new(None),
                 discover: options.discover,
+                protocol,
             }),
         })
     }
 
-    /// Connects the server: starts it, shakes hands and lists its tools,
-    /// Python's `__aenter__`. A provider closed connects again.
+    /// Connects the server: starts it, agrees on the MCP revision with it
+    /// (its discovery, or the handshake) and lists its tools, Python's
+    /// `__aenter__`. A provider closed connects again.
     ///
     /// # Errors
     ///
     /// Returns [`McpError::AlreadyConnected`] for a provider connected
-    /// already, and the [`McpError`] the start, the handshake or the
+    /// already, and the [`McpError`] the start, the negotiation or the
     /// listing failed with.
     pub async fn connect(&self) -> Result<(), McpError> {
         self.connect_until(std::future::pending()).await
@@ -242,6 +252,7 @@ impl McpToolProvider {
                     cancelled,
                     self.inner.tool_filter.clone(),
                     self.inner.discover,
+                    self.inner.protocol,
                 ))
                 .await?
             }
@@ -257,6 +268,7 @@ impl McpToolProvider {
                     cancelled,
                     self.inner.tool_filter.clone(),
                     self.inner.discover,
+                    self.inner.protocol,
                 ))
                 .await?
             }
@@ -430,6 +442,7 @@ impl McpToolProvider {
             label,
             server,
             discover,
+            protocol,
         } = inner;
         Self {
             inner: Arc::new(Inner {
@@ -438,6 +451,7 @@ impl McpToolProvider {
                 label,
                 server,
                 discover,
+                protocol,
             }),
         }
     }

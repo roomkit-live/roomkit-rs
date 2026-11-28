@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use super::{McpToolProviderOptions, Target};
 use crate::command::McpCommand;
+use crate::protocol::Protocol;
 use crate::{McpError, McpHeaders};
 
 pub(super) fn command_at_entry(
@@ -20,15 +21,25 @@ pub(super) fn command_at_entry(
     command
 }
 
+/// How the provider reaches its server and agrees on the MCP revision with
+/// it: the transport checked first, the protocol next, then the transport's
+/// own options, in Python's order.
 pub(super) fn target(
     url: Option<&str>,
     options: &McpToolProviderOptions,
-) -> Result<Target, McpError> {
-    match options.transport.as_str() {
-        "stdio" => command(url, options),
-        "streamable_http" | "sse" => http(url, options),
-        _ => Err(invalid("unsupported transport")),
-    }
+) -> Result<(Target, Protocol), McpError> {
+    let stdio = match options.transport.as_str() {
+        "stdio" => true,
+        "streamable_http" | "sse" => false,
+        _ => return Err(invalid("unsupported transport")),
+    };
+    let protocol = Protocol::new(&options.protocol, options.propagate_trace_context)?;
+    let target = if stdio {
+        command(url, options)?
+    } else {
+        http(url, options)?
+    };
+    Ok((target, protocol))
 }
 
 fn command(url: Option<&str>, options: &McpToolProviderOptions) -> Result<Target, McpError> {

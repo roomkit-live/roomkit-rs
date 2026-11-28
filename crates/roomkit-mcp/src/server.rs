@@ -6,9 +6,11 @@ mod requests;
 use std::fmt;
 use std::sync::Arc;
 
-use rmcp::model::{CallToolRequestParams, CallToolResult, ClientConfig};
+use rmcp::ClientCacheConfig;
+use rmcp::model::{
+    CallToolRequestParams, CallToolResult, ClientConfig, MetaObject, RequestMetaObject,
+};
 use rmcp::service::{Peer, RoleClient, RunningService};
-use rmcp::{ClientCacheConfig, ServiceExt};
 use roomkit::model::Metadata;
 use roomkit_ai::AiTool;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -18,6 +20,7 @@ use crate::command::McpCommand;
 use crate::error::{McpError, stderr_ending};
 use crate::listing::{self, Listed, ToolFilter};
 use crate::process::{ServerProcess, Started, Stderr};
+use crate::protocol::Protocol;
 use crate::raw::Capture;
 use crate::texts::bounded_message;
 
@@ -82,14 +85,15 @@ struct Connection {
 }
 
 impl McpServer {
-    /// Starts `command`'s server, runs the MCP handshake and lists its
-    /// tools, within the command's connect bound, unless `cancelled` ends
-    /// first.
+    /// Starts `command`'s server, agrees on the MCP revision with it as
+    /// `protocol` says and lists its tools, within the command's connect
+    /// bound, unless `cancelled` ends first.
     pub(crate) async fn connect(
         command: McpCommand,
         cancelled: impl Future<Output = ()> + Send,
         filter: Option<ToolFilter>,
         discover: bool,
+        protocol: Protocol,
     ) -> Result<Self, McpError> {
         let program = command.program();
         let Started {
@@ -98,13 +102,14 @@ impl McpServer {
             stdout,
             stderr,
         } = ServerProcess::start(&command)?;
-        let capture = Capture::default();
+        let capture = Capture::opening(protocol.propagate_trace_context);
         let connecting = handshake(
             stdout,
             stdin,
             &program,
             filter.as_ref(),
             discover,
+            protocol.probe,
             capture.clone(),
         );
         let connected = tokio::select! {
@@ -276,31 +281,32 @@ async fn failed(error: McpError, process: ServerProcess, stderr: Stderr) -> McpE
     }
 }
 
-/// The MCP handshake over the server's output and input, then the listing
-/// of its tools; the service is ended if the listing fails.
+/// The MCP negotiation over the server's output and input (discovery
+/// first when `probe`, the handshake otherwise), then the listing of its
+/// tools when `discover`; the service is ended if the listing fails.
 async fn handshake<R, W>(
     output: R,
     input: W,
     program: &str,
     filter: Option<&ToolFilter>,
     discover: bool,
+    probe: bool,
     capture: Capture,
 ) -> Result<(RunningService<RoleClient, ClientConfig>, Listed), McpError>
 where
     R: AsyncRead + Send + Unpin + 'static,
     W: AsyncWrite + Send + Unpin + 'static,
 {
-    let transport = crate::raw_stdio::transport(output, input, capture);
-    let service = crate::protocol::client()
-        .serve(transport)
+    let transport = crate::raw_stdio::transport(output, input, capture.clone());
+    let service = crate::protocol::negotiate(transport, probe)
         .await
         .map_err(|error| McpError::Handshake {
             program: program.to_owned(),
-            message: bounded_message(&error.to_string()),
+            message: bounded_message(&error),
         })?;
     if !service
         .peer_info()
-        .is_some_and(|info| crate::protocol::supported(&info.protocol_version))
+        .is_some_and(|info| crate::protocol::supported(&info.protocol_version, capture.modern()))
     {
         let _ended = service.cancel().await;
         return Err(McpError::Handshake {
@@ -318,7 +324,7 @@ where
     if !discover {
         return Ok((service, Listed::default()));
     }
-    match listing::tools(service.peer(), program, filter).await {
+    match listing::tools(service.peer(), &capture, program, filter).await {
         Ok(tools) => Ok((service, tools)),
         Err(error) => {
             let _ended = service.cancel().await;
@@ -348,7 +354,13 @@ impl McpServer {
         name: &str,
         arguments: Metadata,
     ) -> Result<CallToolResult, McpError> {
-        let params = CallToolRequestParams::new(name.to_owned()).with_arguments(arguments);
+        let mut params = CallToolRequestParams::new(name.to_owned()).with_arguments(arguments);
+        if self.inner.capture.propagates() {
+            let trace = crate::trace::host_context();
+            if !trace.is_empty() {
+                params.meta = Some(RequestMetaObject(MetaObject(trace)));
+            }
+        }
         self.tool_request(params)
             .await
             .map_err(|error| McpError::Call {
@@ -396,7 +408,9 @@ pub(crate) fn check_label(label: &str) -> Result<(), McpError> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     use pretty_assertions::assert_eq;
     use serde_json::{Value, json};
@@ -407,35 +421,115 @@ mod tests {
     /// The messages a server was sent, in order.
     type Received = Arc<Mutex<Vec<Value>>>;
 
-    /// A server on `stream` whose every listing says it stays fresh for a
-    /// day (`ttlMs`), keeping every message it is sent in `received`.
-    async fn fresh_for_a_day(stream: DuplexStream, received: Received) {
+    /// How a scripted server answers a method.
+    #[derive(Clone)]
+    enum Answer {
+        /// With this result.
+        Result(Value),
+        /// Never.
+        Silent,
+        /// With this result, once the next request is answered.
+        Late(Value),
+    }
+
+    /// A server on `stream` answering each method as `plan` says, a method
+    /// it does not plan with a JSON-RPC error, and keeping every message it
+    /// is sent in `received`: Python's scripted server of
+    /// `tests/test_mcp_discovery.py`.
+    async fn scripted(
+        stream: DuplexStream,
+        plan: HashMap<&'static str, Answer>,
+        received: Received,
+    ) {
         let (read, mut write) = tokio::io::split(stream);
         let mut lines = BufReader::new(read).lines();
+        let mut held = Vec::new();
         while let Ok(Some(line)) = lines.next_line().await {
             let request: Value = serde_json::from_str(&line).unwrap();
             received.lock().unwrap().push(request.clone());
             let Some(id) = request.get("id").cloned() else {
                 continue;
             };
-            let result = match request["method"].as_str() {
-                Some("initialize") => json!({
-                    "protocolVersion": request["params"]["protocolVersion"],
-                    "capabilities": { "tools": {} },
-                    "serverInfo": { "name": "fresh", "version": "0" },
-                }),
-                Some("tools/list") => json!({
-                    "tools": [{ "name": "echo", "inputSchema": { "type": "object" } }],
-                    "ttlMs": 86_400_000,
-                }),
-                _ => json!({}),
+            let method = request["method"].as_str().unwrap_or_default();
+            let reply = match plan.get(method).cloned() {
+                Some(Answer::Silent) => continue,
+                Some(Answer::Late(result)) => {
+                    held.push(json!({ "jsonrpc": "2.0", "id": id, "result": result }));
+                    continue;
+                }
+                Some(Answer::Result(result)) => {
+                    json!({ "jsonrpc": "2.0", "id": id, "result": result })
+                }
+                None => json!({ "jsonrpc": "2.0", "id": id,
+                    "error": { "code": -32601, "message": "Method not found" } }),
             };
-            let reply = json!({ "jsonrpc": "2.0", "id": id, "result": result });
-            write
-                .write_all(format!("{reply}\n").as_bytes())
-                .await
-                .unwrap();
+            for reply in std::iter::once(reply).chain(held.drain(..)) {
+                write
+                    .write_all(format!("{reply}\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
         }
+    }
+
+    fn handshake_result(name: &str) -> Answer {
+        Answer::Result(json!({
+            "protocolVersion": "2025-11-25",
+            "capabilities": { "tools": {} },
+            "serverInfo": { "name": name, "version": "0" },
+            "instructions": "from the handshake",
+        }))
+    }
+
+    fn discovery_result() -> Value {
+        json!({
+            "supportedVersions": ["2026-07-28"],
+            "capabilities": { "tools": {} },
+            "instructions": "from discovery",
+            "resultType": "complete", "ttlMs": 0, "cacheScope": "private",
+            "_meta": { "io.modelcontextprotocol/serverInfo": { "name": "modern", "version": "2" } },
+        })
+    }
+
+    /// A listing that says it stays fresh for a day (`ttlMs`).
+    fn fresh_listing() -> Answer {
+        Answer::Result(json!({
+            "tools": [{ "name": "echo", "inputSchema": { "type": "object" } }],
+            "ttlMs": 86_400_000,
+        }))
+    }
+
+    /// The methods `received` holds, in order.
+    fn methods(received: &Received) -> Vec<Value> {
+        received
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|message| message["method"].clone())
+            .collect()
+    }
+
+    /// A connection to a scripted server following `plan`, probing its
+    /// discovery when `probe`: the service, its listing, its capture and
+    /// what the server received.
+    async fn connected(
+        plan: HashMap<&'static str, Answer>,
+        probe: bool,
+    ) -> (
+        RunningService<RoleClient, ClientConfig>,
+        Listed,
+        Capture,
+        Received,
+    ) {
+        let (client, server) = tokio::io::duplex(64 * 1024);
+        let received = Received::default();
+        tokio::spawn(scripted(server, plan, Arc::clone(&received)));
+        let (read, write) = tokio::io::split(client);
+        let capture = Capture::default();
+        let (service, tools) = handshake(read, write, "fake", None, true, probe, capture.clone())
+            .await
+            .unwrap();
+        (service, tools, capture, received)
     }
 
     /// The listing keeps nothing in rmcp's response cache, though the server
@@ -444,54 +538,121 @@ mod tests {
     /// server.
     #[tokio::test]
     async fn a_listing_that_says_it_stays_fresh_leaves_nothing_cached() {
-        let (client, server) = tokio::io::duplex(64 * 1024);
-        let received = Received::default();
-        tokio::spawn(fresh_for_a_day(server, Arc::clone(&received)));
-        let (read, write) = tokio::io::split(client);
-        let (service, tools) = handshake(read, write, "fresh", None, true, Capture::default())
-            .await
-            .unwrap();
+        let plan = HashMap::from([
+            ("initialize", handshake_result("fresh")),
+            ("tools/list", fresh_listing()),
+        ]);
+        let (service, tools, _capture, received) = connected(plan, false).await;
         let again = service.peer().list_tools(None).await.unwrap();
         let _ended = service.cancel().await;
-        let listings = received
-            .lock()
-            .unwrap()
+        let listings = methods(&received)
             .iter()
-            .filter(|message| message["method"] == "tools/list")
+            .filter(|method| *method == "tools/list")
             .count();
         assert_eq!((tools.tools.len(), again.tools.len(), listings), (1, 1, 2));
     }
 
-    /// RFC §21.2: the connection opens with MCP's `initialize` handshake at
-    /// protocol 2025-11-25, as Python's SDK opens it, `server/discover`
-    /// never sent: the protocol of the MCP revision of 2026-07-28 is not
-    /// spoken yet.
+    /// RFC §21.2, RK-21.2-056: `protocol="legacy"` opens with MCP's
+    /// `initialize` handshake at 2025-11-25, as Python's SDK opens it, and
+    /// sends no probe even to a server that would answer it; `"auto"`
+    /// probes discovery first, and a server that refuses it is reached by
+    /// the same handshake. Python:
+    /// `tests/test_mcp_discovery.py::test_the_legacy_protocol_goes_straight_to_the_handshake`
+    /// and `test_a_server_that_does_not_discover_is_reached_by_the_handshake[refused]`.
     #[tokio::test]
-    async fn the_connection_opens_with_initialize_at_2025_11_25() {
-        let (client, server) = tokio::io::duplex(64 * 1024);
-        let received = Received::default();
-        tokio::spawn(fresh_for_a_day(server, Arc::clone(&received)));
-        let (read, write) = tokio::io::split(client);
-        let (service, _tools) = handshake(read, write, "fresh", None, true, Capture::default())
-            .await
-            .unwrap();
+    async fn the_handshake_opens_at_2025_11_25_straight_or_after_a_refused_probe() {
+        for probe in [false, true] {
+            let mut plan = HashMap::from([
+                ("initialize", handshake_result("legacy")),
+                ("tools/list", fresh_listing()),
+            ]);
+            if !probe {
+                plan.insert("server/discover", Answer::Result(discovery_result()));
+            }
+            let (service, _tools, capture, received) = connected(plan, probe).await;
+            let _ended = service.cancel().await;
+            let mut expected = vec![
+                json!("initialize"),
+                json!("notifications/initialized"),
+                json!("tools/list"),
+            ];
+            if probe {
+                expected.insert(0, json!("server/discover"));
+            }
+            let initialize = received.lock().unwrap()[usize::from(probe)].clone();
+            assert_eq!(
+                (
+                    methods(&received),
+                    initialize["params"]["protocolVersion"].clone(),
+                    capture.modern()
+                ),
+                (expected, json!("2025-11-25"), false),
+                "probe: {probe}"
+            );
+        }
+    }
+
+    /// A probe never answered falls back to the handshake within the probe's
+    /// own bound, ten seconds as Python's SDK gives it, well within the
+    /// connection's. Python: `test_a_server_that_does_not_discover_is_reached_by_the_handshake[unanswered]`.
+    #[tokio::test(start_paused = true)]
+    async fn an_unanswered_probe_falls_back_within_its_own_bound() {
+        let plan = HashMap::from([
+            ("server/discover", Answer::Silent),
+            ("initialize", handshake_result("legacy")),
+            ("tools/list", fresh_listing()),
+        ]);
+        let started = tokio::time::Instant::now();
+        let (service, tools, capture, received) = connected(plan, true).await;
+        let waited = started.elapsed();
         let _ended = service.cancel().await;
-        let methods: Vec<Value> = received
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|message| message["method"].clone())
-            .collect();
-        let version = received.lock().unwrap()[0]["params"]["protocolVersion"].clone();
         assert_eq!(
-            (methods, version),
             (
-                vec![
-                    json!("initialize"),
-                    json!("notifications/initialized"),
-                    json!("tools/list")
-                ],
-                json!("2025-11-25")
+                methods(&received)[..2].to_vec(),
+                tools.tools.len(),
+                capture.server_info()["name"].clone()
+            ),
+            (
+                vec![json!("server/discover"), json!("initialize")],
+                1,
+                json!("legacy")
+            )
+        );
+        assert!(
+            waited >= Duration::from_secs(10) && waited < Duration::from_secs(11),
+            "{waited:?}"
+        );
+    }
+
+    /// A server that answers the probe only after the handshake it fell back
+    /// to: the connection speaks the handshake's revision and keeps what the
+    /// handshake said, not the late discovery, and goes on serving. Python:
+    /// `test_a_late_answer_to_the_probe_leaves_what_the_handshake_said`.
+    #[tokio::test(start_paused = true)]
+    async fn a_late_answer_to_the_probe_leaves_what_the_handshake_said() {
+        let plan = HashMap::from([
+            ("server/discover", Answer::Late(discovery_result())),
+            ("initialize", handshake_result("legacy")),
+            ("tools/list", fresh_listing()),
+        ]);
+        let (service, tools, capture, _received) = connected(plan, true).await;
+        let info = service.peer_info().unwrap();
+        let read = (
+            info.protocol_version.to_string(),
+            info.instructions.clone(),
+            capture.server_info()["name"].clone(),
+            capture.modern(),
+            tools.tools.len(),
+        );
+        let _ended = service.cancel().await;
+        assert_eq!(
+            read,
+            (
+                "2025-11-25".to_owned(),
+                Some("from the handshake".to_owned()),
+                json!("legacy"),
+                false,
+                1
             )
         );
     }

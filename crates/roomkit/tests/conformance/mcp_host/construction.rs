@@ -44,6 +44,8 @@ pub(super) fn construct(url: &str, spec: &Value) -> Result<McpToolProvider, Stri
                     .connect_timeout
                     .unwrap_or_else(|| FromUrlOptions::default().connect_timeout),
                 tool_filter: options.tool_filter,
+                protocol: options.protocol,
+                propagate_trace_context: options.propagate_trace_context,
             },
         )
     }

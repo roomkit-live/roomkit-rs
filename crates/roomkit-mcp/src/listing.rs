@@ -1,16 +1,23 @@
 //! A server's tools, listed once when it connects (RFC §21.2): every page
 //! its cursor leads to, within bounds, each tool a definition the model
 //! can be handed.
+//!
+//! Each page is read off the wire, as Python's provider reads it: rmcp's
+//! model of a listing would refuse a page whose cache hints a 2026-07-28
+//! server writes outside that revision's values, and its own reading of
+//! `x-mcp-header` would leave out tools Python's SDK keeps.
 
 use roomkit::model::Metadata;
 use std::collections::{BTreeMap, HashSet};
 
-use rmcp::model::{PaginatedRequestParams, Tool};
+use rmcp::model::{ClientRequest, CustomRequest, ListToolsResult, Tool};
 use rmcp::service::{Peer, RoleClient};
 use roomkit_ai::AiTool;
 use serde_json::Value;
 
 use crate::error::McpError;
+use crate::param_headers::{self, HeaderMap};
+use crate::raw::Capture;
 use crate::texts::{bounded_message, bounded_text};
 
 /// The most pages of `tools/list` read: a bound on a server whose cursor
@@ -35,56 +42,62 @@ pub(crate) const SCHEMA_LIMIT: usize = 32 * 1024;
 /// Which tools of the server a provider keeps, by name.
 pub(crate) type ToolFilter = std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync>;
 
+/// The members of a 2026-07-28 result the listing does not read: its
+/// envelope, which Python's provider leaves out of its reading too.
+const ENVELOPE: [&str; 3] = ["resultType", "ttlMs", "cacheScope"];
+
 /// Every tool the server lists that `filter` admits, following its cursor
 /// (RFC §21.2), each one a definition, in the order listed: the filter
 /// chooses before the bound counts, as Python filters the listing it reads.
-/// The reading stops where it stands, with a warning naming the server, at
-/// a page that brings nothing new (an empty page that still carries a
-/// cursor, a cursor handed out twice), past [`PAGE_LIMIT`] pages, or once
-/// [`TOOL_LIMIT`] tools are kept.
+/// On a 2026-07-28 connection a tool whose `x-mcp-header` annotations are
+/// invalid is left out first, with a warning, and the capture keeps what
+/// each other tool mirrors into headers. The reading stops where it stands,
+/// with a warning naming the server, at a page that brings nothing new (an
+/// empty page that still carries a cursor, a cursor handed out twice), past
+/// [`PAGE_LIMIT`] pages, or once [`TOOL_LIMIT`] tools are kept.
 ///
 /// # Errors
 ///
-/// Returns [`McpError::Listing`] when a page's request fails.
+/// Returns [`McpError::Listing`] when a page's request fails, or a page is
+/// no listing.
 pub(crate) async fn tools(
     peer: &Peer<RoleClient>,
+    capture: &Capture,
     program: &str,
     filter: Option<&ToolFilter>,
 ) -> Result<Listed, McpError> {
+    let modern = capture.modern();
     let mut kept = Catalogue::new(program);
     let mut seen: HashSet<String> = HashSet::new();
-    let mut params: Option<PaginatedRequestParams> = None;
+    let mut cursor: Option<String> = None;
     for _ in 0..PAGE_LIMIT {
-        let page = peer
-            .list_tools(params.take())
+        let page = page(peer, capture, cursor.take())
             .await
-            .map_err(|error| McpError::Listing {
+            .map_err(|message| McpError::Listing {
                 program: program.to_owned(),
-                message: bounded_message(&error.to_string()),
+                message: bounded_message(&message),
             })?;
         let brought = !page.tools.is_empty();
+        if modern {
+            capture.keep_tool_headers(mirrored(&page.tools));
+        }
         let admitted = page
             .tools
             .iter()
+            .filter(|tool| !modern || well_headed(tool, program))
             .filter(|tool| filter.is_none_or(|admits| admits(tool.name.as_ref())));
         for tool in admitted {
             if !kept.take(tool) {
-                return Ok(Listed {
-                    tools: kept.tools,
-                    metadata: kept.metadata,
-                });
+                return Ok(kept.listed());
             }
         }
-        let Some(cursor) = page.next_cursor.filter(|cursor| !cursor.is_empty()) else {
-            return Ok(Listed {
-                tools: kept.tools,
-                metadata: kept.metadata,
-            });
+        let Some(next) = page.next_cursor.filter(|cursor| !cursor.is_empty()) else {
+            return Ok(kept.listed());
         };
-        if !brought || !seen.insert(cursor.clone()) {
+        if !brought || !seen.insert(next.clone()) {
             break;
         }
-        params = Some(PaginatedRequestParams::default().with_cursor(Some(cursor)));
+        cursor = Some(next);
     }
     tracing::warn!(
         target: "roomkit::mcp",
@@ -92,10 +105,65 @@ pub(crate) async fn tools(
         tools = kept.tools.len(),
         "an MCP server pages tools/list without end; the tools read are kept"
     );
-    Ok(Listed {
-        tools: kept.tools,
-        metadata: kept.metadata,
-    })
+    Ok(kept.listed())
+}
+
+/// One page of `tools/list`, after `cursor`, read off the wire: its
+/// envelope left out, the rest read as rmcp models a listing.
+async fn page(
+    peer: &Peer<RoleClient>,
+    capture: &Capture,
+    cursor: Option<String>,
+) -> Result<ListToolsResult, String> {
+    let params = cursor.map(|cursor| Metadata::from_iter([("cursor".into(), cursor.into())]));
+    let params = if capture.propagates() {
+        crate::trace::stamped(params, &crate::trace::host_context())
+    } else {
+        params
+    };
+    let ticket = capture.ticket();
+    let mut request = CustomRequest::new("tools/list", params.clone().map(Value::Object));
+    request.extensions.insert(ticket.marker(params));
+    peer.send_request(ClientRequest::CustomRequest(request))
+        .await
+        .map_err(|error| error.to_string())?;
+    let Some(Value::Object(mut result)) = ticket.take() else {
+        return Err("expected an MCP result object".to_owned());
+    };
+    result.retain(|name, _| !ENVELOPE.contains(&name.as_str()));
+    serde_json::from_value(Value::Object(result)).map_err(|error| error.to_string())
+}
+
+/// Whether `tool`'s `x-mcp-header` annotations are valid, as MCP
+/// 2026-07-28 requires of a tool a client keeps: one whose are not is left
+/// out, with a warning.
+fn well_headed(tool: &Tool, program: &str) -> bool {
+    let schema = Value::Object(tool.input_schema.as_ref().clone());
+    let Some(reason) = param_headers::invalid(&schema) else {
+        return true;
+    };
+    tracing::warn!(
+        target: "roomkit::mcp",
+        server = program,
+        tool = %bounded_message(tool.name.as_ref()),
+        reason,
+        "an MCP tool is left out: invalid x-mcp-header"
+    );
+    false
+}
+
+/// What each tool of a page whose call mirrors an argument into a header
+/// mirrors, by tool, a later listing of a name over an earlier one, as
+/// Python's SDK keeps the tools it is shown.
+fn mirrored(tools: &[Tool]) -> Vec<(String, HeaderMap)> {
+    tools
+        .iter()
+        .filter_map(|tool| {
+            let schema = Value::Object(tool.input_schema.as_ref().clone());
+            param_headers::headed(&schema)
+                .then(|| (tool.name.to_string(), param_headers::header_map(&schema)))
+        })
+        .collect()
 }
 
 /// The one catalogue read at connection, including admitted tools' metadata.
@@ -120,6 +188,14 @@ impl<'a> Catalogue<'a> {
             tools: Vec::new(),
             names: HashSet::new(),
             metadata: BTreeMap::new(),
+        }
+    }
+
+    /// What the catalogue kept, as the connection holds it.
+    fn listed(self) -> Listed {
+        Listed {
+            tools: self.tools,
+            metadata: self.metadata,
         }
     }
 

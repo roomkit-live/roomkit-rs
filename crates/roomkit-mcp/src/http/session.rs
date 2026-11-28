@@ -1,27 +1,29 @@
 //! Negotiation and optional discovery are identical on both HTTP transports.
 
-use rmcp::{
-    ClientCacheConfig, RoleClient, ServiceExt, service::RunningService, transport::Transport,
-};
+use rmcp::{ClientCacheConfig, RoleClient, service::RunningService, transport::Transport};
 
 use super::client::Failure;
 use crate::McpError;
 use crate::listing::{self, Listed, ToolFilter};
+use crate::raw::Capture;
 use rmcp::model::ClientConfig;
 
+/// Agrees on the MCP revision over `transport` (discovery first when
+/// `probe`, the handshake otherwise), then lists the tools when `discover`.
 pub(super) async fn open(
     transport: impl Transport<RoleClient> + 'static,
     failure: &Failure,
+    capture: &Capture,
     filter: Option<&ToolFilter>,
     discover: bool,
+    probe: bool,
 ) -> Result<(RunningService<RoleClient, ClientConfig>, Listed), McpError> {
-    let service = crate::protocol::client()
-        .serve(transport)
+    let service = crate::protocol::negotiate(transport, probe)
         .await
         .map_err(|_| failure.error("MCP handshake failed"))?;
     if !service
         .peer_info()
-        .is_some_and(|info| crate::protocol::supported(&info.protocol_version))
+        .is_some_and(|info| crate::protocol::supported(&info.protocol_version, capture.modern()))
     {
         let _closed = service.cancel().await;
         return Err(failure.error("unsupported MCP protocol version"));
@@ -33,7 +35,7 @@ pub(super) async fn open(
     if !discover {
         return Ok((service, Listed::default()));
     }
-    if let Ok(tools) = listing::tools(service.peer(), "http", filter).await {
+    if let Ok(tools) = listing::tools(service.peer(), capture, "http", filter).await {
         Ok((service, tools))
     } else {
         let error = failure.error("MCP tool discovery failed");

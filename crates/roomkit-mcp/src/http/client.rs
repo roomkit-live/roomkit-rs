@@ -1,4 +1,8 @@
 //! Bounded HTTP I/O; the SDK owns MCP negotiation, sessions and cancellation.
+//! On a 2026-07-28 connection a request's `Mcp-Name` and `Mcp-Param-*`
+//! headers are written as Python's SDK writes them, from the request as it
+//! goes out and the listing's `x-mcp-header` annotations.
+use crate::param_headers;
 use crate::{McpError, server::MESSAGE_LIMIT};
 use reqwest::{
     Method, RequestBuilder, Response,
@@ -189,15 +193,17 @@ impl Client {
     async fn post(
         &self,
         uri: Arc<str>,
-        message: ClientJsonRpcMessage,
+        mut message: ClientJsonRpcMessage,
         session: Option<Arc<str>>,
         auth: Option<String>,
         headers: Headers,
         limit: usize,
     ) -> Result<StreamableHttpPostResponse, Error> {
+        self.capture.stamp(&mut message);
         self.capture.outgoing(&message);
         let wire =
             crate::wire::message(&message).map_err(|_| self.error(None, "Invalid MCP request"))?;
+        let headers = self.standard_headers(headers, &wire);
         let response = self
             .send(
                 self.request(Method::POST, &uri, session.as_deref(), auth, headers)
@@ -235,10 +241,13 @@ impl Client {
                     Some(ServerJsonRpcMessage::Error(e)) => e.error,
                     _ => ErrorData::invalid_request("Discovery unsupported", None),
                 };
-                return Ok(StreamableHttpPostResponse::Json(
-                    ServerJsonRpcMessage::error(error, Some(request.id.clone())),
-                    None,
-                ));
+                // The probe's answer, as the capture shows the SDK an answer.
+                let refused = ServerJsonRpcMessage::error(error, Some(request.id.clone()));
+                let shown = serde_json::to_value(&refused)
+                    .ok()
+                    .and_then(|value| serde_json::from_value(self.capture.incoming(value)).ok())
+                    .unwrap_or(refused);
+                return Ok(StreamableHttpPostResponse::Json(shown, None));
             }
             if let Some(reply @ ServerJsonRpcMessage::Error(_)) = parsed {
                 return Ok(StreamableHttpPostResponse::Json(reply, None));
@@ -284,6 +293,48 @@ impl Client {
         }
     }
 }
+impl Client {
+    /// `headers`, rmcp's for the request `wire`, on a 2026-07-28 connection
+    /// (where rmcp writes `Mcp-Method`): its `Mcp-Name` and `Mcp-Param-*`
+    /// replaced by those Python's SDK writes, the name a `tools/call`,
+    /// `prompts/get` or `resources/read` bears and each argument the
+    /// called tool's listing mirrors.
+    fn standard_headers(&self, mut headers: Headers, wire: &serde_json::Value) -> Headers {
+        if !headers.contains_key(&HeaderName::from_static("mcp-method")) {
+            return headers;
+        }
+        headers.retain(|name, _| {
+            name.as_str() != "mcp-name" && !name.as_str().starts_with("mcp-param-")
+        });
+        let method = wire["method"].as_str().unwrap_or_default();
+        let params = &wire["params"];
+        let mut written = Vec::new();
+        if let Some(key) = param_headers::name_parameter(method)
+            && let Some(name) = params[key].as_str()
+        {
+            written.push(("Mcp-Name".to_owned(), param_headers::encoded(name)));
+        }
+        if method == "tools/call"
+            && let Some(tool) = params["name"].as_str()
+            && let Some(mirrored) = self.capture.tool_headers(tool)
+        {
+            written.extend(param_headers::param_headers(
+                &mirrored,
+                &params["arguments"],
+            ));
+        }
+        for (name, value) in written {
+            if let (Ok(name), Ok(value)) = (
+                HeaderName::from_bytes(name.as_bytes()),
+                HeaderValue::from_str(&value),
+            ) {
+                headers.insert(name, value);
+            }
+        }
+        headers
+    }
+}
+
 fn content_type(response: &Response, expected: &str) -> bool {
     response
         .headers()

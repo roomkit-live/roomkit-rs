@@ -35,8 +35,10 @@ pub(super) async fn connect(
     cancelled: impl Future<Output = ()> + Send,
     filter: Option<crate::listing::ToolFilter>,
     discover: bool,
+    protocol: crate::protocol::Protocol,
 ) -> Result<crate::server::McpServer, crate::McpError> {
-    let capture = crate::raw::Capture::default();
+    let capture = crate::raw::Capture::opening(protocol.propagate_trace_context);
+    let listing = capture.clone();
     let (client, finished, failure) = Client::new(capture.clone())?;
     let interrupted = Arc::new(Notify::new());
     let writer_stop = Arc::clone(&interrupted);
@@ -50,7 +52,15 @@ pub(super) async fn connect(
             let transport = Legacy::open(&url, headers, client, failure.clone(), writer)
                 .await
                 .map_err(|_| failure.error("MCP legacy transport failed"))?;
-            super::session::open(transport, &failure, filter.as_ref(), discover).await
+            super::session::open(
+                transport,
+                &failure,
+                &listing,
+                filter.as_ref(),
+                discover,
+                protocol.probe,
+            )
+            .await
         };
         tokio::pin!(connecting);
         let deadline = async {

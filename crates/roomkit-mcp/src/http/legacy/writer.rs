@@ -127,7 +127,8 @@ async fn write(
     mut queued: mpsc::UnboundedReceiver<Queued>,
     failure: Failure,
 ) {
-    while let Some(message) = next(&mut queued).await {
+    while let Some(mut message) = next(&mut queued).await {
+        client.capture.stamp(&mut message);
         client.capture.outgoing(&message);
         let Ok(message) = crate::wire::message(&message) else {
             failure.record(None, "invalid MCP request");

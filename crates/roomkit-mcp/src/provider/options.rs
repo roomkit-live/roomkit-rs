@@ -34,6 +34,20 @@ pub struct McpToolProviderOptions {
     pub label: Option<String>,
     /// The connection deadline; `None` uses 60 seconds, as Python does.
     pub connect_timeout: Option<Duration>,
+    /// How the connection agrees on the MCP revision: `"auto"` (the
+    /// default) probes the server's discovery (`server/discover`, MCP
+    /// 2026-07-28) and falls back to the `initialize` handshake for a
+    /// server of an earlier revision; `"legacy"` goes straight to the
+    /// handshake, for a server that fails on the probe or leaves it
+    /// unanswered. The `sse` transport always takes the handshake. Any other
+    /// value is refused at construction.
+    pub protocol: String,
+    /// Carry the host's trace context (W3C `traceparent`, `tracestate`,
+    /// `baggage`, from the kit's current span) in each request's `_meta`,
+    /// unless a [`request`](crate::McpToolProvider::request)'s caller wrote
+    /// one of its own there, which goes whole instead; `false` (the default)
+    /// sends only the trace keys a caller writes.
+    pub propagate_trace_context: bool,
 }
 
 impl Default for McpToolProviderOptions {
@@ -49,6 +63,8 @@ impl Default for McpToolProviderOptions {
             discover: true,
             label: None,
             connect_timeout: None,
+            protocol: "auto".to_owned(),
+            propagate_trace_context: false,
         }
     }
 }
@@ -65,13 +81,15 @@ impl fmt::Debug for McpToolProviderOptions {
             .field("discover", &self.discover)
             .field("label", &self.label)
             .field("connect_timeout", &self.connect_timeout)
+            .field("protocol", &self.protocol)
+            .field("propagate_trace_context", &self.propagate_trace_context)
             .finish_non_exhaustive()
     }
 }
 
 /// What [`crate::McpToolProvider::from_command`] takes beside the command:
 /// Python's `args=(), *, env=None, cwd=None, tool_filter=None, label=None,
-/// connect_timeout=60.0`.
+/// connect_timeout=60.0, protocol="auto", propagate_trace_context=False`.
 #[derive(Clone)]
 pub struct FromCommandOptions {
     /// The command's arguments.
@@ -89,10 +107,17 @@ pub struct FromCommandOptions {
     /// aliases naming this server. Letters, digits and `_ . -`, 64 at most,
     /// no `__` and no final `_`.
     pub label: Option<String>,
-    /// How long the start, the handshake and the listing may take.
+    /// How long the start, the negotiation and the listing may take.
     pub connect_timeout: Duration,
     /// List tools while connecting; false opens a resource-only connection.
     pub discover: bool,
+    /// How the connection agrees on the MCP revision: `"auto"` (the
+    /// default) probes discovery first, `"legacy"` goes straight to the
+    /// handshake; see [`McpToolProviderOptions::protocol`].
+    pub protocol: String,
+    /// Carry the host's trace context on each request; see
+    /// [`McpToolProviderOptions::propagate_trace_context`].
+    pub propagate_trace_context: bool,
 }
 
 impl Default for FromCommandOptions {
@@ -105,6 +130,8 @@ impl Default for FromCommandOptions {
             label: None,
             connect_timeout: Duration::from_secs(60),
             discover: true,
+            protocol: "auto".to_owned(),
+            propagate_trace_context: false,
         }
     }
 }
@@ -120,13 +147,16 @@ impl fmt::Debug for FromCommandOptions {
             .field("label", &self.label)
             .field("discover", &self.discover)
             .field("connect_timeout", &self.connect_timeout)
+            .field("protocol", &self.protocol)
+            .field("propagate_trace_context", &self.propagate_trace_context)
             .finish_non_exhaustive()
     }
 }
 
 /// What [`crate::McpToolProvider::from_url`] takes beside the URL: Python's
 /// `*, transport="streamable_http", tool_filter=None, headers=None, label=None,
-/// connect_timeout=60.0`, over Streamable HTTP or legacy SSE.
+/// connect_timeout=60.0, protocol="auto", propagate_trace_context=False`, over
+/// Streamable HTTP or legacy SSE.
 #[cfg(feature = "http")]
 #[derive(Clone)]
 pub struct FromUrlOptions {
@@ -142,10 +172,18 @@ pub struct FromUrlOptions {
     /// aliases naming this server. Letters, digits and `_ . -`, 64 at most,
     /// no `__` and no final `_`.
     pub label: Option<String>,
-    /// How long the handshake and the listing may take.
+    /// How long the negotiation and the listing may take.
     pub connect_timeout: Duration,
     /// List tools while connecting; false opens a resource-only connection.
     pub discover: bool,
+    /// How the connection agrees on the MCP revision: `"auto"` (the
+    /// default) probes discovery first, `"legacy"` goes straight to the
+    /// handshake, which the `sse` transport always takes; see
+    /// [`McpToolProviderOptions::protocol`].
+    pub protocol: String,
+    /// Carry the host's trace context on each request; see
+    /// [`McpToolProviderOptions::propagate_trace_context`].
+    pub propagate_trace_context: bool,
 }
 
 #[cfg(feature = "http")]
@@ -158,6 +196,8 @@ impl Default for FromUrlOptions {
             label: None,
             connect_timeout: Duration::from_secs(60),
             discover: true,
+            protocol: "auto".to_owned(),
+            propagate_trace_context: false,
         }
     }
 }
@@ -171,6 +211,8 @@ impl fmt::Debug for FromUrlOptions {
             .field("label", &self.label)
             .field("discover", &self.discover)
             .field("connect_timeout", &self.connect_timeout)
+            .field("protocol", &self.protocol)
+            .field("propagate_trace_context", &self.propagate_trace_context)
             .finish_non_exhaustive()
     }
 }

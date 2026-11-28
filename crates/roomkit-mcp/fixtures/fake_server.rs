@@ -19,7 +19,8 @@
 //! `listing-error`), `initialize-error` (answers the handshake with an error
 //! whose message carries escapes, a forged log line and bidi controls),
 //! `listing-error`, `pages:<n>`, `same-cursor`, `endless`, `endless-same`,
-//! `empty-page`, `many`, `names`, `skill-names`.
+//! `empty-page`, `many`, `names`, `skill-names`, `scripted` (answers as
+//! `--plan <json>` says, every line read appended to `--log <path>`).
 //!
 //! The tools of `normal`: `echo` answers its `text`; `fails` says
 //! `isError` with two texts; `content` answers every kind of content;
@@ -34,6 +35,7 @@
 )]
 
 mod host;
+mod scripted;
 
 use std::io::{self, BufRead, Write};
 use std::process::ExitCode;
@@ -49,6 +51,8 @@ struct Options {
     instructions: Option<String>,
     child_pid_file: Option<String>,
     stubborn_pid_file: Option<String>,
+    log: Option<String>,
+    plan: Option<String>,
 }
 
 fn main() -> ExitCode {
@@ -96,6 +100,11 @@ fn main() -> ExitCode {
     }
     if matches!(options.mode.as_str(), "host" | "host-modern") {
         host::serve(options.mode == "host-modern");
+    } else if options.mode == "scripted" {
+        scripted::serve(
+            options.log.as_deref().unwrap_or_default(),
+            options.plan.as_deref().unwrap_or("{}"),
+        );
     } else {
         serve(&options);
     }
@@ -124,6 +133,8 @@ fn options() -> Option<Options> {
     let mut instructions = None;
     let mut child_pid_file = None;
     let mut stubborn_pid_file = None;
+    let mut log = None;
+    let mut plan = None;
     while let Some(flag) = args.next() {
         let value = args.next()?;
         match flag.as_str() {
@@ -131,6 +142,8 @@ fn options() -> Option<Options> {
             "--instructions" => instructions = Some(value),
             "--child-pid-file" => child_pid_file = Some(value),
             "--stubborn-pid-file" => stubborn_pid_file = Some(value),
+            "--log" => log = Some(value),
+            "--plan" => plan = Some(value),
             _ => return None,
         }
     }
@@ -139,6 +152,8 @@ fn options() -> Option<Options> {
         instructions,
         child_pid_file,
         stubborn_pid_file,
+        log,
+        plan,
     })
 }
 

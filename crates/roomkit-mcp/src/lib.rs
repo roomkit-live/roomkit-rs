@@ -15,6 +15,12 @@
 //!   Deprecated by the MCP 2026-07-28 revision, it warns at construction and
 //!   reads an SSE event of 1 MiB at most.
 //!   [`new`](McpToolProvider::new) accepts either transport or stdio.
+//! - A connection agrees on the MCP revision with its server: with
+//!   [`protocol`](FromCommandOptions::protocol) `"auto"` (the default) it
+//!   probes MCP 2026-07-28's discovery over stdio and Streamable HTTP, and
+//!   speaks that revision with a server that answers it, the `initialize`
+//!   handshake of the earlier ones with any other; `"legacy"` and legacy SSE
+//!   go straight to the handshake.
 //! - A channel serves its tools through
 //!   [`get_tools`](McpToolProvider::get_tools) and
 //!   [`as_tool_handler`](McpToolProvider::as_tool_handler); its
@@ -72,6 +78,7 @@ mod group;
 mod host;
 mod listing;
 mod maps;
+mod param_headers;
 mod process;
 mod protocol;
 mod provider;
@@ -84,6 +91,7 @@ mod skills;
 mod structured;
 mod texts;
 mod tool_dicts;
+mod trace;
 mod wire;
 
 pub use self::error::McpError;

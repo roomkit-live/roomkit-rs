@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use crate::error::McpError;
 use crate::listing::ToolFilter;
+use crate::protocol::Protocol;
 use crate::server::McpServer;
 
 /// How long connecting may take by default: the handshake and the listing
@@ -124,7 +125,8 @@ impl McpCommand {
         self
     }
 
-    /// Starts the server, runs the MCP handshake and lists its tools, within
+    /// Starts the server, agrees on the MCP revision with it as `protocol`
+    /// says (its discovery, or the handshake) and lists its tools, within
     /// the connect bound ([`connect_timeout`](Self::connect_timeout), 60
     /// seconds by default), until `cancelled` completes: cancellation stops
     /// and reaps the server before returning (RFC §21.2).
@@ -144,8 +146,9 @@ impl McpCommand {
         cancelled: impl Future<Output = ()> + Send,
         filter: Option<ToolFilter>,
         discover: bool,
+        protocol: Protocol,
     ) -> Result<McpServer, McpError> {
-        McpServer::connect(self, cancelled, filter, discover).await
+        McpServer::connect(self, cancelled, filter, discover, protocol).await
     }
 
     /// The program, as errors and logs name the server: never its

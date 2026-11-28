@@ -9,6 +9,7 @@
 
 mod agent;
 mod calls;
+mod discovery;
 mod host;
 #[cfg(target_os = "linux")]
 mod lifecycle;
@@ -17,3 +18,4 @@ mod skill_server;
 mod structured;
 mod support;
 mod tool_dicts;
+mod trace;

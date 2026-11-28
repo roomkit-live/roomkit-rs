@@ -69,7 +69,11 @@ impl McpToolProvider {
     /// Send a host request, preserving result fields even when they resemble a
     /// typed SDK result. `params` go out as written, but for a `_meta` that
     /// is `null` or empty, which goes as none; no parameters, or an empty
-    /// set, go out as no `params` member (RFC §21.2, RK-21.2-046).
+    /// set, go out as no `params` member (RFC §21.2, RK-21.2-046). On a
+    /// 2026-07-28 connection the protocol's own `_meta` entries go with
+    /// them, over the caller's of the same names; a provider given
+    /// `propagate_trace_context` adds the host's trace context, unless the
+    /// caller wrote one of its own, which goes whole.
     ///
     /// # Errors
     /// Returns `NotConnected`; `Validation`, with nothing sent, when the
@@ -114,7 +118,8 @@ impl McpToolProvider {
         crate::resources::result(result)
     }
 
-    /// Send `method` with `params` written as given: `None` writes no
+    /// Send `method` with `params` written as given, the host's trace
+    /// context added when the provider propagates it: `None` writes no
     /// `params` member.
     async fn host_request(
         &self,
@@ -130,6 +135,11 @@ impl McpToolProvider {
                 after: timeout,
             });
         }
+        let params = if server.host_capture().propagates() {
+            crate::trace::stamped(params, &crate::trace::host_context())
+        } else {
+            params
+        };
         let ticket = server.host_capture().ticket();
         let mut request = CustomRequest::new(method, params.clone().map(Value::Object));
         request.extensions.insert(ticket.marker(params));

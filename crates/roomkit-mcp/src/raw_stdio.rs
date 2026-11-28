@@ -53,8 +53,9 @@ where
     type Error = std::io::Error;
     fn send(
         &mut self,
-        message: ClientJsonRpcMessage,
+        mut message: ClientJsonRpcMessage,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'static {
+        self.capture.stamp(&mut message);
         self.capture.outgoing(&message);
         let message = match message {
             ClientJsonRpcMessage::Request(request) => {

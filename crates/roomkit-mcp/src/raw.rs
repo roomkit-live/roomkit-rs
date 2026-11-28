@@ -2,15 +2,23 @@
 //!
 //! Tickets travel in non-serialized request extensions. Only live requests keep
 //! a slot; cancellation removes it even if the transport has not sent it yet.
+//!
+//! The capture also follows the connection's negotiation (RFC §21.2): it
+//! keeps the result of whichever of discovery and handshake was answered
+//! last, a late answer to a probe given up on ignored, and shows rmcp a
+//! discovery as Python's SDK reads it.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 use rmcp::model::{
-    ClientJsonRpcMessage, ClientNotification, ClientRequest, GetExtensions, RequestId,
+    ClientJsonRpcMessage, ClientNotification, ClientRequest, GetExtensions, GetMeta, RequestId,
 };
 use roomkit::model::Metadata;
 use serde_json::{Value, json};
+
+use crate::param_headers::HeaderMap;
+use crate::protocol::SERVER_INFO_META;
 
 #[derive(Clone, Default)]
 pub(crate) struct Capture(Arc<Mutex<State>>);
@@ -18,10 +26,23 @@ pub(crate) struct Capture(Arc<Mutex<State>>);
 #[derive(Default)]
 struct State {
     pending: HashMap<RequestId, Weak<Mutex<Option<Value>>>>,
-    initialization: Option<RequestId>,
+    /// The negotiation request sent last, and whether it is a discovery
+    /// probe, until it is answered.
+    negotiation: Option<(RequestId, bool)>,
+    /// How many discovery probes were sent.
+    probes: usize,
+    /// Whether a discovery agreed on MCP 2026-07-28.
+    modern: bool,
     handshake: Value,
     /// The `tools/call` requests sent, neither answered nor cancelled.
     calls: HashSet<RequestId>,
+    /// Whether requests carry the host's trace context.
+    propagates: bool,
+    /// The host's trace context when the connection opened, which its
+    /// negotiation carries.
+    opening_trace: Metadata,
+    /// The arguments each listed tool mirrors into headers, by tool.
+    tool_headers: HashMap<String, HeaderMap>,
 }
 
 /// The fields of which a `tools/call` result carries at least one.
@@ -58,6 +79,65 @@ fn lock<T>(value: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl Capture {
+    /// The capture of a connection whose requests carry the host's trace
+    /// context when `propagates`, its negotiation the one current now.
+    pub(crate) fn opening(propagates: bool) -> Self {
+        let opening_trace = if propagates {
+            crate::trace::host_context()
+        } else {
+            Metadata::new()
+        };
+        Self(Arc::new(Mutex::new(State {
+            propagates,
+            opening_trace,
+            ..State::default()
+        })))
+    }
+
+    /// Whether the connection's requests carry the host's trace context.
+    pub(crate) fn propagates(&self) -> bool {
+        lock(&self.0).propagates
+    }
+
+    /// Whether a discovery agreed on MCP 2026-07-28.
+    pub(crate) fn modern(&self) -> bool {
+        lock(&self.0).modern
+    }
+
+    /// Keeps what each listed tool mirrors into headers, a tool listed
+    /// again over its earlier listing.
+    pub(crate) fn keep_tool_headers(&self, headers: Vec<(String, HeaderMap)>) {
+        lock(&self.0).tool_headers.extend(headers);
+    }
+
+    /// What the tool `name` mirrors into headers, if its listing said.
+    #[cfg(feature = "http")]
+    pub(crate) fn tool_headers(&self, name: &str) -> Option<HeaderMap> {
+        lock(&self.0).tool_headers.get(name).cloned()
+    }
+
+    /// Writes the trace context of the connection's opening into a
+    /// negotiation request it sends (RK-21.2-057).
+    pub(crate) fn stamp(&self, message: &mut ClientJsonRpcMessage) {
+        let ClientJsonRpcMessage::Request(request) = message else {
+            return;
+        };
+        if !matches!(
+            request.request,
+            ClientRequest::InitializeRequest(_) | ClientRequest::DiscoverRequest(_)
+        ) {
+            return;
+        }
+        let trace = lock(&self.0).opening_trace.clone();
+        if trace.is_empty() {
+            return;
+        }
+        let meta = request.request.get_meta_mut();
+        for (key, value) in trace {
+            meta.insert(key, value);
+        }
+    }
+
     pub(crate) fn ticket(&self) -> Ticket {
         Ticket {
             capture: self.clone(),
@@ -74,7 +154,11 @@ impl Capture {
         };
         let mut state = lock(&self.0);
         if matches!(request.request, ClientRequest::InitializeRequest(_)) {
-            state.initialization = Some(request.id.clone());
+            state.negotiation = Some((request.id.clone(), false));
+        }
+        if matches!(request.request, ClientRequest::DiscoverRequest(_)) {
+            state.negotiation = Some((request.id.clone(), true));
+            state.probes += 1;
         }
         if matches!(request.request, ClientRequest::CallToolRequest(_)) {
             state.calls.insert(request.id.clone());
@@ -107,12 +191,16 @@ impl Capture {
             return message;
         };
         let mut state = lock(&self.0);
-        if state.initialization.as_ref() == Some(&id) {
-            state.initialization = None;
+        if let Some((negotiating, probe)) = state.negotiation.clone()
+            && negotiating == id
+        {
+            state.negotiation = None;
             if let Some(result) = message.get("result") {
                 state.handshake = result.clone();
             }
             crate::protocol::compatible_handshake(&mut message);
+            state.modern =
+                probe && crate::protocol::as_the_sdk_reads_a_discovery(&mut message, state.probes);
         }
         if state.calls.remove(&id) {
             refuse_an_empty_call_result(&mut message);
@@ -125,13 +213,19 @@ impl Capture {
         message
     }
 
+    /// What the server said of itself: its handshake's `serverInfo`, or
+    /// the `io.modelcontextprotocol/serverInfo` of its discovery's `_meta`.
     pub(crate) fn server_info(&self) -> Metadata {
-        let mut info = lock(&self.0)
-            .handshake
-            .get("serverInfo")
-            .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
+        let state = lock(&self.0);
+        let info = if state.handshake.get("supportedVersions").is_some() {
+            state
+                .handshake
+                .get("_meta")
+                .and_then(|meta| meta.get(SERVER_INFO_META))
+        } else {
+            state.handshake.get("serverInfo")
+        };
+        let mut info = info.and_then(Value::as_object).cloned().unwrap_or_default();
         info.retain(|_, value| !value.is_null());
         if let Some(icons) = info.get_mut("icons").and_then(Value::as_array_mut) {
             for icon in icons.iter_mut().filter_map(Value::as_object_mut) {

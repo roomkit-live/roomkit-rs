@@ -75,6 +75,19 @@ impl Fake {
         self
     }
 
+    /// The same server, the connection agreeing on the MCP revision as
+    /// `protocol` says (`"auto"` or `"legacy"`).
+    pub(crate) fn protocol(mut self, protocol: &str) -> Self {
+        protocol.clone_into(&mut self.options.protocol);
+        self
+    }
+
+    /// The same server, its requests carrying the host's trace context.
+    pub(crate) fn propagating_trace_context(mut self) -> Self {
+        self.options.propagate_trace_context = true;
+        self
+    }
+
     /// The provider of this server, not connected, given [`GRACE`] to exit.
     pub(crate) fn provider(self) -> McpToolProvider {
         self.built().unwrap()
@@ -185,6 +198,60 @@ impl Drop for PidFile {
     }
 }
 
+/// The fake server in `scripted` mode: what it answers as its plan says,
+/// and the log of every line it read, removed when dropped. Python's
+/// scripted server of `tests/test_mcp_discovery.py`.
+pub(crate) struct Scripted {
+    log: PathBuf,
+}
+
+impl Scripted {
+    pub(crate) fn new() -> Self {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let name = format!(
+            "roomkit-mcp-{}-{}.jsonl",
+            process::id(),
+            NEXT.fetch_add(1, Ordering::SeqCst)
+        );
+        Self {
+            log: env::temp_dir().join(name),
+        }
+    }
+
+    /// The server answering as `plan` says: a method's answer's members,
+    /// `"silent"`, or `{"late": ...}` for an answer sent after the next.
+    pub(crate) fn server(&self, plan: &serde_json::Value) -> Fake {
+        fake("scripted")
+            .arg("--log")
+            .arg(&self.log)
+            .arg("--plan")
+            .arg(plan.to_string())
+    }
+
+    /// Every message the server read, in order.
+    pub(crate) fn received(&self) -> Vec<serde_json::Value> {
+        fs::read_to_string(&self.log)
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
+    /// The methods of [`received`](Self::received), in order.
+    pub(crate) fn methods(&self) -> Vec<String> {
+        self.received()
+            .iter()
+            .map(|message| message["method"].as_str().unwrap_or_default().to_owned())
+            .collect()
+    }
+}
+
+impl Drop for Scripted {
+    fn drop(&mut self) {
+        let _gone = fs::remove_file(&self.log);
+    }
+}
+
 /// Whether the process `pid` exists, a zombie included: once it is gone,
 /// its parent has waited for it.
 pub(crate) fn exists(pid: u32) -> bool {
@@ -220,7 +287,12 @@ pub(crate) struct Room {
 impl Room {
     /// The room, its agent the one `agent` builds.
     pub(crate) async fn with(agent: AiChannel<ScriptedProvider>) -> Self {
-        let kit = RoomKit::new(RoomKitOptions::default());
+        Self::on(RoomKitOptions::default(), agent).await
+    }
+
+    /// The room of a kit built with `options`, its agent `agent`.
+    pub(crate) async fn on(options: RoomKitOptions, agent: AiChannel<ScriptedProvider>) -> Self {
+        let kit = RoomKit::new(options);
         kit.register_channel(RecordingTransport::new(
             channel("sms"),
             ChannelType::SMS,

@@ -6,6 +6,7 @@ mod sse;
 
 use crate::error::McpError;
 use crate::listing::ToolFilter;
+use crate::protocol::Protocol;
 use crate::raw::Capture;
 use crate::server::{MESSAGE_LIMIT, McpServer};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -79,9 +80,11 @@ impl McpHttp {
         })
     }
 
-    /// Connects and discovers tools once (RFC §21.2), until cancelled.
-    /// Failure or cancellation drains HTTP workers and attempts to delete any
-    /// negotiated Streamable HTTP session before returning.
+    /// Connects, agreeing on the MCP revision as `protocol` says (legacy
+    /// SSE always by the handshake), and discovers tools once (RFC §21.2),
+    /// until cancelled. Failure or cancellation drains HTTP workers and
+    /// attempts to delete any negotiated Streamable HTTP session before
+    /// returning.
     ///
     /// # Errors
     /// Returns a safe transport failure, a timeout, invalid configuration,
@@ -91,8 +94,10 @@ impl McpHttp {
         cancelled: impl Future<Output = ()> + Send,
         filter: Option<ToolFilter>,
         discover: bool,
+        protocol: Protocol,
     ) -> Result<McpServer, McpError> {
         if self.legacy {
+            // MCP 2026-07-28 does not define the HTTP+SSE transport.
             return legacy::connect(
                 self.url,
                 self.headers,
@@ -100,10 +105,11 @@ impl McpHttp {
                 cancelled,
                 filter,
                 discover,
+                protocol.handshake_only(),
             )
             .await;
         }
-        let capture = Capture::default();
+        let capture = Capture::opening(protocol.propagate_trace_context);
         let (client, finished, failure) = client::Client::new(capture.clone())?;
         let client = client.with_headers(self.headers);
         let config = StreamableHttpClientTransportConfig::with_uri(self.url.as_str())
@@ -112,7 +118,14 @@ impl McpHttp {
             .control_request_timeout(Duration::from_secs(3));
         let transport = StreamableHttpClientTransport::with_client(client, config);
         let stop = transport.cancel_token();
-        let connecting = session::open(transport, &failure, filter.as_ref(), discover);
+        let connecting = session::open(
+            transport,
+            &failure,
+            &capture,
+            filter.as_ref(),
+            discover,
+            protocol.probe,
+        );
         let connected = tokio::select! {
             biased;
             () = cancelled => Err(McpError::Cancelled),
