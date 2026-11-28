@@ -275,10 +275,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Python does (RFC §13.2, RMK-2243): an error a channel raises under a
   class (`ClassedError`) is matched by that class, where it read as
   `ChannelError`, and a class Python knows by the bases Python gives it.
-  A built-in class (`TimeoutError`, `RuntimeError`, `TypeError`,
-  `ValueError`, `AssertionError`), whether the kit raised it or recorded
-  it from a channel, no longer matches `RoomKitError`, and a `TimeoutError`
-  now matches `OSError`.
+  A built-in class, raised by the kit or recorded from a channel
+  (`TimeoutError`, `RuntimeError`, `TypeError`, `AssertionError`,
+  `OSError` and its subclasses, `KeyError`, `LookupError`,
+  `CancelledError`, and a `ValueError` recorded from a channel), no
+  longer matches `RoomKitError`; `TimeoutError`,
+  `PermissionError`, `ConnectionError` and `FileNotFoundError` now match
+  `OSError`, and `KeyError` matches `LookupError`.
 
 - A memory's summary reads every content by its text form (RFC §6.6,
   RMK-2241), as Python's now does: the summarizer read a location as

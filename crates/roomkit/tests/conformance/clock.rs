@@ -8,12 +8,14 @@
 //! roomkit-rs provides no media feature, so the clock reaches only the
 //! core's two durations here, and only the run's own kit: the kits of
 //! `setup.processes` stay on tokio's clock, where roomkit's installed clock
-//! is every kit's of the process (no scenario combines the two yet). An advance ends each wait due by its target in
-//! the order they fall due, each at its due time, and lets the work it
-//! resumes run before the next one ends; on several workers the runner
-//! cannot see when that work waits again, as roomkit's reads its event
-//! loop's ready queue, so a scenario orders what follows a wait with a step
-//! that waits for it (`waiters`, a gate).
+//! is every kit's of the process (no scenario combines the two yet).
+//!
+//! An advance ends each wait due by its target in the order they fall due,
+//! each at its due time, and lets the work it resumes run before the next
+//! one ends; on several workers the runner cannot see when that work waits
+//! again, as roomkit's reads its event loop's ready queue, so a scenario
+//! orders what follows a wait with a step that waits for it (`waiters`, a
+//! gate).
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
