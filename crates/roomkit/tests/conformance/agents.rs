@@ -1524,6 +1524,23 @@ fn agent_settings(spec: &Value, options: &mut AiChannelOptions) -> Result<(), St
         let prompt = prompt.as_str().ok_or("system_prompt: not a text")?;
         options.system_prompt = Some(prompt.to_owned());
     }
+    // The servers' instructions, by the host's label, in order (README,
+    // `server_instructions`); a label the channel refuses refuses it.
+    if let Some(named) = spec.get("server_instructions") {
+        let named = named
+            .as_object()
+            .ok_or("server_instructions: not an object")?;
+        options.server_instructions = named
+            .iter()
+            .map(|(label, text)| match text {
+                Value::Null => Ok((label.clone(), None)),
+                Value::String(text) => Ok((label.clone(), Some(text.clone()))),
+                Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_) => {
+                    Err("server_instructions: a text or null by label")
+                }
+            })
+            .collect::<Result<_, _>>()?;
+    }
     if let Some(temperature) = spec.get("temperature") {
         options.temperature = temperature.as_f64().ok_or("temperature: not a number")?;
     }

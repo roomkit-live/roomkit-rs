@@ -60,6 +60,16 @@ tokio = { workspace = true, features = ["test-util", "net", "io-util"] }
 [lints]
 workspace = true
 
+# The conformance runner's fixture process, which a scenario's MCP server
+# (`mcp_servers` `stdio`) or ACP channel (`acp.process`) starts from its
+# command (fixtures/conformance.rs). A dependent never builds it.
+[[bin]]
+name = "roomkit-conformance-fixture"
+path = "fixtures/conformance.rs"
+test = false
+doc = false
+bench = false
+
 # Each subprocess has its own initial environment and process-wide switch.
 [[test]]
 name = "content_logging"

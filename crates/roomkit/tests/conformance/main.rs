@@ -54,6 +54,7 @@ mod member_calls;
 mod memory;
 mod normalize;
 mod process_tests;
+mod processes;
 mod report_claims;
 mod room_calls;
 mod room_queries;
@@ -239,6 +240,12 @@ pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[
         "timing: RFC §19.8 (RK-19.8-018): on several workers the end a cut turn posts during \
          the kit's close is published on a task the close cuts before its room's \
          ON_STATUS_POSTED hooks run; one thread runs them in time (RMK-2184)",
+    ),
+    (
+        "mcp/a-tool-listed-with-an-output-schema-fails-a-result-that-breaks-it-or-carries-none",
+        "RFC §21.2 (RK-21.2-022, RK-21.2-030): roomkit-mcp keeps no tool's output schema from \
+         its listing and validates no result's structured content, so a result that breaks \
+         the schema or carries none succeeds (RMK-2255)",
     ),
 ];
 

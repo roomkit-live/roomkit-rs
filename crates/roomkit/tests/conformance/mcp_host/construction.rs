@@ -3,10 +3,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use roomkit_mcp::{FromUrlOptions, McpHeaders, McpToolProvider, McpToolProviderOptions};
+use roomkit_mcp::{FromUrlOptions, McpError, McpHeaders, McpToolProvider, McpToolProviderOptions};
 use serde_json::Value;
 
-pub(super) fn construct(url: &str, spec: &Value) -> Result<McpToolProvider, String> {
+/// The provider public construction builds on `url`, or its refusal.
+pub(super) fn construct(url: &str, spec: &Value) -> Result<McpToolProvider, McpError> {
     let headers = spec
         .get("headers")
         .map(|value| McpHeaders::new(entries(value)));
@@ -48,8 +49,7 @@ pub(super) fn construct(url: &str, spec: &Value) -> Result<McpToolProvider, Stri
                 propagate_trace_context: options.propagate_trace_context,
             },
         )
-    }
-    .map_err(|error| error.to_string())?;
+    }?;
     if let Some(replacement) = spec.get("headers_after_construction") {
         headers.as_ref().unwrap().replace(entries(replacement));
     }

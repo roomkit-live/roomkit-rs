@@ -91,3 +91,53 @@ fn record(span: &Span) -> Value {
         "error_message": span.error_message,
     })
 }
+
+/// The kit's recording provider with `injects_context` (README, "Setup"):
+/// it records as the mock does, and names the span it is handed to another
+/// process, each of `traceparent`, `tracestate`, `baggage` and `span` mapped
+/// to the span's id.
+#[derive(Debug)]
+pub(crate) struct InjectingTelemetry(pub(crate) Arc<roomkit::telemetry::MockTelemetryProvider>);
+
+impl roomkit::telemetry::TelemetryProvider for InjectingTelemetry {
+    fn name(&self) -> &str {
+        self.0.name()
+    }
+
+    fn start_span(
+        &self,
+        kind: SpanKind,
+        name: &str,
+        options: roomkit::telemetry::StartSpanOptions,
+    ) -> String {
+        self.0.start_span(kind, name, options)
+    }
+
+    fn end_span(&self, span_id: &str, options: roomkit::telemetry::EndSpanOptions) {
+        self.0.end_span(span_id, options);
+    }
+
+    fn set_attribute(&self, span_id: &str, key: &str, value: Value) {
+        self.0.set_attribute(span_id, key, value);
+    }
+
+    fn record_metric(
+        &self,
+        name: &str,
+        value: f64,
+        options: roomkit::telemetry::RecordMetricOptions,
+    ) {
+        self.0.record_metric(name, value, options);
+    }
+
+    fn inject_context(&self, span_id: &str) -> std::collections::BTreeMap<String, String> {
+        ["traceparent", "tracestate", "baggage", "span"]
+            .into_iter()
+            .map(|key| (key.to_owned(), span_id.to_owned()))
+            .collect()
+    }
+
+    fn reset(&self) {
+        self.0.reset();
+    }
+}

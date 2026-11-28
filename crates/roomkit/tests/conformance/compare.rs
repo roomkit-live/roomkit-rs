@@ -460,6 +460,8 @@ impl Comparison<'_> {
     fn acp(&mut self) {
         for (kind, recorded) in [
             ("acp_wire", &self.observed.acp_wire),
+            ("processes", &self.observed.processes),
+            ("mcp_calls", &self.observed.mcp_calls),
             ("acp_permissions", &self.observed.acp_permissions),
             ("acp_handlers", &self.observed.acp_handlers),
             ("acp_prompts", &self.observed.acp_prompts),

@@ -96,6 +96,10 @@ pub(crate) struct Observed {
     pub(crate) classifier_calls: BTreeMap<String, Vec<Value>>,
     /// What each scripted ACP agent received, by its channel.
     pub(crate) acp_wire: BTreeMap<String, Vec<Value>>,
+    /// Each fixture process's starts, by its name (README, `processes`).
+    pub(crate) processes: BTreeMap<String, Vec<Value>>,
+    /// Each labelled MCP server's `tools/call` requests (README, `mcp_calls`).
+    pub(crate) mcp_calls: BTreeMap<String, Vec<Value>>,
     pub(crate) acp_handlers: BTreeMap<String, Vec<Value>>,
     pub(crate) external_handlers: BTreeMap<String, Vec<Value>>,
     pub(crate) acp_permissions: BTreeMap<String, Vec<Value>>,

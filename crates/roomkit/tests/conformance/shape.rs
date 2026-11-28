@@ -62,6 +62,7 @@ const KIT: &[&str] = &[
     "persistence_policy",
     "store_faults",
     "store_spans",
+    "injects_context",
     "store_owner",
     "task_runner",
     "shared_realtime",
@@ -131,6 +132,7 @@ const CHANNEL: &[&str] = &[
     "model",
     "acp",
     "mcp_servers",
+    "server_instructions",
     "tools",
     "tool_policy",
     "max_tool_rounds",
@@ -304,8 +306,26 @@ const TOOL: &[&str] = &[
 const RAISES: &[&str] = &["kind", "message"];
 const POLICY: &[&str] = &["allow", "deny", "role_overrides"];
 const ROLE_OVERRIDE: &[&str] = &["allow", "deny", "mode"];
-const MCP_SERVER: &[&str] = &["label", "gate_discovery", "declare", "tools"];
-const MCP_TOOL: &[&str] = &["name", "description", "input_schema", "returns", "is_error"];
+const MCP_SERVER: &[&str] = &[
+    "label",
+    "gate_discovery",
+    "declare",
+    "tools",
+    "server_name",
+    "instructions",
+    "propagate_trace_context",
+    "stdio",
+];
+const MCP_TOOL: &[&str] = &[
+    "name",
+    "description",
+    "input_schema",
+    "returns",
+    "is_error",
+    "output_schema",
+    "content",
+    "structured_content",
+];
 const MEMORY: &[&str] = &[
     "max_events",
     "returns_current_event",
@@ -487,6 +507,8 @@ const EXPECT: &[&str] = &[
     "script_executors",
     "sandbox_executors",
     "acp_wire",
+    "processes",
+    "mcp_calls",
     "acp_permissions",
     "acp_handlers",
     "acp_prompts",
@@ -936,8 +958,15 @@ fn optional(value: &Value, known: &[&str], path: &str, found: &mut Vec<String>) 
 
 /// A scripted ACP agent's members (README, "Scripted ACP agents").
 fn scripted_acp(acp: &Value, path: &str, found: &mut Vec<String>) {
-    use crate::acp_agents::{ACP, AFTER_REPLY, AGENT, INITIALIZE, PROMPT, SESSION_REPLY};
+    use crate::acp_agents::{ACP, AFTER_REPLY, AGENT, INITIALIZE, PROCESS, PROMPT, SESSION_REPLY};
     optional(acp, ACP, path, found);
+    optional(&acp["process"], PROCESS, &format!("{path}.process"), found);
+    if acp
+        .get("reach")
+        .is_some_and(|reach| reach != "both" && reach != "neither")
+    {
+        found.push(format!("{path}.reach: expected both or neither"));
+    }
     acp_directories(acp, path, found);
     crate::acp_agents::mcp::validate(acp, path, found);
     crate::acp_agents::context::validate(acp, path, found);
@@ -1027,6 +1056,12 @@ fn mcp_servers(servers: &Value, path: &str, found: &mut Vec<String>) {
     for (index, server) in items(servers) {
         let server_path = format!("{path}.mcp_servers[{index}]");
         members(server, MCP_SERVER, &server_path, found);
+        if let Some(stdio) = server.get("stdio") {
+            members(stdio, &["args"], &format!("{server_path}.stdio"), found);
+            if server.get("label").is_none() {
+                found.push(format!("{server_path}.stdio: needs a label"));
+            }
+        }
         for (position, tool) in items(&server["tools"]) {
             let tool_path = format!("{server_path}.tools[{position}]");
             members(tool, MCP_TOOL, &tool_path, found);

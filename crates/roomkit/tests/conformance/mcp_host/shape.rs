@@ -14,6 +14,7 @@ pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
             "headers",
             "headers_after_construction",
             "label",
+            "url",
             "connect_timeout_ms",
         ]);
     }
@@ -140,9 +141,10 @@ fn peer(value: &Value, path: &str, found: &mut Vec<String>) {
 
 fn operation(op: &Value, path: &str, found: &mut Vec<String>) {
     let fields: &[&str] = match op["method"].as_str() {
-        Some("connect" | "close" | "connected" | "tool_names" | "get_tools_as_dicts") => {
-            &["method"]
-        }
+        Some(
+            "connect" | "close" | "connected" | "instructions" | "tool_names"
+            | "get_tools_as_dicts",
+        ) => &["method"],
         Some("tool_meta" | "server_info" | "server_extensions") => &["method", "mutate"],
         Some("request") => &["method", "name", "params", "timeout_ms"],
         Some("read_resource") => &["method", "uri", "timeout_ms"],
@@ -214,6 +216,7 @@ fn construction(spec: &Value, path: &str, found: &mut Vec<String>) {
         }
     }
     if spec.get("label").is_some_and(|value| !value.is_string())
+        || spec.get("url").is_some_and(|value| !value.is_string())
         || spec
             .get("connect_timeout_ms")
             .is_some_and(|value| value.as_u64().is_none_or(|value| value == 0))

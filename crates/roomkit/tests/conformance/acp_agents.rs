@@ -56,7 +56,14 @@ pub(crate) const ACP: &[&str] = &[
     "name",
     "role",
     "description",
+    "process",
+    "reach",
+    "env",
+    "inherit_env",
+    "authentication_method",
 ];
+/// The members of its `process` (README, `acp.process`).
+pub(crate) const PROCESS: &[&str] = &["args", "says"];
 /// The members of its `agent`.
 pub(crate) const AGENT: &[&str] = &[
     "initialize",
@@ -96,13 +103,148 @@ pub(crate) const SESSION_REPLY: &[&str] = &["gate", "result", "error"];
 /// What the agent received, in order: each `{method, params}`.
 pub(crate) type Wire = Arc<Mutex<Vec<Value>>>;
 
-/// The channel a scenario's `acp` member describes, and what its agent
-/// receives.
+/// The ACP channel a scenario's `acp` member describes.
+pub(crate) enum Built {
+    /// Over the runner's transport, its scripted agent behind it, and what
+    /// that agent receives.
+    Scripted(AcpChannel<ScriptedTransport>, Wire, Arc<AgentPipe>),
+    /// Spawning the runner's fixture agent from its command (README,
+    /// `acp.process`), and the agent's report.
+    Process(AcpChannel, PathBuf),
+    /// Refused by the channel's constructor: `register_channel`'s
+    /// `invalid_argument`.
+    Refused,
+}
+
+/// The channel a scenario's `acp` member describes: over the runner's
+/// transport, or spawning the fixture agent (README, `acp.process`,
+/// `acp.reach`).
+pub(crate) fn build(channel: &Value, id: ChannelId, run: &Arc<Run>) -> Result<Built, Unreadable> {
+    let spec = &channel["acp"];
+    // With `reach`, the channel is given both a command and the runner's
+    // transport, or neither: built over the transport's path, and refused.
+    if spec.get("process").is_none() || spec.get("reach").is_some() {
+        return over_transport(channel, id, run);
+    }
+    let cwd = spec["cwd"]
+        .as_str()
+        .ok_or_else(|| "acp.cwd: an absolute path".to_owned())?;
+    let name = id.to_string();
+    let report = run.fixtures.report(&name)?;
+    let (command, env, inherit_env) = fixture_command(spec, &report)?;
+    let options = AcpChannelOptions {
+        command: Some(command),
+        env,
+        inherit_env,
+        authentication_method: crate::calls::optional(spec, "authentication_method")?,
+        ..AcpChannelOptions::default()
+    };
+    Ok(match AcpChannel::new(id, cwd, options) {
+        Ok(channel) => Built::Process(channel, report),
+        Err(_refused) => Built::Refused,
+    })
+}
+
+/// The fixture agent's command for `spec`'s `process`: the fixture's
+/// program and its own arguments, then the scenario's; and the channel's
+/// `env` and `inherit_env`.
+#[expect(
+    clippy::type_complexity,
+    reason = "three constructor options read together"
+)]
+fn fixture_command(
+    spec: &Value,
+    report: &std::path::Path,
+) -> Result<
+    (
+        Vec<String>,
+        Option<std::collections::BTreeMap<String, String>>,
+        Option<Vec<String>>,
+    ),
+    Unreadable,
+> {
+    let (env, inherit_env) = spawn_env(spec)?;
+    let mut names: Vec<String> = env.iter().flat_map(|env| env.keys().cloned()).collect();
+    names.extend(inherit_env.iter().flatten().cloned());
+    let own = json!({ "mode": "acp", "says": spec["process"]["says"], "env": names });
+    let mut command = vec![
+        crate::processes::FIXTURE.to_owned(),
+        report.to_string_lossy().into_owned(),
+        own.to_string(),
+    ];
+    for arg in spec["process"]["args"].as_array().into_iter().flatten() {
+        command.push(arg.as_str().ok_or("acp.process.args: texts")?.to_owned());
+    }
+    Ok((command, env, inherit_env))
+}
+
+/// The channel's `env` and `inherit_env`, as its constructor takes them.
+#[expect(
+    clippy::type_complexity,
+    reason = "two constructor options read together"
+)]
+fn spawn_env(
+    spec: &Value,
+) -> Result<
+    (
+        Option<std::collections::BTreeMap<String, String>>,
+        Option<Vec<String>>,
+    ),
+    Unreadable,
+> {
+    let env = spec
+        .get("env")
+        .map(|env| {
+            env.as_object()
+                .ok_or("acp.env: an object of texts")?
+                .iter()
+                .map(|(name, value)| {
+                    value
+                        .as_str()
+                        .map(|value| (name.clone(), value.to_owned()))
+                        .ok_or("acp.env: an object of texts")
+                })
+                .collect::<Result<_, _>>()
+        })
+        .transpose()?;
+    let inherit_env = spec
+        .get("inherit_env")
+        .map(|names| {
+            names
+                .as_array()
+                .ok_or("acp.inherit_env: a list of texts")?
+                .iter()
+                .map(|name| {
+                    name.as_str()
+                        .map(str::to_owned)
+                        .ok_or("acp.inherit_env: a list of texts")
+                })
+                .collect::<Result<_, _>>()
+        })
+        .transpose()?;
+    Ok((env, inherit_env))
+}
+
+/// The channel a scenario's `acp` member describes over the runner's
+/// transport, and what its agent receives, for a caller that takes no
+/// other: an executor's build.
 pub(crate) fn scripted_acp_channel(
     channel: &Value,
     id: ChannelId,
     run: &Arc<Run>,
 ) -> Result<(AcpChannel<ScriptedTransport>, Wire, Arc<AgentPipe>), Unreadable> {
+    match over_transport(channel, id, run)? {
+        Built::Scripted(channel, wire, pipe) => Ok((channel, wire, pipe)),
+        Built::Process(..) | Built::Refused => {
+            Err("acp: an executor builds no such channel".into())
+        }
+    }
+}
+
+/// The channel a scenario's `acp` member describes over the runner's
+/// transport, and what its agent receives; with `reach` `both`, the fixture
+/// agent's command too, and with `neither`, no transport.
+fn over_transport(channel: &Value, id: ChannelId, run: &Arc<Run>) -> Result<Built, Unreadable> {
     let spec = &channel["acp"];
     let cwd = spec["cwd"]
         .as_str()
@@ -126,8 +268,20 @@ pub(crate) fn scripted_acp_channel(
                 .into_iter(),
         )),
     };
+    let reach = spec["reach"].as_str();
+    let command = if reach == Some("both") {
+        let report = run.fixtures.report(id.as_str())?;
+        Some(fixture_command(spec, &report)?.0)
+    } else {
+        None
+    };
+    let (env, inherit_env) = spawn_env(spec)?;
     let options = AcpChannelOptions {
-        transport: Some(transport),
+        transport: (reach != Some("neither")).then_some(transport),
+        command,
+        env,
+        inherit_env,
+        authentication_method: crate::calls::optional(spec, "authentication_method")?,
         additional_directories: directories(spec)?,
         mcp_servers: mcp::servers(spec, id.as_str(), run)?,
         publish_thinking_text: thinking::publishes(spec)?,
@@ -143,10 +297,12 @@ pub(crate) fn scripted_acp_channel(
             .get("session_config")
             .and_then(Value::as_object)
             .cloned(),
-        ..AcpChannelOptions::default()
     };
-    let channel = AcpChannel::new(id, cwd, options).map_err(|error| format!("acp: {error}"))?;
-    Ok((channel, wire, pipe))
+    // The constructor's refusal is register_channel's invalid_argument.
+    Ok(match AcpChannel::new(id, cwd, options) {
+        Ok(channel) => Built::Scripted(channel, wire, pipe),
+        Err(_refused) => Built::Refused,
+    })
 }
 
 fn instructions(spec: &Value) -> Result<Option<String>, Unreadable> {
@@ -498,6 +654,7 @@ async fn answer(agent: Arc<Agent>, message: Value, prompt: Option<Value>, writer
         .cloned();
     let outcome: Result<Value, Value> = match (method, prompt) {
         ("initialize", _) => Ok(agent.initialized(params)),
+        ("authenticate", _) => Ok(json!({})),
         ("session/new" | "session/set_config_option" | "session/close", Some(reply)) => {
             agent.session_reply(method, &reply).await
         }

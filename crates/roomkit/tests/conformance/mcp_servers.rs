@@ -1,9 +1,10 @@
 //! A scripted agent's MCP servers (roomkit-specs conformance/README.md,
 //! "Scripted agents", `mcp_servers`): each one served in process over
-//! streamable HTTP and reached through roomkit-mcp's own provider,
-//! connected before the run, its tools listed then, and closed after it.
+//! streamable HTTP, or as the runner's fixture process over stdio
+//! (`stdio`), and reached through roomkit-mcp's own provider, connected
+//! before the run, its tools listed then, and closed after it.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
 use axum::Router;
@@ -12,33 +13,56 @@ use axum::extract::State;
 use axum::http::{Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
+use std::path::PathBuf;
+
 use roomkit_ai::{AiTool, ToolEntry, ToolHandler};
-use roomkit_mcp::{AsToolHandlerOptions, FromUrlOptions, McpToolProvider};
+use roomkit_mcp::{AsToolHandlerOptions, FromCommandOptions, FromUrlOptions, McpToolProvider};
 use serde_json::{Value, json};
 use tokio::task::JoinHandle;
 
+use crate::processes::ProcessReports;
 use crate::run::lock;
 
-/// One server: its spec, its provider, and the task serving it.
+#[path = "../../fixtures/mcp_wire.rs"]
+mod mcp_wire;
+
+/// The `tools/call` requests a server in process received.
+type Calls = Arc<Mutex<Vec<Value>>>;
+
+/// Where a server's `tools/call` requests are read: in process, or in its
+/// fixture process's report.
+enum Recorded {
+    Memory(Calls),
+    Report(PathBuf),
+}
+
+/// One server: its spec, its provider, the task serving it in process, and
+/// its calls.
 pub(crate) struct Server {
     spec: Value,
     provider: McpToolProvider,
-    task: JoinHandle<()>,
+    task: Option<JoinHandle<()>>,
+    calls: Recorded,
 }
 
 /// Every setup channel's MCP servers, by channel id, in chain order.
 #[derive(Default)]
 pub(crate) struct McpServers {
     by_channel: Mutex<HashMap<String, Vec<Arc<Server>>>>,
+    calls: Mutex<BTreeMap<String, Vec<Value>>>,
 }
 
 impl McpServers {
     /// Starts and connects the servers of each of `channels`, in order.
-    pub(crate) async fn connect(&self, channels: &Value) -> Result<(), String> {
+    pub(crate) async fn connect(
+        &self,
+        channels: &Value,
+        reports: &ProcessReports,
+    ) -> Result<(), String> {
         for channel in channels.as_array().into_iter().flatten() {
             let id = channel["id"].as_str().unwrap_or_default();
             for spec in channel["mcp_servers"].as_array().into_iter().flatten() {
-                let server = serve(spec).await?;
+                let server = serve(spec, reports).await?;
                 lock(&self.by_channel)
                     .entry(id.to_owned())
                     .or_default()
@@ -53,7 +77,8 @@ impl McpServers {
         lock(&self.by_channel).get(id).cloned().unwrap_or_default()
     }
 
-    /// Disconnects every provider and stops its server.
+    /// Disconnects every provider and stops its server, keeping what each
+    /// labelled one was sent: `expect.mcp_calls`.
     pub(crate) async fn close(&self) {
         let servers: Vec<Arc<Server>> = lock(&self.by_channel)
             .drain()
@@ -61,8 +86,22 @@ impl McpServers {
             .collect();
         for server in servers {
             server.provider.close().await;
-            server.task.abort();
+            if let Some(task) = &server.task {
+                task.abort();
+            }
+            if let Some(label) = server.spec["label"].as_str() {
+                let calls = match &server.calls {
+                    Recorded::Memory(calls) => lock(calls).clone(),
+                    Recorded::Report(path) => crate::processes::calls(path),
+                };
+                lock(&self.calls).insert(label.to_owned(), calls);
+            }
         }
+    }
+
+    /// `expect.mcp_calls`, once the servers are closed.
+    pub(crate) fn calls(&self) -> BTreeMap<String, Vec<Value>> {
+        lock(&self.calls).clone()
     }
 }
 
@@ -108,12 +147,17 @@ pub(crate) fn handlers(servers: &[Arc<Server>]) -> Result<Vec<ToolHandler>, Stri
         .collect()
 }
 
-/// `spec`'s server, served at a port of its own, and its provider,
-/// connected.
-async fn serve(spec: &Value) -> Result<Server, String> {
+/// `spec`'s server, connected: the runner's fixture process when the spec
+/// names `stdio` (its report under the server's label), served in process
+/// over HTTP at a port of its own otherwise.
+async fn serve(spec: &Value, reports: &ProcessReports) -> Result<Server, String> {
+    if let Some(stdio) = spec.get("stdio") {
+        return serve_stdio(spec, stdio, reports).await;
+    }
+    let calls = Calls::default();
     let app = Router::new()
         .route("/mcp", any(answer))
-        .with_state(Arc::new(spec.clone()));
+        .with_state((Arc::new(spec.clone()), Arc::clone(&calls)));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .map_err(|e| e.to_string())?;
@@ -126,6 +170,7 @@ async fn serve(spec: &Value) -> Result<Server, String> {
     });
     let options = FromUrlOptions {
         label: spec["label"].as_str().map(str::to_owned),
+        propagate_trace_context: spec["propagate_trace_context"] == true,
         ..FromUrlOptions::default()
     };
     let provider = McpToolProvider::from_url(&url, options).map_err(|e| e.to_string())?;
@@ -136,14 +181,59 @@ async fn serve(spec: &Value) -> Result<Server, String> {
     Ok(Server {
         spec: spec.clone(),
         provider,
-        task,
+        task: Some(task),
+        calls: Recorded::Memory(calls),
     })
 }
 
-/// The server's answer to one request: its handshake, its tools as the
-/// spec writes them, and each call answered with the tool's `returns`, a
-/// result that says `isError` when the tool's `is_error` is true.
-async fn answer(State(spec): State<Arc<Value>>, method: Method, body: Bytes) -> Response {
+/// `spec`'s server as the runner's fixture process, started by the
+/// provider's public command constructor from the fixture's program and
+/// its own arguments, then each of `stdio`'s `args`.
+async fn serve_stdio(
+    spec: &Value,
+    stdio: &Value,
+    reports: &ProcessReports,
+) -> Result<Server, String> {
+    let label = spec["label"]
+        .as_str()
+        .ok_or("mcp_servers: stdio needs a label")?;
+    let report = reports.report(label)?;
+    let own = json!({ "mode": "mcp", "server": spec, "env": [] });
+    let mut args = vec![report.clone().into_os_string(), own.to_string().into()];
+    for arg in stdio["args"].as_array().into_iter().flatten() {
+        args.push(
+            arg.as_str()
+                .ok_or("mcp_servers: stdio args are texts")?
+                .into(),
+        );
+    }
+    let options = FromCommandOptions {
+        args,
+        label: Some(label.to_owned()),
+        propagate_trace_context: spec["propagate_trace_context"] == true,
+        ..FromCommandOptions::default()
+    };
+    let provider = McpToolProvider::from_command(crate::processes::FIXTURE, options)
+        .map_err(|e| e.to_string())?;
+    provider
+        .connect()
+        .await
+        .map_err(|error| format!("mcp_servers: {error}"))?;
+    Ok(Server {
+        spec: spec.clone(),
+        provider,
+        task: None,
+        calls: Recorded::Report(report),
+    })
+}
+
+/// The server's answer to one request (`mcp_wire::answer`), each
+/// `tools/call` recorded first.
+async fn answer(
+    State((spec, calls)): State<(Arc<Value>, Calls)>,
+    method: Method,
+    body: Bytes,
+) -> Response {
     if method == Method::DELETE {
         return StatusCode::NO_CONTENT.into_response();
     }
@@ -153,45 +243,16 @@ async fn answer(State(spec): State<Arc<Value>>, method: Method, body: Bytes) -> 
     let Ok(request) = serde_json::from_slice::<Value>(&body) else {
         return StatusCode::BAD_REQUEST.into_response();
     };
-    let name = request["method"].as_str().unwrap_or_default();
-    if name.starts_with("notifications/") {
-        return StatusCode::ACCEPTED.into_response();
+    if request["method"] == "tools/call" {
+        let params = &request["params"];
+        lock(&calls).push(json!({
+            "name": params["name"],
+            "arguments": params.get("arguments").cloned().unwrap_or_else(|| json!({})),
+            "_meta": params.get("_meta").cloned().unwrap_or_else(|| json!({})),
+        }));
     }
-    let tools = spec["tools"].as_array().cloned().unwrap_or_default();
-    let result = match name {
-        "initialize" => json!({
-            "protocolVersion": "2025-03-26",
-            "capabilities": { "tools": {} },
-            "serverInfo": { "name": spec["label"].as_str().unwrap_or("scripted"), "version": "1" },
-        }),
-        "tools/list" => json!({ "tools": tools.iter().map(listed).collect::<Vec<_>>() }),
-        "tools/call" => {
-            let called = &request["params"]["name"];
-            match tools.iter().find(|tool| &tool["name"] == called) {
-                Some(tool) => json!({
-                    "content": [{ "type": "text", "text": tool["returns"] }],
-                    "isError": tool["is_error"] == true,
-                }),
-                None => json!({
-                    "content": [{ "type": "text", "text": format!("Unknown tool: {called}") }],
-                    "isError": true,
-                }),
-            }
-        }
-        _ => json!({}),
-    };
-    let body = json!({ "jsonrpc": "2.0", "id": request["id"], "result": result }).to_string();
-    ([("content-type", "application/json")], body).into_response()
-}
-
-/// A tool of the spec as the server lists it.
-fn listed(tool: &Value) -> Value {
-    let mut listed = json!({
-        "name": tool["name"],
-        "inputSchema": tool.get("input_schema").cloned().unwrap_or_else(|| json!({ "type": "object" })),
-    });
-    if let Some(description) = tool.get("description") {
-        listed["description"] = description.clone();
+    match mcp_wire::answer(&spec, &request) {
+        Some(body) => ([("content-type", "application/json")], body.to_string()).into_response(),
+        None => StatusCode::ACCEPTED.into_response(),
     }
-    listed
 }

@@ -14,10 +14,11 @@ use roomkit_mcp::{
 };
 use serde_json::{Value, json};
 
-use crate::calls::Unreadable;
+use crate::calls::{Called, Unreadable};
+use crate::errors::named;
 pub(crate) use shape::{arguments, validate};
 
-pub(crate) async fn session(spec: &Value) -> Result<Value, Unreadable> {
+pub(crate) async fn session(spec: &Value) -> Result<Called, Unreadable> {
     let mut problems = Vec::new();
     validate(spec, "mcp_session", &mut problems);
     if !problems.is_empty() {
@@ -25,7 +26,19 @@ pub(crate) async fn session(spec: &Value) -> Result<Value, Unreadable> {
     }
     let peer = peer::Peer::start(spec["peer"].clone(), spec["transport"] == "sse").await?;
     let discover = spec["discover"].as_bool().unwrap_or(true);
-    let provider = construction::construct(&peer.url, spec)?;
+    // A URL of the scenario's own, in place of the peer's (README, "MCP
+    // host sessions"): the peer still runs, and is never reached from it.
+    let url = spec["url"].as_str().unwrap_or(&peer.url).to_owned();
+    let provider = match construction::construct(&url, spec) {
+        Ok(provider) => provider,
+        // Public construction refused its arguments: the call's
+        // invalid_argument, and no operation runs.
+        Err(McpError::Configuration { .. }) => {
+            peer.finish().await?;
+            return Ok(Err(named("invalid_argument")));
+        }
+        Err(error) => return Err(format!("unexpected MCP construction error: {error}")),
+    };
     let results = observations(&provider, &peer, spec, discover).await;
     provider.close().await;
     peer.settle_closed().await?;
@@ -45,7 +58,7 @@ pub(crate) async fn session(spec: &Value) -> Result<Value, Unreadable> {
     if let Some(posted) = posted {
         observed["messages"] = posted;
     }
-    Ok(observed)
+    Ok(Ok(observed))
 }
 
 async fn observations(
@@ -121,6 +134,7 @@ async fn operation(provider: &McpToolProvider, op: &Value) -> Result<Value, McpE
             Value::Null
         }
         "connected" => json!(provider.connected()),
+        "instructions" => json!(provider.instructions()?),
         "tool_names" => json!(provider.tool_names()?),
         "get_tools_as_dicts" => json!(provider.get_tools_as_dicts()?),
         "tool_meta" => json!(provider.tool_meta()?),
@@ -222,7 +236,7 @@ mod tests {
             "operations":[{"method":"connect"},{"method":"tool_names"},
                 {"method":"call_tool","name":"routed","arguments":{"region":"eu"}},{"method":"close"}],
         });
-        let observed = session(&spec).await.unwrap();
+        let observed = session(&spec).await.unwrap().unwrap();
         assert_eq!(
             observed["results"],
             json!([{"result":null},{"result":["routed","odd"]},{"result":"eu"},{"result":null}])

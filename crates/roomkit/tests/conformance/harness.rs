@@ -93,7 +93,13 @@ fn kit_options<S: ConversationStore>(
     slot: &RunSlot,
     telemetry: Option<&Arc<roomkit::telemetry::MockTelemetryProvider>>,
 ) -> RoomKitOptions<S> {
-    options.telemetry = telemetry.cloned().map(Into::into);
+    options.telemetry = telemetry.cloned().map(|recorder| {
+        if kit["injects_context"] == true {
+            Arc::new(crate::telemetry_calls::InjectingTelemetry(recorder)).into()
+        } else {
+            recorder.into()
+        }
+    });
     if let Some(names) = kit.get("error_classes") {
         let names: Vec<crate::channel_verbs::turn_errors::FixtureClass> =
             serde_json::from_value(names.clone()).unwrap();
@@ -284,12 +290,22 @@ pub(crate) async fn run_with(
         // Its owner closes a store the kit left open.
         run.store().close_owned().await;
     }
-    run.mcp.close().await;
+    close_fixtures(&run, &mut observed).await;
     run.observer_store().close().await;
     observed.text_events = std::mem::take(&mut *lock(&text_events));
     let mut found = lock(&run.problems).clone();
     found.extend(compare(&run, scenario, &observed));
     found
+}
+
+/// Closes the agents' MCP servers, then reads what they were sent and
+/// what the fixture processes reported, once each ended (README,
+/// `mcp_calls`, `processes`).
+async fn close_fixtures(run: &Run, observed: &mut Observed) {
+    run.mcp.close().await;
+    observed.mcp_calls = run.mcp.calls();
+    observed.processes = run.fixtures.observe().await;
+    run.fixtures.close();
 }
 
 /// What the setup says of the kit's store: its faults declared
@@ -359,7 +375,7 @@ async fn open_process(
 async fn set_up(run: &Arc<Run>, setup: &Value) -> Result<(), String> {
     run.auditors
         .set_up(&setup["session_auditor"], &setup["audit_files"], run.kit())?;
-    run.mcp.connect(&setup["channels"]).await?;
+    run.mcp.connect(&setup["channels"], &run.fixtures).await?;
     for channel in setup["channels"].as_array().into_iter().flatten() {
         calls::register_channel(run, channel)?
             .map_err(|error| format!("register {channel}: {error}"))?;
@@ -802,6 +818,11 @@ async fn observe(run: &Arc<Run>, step_outcomes: Vec<Value>) -> Observed {
     collect_acp_context(run, &mut observed);
     for (channel, wire) in lock(&run.acp_wires).iter() {
         let received = lock(wire).clone();
+        observed.acp_wire.insert(channel.clone(), received);
+    }
+    // What each fixture agent received, from its report (README, `acp.process`).
+    for (channel, report) in lock(&run.acp_process_reports).iter() {
+        let received = crate::processes::received(report);
         observed.acp_wire.insert(channel.clone(), received);
     }
     (observed.tool_audit, observed.session_audit) = run.auditors.observe(&mut problems);

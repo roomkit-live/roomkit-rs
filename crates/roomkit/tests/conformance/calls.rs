@@ -407,7 +407,7 @@ async fn other_call(
         return crate::skill_registry::session(run, spec).await.map(Ok);
     }
     if name == "mcp_session" {
-        return crate::mcp_host::session(spec).await.map(Ok);
+        return crate::mcp_host::session(spec).await;
     }
     if name == "acp.close" {
         return crate::acp_agents::control::close(run, spec).await;
@@ -848,12 +848,20 @@ pub(crate) fn register_channel_with_skills(
     } else if channel.get("model").is_some_and(Value::is_null) {
         register_built(run.kit(), declared, agents::config_only_agent(channel)?)
     } else if channel.get("acp").is_some() {
-        let (agent, wire, pipe) =
-            crate::acp_agents::scripted_acp_channel(channel, id.clone(), run)?;
-        crate::run::lock(&run.acp_channels).insert(id.to_string(), agent.clone());
-        crate::run::lock(&run.acp_wires).insert(id.to_string(), wire);
-        crate::run::lock(&run.acp_pipes).insert(id.to_string(), pipe);
-        register_built(run.kit(), declared, agent)
+        match crate::acp_agents::build(channel, id.clone(), run)? {
+            crate::acp_agents::Built::Scripted(agent, wire, pipe) => {
+                crate::run::lock(&run.acp_channels).insert(id.to_string(), agent.clone());
+                crate::run::lock(&run.acp_wires).insert(id.to_string(), wire);
+                crate::run::lock(&run.acp_pipes).insert(id.to_string(), pipe);
+                register_built(run.kit(), declared, agent)
+            }
+            crate::acp_agents::Built::Process(agent, report) => {
+                crate::run::lock(&run.acp_process_reports).insert(id.to_string(), report);
+                register_built(run.kit(), declared, agent)
+            }
+            // The constructor's refusal (README, "Errors").
+            crate::acp_agents::Built::Refused => return Ok(Err(named("invalid_argument"))),
+        }
     } else if channel.get("model").is_some() {
         // The implementation's refusal to build the agent is the call's
         // invalid_argument (README, "Errors").

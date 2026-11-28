@@ -247,6 +247,11 @@ pub(crate) struct Run {
     pub(crate) sandboxes: crate::sandbox::Sandboxes,
     /// The scripted agents' MCP servers (README, "Scripted agents").
     pub(crate) mcp: crate::mcp_servers::McpServers,
+    /// The reports of the run's fixture processes (README, `processes`).
+    pub(crate) fixtures: crate::processes::ProcessReports,
+    /// The report of each ACP channel's fixture agent, by channel
+    /// (README, `acp.process`).
+    pub(crate) acp_process_reports: Mutex<BTreeMap<String, std::path::PathBuf>>,
 }
 
 impl Run {
@@ -341,6 +346,8 @@ impl Run {
             skills: crate::skills::SkillDirectories::default(),
             sandboxes: crate::sandbox::Sandboxes::default(),
             mcp: crate::mcp_servers::McpServers::default(),
+            fixtures: crate::processes::ProcessReports::default(),
+            acp_process_reports: Mutex::default(),
         }
     }
 
