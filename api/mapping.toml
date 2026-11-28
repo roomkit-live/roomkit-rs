@@ -677,7 +677,7 @@ reason = "Python's Agent(channel_id, router=router, ...), as AiChannel::routed (
 rust = "roomkit_ai::Agent"
 members = ["config_only"]
 approved = "2026-11-28"
-reason = "Python's Agent(channel_id, ...) given neither provider nor router: the constructor of a configuration-only agent, an Agent<ConfigOnly>, as Agent::routed is a routed one's (HITL 59992320, RMK-2249)"
+reason = "Python's Agent(channel_id, ...) given neither provider nor router: the constructor of a configuration-only agent, an Agent<ConfigOnly>, as Agent::routed is a routed one's (HITL 59992320, RMK-2249). Its own turn fails as it starts, before its memory and its generation hooks, where Python's null provider raises once the turn is built: the same message and class, a difference kept (HITL 2ff942df)"
 
 [[exception]]
 rust = "roomkit_ai::ConfigOnly"
