@@ -17,7 +17,8 @@ struct Script {
 }
 impl Script {
     fn new(spec: &Value, id: &str, run: &Arc<Run>, thinking: bool) -> Result<Self, String> {
-        super::shape::script(spec, thinking)?;
+        let beside: &[&str] = if thinking { &[] } else { &["answer_only"] };
+        super::shape::script_with(spec, thinking, beside)?;
         Ok(Self {
             entries: spec[if thinking { "thoughts" } else { "decisions" }]
                 .as_array()

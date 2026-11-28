@@ -454,6 +454,7 @@ const EXPECT: &[&str] = &[
     "continuations",
     "speak_turns",
     "thinker_calls",
+    "classifier_calls",
     "external_handlers",
     "executors",
     "turn_ends",

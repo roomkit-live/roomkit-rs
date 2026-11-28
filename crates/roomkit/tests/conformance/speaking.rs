@@ -1,4 +1,6 @@
 //! Scripted public speaking policies and thinkers with their actual call records.
+#[path = "speaking/classifier.rs"]
+mod classifier;
 #[path = "speaking/scripts.rs"]
 mod scripts;
 #[path = "speaking/shape.rs"]
@@ -10,19 +12,29 @@ mod tests;
 use std::sync::Arc;
 use std::time::Duration;
 
-use roomkit_ai::speaking::{SpeakDecision, SpeakDecisionEvent, SpeakTurn, ThoughtEvent};
+use roomkit_ai::speaking::{
+    LlmThinker, LlmThinkerOptions, SpeakDecision, SpeakDecisionEvent, SpeakPolicy, SpeakTurn,
+    Thinker, ThoughtEvent,
+};
 use roomkit_ai::{AiChannelOptions, AiContext};
 use serde_json::{Value, json};
 
 use crate::ai_hooks::Scripted;
 use crate::run::{Run, lock};
+use roomkit_ai::testing::ScriptedProvider;
 pub(crate) use shape::{check, hook};
 
+/// A scripted model under the name `expect.models` gives it.
+type NamedModel = (String, ScriptedProvider);
+
+/// Installs the channel's speak policy and thinker; returns the scripted model
+/// of its LLM thinker, under the name `expect.models` gives it, when it has one.
 pub(crate) fn install(
     channel: &Value,
     run: &Arc<Run>,
     options: &mut AiChannelOptions,
-) -> Result<(), String> {
+    shared: Option<ScriptedProvider>,
+) -> Result<Option<NamedModel>, String> {
     let mut problems = Vec::new();
     check(channel, "channel", &mut problems);
     if !problems.is_empty() {
@@ -35,9 +47,17 @@ pub(crate) fn install(
         observed.thinker_calls.entry(id.to_owned()).or_default();
     }
     if let Some(spec) = channel.get("speak_policy") {
-        options.speak_policy = Some(Arc::new(scripts::Policy::new(spec, id, run)?));
+        let scripted = || -> Result<Arc<dyn SpeakPolicy>, String> {
+            Ok(Arc::new(scripts::Policy::new(spec, id, run)?))
+        };
+        options.speak_policy = Some(classifier::policy(spec, id, run, scripted)?);
     }
-    if let Some(spec) = channel.get("thinker") {
+    let mut thinker_model = None;
+    if let Some(llm) = channel["thinker"].get("llm") {
+        let (thinker, model) = llm_thinker(llm, id, run, shared)?;
+        options.thinker = Some(thinker);
+        thinker_model = Some(model);
+    } else if let Some(spec) = channel.get("thinker") {
         options.thinker = Some(Arc::new(scripts::Thinking::new(spec, id, run)?));
     }
     if let Some(value) = channel.get("speak_timeout_ms").and_then(Value::as_f64) {
@@ -52,7 +72,34 @@ pub(crate) fn install(
         options.think_wait =
             Duration::try_from_secs_f64(value / 1000.0).map_err(|e| e.to_string())?;
     }
-    Ok(())
+    Ok(thinker_model)
+}
+
+/// The implementation's LLM thinker over the scripted model `spec` names
+/// (README, `thinker.llm`), and that model under `<agent>/thinker`.
+fn llm_thinker(
+    spec: &Value,
+    id: &str,
+    run: &Arc<Run>,
+    shared: Option<ScriptedProvider>,
+) -> Result<(Arc<dyn Thinker>, NamedModel), String> {
+    let name = format!("{id}/thinker");
+    let (model, paced) = crate::agents::scripted_model(&spec["model"], run, &name, shared)?;
+    let mut options = LlmThinkerOptions::default();
+    if let Some(instructions) = spec.get("instructions").and_then(Value::as_str) {
+        options.instructions = Some(instructions.to_owned());
+    }
+    if let Some(bound) = spec.get("max_tokens").and_then(Value::as_u64) {
+        options.max_tokens = Some(u32::try_from(bound).map_err(|e| e.to_string())?);
+    }
+    if let Some(effort) = spec.get("reasoning_effort").and_then(Value::as_str) {
+        options.reasoning_effort = Some(effort.to_owned());
+    }
+    if let Some(bound) = spec.get("timeout_ms").and_then(Value::as_f64) {
+        options.timeout = Some(bound / 1000.0);
+    }
+    let thinker = LlmThinker::new(paced, options).map_err(|e| e.to_string())?;
+    Ok((Arc::new(thinker), (name, model)))
 }
 
 fn decision(value: &Value) -> Result<SpeakDecision, String> {

@@ -407,7 +407,8 @@ pub(crate) fn scripted_agent_with_skills(
     options.continuation = crate::continuation::policy(spec, run)?;
     options.external_tool_handler =
         crate::acp_agents::handler::build_observed(spec, id.as_str(), run, &run.external_handlers)?;
-    crate::speaking::install(spec, run, &mut options)?;
+    let thinker_model =
+        crate::speaking::install(spec, run, &mut options, shared(&format!("{id}/thinker")))?;
     bounds(spec, &mut options)?;
     agent_settings(spec, &mut options)?;
     run.skills.script_executor(spec, &mut options)?;
@@ -450,6 +451,7 @@ pub(crate) fn scripted_agent_with_skills(
         options.retry_policy = Some(retry_policy(policy)?);
     }
     let mut models = vec![(id.to_string(), model)];
+    models.extend(thinker_model);
     keep_chat_dialect(&spec["model"], id.to_string(), run)?;
     let serving = if spec.get("fallback_model").is_none() && spec.get("router").is_none() {
         Serving::Model(Box::new(paced))

@@ -379,6 +379,7 @@ impl Comparison<'_> {
         for (kind, entries) in [
             ("speak_turns", &self.observed.speak_turns),
             ("thinker_calls", &self.observed.thinker_calls),
+            ("classifier_calls", &self.observed.classifier_calls),
         ] {
             for (channel, expected) in self.expect[kind].as_object().into_iter().flatten() {
                 let actual = entries.get(channel).cloned().map(Value::Array);

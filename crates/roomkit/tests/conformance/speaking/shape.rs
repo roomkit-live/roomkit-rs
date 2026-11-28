@@ -51,12 +51,17 @@ fn thought(value: &Value) -> Result<(), String> {
 }
 
 pub(super) fn script(value: &Value, thinking: bool) -> Result<(), String> {
+    script_with(value, thinking, &[])
+}
+
+pub(super) fn script_with(value: &Value, thinking: bool, beside: &[&str]) -> Result<(), String> {
     let (list, payload) = if thinking {
         ("thoughts", "thought")
     } else {
         ("decisions", "decision")
     };
-    let members = object(value, &[list])?;
+    let allowed: Vec<&str> = [list].into_iter().chain(beside.iter().copied()).collect();
+    let members = object(value, &allowed)?;
     let entries = members
         .get(list)
         .and_then(Value::as_array)
@@ -83,10 +88,163 @@ pub(super) fn script(value: &Value, thinking: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// The members of the implementation's classifier policy (README, `speak_policy`).
+const CLASSIFIER_POLICY: [&str; 8] = [
+    "classifier",
+    "agent_name",
+    "agent_role",
+    "questions",
+    "languages",
+    "history",
+    "proactivity",
+    "composition",
+];
+
+/// A scripted classifier's controls: each call answers or fails, maybe at a gate.
+pub(super) fn classifier(value: &Value) -> Result<(), String> {
+    let members = object(value, &["calls"])?;
+    let calls = members
+        .get("calls")
+        .and_then(Value::as_array)
+        .filter(|calls| !calls.is_empty())
+        .ok_or("classifier.calls must be a nonempty array")?;
+    for call in calls {
+        let members = object(call, &["answers", "fail", "gate"])?;
+        if members.contains_key("answers") == members.contains_key("fail") {
+            return Err("exactly one of answers and fail is required".into());
+        }
+        let readable = members.get("answers").is_none_or(|answers| {
+            answers
+                .as_object()
+                .is_some_and(|m| m.values().all(|v| v.is_number() || v.is_string()))
+        });
+        if !readable
+            || ["fail", "gate"]
+                .iter()
+                .any(|k| members.get(*k).is_some_and(|v| !v.is_string()))
+        {
+            return Err("malformed classifier call".into());
+        }
+    }
+    Ok(())
+}
+
+fn question(value: &Value) -> Result<(), String> {
+    let members = object(value, &["instructions", "yes", "no", "options", "levels"])?;
+    let kinds = ["options", "levels"]
+        .iter()
+        .filter(|k| members.contains_key(**k))
+        .count();
+    let described = members.contains_key("yes") || members.contains_key("no");
+    if !value["instructions"].is_string() || kinds > 1 || (kinds == 1 && described) {
+        return Err("a question is a yes/no question, a choice or a score".into());
+    }
+    Ok(())
+}
+
+fn classifier_policy(members: &serde_json::Map<String, Value>) -> Result<(), String> {
+    classifier(&members["classifier"])?;
+    if members.contains_key("decisions") {
+        return Err("decisions and classifier are two policies: give one".into());
+    }
+    if !members.get("agent_name").is_some_and(Value::is_string)
+        || members.get("agent_role").is_some_and(|v| !v.is_string())
+        || members.get("history").is_some_and(|v| !v.is_i64())
+        || members.get("proactivity").is_some_and(|v| !v.is_number())
+        || members.get("languages").is_some_and(|v| {
+            !v.as_object()
+                .is_some_and(|m| m.values().all(Value::is_string))
+        })
+    {
+        return Err("malformed classifier policy argument".into());
+    }
+    for asked in members
+        .get("questions")
+        .map(|q| q.as_object().ok_or("questions: expected an object"))
+        .transpose()?
+        .into_iter()
+        .flatten()
+    {
+        question(asked.1)?;
+    }
+    if let Some(composition) = members.get("composition") {
+        decision(
+            object(composition, &["decision"])?
+                .get("decision")
+                .ok_or("missing decision")?,
+        )?;
+    }
+    Ok(())
+}
+
+fn answer_only(value: &Value) -> Result<(), String> {
+    let people = object(value, &["people"])?
+        .get("people")
+        .and_then(Value::as_array);
+    if !people.is_some_and(|people| !people.is_empty() && people.iter().all(Value::is_string)) {
+        return Err("answer_only.people must be a nonempty array of strings".into());
+    }
+    Ok(())
+}
+
+/// A speak policy: scripted, or the classifier policy, maybe answer-only.
+fn policy(value: &Value) -> Result<(), String> {
+    let beside: Vec<&str> = ["answer_only"]
+        .into_iter()
+        .chain(CLASSIFIER_POLICY)
+        .collect();
+    let members = object(value, &[&["decisions"], beside.as_slice()].concat())?;
+    if let Some(only) = members.get("answer_only") {
+        answer_only(only)?;
+    }
+    if members.contains_key("classifier") {
+        return classifier_policy(members);
+    }
+    if let Some(key) = members
+        .keys()
+        .find(|key| CLASSIFIER_POLICY.contains(&key.as_str()))
+    {
+        return Err(format!("{key} needs classifier"));
+    }
+    script_with(value, false, &["answer_only"])
+}
+
+/// A thinker: scripted, or the implementation's LLM thinker over a scripted model.
+fn thinker(value: &Value) -> Result<(), String> {
+    let Some(llm) = value.get("llm") else {
+        return script(value, true);
+    };
+    object(value, &["llm"])?;
+    let members = object(
+        llm,
+        &[
+            "model",
+            "instructions",
+            "max_tokens",
+            "reasoning_effort",
+            "timeout_ms",
+        ],
+    )?;
+    if !members.get("model").is_some_and(Value::is_object)
+        || ["instructions", "reasoning_effort"]
+            .iter()
+            .any(|k| members.get(*k).is_some_and(|v| !v.is_string()))
+        || members.get("max_tokens").is_some_and(|v| !v.is_u64())
+        || members.get("timeout_ms").is_some_and(|v| !v.is_number())
+    {
+        return Err("malformed thinker.llm".into());
+    }
+    Ok(())
+}
+
+/// A check of one of a channel's speaking members.
+type Read = fn(&Value) -> Result<(), String>;
+
 pub(crate) fn check(channel: &Value, path: &str, found: &mut Vec<String>) {
-    for (name, thinking) in [("speak_policy", false), ("thinker", true)] {
+    let reads: [(&str, Read); 2] = [("speak_policy", policy), ("thinker", thinker)];
+    for (name, read) in reads {
         if let Some(value) = channel.get(name)
-            && let Err(error) = script(value, thinking)
+            && let Err(error) = read(value)
         {
             found.push(format!("{path}.{name}: {error}"));
         }
