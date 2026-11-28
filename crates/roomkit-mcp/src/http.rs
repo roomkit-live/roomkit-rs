@@ -1,6 +1,7 @@
 //! Optional Streamable HTTP and legacy SSE composition (RFC §21.2).
 mod client;
 pub(crate) mod legacy;
+mod negotiation;
 mod session;
 mod sse;
 
@@ -105,7 +106,7 @@ impl McpHttp {
                 cancelled,
                 filter,
                 discover,
-                protocol.handshake_only(),
+                protocol,
             )
             .await;
         }
@@ -116,16 +117,22 @@ impl McpHttp {
             .max_sse_event_size(MESSAGE_LIMIT)
             .reinit_on_expired_session(false)
             .control_request_timeout(Duration::from_secs(3));
-        let transport = StreamableHttpClientTransport::with_client(client, config);
+        let transport = StreamableHttpClientTransport::with_client(client.clone(), config);
         let stop = transport.cancel_token();
-        let connecting = session::open(
-            transport,
-            &failure,
-            &capture,
-            filter.as_ref(),
-            discover,
-            protocol.probe,
-        );
+        let url = self.url.as_str().into();
+        let connecting = async {
+            // The worker posts nothing before rmcp opens the connection,
+            // which the negotiation's settled answer opens.
+            if protocol.probe {
+                let mut link = client.negotiating(url);
+                let settled = crate::negotiation::negotiate_auto(&mut link)
+                    .await
+                    .map_err(|_| failure.error("MCP handshake failed"))?;
+                capture.settle(&settled, link.session());
+            }
+            drop(client);
+            session::open(transport, &failure, &capture, filter.as_ref(), discover).await
+        };
         let connected = tokio::select! {
             biased;
             () = cancelled => Err(McpError::Cancelled),

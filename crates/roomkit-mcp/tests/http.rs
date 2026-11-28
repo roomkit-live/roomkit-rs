@@ -130,7 +130,12 @@ async fn handle(
     }
     let id = request.get("id").unwrap();
     if name == "server/discover" {
-        return (StatusCode::BAD_REQUEST, "Legacy server").into_response();
+        let status = match shared.mode {
+            "discover-500" => StatusCode::INTERNAL_SERVER_ERROR,
+            "discover-502" => StatusCode::BAD_GATEWAY,
+            _ => StatusCode::BAD_REQUEST,
+        };
+        return (status, "Legacy server").into_response();
     }
     if name == "tools/list" {
         shared.listing.notify_one();
@@ -224,6 +229,29 @@ async fn roundtrip(mode: &'static str) {
 #[tokio::test]
 async fn json_replies_and_session_cleanup() {
     roundtrip("json").await;
+}
+/// RFC §21.2, RK-21.2-056: a probe a server or a gateway answers with a
+/// 5xx status reads as Python's SDK reads it, a JSON-RPC error (`-32603`),
+/// and falls back to the handshake: an mcp 1.9.3 server that fails on a
+/// method it does not know is still reached.
+#[tokio::test]
+async fn a_probe_answered_with_a_server_error_falls_back_to_the_handshake() {
+    for mode in ["discover-500", "discover-502"] {
+        let fixture = Fixture::start(mode).await;
+        let server = fixture.client();
+        server.connect().await.unwrap();
+        let names = server.tool_names().unwrap();
+        server.close().await;
+        let posts = fixture.shared.seen.lock().unwrap().posts.clone();
+        assert_eq!(
+            (names, posts[..2].to_vec()),
+            (
+                vec!["echo".to_owned()],
+                vec!["server/discover".to_owned(), "initialize".to_owned()]
+            ),
+            "{mode}"
+        );
+    }
 }
 #[tokio::test]
 async fn sse_replies_and_session_cleanup() {

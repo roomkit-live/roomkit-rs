@@ -297,13 +297,20 @@ where
     R: AsyncRead + Send + Unpin + 'static,
     W: AsyncWrite + Send + Unpin + 'static,
 {
-    let transport = crate::raw_stdio::transport(output, input, capture.clone());
-    let service = crate::protocol::negotiate(transport, probe)
+    let refused = |error: String| McpError::Handshake {
+        program: program.to_owned(),
+        message: bounded_message(&error),
+    };
+    let mut transport = crate::raw_stdio::transport(output, input, capture.clone());
+    if probe {
+        let settled = crate::negotiation::negotiate_auto(&mut transport)
+            .await
+            .map_err(refused)?;
+        capture.settle(&settled, None);
+    }
+    let service = crate::protocol::serve(transport, capture.modern())
         .await
-        .map_err(|error| McpError::Handshake {
-            program: program.to_owned(),
-            message: bounded_message(&error),
-        })?;
+        .map_err(refused)?;
     if !service
         .peer_info()
         .is_some_and(|info| crate::protocol::supported(&info.protocol_version, capture.modern()))
@@ -426,10 +433,16 @@ mod tests {
     enum Answer {
         /// With this result.
         Result(Value),
+        /// With this JSON-RPC error.
+        Error(Value),
         /// Never.
         Silent,
         /// With this result, once the next request is answered.
         Late(Value),
+        /// As the answer, once this long has passed.
+        After(Duration, Box<Answer>),
+        /// Each call as the next of these, the last one from then on.
+        Each(Vec<Answer>),
     }
 
     /// A server on `stream` answering each method as `plan` says, a method
@@ -444,6 +457,7 @@ mod tests {
         let (read, mut write) = tokio::io::split(stream);
         let mut lines = BufReader::new(read).lines();
         let mut held = Vec::new();
+        let mut calls: HashMap<String, usize> = HashMap::new();
         while let Ok(Some(line)) = lines.next_line().await {
             let request: Value = serde_json::from_str(&line).unwrap();
             received.lock().unwrap().push(request.clone());
@@ -451,7 +465,17 @@ mod tests {
                 continue;
             };
             let method = request["method"].as_str().unwrap_or_default();
-            let reply = match plan.get(method).cloned() {
+            let call = calls.entry(method.to_owned()).or_default();
+            let mut answer = plan.get(method).cloned();
+            if let Some(Answer::Each(answers)) = answer {
+                answer = answers.get(*call).or(answers.last()).cloned();
+            }
+            *call += 1;
+            if let Some(Answer::After(delay, then)) = answer {
+                tokio::time::sleep(delay).await;
+                answer = Some(*then);
+            }
+            let reply = match answer {
                 Some(Answer::Silent) => continue,
                 Some(Answer::Late(result)) => {
                     held.push(json!({ "jsonrpc": "2.0", "id": id, "result": result }));
@@ -460,6 +484,8 @@ mod tests {
                 Some(Answer::Result(result)) => {
                     json!({ "jsonrpc": "2.0", "id": id, "result": result })
                 }
+                Some(Answer::Error(error)) => json!({ "jsonrpc": "2.0", "id": id, "error": error }),
+                Some(Answer::After(..) | Answer::Each(_)) => unreachable!("one level of each"),
                 None => json!({ "jsonrpc": "2.0", "id": id,
                     "error": { "code": -32601, "message": "Method not found" } }),
             };
@@ -655,5 +681,104 @@ mod tests {
                 1
             )
         );
+    }
+
+    /// `-32022`, its data naming the revisions the server speaks.
+    fn unsupported(supported: &[&str]) -> Answer {
+        Answer::Error(json!({
+            "code": -32022, "message": "unsupported protocol version",
+            "data": { "supported": supported, "requested": "2025-11-25" },
+        }))
+    }
+
+    /// A probe that timed out reached a server slow to start, which then
+    /// speaks 2026-07-28 only: its handshake refused with `-32022` naming
+    /// that revision, the connection probes again and speaks it, as Python's
+    /// SDK does (`negotiate_auto`), the late answer to the first probe left.
+    #[tokio::test(start_paused = true)]
+    async fn a_handshake_refused_after_a_probe_timed_out_probes_again() {
+        let plan = HashMap::from([
+            (
+                "server/discover",
+                Answer::Each(vec![
+                    Answer::Late(discovery_result()),
+                    Answer::Result(discovery_result()),
+                ]),
+            ),
+            ("initialize", unsupported(&["2026-07-28"])),
+            ("tools/list", fresh_listing()),
+        ]);
+        let (service, tools, capture, received) = connected(plan, true).await;
+        let _ended = service.cancel().await;
+        assert_eq!(
+            (methods(&received), capture.modern(), tools.tools.len()),
+            (
+                vec![
+                    json!("server/discover"),
+                    json!("initialize"),
+                    json!("server/discover"),
+                    json!("tools/list")
+                ],
+                true,
+                1
+            )
+        );
+    }
+
+    /// Each probe of a `-32022` retry has a bound of its own, ten seconds:
+    /// a second probe answered at 15 seconds, 9 after it went out, agrees.
+    #[tokio::test(start_paused = true)]
+    async fn each_probe_of_a_retry_has_a_bound_of_its_own() {
+        let plan = HashMap::from([
+            (
+                "server/discover",
+                Answer::Each(vec![
+                    Answer::After(
+                        Duration::from_secs(6),
+                        Box::new(unsupported(&["2026-07-28", "2025-11-25"])),
+                    ),
+                    Answer::After(
+                        Duration::from_secs(9),
+                        Box::new(Answer::Result(discovery_result())),
+                    ),
+                ]),
+            ),
+            ("initialize", handshake_result("legacy")),
+            ("tools/list", fresh_listing()),
+        ]);
+        let started = tokio::time::Instant::now();
+        let (service, _tools, capture, received) = connected(plan, true).await;
+        let waited = started.elapsed();
+        let _ended = service.cancel().await;
+        assert_eq!(
+            (methods(&received)[..2].to_vec(), capture.modern()),
+            (
+                vec![json!("server/discover"), json!("server/discover")],
+                true
+            )
+        );
+        assert!(waited >= Duration::from_secs(15), "{waited:?}");
+    }
+
+    /// A handshake result that also names `supportedVersions` is read as a
+    /// handshake's, as Python's SDK reads it: only a probe's answer is given
+    /// a discovery's defaults.
+    #[tokio::test]
+    async fn a_handshake_that_names_revisions_is_still_a_handshake() {
+        let plan = HashMap::from([
+            (
+                "initialize",
+                Answer::Result(json!({
+                    "protocolVersion": "2025-11-25",
+                    "supportedVersions": ["2025-11-25"],
+                    "capabilities": { "tools": {} },
+                    "serverInfo": { "name": "legacy", "version": "0" },
+                })),
+            ),
+            ("tools/list", fresh_listing()),
+        ]);
+        let (service, tools, capture, _received) = connected(plan, true).await;
+        let _ended = service.cancel().await;
+        assert_eq!((tools.tools.len(), capture.modern()), (1, false));
     }
 }

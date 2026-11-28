@@ -78,6 +78,7 @@ mod group;
 mod host;
 mod listing;
 mod maps;
+mod negotiation;
 mod param_headers;
 mod process;
 mod protocol;

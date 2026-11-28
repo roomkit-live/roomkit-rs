@@ -52,15 +52,7 @@ pub(super) async fn connect(
             let transport = Legacy::open(&url, headers, client, failure.clone(), writer)
                 .await
                 .map_err(|_| failure.error("MCP legacy transport failed"))?;
-            super::session::open(
-                transport,
-                &failure,
-                &listing,
-                filter.as_ref(),
-                discover,
-                protocol.probe,
-            )
-            .await
+            super::session::open(transport, &failure, &listing, filter.as_ref(), discover).await
         };
         tokio::pin!(connecting);
         let deadline = async {

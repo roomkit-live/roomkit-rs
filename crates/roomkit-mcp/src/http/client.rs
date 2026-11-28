@@ -9,7 +9,7 @@ use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
 };
 use rmcp::{
-    model::{ClientJsonRpcMessage, ClientRequest, ErrorData, ServerJsonRpcMessage},
+    model::{ClientJsonRpcMessage, ServerJsonRpcMessage},
     transport::{
         common::client_side_sse::BoxedSseResponse,
         streamable_http_client::{
@@ -62,7 +62,7 @@ impl Failure {
 pub(super) struct Client {
     lease: Arc<Lease>,
     headers: HeaderMap,
-    failure: Failure,
+    pub(super) failure: Failure,
     pub(super) capture: crate::raw::Capture,
 }
 
@@ -127,7 +127,7 @@ impl Client {
         self
     }
 
-    fn request(
+    pub(super) fn request(
         &self,
         method: Method,
         uri: &str,
@@ -152,7 +152,7 @@ impl Client {
         }
         request
     }
-    async fn send(&self, request: RequestBuilder) -> Result<Response, Error> {
+    pub(super) async fn send(&self, request: RequestBuilder) -> Result<Response, Error> {
         // A tool may send its headers only when its result is ready. Startup
         // and per-call deadlines belong to the caller; DELETE has its own bound.
         request
@@ -170,7 +170,7 @@ impl Client {
         }
         Err(self.error(Some(response.status().as_u16()), "HTTP request rejected"))
     }
-    async fn body(&self, mut response: Response) -> Result<Vec<u8>, Error> {
+    pub(super) async fn body(&self, mut response: Response) -> Result<Vec<u8>, Error> {
         if response
             .content_length()
             .is_some_and(|n| n > MESSAGE_LIMIT as u64)
@@ -199,6 +199,12 @@ impl Client {
         headers: Headers,
         limit: usize,
     ) -> Result<StreamableHttpPostResponse, Error> {
+        if let Some((answer, session)) = self.capture.replay(&message) {
+            // rmcp's own negotiation request, which the negotiation settled.
+            let answer = serde_json::from_value(answer)
+                .map_err(|_| self.error(None, "Invalid MCP JSON response"))?;
+            return Ok(StreamableHttpPostResponse::Json(answer, session));
+        }
         self.capture.stamp(&mut message);
         self.capture.outgoing(&message);
         let wire =
@@ -232,23 +238,6 @@ impl Client {
                 Vec::new()
             };
             let parsed = serde_json::from_slice::<ServerJsonRpcMessage>(&body).ok();
-            if session.is_none()
-                && status.is_client_error()
-                && let ClientJsonRpcMessage::Request(request) = &message
-                && matches!(request.request, ClientRequest::DiscoverRequest(_))
-            {
-                let error = match parsed {
-                    Some(ServerJsonRpcMessage::Error(e)) => e.error,
-                    _ => ErrorData::invalid_request("Discovery unsupported", None),
-                };
-                // The probe's answer, as the capture shows the SDK an answer.
-                let refused = ServerJsonRpcMessage::error(error, Some(request.id.clone()));
-                let shown = serde_json::to_value(&refused)
-                    .ok()
-                    .and_then(|value| serde_json::from_value(self.capture.incoming(value)).ok())
-                    .unwrap_or(refused);
-                return Ok(StreamableHttpPostResponse::Json(shown, None));
-            }
             if let Some(reply @ ServerJsonRpcMessage::Error(_)) = parsed {
                 return Ok(StreamableHttpPostResponse::Json(reply, None));
             }
@@ -335,7 +324,7 @@ impl Client {
     }
 }
 
-fn content_type(response: &Response, expected: &str) -> bool {
+pub(super) fn content_type(response: &Response, expected: &str) -> bool {
     response
         .headers()
         .get("content-type")

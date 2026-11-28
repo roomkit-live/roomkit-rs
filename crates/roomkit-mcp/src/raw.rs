@@ -3,10 +3,10 @@
 //! Tickets travel in non-serialized request extensions. Only live requests keep
 //! a slot; cancellation removes it even if the transport has not sent it yet.
 //!
-//! The capture also follows the connection's negotiation (RFC §21.2): it
-//! keeps the result of whichever of discovery and handshake was answered
-//! last, a late answer to a probe given up on ignored, and shows rmcp a
-//! discovery as Python's SDK reads it.
+//! The capture also keeps what the connection's negotiation settled (RFC
+//! §21.2): the server's discovery or handshake result as it sent it, and
+//! the copy of it rmcp is shown in answer to its own negotiation request,
+//! which never goes out again.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
@@ -17,6 +17,7 @@ use rmcp::model::{
 use roomkit::model::Metadata;
 use serde_json::{Value, json};
 
+use crate::negotiation::Settled;
 use crate::param_headers::HeaderMap;
 use crate::protocol::SERVER_INFO_META;
 
@@ -26,13 +27,13 @@ pub(crate) struct Capture(Arc<Mutex<State>>);
 #[derive(Default)]
 struct State {
     pending: HashMap<RequestId, Weak<Mutex<Option<Value>>>>,
-    /// The negotiation request sent last, and whether it is a discovery
-    /// probe, until it is answered.
-    negotiation: Option<(RequestId, bool)>,
-    /// How many discovery probes were sent.
-    probes: usize,
+    /// The handshake rmcp sent itself, until it is answered.
+    initialization: Option<RequestId>,
     /// Whether a discovery agreed on MCP 2026-07-28.
     modern: bool,
+    /// What rmcp's own negotiation request is answered with, once, and the
+    /// HTTP session the negotiation's handshake opened.
+    replay: Option<(Value, Option<String>)>,
     handshake: Value,
     /// The `tools/call` requests sent, neither answered nor cancelled.
     calls: HashSet<RequestId>,
@@ -116,6 +117,44 @@ impl Capture {
         lock(&self.0).tool_headers.get(name).cloned()
     }
 
+    /// Keeps what the negotiation settled: the server's answer as it sent
+    /// it, and the copy of it rmcp is shown in answer to its own negotiation
+    /// request, which rmcp's model reads, with the HTTP `session` its
+    /// handshake opened.
+    pub(crate) fn settle(&self, settled: &Settled, session: Option<String>) {
+        let mut shown = json!({ "jsonrpc": "2.0", "result": settled.result() });
+        crate::protocol::compatible_handshake(&mut shown);
+        if settled.is_modern()
+            && let Some(result) = shown.get_mut("result")
+        {
+            crate::protocol::with_discovery_defaults(result);
+        }
+        let mut state = lock(&self.0);
+        state.handshake = settled.result().clone();
+        state.modern = settled.is_modern();
+        state.replay = shown.get("result").cloned().map(|result| (result, session));
+    }
+
+    /// The answer to rmcp's own negotiation request `message`, which goes
+    /// out no more, when the negotiation settled it already, once, with the
+    /// HTTP session it opened.
+    pub(crate) fn replay(&self, message: &ClientJsonRpcMessage) -> Option<(Value, Option<String>)> {
+        let ClientJsonRpcMessage::Request(request) = message else {
+            return None;
+        };
+        if !matches!(
+            request.request,
+            ClientRequest::InitializeRequest(_) | ClientRequest::DiscoverRequest(_)
+        ) {
+            return None;
+        }
+        let (result, session) = lock(&self.0).replay.take()?;
+        Some((
+            json!({ "jsonrpc": "2.0", "id": request.id, "result": result }),
+            session,
+        ))
+    }
+
     /// Writes the trace context of the connection's opening into a
     /// negotiation request it sends (RK-21.2-057).
     pub(crate) fn stamp(&self, message: &mut ClientJsonRpcMessage) {
@@ -154,11 +193,7 @@ impl Capture {
         };
         let mut state = lock(&self.0);
         if matches!(request.request, ClientRequest::InitializeRequest(_)) {
-            state.negotiation = Some((request.id.clone(), false));
-        }
-        if matches!(request.request, ClientRequest::DiscoverRequest(_)) {
-            state.negotiation = Some((request.id.clone(), true));
-            state.probes += 1;
+            state.initialization = Some(request.id.clone());
         }
         if matches!(request.request, ClientRequest::CallToolRequest(_)) {
             state.calls.insert(request.id.clone());
@@ -191,16 +226,12 @@ impl Capture {
             return message;
         };
         let mut state = lock(&self.0);
-        if let Some((negotiating, probe)) = state.negotiation.clone()
-            && negotiating == id
-        {
-            state.negotiation = None;
+        if state.initialization.as_ref() == Some(&id) {
+            state.initialization = None;
             if let Some(result) = message.get("result") {
                 state.handshake = result.clone();
             }
             crate::protocol::compatible_handshake(&mut message);
-            state.modern =
-                probe && crate::protocol::as_the_sdk_reads_a_discovery(&mut message, state.probes);
         }
         if state.calls.remove(&id) {
             refuse_an_empty_call_result(&mut message);

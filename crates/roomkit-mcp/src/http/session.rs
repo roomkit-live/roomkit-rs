@@ -8,17 +8,17 @@ use crate::listing::{self, Listed, ToolFilter};
 use crate::raw::Capture;
 use rmcp::model::ClientConfig;
 
-/// Agrees on the MCP revision over `transport` (discovery first when
-/// `probe`, the handshake otherwise), then lists the tools when `discover`.
+/// Opens rmcp's connection over `transport`, by the discovery or the
+/// handshake the negotiation settled in `capture` (the handshake when none
+/// ran), then lists the tools when `discover`.
 pub(super) async fn open(
     transport: impl Transport<RoleClient> + 'static,
     failure: &Failure,
     capture: &Capture,
     filter: Option<&ToolFilter>,
     discover: bool,
-    probe: bool,
 ) -> Result<(RunningService<RoleClient, ClientConfig>, Listed), McpError> {
-    let service = crate::protocol::negotiate(transport, probe)
+    let service = crate::protocol::serve(transport, capture.modern())
         .await
         .map_err(|_| failure.error("MCP handshake failed"))?;
     if !service
