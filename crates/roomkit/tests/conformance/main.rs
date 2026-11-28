@@ -207,6 +207,13 @@ pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[
          the row (RMK-2172)",
     ),
     (
+        "tasks/a-task-announced-as-the-kit-s-close-began-ends-cancelled-before-it-runs",
+        "RFC §23.3 (RK-23.3-087): the kit's close holds a call's own task, not the \
+         delegation it was made in: once the child room's attach returned, the close leaves its \
+         grace before the task is announced, and refuses its ON_TASK_DELEGATED and \
+         ON_TASK_COMPLETED observers (RMK-2223)",
+    ),
+    (
         "verification/a-deferred-code-reply-from-a-locked-hook-is-answered-after-the-hook-s-work",
         "RFC §11.7.6 (RK-11.7.6-008): a deferred code reply sent from a hook's locked section \
          has its released message answered before that hook's event is delivered, the \
