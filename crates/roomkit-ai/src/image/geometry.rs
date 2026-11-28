@@ -2,9 +2,19 @@
 //! bytes: Python's `parse_size`, `sniff_mime_type` and `payload_mime_type`
 //! (`roomkit.providers.image`).
 
-use base64::{Engine, engine::general_purpose::STANDARD};
+use base64::Engine;
+use base64::alphabet::STANDARD as ALPHABET;
+use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig};
 
 use super::ImageRequestError;
+
+/// Python's `b64decode(..., validate=True)`: the standard alphabet, its
+/// padding, and the bits past the last byte ignored as Python ignores
+/// them.
+const PYTHON_BASE64: GeneralPurpose = GeneralPurpose::new(
+    &ALPHABET,
+    GeneralPurposeConfig::new().with_decode_allow_trailing_bits(true),
+);
 
 /// The media type an image whose bytes say nothing is given.
 const FALLBACK: &str = "image/png";
@@ -44,7 +54,9 @@ impl Default for PayloadMimeTypeOptions {
 }
 
 /// The width and the height `size` names: two whole numbers joined by `x`
-/// (in either case), the whitespace around them ignored.
+/// (in either case), the whitespace around them ignored. Two of Python's
+/// readings are not followed: its digits of other scripts (`١٠x16`), and
+/// a dimension past `u32`, which reads as `u32::MAX`.
 ///
 /// # Errors
 ///
@@ -56,7 +68,10 @@ pub fn parse_size(size: &str) -> Result<(u32, u32), ImageRequestError> {
             "size must be 'WIDTHxHEIGHT' (e.g. '1024x1024'), got '{size}'"
         ))
     };
-    let written = size.trim().to_lowercase();
+    // Python's `strip()`: Unicode's whitespace and the separators U+001C
+    // to U+001F.
+    let space = |c: char| c.is_whitespace() || matches!(c, '\u{1c}'..='\u{1f}');
+    let written = size.trim_matches(space).to_lowercase();
     let (width, height) = written.split_once('x').ok_or_else(unread)?;
     let digits = |text: &str| !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit());
     if !digits(width) || !digits(height) {
@@ -108,7 +123,7 @@ pub fn payload_mime_type(
     // fits in.
     let head = payload.get(..payload.len().min(32)).unwrap_or(payload);
     let fallback = options.fallback;
-    match STANDARD.decode(head) {
+    match PYTHON_BASE64.decode(head) {
         Ok(head) => sniff_mime_type(&head, SniffMimeTypeOptions { fallback }),
         Err(_) => fallback,
     }
@@ -116,6 +131,8 @@ pub fn payload_mime_type(
 
 #[cfg(test)]
 mod tests {
+    use base64::engine::general_purpose::STANDARD;
+
     use super::*;
 
     // Python: tests/test_providers/test_image.py::test_parse_size_accepts_wxh
@@ -125,6 +142,8 @@ mod tests {
             ("1024x1024", (1024, 1024)),
             ("1536X1024", (1536, 1024)),
             (" 512x512 ", (512, 512)),
+            // Python's `strip()` takes the separators U+001C to U+001F.
+            ("\u{1c}1024x1024\u{1f}", (1024, 1024)),
         ] {
             assert_eq!(parse_size(value), Ok(expected), "{value}");
         }
@@ -188,5 +207,10 @@ mod tests {
             "image/jpeg"
         );
         assert_eq!(payload_mime_type(None, "!!", gif), "image/gif");
+        // Bits past the last byte, which Python ignores: a GIF still.
+        assert_eq!(
+            payload_mime_type(None, "R0lGODlhAR==", by_default()),
+            "image/gif"
+        );
     }
 }

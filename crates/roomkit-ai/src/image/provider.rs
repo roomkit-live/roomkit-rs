@@ -6,8 +6,8 @@ use std::future::Future;
 
 use super::catalog::image_model_entry;
 use super::{
-    ImageCatalogEntry, ImageGenerationError, ImageOptions, ImageProgressCallback,
-    ImageRequestError, ImageResult,
+    DataUriError, ImageCatalogEntry, ImageGenerationError, ImageOptions, ImageProgressCallback,
+    ImageRequestError, ImageResult, ImageResultError,
 };
 use crate::provider::short_type_name;
 use crate::{AiImagePart, ProviderError};
@@ -41,6 +41,22 @@ impl From<ProviderError> for ImageError {
 impl From<ImageGenerationError> for ImageError {
     fn from(failed: ImageGenerationError) -> Self {
         Self::Provider(failed.into())
+    }
+}
+
+impl From<DataUriError> for ImageError {
+    /// A reference or a mask whose `data:` URI does not read: Python's
+    /// `ValueError` of `parse_data_uri`.
+    fn from(unread: DataUriError) -> Self {
+        Self::Value(ImageRequestError::new(unread.to_string()))
+    }
+}
+
+impl From<ImageResultError> for ImageError {
+    /// A result whose image is no `data:` URI: Python's `ValidationError`
+    /// of `ImageResult`, a `ValueError`.
+    fn from(refused: ImageResultError) -> Self {
+        Self::Value(ImageRequestError::new(refused.to_string()))
     }
 }
 

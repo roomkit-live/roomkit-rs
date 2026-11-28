@@ -1234,6 +1234,12 @@ approved = "2026-11-02"
 reason = "Python's instance attributes search_calls, index_calls and closed, as MockMemoryProvider's (HITL 01cca70d, RMK-1178; architecture: Tools)"
 
 [[exception]]
+rust = "roomkit_ai::image::ImageGenerationError"
+members = ["with_source"]
+approved = "2026-11-28"
+reason = "language: Python's `raise ImageGenerationError(...) from error` keeps the cause in __cause__; Rust keeps it as the error's source, as ProviderError's"
+
+[[exception]]
 rust = "roomkit_ai::image::ImageSize"
 approved = "2026-11-28"
 reason = "language: the values of Python's Literal of ImageOptions.image_size, '512', '1K', '2K' and '4K', are no Rust names: variants Tier512, Tier1K, Tier2K and Tier4K, written as Python writes the values"

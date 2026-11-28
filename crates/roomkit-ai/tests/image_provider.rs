@@ -272,4 +272,8 @@ fn a_catalogue_entry_reads_back_as_the_kind_it_is() {
         let read: ImageCatalogEntry = serde_json::from_value(written).unwrap();
         assert_eq!(read, entry);
     }
+    // An entry whose `image` does not read is refused, not read as a
+    // `ModelInfo` without it.
+    let broken = serde_json::json!({"id": "gpt-image-2", "image": {"max_images": 2}});
+    assert!(serde_json::from_value::<ImageCatalogEntry>(broken).is_err());
 }

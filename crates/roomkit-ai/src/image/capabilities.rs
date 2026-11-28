@@ -212,8 +212,39 @@ impl ImageCapabilities {
                 unsupported.join(", ")
             )));
         }
-        for (field, value) in options.listed_values() {
-            let allowed = self.allowed(field);
+        let listed = [
+            (
+                "quality",
+                options.quality.as_ref().map(written),
+                &self.qualities,
+            ),
+            (
+                "output_format",
+                options.output_format.as_ref().map(written),
+                &self.formats,
+            ),
+            (
+                "background",
+                options.background.as_ref().map(written),
+                &self.backgrounds,
+            ),
+            (
+                "aspect_ratio",
+                options.aspect_ratio.clone(),
+                &self.aspect_ratios,
+            ),
+            (
+                "image_size",
+                options.image_size.as_ref().map(written),
+                &self.image_sizes,
+            ),
+            (
+                "thinking_level",
+                options.thinking_level.as_ref().map(written),
+                &self.thinking_levels,
+            ),
+        ];
+        for (field, value, allowed) in listed {
             if value.is_some_and(|value| !allowed.contains(&value)) {
                 return Err(ImageRequestError::new(format!(
                     "{field} must be one of {}",
@@ -222,18 +253,6 @@ impl ImageCapabilities {
             }
         }
         Ok(())
-    }
-
-    /// The values the model lists for `field`.
-    fn allowed(&self, field: &str) -> &[String] {
-        match field {
-            "quality" => &self.qualities,
-            "output_format" => &self.formats,
-            "background" => &self.backgrounds,
-            "aspect_ratio" => &self.aspect_ratios,
-            "image_size" => &self.image_sizes,
-            _ => &self.thinking_levels,
-        }
     }
 
     /// Refuses a search or a continuity the model does not have.

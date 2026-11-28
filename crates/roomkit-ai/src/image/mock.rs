@@ -3,8 +3,7 @@
 
 use std::sync::Mutex;
 
-use base64::{Engine, engine::general_purpose::STANDARD};
-use serde_json::json;
+use serde_json::Value;
 
 use super::{
     GenerateOptions, ImageError, ImageProvider, ImageRequestError, ImageResult, parse_size,
@@ -13,8 +12,8 @@ use super::{
 use crate::AiImagePart;
 
 /// A real 1x1 transparent PNG, so that a consumer's test runs the whole
-/// path, decoding, writing and measuring.
-const PNG_1X1: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+/// path, decoding, writing and measuring: Python's `_PNG_1X1`.
+const PNG_1X1: &[u8] = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\xdacd`\xf8_\x0f\x00\x02\x87\x01\x80\xebG\xba\x92\x00\x00\x00\x00IEND\xaeB`\x82";
 
 /// One call a [`MockImageProvider`] was asked: its prompt, size, count and
 /// reference images.
@@ -79,7 +78,7 @@ impl MockImageProvider {
             revised_prompt,
         } = options;
         let images = if images.is_empty() {
-            vec![STANDARD.decode(PNG_1X1).unwrap_or_default()]
+            vec![PNG_1X1.to_vec()]
         } else {
             images
         };
@@ -114,22 +113,22 @@ impl MockImageProvider {
         references: usize,
     ) -> Result<ImageResult, ImageError> {
         let uri = to_data_uri(data, &self.mime_type);
-        let mut result = ImageResult::new(uri, self.mime_type.clone())
-            .map_err(|refused| ImageRequestError::new(refused.to_string()))?;
+        let mut result = ImageResult::new(uri, self.mime_type.clone())?;
         result.revised_prompt.clone_from(&self.revised_prompt);
         let words = prompt
             .split(|c: char| c.is_whitespace() || matches!(c, '\u{1c}'..='\u{1f}'))
             .filter(|word| !word.is_empty())
             .count();
-        let usage = json!({
-            "input_tokens": words,
-            "input_image_tokens": references * 100,
-            "output_tokens": 0,
-            "output_image_tokens": 1024,
-        });
-        if let serde_json::Value::Object(usage) = usage {
-            result.usage = usage.into_iter().collect();
-        }
+        let counters = [
+            ("input_tokens", words),
+            ("input_image_tokens", references * 100),
+            ("output_tokens", 0),
+            ("output_image_tokens", 1024),
+        ];
+        result.usage = counters
+            .into_iter()
+            .map(|(name, count)| (name.to_owned(), Value::from(count)))
+            .collect();
         Ok(result)
     }
 }

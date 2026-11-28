@@ -895,3 +895,70 @@ fn the_mock_image_provider_draws_a_png_with_mock_image_by_default() {
     // roomkit.MockImageProvider.__init__(revised_prompt) = None
     assert!(options.revised_prompt.is_none());
 }
+
+#[test]
+fn image_models_default_as_python() {
+    use roomkit_ai::image::{
+        ImageAttempt, ImageAttemptStatus, ImageCapabilities, ImageModelInfo, ImageOptions,
+        ImageResult,
+    };
+    let verified = roomkit_ai::Date::new(2026, 11, 28).unwrap();
+    for capabilities in [
+        ImageCapabilities::new(verified),
+        serde_json::from_value(serde_json::json!({"verified": "2026-11-28"})).unwrap(),
+    ] {
+        // roomkit.ImageCapabilities.__init__(max_images) = 10
+        assert_eq!(capabilities.max_images, Some(10));
+        // roomkit.ImageCapabilities.__init__(max_references) = 0
+        assert_eq!(capabilities.max_references, 0);
+        // roomkit.ImageCapabilities.__init__(flexible_size) = False
+        assert!(!capabilities.flexible_size);
+        // roomkit.ImageCapabilities.__init__(mask) = False
+        assert!(!capabilities.mask);
+        // roomkit.ImageCapabilities.__init__(continuity) = False
+        assert!(!capabilities.continuity);
+        // roomkit.ImageCapabilities.__init__(streaming) = False
+        assert!(!capabilities.streaming);
+        // roomkit.ImageCapabilities.__init__(retirement_date) = None
+        assert!(capabilities.retirement_date.is_none());
+        // roomkit.ImageCapabilities.__init__(options) = <factory>
+        assert_eq!(capabilities.options, Vec::<String>::new());
+        assert_eq!(capabilities.sizes, Vec::<String>::new());
+        assert_eq!(capabilities.search_types, Vec::<String>::new());
+    }
+    let attempt = ImageAttempt::default();
+    // roomkit.ImageAttempt.__init__(index) = 0
+    assert_eq!(attempt.index, 0);
+    // roomkit.ImageAttempt.__init__(status) = 'started'
+    assert_eq!(attempt.status, ImageAttemptStatus::Started);
+    // roomkit.ImageAttempt.__init__(provider_request_id) = None
+    assert!(attempt.provider_request_id.is_none());
+    // roomkit.ImageAttempt.__init__(results) = <factory>
+    assert_eq!(attempt.results, Vec::new());
+    // roomkit.ImageAttempt.__init__(error) = None
+    assert!(attempt.error.is_none());
+    // roomkit.ImageAttempt.__init__(status_code) = None
+    assert!(attempt.status_code.is_none());
+    assert!(attempt.usage.is_empty());
+    let entry = ImageModelInfo::new("gpt-image-2", ImageCapabilities::new(verified));
+    // roomkit.ImageModelInfo.__init__(deprecated) = False
+    assert!(!entry.deprecated);
+    // roomkit.ImageModelInfo.__init__(aliases) = <factory>
+    assert_eq!(entry.aliases, Vec::<String>::new());
+    // roomkit.ImageModelInfo.__init__(pricing) = None
+    assert!(entry.pricing.is_none());
+    assert!(entry.display_name.is_none() && entry.context_window.is_none());
+    assert!(entry.supports_vision.is_none());
+    assert_eq!(entry.capabilities, Vec::<String>::new());
+    let result = ImageResult::new("data:image/png;base64,QUJD", "image/png").unwrap();
+    // roomkit.ImageResult.__init__(revised_prompt) = None
+    assert!(result.revised_prompt.is_none());
+    // roomkit.ImageResult.__init__(usage) = <factory>
+    assert!(result.usage.is_empty());
+    // roomkit.ImageResult.__init__(attempt_id) = None
+    assert!(result.attempt_id.is_none());
+    // roomkit.ImageResult.__init__(width) = None
+    assert!(result.width.is_none() && result.height.is_none());
+    // roomkit.ImageOptions.__init__(quality) = None, and every other control
+    assert_eq!(ImageOptions::default().supplied(), Vec::<&str>::new());
+}

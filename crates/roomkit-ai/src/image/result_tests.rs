@@ -160,6 +160,8 @@ async fn callback_failure_keeps_the_vendor_result() {
     assert_eq!(failed.provider, "GeminiImageProvider");
     assert_eq!(failed.attempts, vec![succeeded.clone()]);
     assert_eq!(failed.results.len(), 1);
+    let cause = std::error::Error::source(&failed).map(ToString::to_string);
+    assert_eq!(cause.as_deref(), Some("storage unavailable"));
     assert!(!ProviderError::from(failed).retryable);
     assert_eq!(*seen.lock().expect("not poisoned"), vec![succeeded]);
 }
@@ -178,4 +180,38 @@ async fn progress_reaches_the_callback_when_there_is_one() {
     let told = notify_image_progress(Some(&callback), &attempt, "MockImageProvider").await;
     assert_eq!(told, Ok(()));
     assert_eq!(*seen.lock().expect("not poisoned"), vec![attempt]);
+}
+
+// Python: str(ImageGenerationError("boom", provider="gemini",
+// attempts=[ImageAttempt(status_code=500)])) == "gemini (500): boom", and
+// a message that names its provider reads as given
+#[test]
+fn a_generation_error_reads_as_the_provider_error_it_is() {
+    let failed = ImageGenerationError::new("boom", "gemini", vec![attempt(0, Some(500), vec![])]);
+    assert_eq!(failed.to_string(), "gemini (500): boom");
+    let named = ImageGenerationError::new("gemini failed", "gemini", vec![]);
+    assert_eq!(named.to_string(), "gemini failed");
+}
+
+#[derive(Debug)]
+struct Unreachable;
+
+impl fmt::Display for Unreachable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("the vendor is unreachable")
+    }
+}
+
+impl std::error::Error for Unreachable {}
+
+// Python: raise ImageGenerationError(...) from exc keeps exc as the cause,
+// past the ProviderError it is
+#[test]
+fn a_generation_error_keeps_what_it_was_raised_from() {
+    use std::error::Error;
+    let failed = ImageGenerationError::new("boom", "openai", vec![]).with_source(Unreachable);
+    let error = ProviderError::from(failed);
+    let generation = error.source().expect("the generation's failure");
+    let cause = generation.source().expect("what it was raised from");
+    assert_eq!(cause.to_string(), "the vendor is unreachable");
 }

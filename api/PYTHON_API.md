@@ -254,7 +254,7 @@ the mapping and its tests. The check does not generate or update this document.
 | `roomkit_ai::knowledge::MockKnowledgeSource` | — | `search_calls`, `index_calls`, `closed` |
 | `roomkit_ai::ThinkingBlocks` | — | `last_signature` |
 | `roomkit_ai::RoundTranscript` | — | `thinking` |
-| `roomkit_ai::image::ImageGenerationError` | — | `results` |
+| `roomkit_ai::image::ImageGenerationError` | — | `results`, `with_source` |
 | `roomkit_ai::image::MockImageProvider` | — | `calls` |
 | `roomkit_ai::image::ImageSize` | `ImageOptions.image_size: Literal["512", "1K", "2K", "4K"]` | Whole type: variants `Tier512`, `Tier1K`, `Tier2K`, `Tier4K`, serialized as Python's values |
 | `roomkit_ai::image::ImageCatalogEntry` | `list[ModelInfo]` of `ImageProvider.available_models()` | Whole type: `Model(ModelInfo)` or `Image(ImageModelInfo)`, what `available_models` and `catalog_entry` return (HITL 4071eaf1) |

@@ -158,8 +158,10 @@ pub struct ImageOptions {
 
 impl ImageOptions {
     /// The names of the controls given, in Python's field order: Python's
-    /// `model_dump(exclude_none=True)` keys.
-    pub(crate) fn supplied(&self) -> Vec<&'static str> {
+    /// `model_dump(exclude_none=True)` keys. For a provider.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn supplied(&self) -> Vec<&'static str> {
         let given = [
             ("quality", self.quality.is_some()),
             ("background", self.background.is_some()),
@@ -184,22 +186,15 @@ impl ImageOptions {
             .collect()
     }
 
-    /// The values of the controls whose value a model's capabilities list,
-    /// in the order Python checks them, as Python writes them.
-    pub(crate) fn listed_values(&self) -> [(&'static str, Option<String>); 6] {
-        [
-            ("quality", self.quality.as_ref().map(written)),
-            ("output_format", self.output_format.as_ref().map(written)),
-            ("background", self.background.as_ref().map(written)),
-            ("aspect_ratio", self.aspect_ratio.clone()),
-            ("image_size", self.image_size.as_ref().map(written)),
-            ("thinking_level", self.thinking_level.as_ref().map(written)),
-        ]
-    }
-
     /// The refusal Python's model raises when it is built, for a value out
-    /// of its field's bounds.
-    pub(crate) fn out_of_bounds(&self) -> Result<(), ImageRequestError> {
+    /// of its field's bounds: what a provider checks before it sends
+    /// options no model's capabilities checked. For a provider.
+    ///
+    /// # Errors
+    ///
+    /// [`ImageRequestError`] for the first value out of its bounds.
+    #[doc(hidden)]
+    pub fn out_of_bounds(&self) -> Result<(), ImageRequestError> {
         if self.output_compression.is_some_and(|value| value > 100) {
             return Err(ImageRequestError::new(
                 "output_compression must be between 0 and 100",

@@ -6,7 +6,8 @@
 //! subclass `ImageModelInfo`, which states them; a Rust list cannot hold a
 //! type and its subclass, so an entry is one or the other (HITL 4071eaf1).
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 
 use super::ImageCapabilities;
 use crate::{ModelInfo, ModelPricing};
@@ -80,7 +81,10 @@ impl From<ImageModelInfo> for ModelInfo {
 /// One entry of an image provider's catalogue: a model whose image
 /// capabilities nobody verified, or one that states them. Python's
 /// `ModelInfo | ImageModelInfo` (HITL 4071eaf1).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+///
+/// Written as its entry is; read as an `ImageModelInfo` when it has an
+/// `image`, which must then read, never dropped for a `ModelInfo`.
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(untagged)]
 #[expect(
     clippy::large_enum_variant,
@@ -114,6 +118,18 @@ impl ImageCatalogEntry {
     }
 }
 
+impl<'de> Deserialize<'de> for ImageCatalogEntry {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let written = Value::deserialize(deserializer)?;
+        let read = if written.get("image").is_some() {
+            serde_json::from_value(written).map(Self::Image)
+        } else {
+            serde_json::from_value(written).map(Self::Model)
+        };
+        read.map_err(serde::de::Error::custom)
+    }
+}
+
 impl From<ModelInfo> for ImageCatalogEntry {
     fn from(entry: ModelInfo) -> Self {
         Self::Model(entry)
@@ -126,8 +142,8 @@ impl From<ImageModelInfo> for ImageCatalogEntry {
     }
 }
 
-/// The entry of `models` for `model`: its exact id, else a snapshot alias
-/// an entry with image capabilities verified. Python's
+/// The first entry of `models` whose id is `model`, or that names it among
+/// the snapshot aliases its verified image capabilities list: Python's
 /// `image_model_entry(models, model)`.
 pub(crate) fn image_model_entry(
     models: Vec<ImageCatalogEntry>,
