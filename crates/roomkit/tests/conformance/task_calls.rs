@@ -5,7 +5,10 @@
 //! observation.
 //!
 //! `status.post` is the bus's `post_async`, which returns once the bus's
-//! subscribers ran. A call `host.<verb>` is a verb of the turn's host, made
+//! subscribers ran, and with `wait: false` its `post`, which returns without
+//! waiting for them; `status.subscribe` subscribes a callback of the
+//! scenario's, which records each entry it is handed under its name
+//! (`expect.status_subscribers`), then holds at its gate. A call `host.<verb>` is a verb of the turn's host, made
 //! by an action of a scripted intelligence channel's turn: one made where
 //! no turn's host is cannot be read.
 
@@ -15,7 +18,10 @@ use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
     ChannelId, EventContent, HookResult, Metadata, Observation, RoomContext, RoomId,
 };
-use roomkit::orchestration::{PostAsyncOptions, RecentOptions, RecentTextOptions, StatusLevel};
+use roomkit::orchestration::{
+    HasCompletedOptions, PostAsyncOptions, PostOptions, RecentOptions, RecentTextOptions,
+    StatusCallback, StatusEntry, StatusLevel,
+};
 use roomkit::tasks::DelegatedTask;
 use roomkit::{
     CancelTaskOptions, DelegateOptions, HookError, ListObservationsOptions, ListTasksOptions,
@@ -40,9 +46,12 @@ const STATUS: &[&str] = &["agent_id", "action", "status", "detail", "metadata"];
 /// a call this module does not make.
 pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
     Some(match call {
-        "status.post" | "host.post_status" => STATUS,
+        "status.post" => &["agent_id", "action", "status", "detail", "metadata", "wait"],
+        "host.post_status" => STATUS,
         "status.recent" => &["n", "agent_id", "status"],
         "status.recent_text" => &["n"],
+        "status.subscribe" => &["subscriber", "gate"],
+        "status.unsubscribe" => &["subscriber"],
         "update_room_metadata" | "host.update_room_metadata" => &["room_id", "metadata"],
         "submit_feedback" => &[
             "room_id",
@@ -75,7 +84,7 @@ pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
         "host.wait_task" => &["task_id", "timeout_ms"],
         "start_task" => &["room_id", "agent_id", "task", "hand_back"],
         "setup_background" => &["agent_id", "worker", "hand_back"],
-        "setup_task_tools" => &["agent_id"],
+        "setup_task_tools" | "status.has_completed" => &["agent_id"],
         "host.send_event" => &[
             "room_id",
             "channel_id",
@@ -121,6 +130,54 @@ fn organization_id(spec: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// The bus's `post_async`, or with `wait: false` its `post` (README,
+/// `status.post`).
+async fn status_post(run: &Run, spec: &Value) -> Result<StatusEntry, Unreadable> {
+    let (detail, metadata) = (
+        optional(spec, "detail")?.unwrap_or_default(),
+        optional(spec, "metadata")?,
+    );
+    let (agent, action, status) = status(spec)?;
+    let bus = run.kit().status_bus();
+    if optional::<bool>(spec, "wait")? == Some(false) {
+        return Ok(bus.post(agent, action, status, PostOptions { detail, metadata }));
+    }
+    let options = PostAsyncOptions { detail, metadata };
+    Ok(bus.post_async(agent, action, status, options).await)
+}
+
+/// The bus's `subscribe` of a callback recording each entry it is handed
+/// under the subscriber's name, then holding at its gate (README,
+/// `status.subscribe`).
+async fn status_subscribe(run: &Arc<Run>, spec: &Value) -> Result<Called, Unreadable> {
+    let name = field::<String>(spec, "subscriber")?;
+    let gate = optional::<String>(spec, "gate")?;
+    if lock(&run.status_callbacks).contains_key(&name) {
+        return Err(format!(
+            "status.subscribe: subscriber {name} subscribed already"
+        ));
+    }
+    run.record_status_subscriber(&name, None);
+    let recorder = Arc::downgrade(run);
+    let subscriber = name.clone();
+    let callback: StatusCallback = Arc::new(move |entry: StatusEntry| {
+        let (recorder, subscriber, gate) =
+            (Weak::clone(&recorder), subscriber.clone(), gate.clone());
+        Box::pin(async move {
+            let Some(run) = recorder.upgrade() else {
+                return;
+            };
+            run.record_status_subscriber(&subscriber, Some(dump(&entry)));
+            if let Some(gate) = gate {
+                run.gates.hold(&gate).await;
+            }
+        })
+    });
+    lock(&run.status_callbacks).insert(name, Arc::clone(&callback));
+    run.kit().status_bus().subscribe(callback).await;
+    Ok(Ok(Value::Null))
+}
+
 /// Makes the call `spec` names, its references already resolved; returns
 /// its outcome and, for one that returns an event, the event's id.
 pub(crate) async fn call(
@@ -134,17 +191,23 @@ pub(crate) async fn call(
     let kit = run.kit();
     let room = || field::<RoomId>(spec, "room_id");
     Ok(match name {
-        "status.post" => {
-            let options = PostAsyncOptions {
-                detail: optional(spec, "detail")?.unwrap_or_default(),
-                metadata: optional(spec, "metadata")?,
+        "status.post" => (Ok(dump(&status_post(run, spec).await?)), None),
+        "status.subscribe" => (status_subscribe(run, spec).await?, None),
+        "status.unsubscribe" => {
+            let name = field::<String>(spec, "subscriber")?;
+            let callback = lock(&run.status_callbacks)
+                .get(&name)
+                .cloned()
+                .ok_or_else(|| format!("status.unsubscribe: no subscriber {name}"))?;
+            kit.status_bus().unsubscribe(callback).await;
+            (Ok(Value::Null), None)
+        }
+        "status.has_completed" => {
+            let options = HasCompletedOptions {
+                agent_id: optional::<Option<String>>(spec, "agent_id")?.flatten(),
             };
-            let (agent, action, status) = status(spec)?;
-            let entry = kit
-                .status_bus()
-                .post_async(agent, action, status, options)
-                .await;
-            (Ok(dump(&entry)), None)
+            let completed = kit.status_bus().has_completed(options).await;
+            (Ok(Value::Bool(completed)), None)
         }
         "status.recent" => {
             let options = RecentOptions {

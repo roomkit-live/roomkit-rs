@@ -35,6 +35,7 @@ pub(crate) fn arguments(name: &str) -> Option<&'static [&'static str]> {
             "known_agents",
             "greeting_map",
             "event_channel_id",
+            "agents",
         ]),
         "install_router" => Some(&[
             "handler",
@@ -125,11 +126,22 @@ pub(crate) async fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Cal
                 event_channel_id: optional(spec, "event_channel_id")?,
                 ..HandoffHandlerOptions::default()
             };
-            let router = crate::routing_calls::router(&spec["router"])?;
+            let router = crate::routing_calls::router(run, &spec["router"])?;
             let greeting_map: Option<HashMap<ChannelId, String>> = optional(spec, "greeting_map")?;
             let handler = HandoffHandler::new(run.kit(), router, options);
             if let Some(greeting_map) = greeting_map {
                 handler.set_greeting_map(greeting_map);
+            }
+            // Its agents, the channels the kit holds under those ids, live
+            // or by their declaration (README, `handoff_handler`).
+            if let Some(agents) = optional::<Vec<ChannelId>>(spec, "agents")? {
+                if let Some(id) = agents.iter().find(|id| run.kit().get_channel(id).is_none()) {
+                    return Err(format!("handoff_handler: the kit holds no channel {id}"));
+                }
+                let held = agents
+                    .into_iter()
+                    .map(|id| (id.clone(), StrategyAgent::from(id)));
+                handler.set_agents(held.collect());
             }
             keep(run, name, spec, Ok(handler))
         }
@@ -142,7 +154,7 @@ pub(crate) async fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Cal
                 phase_map: optional(spec, "phase_map")?,
                 hook_priority: optional(spec, "hook_priority")?.unwrap_or(defaults.hook_priority),
             };
-            let router = crate::routing_calls::router(&spec["router"])?;
+            let router = crate::routing_calls::router(run, &spec["router"])?;
             let installed = router.install(run.kit(), &agents, options);
             keep(run, name, spec, installed)
         }

@@ -227,6 +227,12 @@ pub(crate) struct Run {
     pub(crate) backend: Mutex<Option<roomkit::InMemoryDeliveryBackend>>,
     /// The scenario's scripted strategies, by id (README, "Setup").
     pub(crate) strategies: Mutex<HashMap<String, crate::strategy_calls::Strategy>>,
+    /// What `agent.build_identity_block` reads of each scripted agent with
+    /// an identity, by its channel id.
+    pub(crate) identity_blocks: Mutex<BTreeMap<String, crate::agents::IdentityBlock>>,
+    /// The status bus subscribers the steps subscribed, by name (README:
+    /// `status.subscribe`).
+    pub(crate) status_callbacks: Mutex<HashMap<String, roomkit::orchestration::StatusCallback>>,
     /// The handoff handlers the run built, by the name its calls give them.
     pub(crate) handoff_handlers: Mutex<HashMap<String, roomkit::HandoffHandler<crate::Store>>>,
     pub(crate) delegate_handlers:
@@ -323,6 +329,8 @@ impl Run {
             executor_turns: Mutex::default(),
             human_inputs: Mutex::default(),
             strategies: Mutex::default(),
+            identity_blocks: Mutex::default(),
+            status_callbacks: Mutex::default(),
             handoff_handlers: Mutex::default(),
             delegate_handlers: Mutex::default(),
             auditors: crate::audits::Auditors::default(),
@@ -557,6 +565,42 @@ impl Run {
             .entry(channel_id.to_string())
             .or_default()
             .push(serde_json::to_value(event).unwrap_or_default());
+    }
+
+    /// What `current_turn_footprint()` returned as a scripted memory of
+    /// `channel_id` read `room_id` (README: `footprints`).
+    pub(crate) fn record_footprint(&self, room_id: &RoomId, channel_id: &ChannelId, item: Value) {
+        if !self.recording.load(Ordering::SeqCst) {
+            return;
+        }
+        lock(&self.observed)
+            .footprints
+            .entry(room_id.to_string())
+            .or_default()
+            .entry(channel_id.to_string())
+            .or_default()
+            .push(item);
+    }
+
+    /// One entry the status bus handed the subscriber `name`, or none to
+    /// make it known (README: `status_subscribers`).
+    pub(crate) fn record_status_subscriber(&self, name: &str, entry: Option<Value>) {
+        let mut observed = lock(&self.observed);
+        let read = observed
+            .status_subscribers
+            .entry(name.to_owned())
+            .or_default();
+        read.extend(entry);
+    }
+
+    /// One call a router rule's scripted predicate `name` was handed
+    /// (README: `custom_conditions`).
+    pub(crate) fn record_custom_condition(&self, name: &str, call: Value) {
+        lock(&self.observed)
+            .custom_conditions
+            .entry(name.to_owned())
+            .or_default()
+            .push(call);
     }
 
     /// One compaction between two tool rounds a scripted memory of

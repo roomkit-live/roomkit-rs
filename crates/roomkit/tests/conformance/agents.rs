@@ -28,13 +28,14 @@ use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
     Agent, AgentOptions, AiChannel, AiChannelOptions, AiChannelTurnConfig, AiContentPart,
     AiContext, AiError, AiImagePart, AiMessage, AiMessageContent, AiProvider, AiResponse, AiRole,
-    AiRouter, AiRouterFuture, AiTextPart, AiThinkingPart, AiTool, AiToolCall, DynAiProvider,
-    FallbackRouter, FinishReason, HumanInputToolHandler, HumanInputToolHandlerOptions, ModelInfo,
-    ModelPricing, ProviderError, ProviderErrorOptions, ProviderStream, RoleOverride,
-    RoleOverrideOptions, RouteReason, RouteRequest, Routed, ServedCall, StreamDone, StreamEvent,
-    StreamTextDelta, StreamThinkingDelta, StreamToolCallDelta, StreamUsage, TextStream, Tool,
-    ToolContext, ToolEntry, ToolError, ToolHandler, ToolPolicy, ToolPolicyOptions, ToolResult,
-    ToolResultPart, Tools, check_schema_answer, checked_stream, schema_for_generate,
+    AiRouter, AiRouterFuture, AiTextPart, AiThinkingPart, AiTool, AiToolCall,
+    BuildIdentityBlockOptions, ConfigOnly, DynAiProvider, FallbackRouter, FinishReason,
+    HumanInputToolHandler, HumanInputToolHandlerOptions, ModelInfo, ModelPricing, ProviderError,
+    ProviderErrorOptions, ProviderStream, RoleOverride, RoleOverrideOptions, RouteReason,
+    RouteRequest, Routed, ServedCall, StreamDone, StreamEvent, StreamTextDelta,
+    StreamThinkingDelta, StreamToolCallDelta, StreamUsage, TextStream, Tool, ToolContext,
+    ToolEntry, ToolError, ToolHandler, ToolPolicy, ToolPolicyOptions, ToolResult, ToolResultPart,
+    Tools, check_schema_answer, checked_stream, schema_for_generate,
 };
 use serde_json::{Value, json};
 
@@ -685,8 +686,20 @@ fn scripted(
             }
         });
     };
+    let agent_options = agent_options(identity, options);
+    Ok(match serving {
+        Serving::Model(paced) => Scripted::Agent(Box::new(Agent::new(id, *paced, agent_options)?)),
+        Serving::Router(router) => {
+            Scripted::RoutedAgent(Box::new(Agent::routed(id, Boxed(router), agent_options)?))
+        }
+    })
+}
+
+/// An Agent's options from a scripted agent's `identity` (README,
+/// "Scripted agents", `agent`), the AI channel's `options` beside them.
+fn agent_options(identity: &Value, options: AiChannelOptions) -> AgentOptions {
     let text = |key: &str| identity[key].as_str().map(str::to_owned);
-    let agent_options = AgentOptions {
+    AgentOptions {
         name: text("name"),
         role: text("role"),
         description: text("description"),
@@ -698,13 +711,61 @@ fn scripted(
         auto_greet: identity["auto_greet"] != false,
         ai: options,
         ..AgentOptions::default()
+    }
+}
+
+/// The members a configuration-only Agent takes (README, "Scripted agents").
+const CONFIG_ONLY: &[&str] = &["id", "type", "category", "agent", "model", "system_prompt"];
+
+/// The implementation's configuration-only Agent an `ai` channel with an
+/// `agent` and `"model": null` is: an Agent given no AI provider, its
+/// identity and its system prompt what it holds (README, "Scripted
+/// agents").
+pub(crate) fn config_only_agent(spec: &Value) -> Result<Agent<ConfigOnly>, String> {
+    let identity = spec
+        .get("agent")
+        .ok_or("model: null needs an agent: a configuration-only Agent")?;
+    let extra: Vec<&String> = spec
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(member, _)| member)
+        .filter(|member| !CONFIG_ONLY.contains(&member.as_str()))
+        .collect();
+    if !extra.is_empty() {
+        return Err(format!("a configuration-only Agent takes no {extra:?}"));
+    }
+    let id = ChannelId::new(spec["id"].as_str().unwrap_or_default()).map_err(|e| e.to_string())?;
+    let options = AiChannelOptions {
+        system_prompt: spec["system_prompt"].as_str().map(str::to_owned),
+        ..AiChannelOptions::default()
     };
-    Ok(match serving {
-        Serving::Model(paced) => Scripted::Agent(Box::new(Agent::new(id, *paced, agent_options)?)),
-        Serving::Router(router) => {
-            Scripted::RoutedAgent(Box::new(Agent::routed(id, Boxed(router), agent_options)?))
-        }
-    })
+    let agent =
+        Agent::config_only(id, agent_options(identity, options)).map_err(|e| e.to_string())?;
+    if !agent.is_config_only() {
+        return Err(format!(
+            "Agent {} with no provider is not configuration-only",
+            spec["id"]
+        ));
+    }
+    Ok(agent)
+}
+
+/// What `agent.build_identity_block` reads of a scripted agent: its
+/// `build_identity_block(language)`.
+pub(crate) type IdentityBlock = Arc<dyn Fn(Option<String>) -> Option<String> + Send + Sync>;
+
+/// The identity block of the agent `spec` describes (README, Calls,
+/// `agent.build_identity_block`): the kit takes the agent itself, so the
+/// block is read of the implementation's Agent of the same identity, whose
+/// block it alone gives.
+pub(crate) fn identity_block(spec: &Value) -> Result<IdentityBlock, String> {
+    let id = ChannelId::new(spec["id"].as_str().unwrap_or_default()).map_err(|e| e.to_string())?;
+    let options = agent_options(&spec["agent"], AiChannelOptions::default());
+    let agent = Agent::config_only(id, options).map_err(|e| e.to_string())?;
+    Ok(Arc::new(move |language| {
+        agent.build_identity_block(BuildIdentityBlockOptions { language })
+    }))
 }
 
 /// The models a scripted router may pick, by the name `expect.models` gives

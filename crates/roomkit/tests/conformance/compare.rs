@@ -265,6 +265,42 @@ impl Comparison<'_> {
         }
     }
 
+    /// Each room's recorded footprints, each piece its history replays at
+    /// its index read without the room's lifecycle records (README:
+    /// `footprints`).
+    fn footprints(&mut self) {
+        let expect = self.expect;
+        for (alias, agents) in expect["footprints"].as_object().into_iter().flatten() {
+            let room = self.room_of(alias);
+            let per_room = self.observed.footprints.get(&room).cloned();
+            for (agent, expected) in agents.as_object().into_iter().flatten() {
+                let read = per_room
+                    .as_ref()
+                    .and_then(|per_room| per_room.get(agent))
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|footprint| self.footprint(&room, footprint))
+                    .collect();
+                let path = format!("footprints.{alias}.{agent}");
+                self.check(expected, Some(&Value::Array(read)), &path);
+            }
+        }
+    }
+
+    /// `footprint` with each replayed piece's index read without `room`'s
+    /// lifecycle records.
+    fn footprint(&self, room: &str, mut footprint: Value) -> Value {
+        if let Some(replayed) = footprint["replayed"].as_array_mut() {
+            for piece in replayed {
+                if let Some(index) = piece[0].as_i64() {
+                    piece[0] = Value::from(self.normalizer.index(room, index));
+                }
+            }
+        }
+        footprint
+    }
+
     fn channel_calls(&mut self) {
         let expect = self.expect;
         for (kind, recorded) in [
@@ -457,6 +493,16 @@ impl Comparison<'_> {
             let read = Value::Array(read.unwrap_or_default());
             self.check(expected, Some(&read), &format!("subscribers.{name}"));
         }
+        for (kind, recorded) in [
+            ("status_subscribers", &self.observed.status_subscribers),
+            ("custom_conditions", &self.observed.custom_conditions),
+        ] {
+            for (name, expected) in expect[kind].as_object().into_iter().flatten() {
+                let read = Value::Array(recorded.get(name).cloned().unwrap_or_default());
+                self.check(expected, Some(&read), &format!("{kind}.{name}"));
+            }
+        }
+        self.footprints();
         for (label, expected) in expect["actions"].as_object().into_iter().flatten() {
             let outcomes = self
                 .observed

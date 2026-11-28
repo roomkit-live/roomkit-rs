@@ -63,7 +63,7 @@ pub(crate) const SUPERVISOR: &[&str] = &[
     "async_delivery",
 ];
 pub(crate) const STRATEGY_STEP: &[&str] = &["gate", "do", "refuse"];
-pub(crate) const STRATEGY_UNINSTALL: &[&str] = &["gate", "do"];
+pub(crate) const STRATEGY_UNINSTALL: &[&str] = &["gate", "do", "fail"];
 
 /// A scripted strategy: it attaches its agents by id, then does what its
 /// install says, as a reaction does, in the room it is installed in.
@@ -104,7 +104,12 @@ impl Orchestration<crate::Store> for ScriptedStrategy {
     ) -> StrategyFuture<'call> {
         Box::pin(async move {
             step(&self.run, &self.uninstall, room_id).await;
-            Ok(())
+            // The strategy's own failure to be taken back (README,
+            // `uninstall.fail`).
+            match self.uninstall["fail"].as_str() {
+                Some(failure) => Err(RoomKitError::Runtime(failure.to_owned())),
+                None => Ok(()),
+            }
         })
     }
 }

@@ -394,6 +394,15 @@ async fn other_call(
     if matches!(name, "agent.extra_tools" | "agent.replace_extra_tool") {
         return crate::extra_tools::call(run, name, spec);
     }
+    if name == "agent.build_identity_block" {
+        let id: String = field(spec, "channel_id")?;
+        let block = crate::run::lock(&run.identity_blocks)
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| format!("{name}: {id} is no Agent"))?;
+        let language = optional::<String>(spec, "language")?;
+        return Ok(Ok(block(language).map_or(Value::Null, Value::String)));
+    }
     if name == "skill_registry_session" {
         return crate::skill_registry::session(run, spec).await.map(Ok);
     }
@@ -823,13 +832,19 @@ pub(crate) fn register_channel_with_skills(
     if agents::tool_policy_refused(channel) {
         return Ok(Err(named("invalid_argument")));
     }
-    let declared = channel["declared"] == true;
+    let declared = Declared::of(channel);
+    if channel.get("agent").is_some() {
+        crate::run::lock(&run.identity_blocks)
+            .insert(id.to_string(), agents::identity_block(channel)?);
+    }
     let registered = if channel["type"] == "host" {
         register_built(
             run.kit(),
             declared,
             HostChannel::new(roomkit::HostChannelOptions { channel_id: id }),
         )
+    } else if channel.get("model").is_some_and(Value::is_null) {
+        register_built(run.kit(), declared, agents::config_only_agent(channel)?)
     } else if channel.get("acp").is_some() {
         let (agent, wire, pipe) =
             crate::acp_agents::scripted_acp_channel(channel, id.clone(), run)?;
@@ -880,9 +895,9 @@ fn register_agent(
         Err(agents::Unbuilt::Refused(_)) => return Ok(None),
         Err(agents::Unbuilt::Unreadable(error)) => return Err(error),
     };
-    let declared = channel["declared"] == true;
+    let declared = Declared::of(channel);
     crate::run::lock(&run.models).extend(models);
-    let direct = (!declared).then(|| agents::direct_prompt::channel(&agent));
+    let direct = (!declared.0).then(|| agents::direct_prompt::channel(&agent));
     let read = crate::channel_provider::of_agent(&agent);
     let host_tools = crate::extra_tools::reader(&agent);
     let registered = match agent {
@@ -905,7 +920,7 @@ fn register_agent(
 /// `deliver_stream` when it says so (README, `default_deliver_stream`).
 fn register_scripted(
     kit: &crate::Kit,
-    declared: bool,
+    declared: Declared,
     channel: ScriptedChannel,
     spec: &Value,
 ) -> Result<(), RoomKitError> {
@@ -916,18 +931,36 @@ fn register_scripted(
     }
 }
 
+/// Whether the kit holds a setup channel by its declaration alone, and
+/// what that declaration says of the owner's tools when the setup names it
+/// (README, `declared`, `takes_owner_tools`).
+#[derive(Clone, Copy)]
+struct Declared(bool, Option<bool>);
+
+impl Declared {
+    fn of(channel: &Value) -> Self {
+        Self(
+            channel["declared"] == true,
+            channel["takes_owner_tools"].as_bool(),
+        )
+    }
+}
+
 /// Build the scenario's actual channel before registering its advertisement,
 /// so the remote workers share its model and see its declared capabilities.
 fn register_built(
     kit: &crate::Kit,
-    declared: bool,
+    Declared(declared, takes_owner_tools): Declared,
     channel: impl roomkit::Channel,
 ) -> Result<(), RoomKitError> {
-    if declared {
-        kit.register_channel(channel.declaration())
-    } else {
-        kit.register_channel(channel)
+    if !declared {
+        return kit.register_channel(channel);
     }
+    let mut declaration = channel.declaration();
+    if let Some(takes) = takes_owner_tools {
+        declaration.takes_owner_tools = takes;
+    }
+    kit.register_channel(declaration)
 }
 
 /// Registers `channel` on `kit`, another process of the setup: a scripted
@@ -940,13 +973,15 @@ pub(crate) fn register_process_channel(
 ) -> Result<(), Unreadable> {
     let id = ChannelId::new(channel["id"].as_str().unwrap_or_default())
         .map_err(|error| error.to_string())?;
-    let declared = channel["declared"] == true;
+    let declared = Declared::of(channel);
     let registered = if channel["type"] == "host" {
         register_built(
             kit,
             declared,
             HostChannel::new(roomkit::HostChannelOptions { channel_id: id }),
         )
+    } else if channel.get("model").is_some_and(Value::is_null) {
+        register_built(kit, declared, agents::config_only_agent(channel)?)
     } else if channel.get("model").is_some() {
         match agents::scripted_agent_of(channel, run, true)?.0 {
             agents::Scripted::Channel(agent) => register_built(kit, declared, *agent),
@@ -1041,7 +1076,7 @@ fn add_room_hook(
     let (kit, room) = (run.kit_of(spec)?, room.clone());
     let router = hook
         .get("router")
-        .map(crate::routing_calls::router)
+        .map(|router| crate::routing_calls::router(run, router))
         .transpose()?;
     let (tool, event) = (
         trigger
@@ -1150,7 +1185,7 @@ pub(crate) fn register_hook(
     };
     let kit = run.kit();
     if let Some(router) = hook.get("router") {
-        let router = crate::routing_calls::router(router)?;
+        let router = crate::routing_calls::router(run, router)?;
         return Ok(kit.hook(trigger, router.as_hook(), options).map(drop));
     }
     let registered = if trigger.is_tool_trigger() {

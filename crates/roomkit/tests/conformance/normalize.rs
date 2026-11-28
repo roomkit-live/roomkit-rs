@@ -76,6 +76,15 @@ pub(crate) struct Observed {
     pub(crate) custom_events: BTreeMap<String, Vec<Value>>,
     /// Per subscriber a `subscribe_room` call named, the events it read.
     pub(crate) subscribers: BTreeMap<String, Vec<Value>>,
+    /// Per subscriber a `status.subscribe` call named, the entries it was
+    /// handed (README: `status_subscribers`).
+    pub(crate) status_subscribers: BTreeMap<String, Vec<Value>>,
+    /// Per scripted predicate of a router rule, the calls it was handed
+    /// (README: `custom_conditions`).
+    pub(crate) custom_conditions: BTreeMap<String, Vec<Value>>,
+    /// Per room and scripted agent, what `current_turn_footprint()` returned
+    /// at each read of its scripted memory (README: `footprints`).
+    pub(crate) footprints: BTreeMap<String, BTreeMap<String, Vec<Value>>>,
     pub(crate) text_events: BTreeMap<String, Vec<Value>>,
     pub(crate) tasks: BTreeMap<String, Vec<Value>>,
     pub(crate) steps: Vec<Value>,
@@ -195,7 +204,7 @@ impl Normalizer {
     }
 
     /// `raw` without the room's lifecycle records at or below it.
-    fn index(&self, room_id: &str, raw: i64) -> i64 {
+    pub(crate) fn index(&self, room_id: &str, raw: i64) -> i64 {
         without_records(self.lifecycle.get(room_id).map_or(&[], Vec::as_slice), raw)
     }
 
@@ -371,6 +380,7 @@ fn observed_values(observed: &Observed) -> Value {
     all.extend(observed.observations.values().flatten().cloned());
     all.extend(observed.tasks.values().flatten().cloned());
     all.extend(observed.participants.values().flatten().cloned());
+    all.extend(observed.status_subscribers.values().flatten().cloned());
     Value::Array(all)
 }
 

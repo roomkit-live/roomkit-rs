@@ -7,6 +7,7 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::time::Duration;
 
 use roomkit::ChannelError;
 use roomkit::model::{ChannelId, Metadata, RoomContext, RoomEvent, RoomId};
@@ -15,8 +16,9 @@ use roomkit_ai::memory::{
     BudgetAwareMemory, BudgetAwareMemoryOptions, CompactOptions, CompactingMemory,
     CompactingMemoryOptions, IngestOptions, MemoryProvider, MemoryResult, RetrievalMemory,
     RetrievalMemoryOptions, RetrieveOptions, SlidingWindowMemory, SlidingWindowMemoryOptions,
-    SummarizingMemory, SummarizingMemoryOptions,
+    SummarizingMemory, SummarizingMemoryOptions, current_turn_footprint,
 };
+use roomkit_ai::orchestration::HandoffMemoryProvider;
 use roomkit_ai::testing::ScriptedProvider;
 use roomkit_ai::{AiContentPart, AiMessage, AiMessageContent, AiRole, AiTextPart};
 use serde_json::{Value, json};
@@ -28,7 +30,10 @@ use crate::run::Run;
 /// what the scenario says the memory built, retrieved and names; each
 /// event it is handed is recorded as the agent's (`expect.ingested`).
 /// Each compaction between two tool rounds answers the scenario's next
-/// `compacts` item, and is recorded (`expect.compacted`).
+/// `compacts` item, and is recorded (`expect.compacted`). With
+/// `ingest_gate`, each event it is handed holds at that gate once recorded;
+/// with `records_footprint`, each read records what
+/// `current_turn_footprint()` returns (`expect.footprints`).
 struct Scripted {
     window: SlidingWindowMemory,
     messages: Vec<AiMessage>,
@@ -56,6 +61,11 @@ impl MemoryProvider for Scripted {
         options: RetrieveOptions,
     ) -> Pin<Box<dyn Future<Output = Result<MemoryResult, ChannelError>> + Send + 'a>> {
         Box::pin(async move {
+            if self.spec["records_footprint"] == true
+                && let Some(run) = self.run.upgrade()
+            {
+                run.record_footprint(room_id, &self.owner, footprint_record());
+            }
             write_record(&self.spec);
             let mut window = self
                 .window
@@ -113,11 +123,36 @@ impl MemoryProvider for Scripted {
         event: &'a RoomEvent,
         _options: IngestOptions,
     ) -> Pin<Box<dyn Future<Output = Result<(), ChannelError>> + Send + 'a>> {
-        if let Some(run) = self.run.upgrade() {
+        let run = self.run.upgrade();
+        if let Some(run) = &run {
             run.record_ingested(room_id, event, &self.owner);
         }
-        Box::pin(std::future::ready(Ok(())))
+        let gate = self.spec["ingest_gate"].as_str().map(str::to_owned);
+        Box::pin(async move {
+            if let (Some(run), Some(gate)) = (run, gate) {
+                run.gates.hold(&gate).await;
+            }
+            Ok(())
+        })
     }
+}
+
+/// What `current_turn_footprint()` returns now, as `expect.footprints`
+/// reads it: null outside a turn's read.
+fn footprint_record() -> Value {
+    let Some(footprint) = current_turn_footprint() else {
+        return Value::Null;
+    };
+    let replayed: Vec<Value> = footprint
+        .replayed
+        .iter()
+        .map(|(index, turn, tokens)| json!([index, turn, tokens]))
+        .collect();
+    json!({
+        "input_tokens": footprint.input_tokens,
+        "reply_tokens": footprint.reply_tokens,
+        "replayed": replayed,
+    })
 }
 
 /// What a scripted memory answers a compaction of `history` (README,
@@ -202,10 +237,15 @@ pub(crate) fn scripted_memory(
         Some(summarizing) => self::summarizing(summarizing, memory, needed(summarizer)?)?,
         None => memory,
     };
-    match spec.get("retrieval") {
-        Some(retrieval) => self::retrieval(retrieval, memory),
-        None => Ok(memory),
-    }
+    let memory = match spec.get("retrieval") {
+        Some(retrieval) => self::retrieval(retrieval, memory)?,
+        None => memory,
+    };
+    Ok(if spec["handoff"] == true {
+        Arc::new(HandoffMemoryProvider::new(memory))
+    } else {
+        memory
+    })
 }
 
 /// A knowledge source answering every search with its results, at most
@@ -320,7 +360,7 @@ fn compacting(
         summary_ratio: ratio(spec, "summary_ratio", defaults.summary_ratio)?,
         safety_margin_ratio: ratio(spec, "safety_margin_ratio", defaults.safety_margin_ratio)?,
         min_events: count(spec, "min_events", defaults.min_events)?,
-        ..defaults
+        summary_cache_ttl: cache_ttl(spec, defaults.summary_cache_ttl)?,
     };
     let window = count_of(&spec["max_context_tokens"], "max_context_tokens")?;
     Ok(Arc::new(CompactingMemory::new(
@@ -346,12 +386,22 @@ fn summarizing(
         truncate_chars: count(spec, "truncate_chars", defaults.truncate_chars)?,
         summary_max_tokens: u32::try_from(summary_max_tokens).map_err(|e| e.to_string())?,
         min_events: count(spec, "min_events", defaults.min_events)?,
-        ..defaults
+        summary_cache_ttl: cache_ttl(spec, defaults.summary_cache_ttl)?,
     };
     let window = count_of(&spec["max_context_tokens"], "max_context_tokens")?;
     Ok(Arc::new(SummarizingMemory::new(
         inner, summarizer, window, options,
     )))
+}
+
+/// A compacting or summarizing memory's `summary_cache_ttl`, from its
+/// `summary_cache_ttl_ms` when it gives one.
+fn cache_ttl(spec: &Value, default: Duration) -> Result<Duration, String> {
+    spec.get("summary_cache_ttl_ms").map_or(Ok(default), |ms| {
+        ms.as_u64()
+            .map(Duration::from_millis)
+            .ok_or_else(|| "summary_cache_ttl_ms: not a count".to_owned())
+    })
 }
 
 fn ratio(spec: &Value, name: &str, default: f64) -> Result<f64, String> {

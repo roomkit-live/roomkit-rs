@@ -105,6 +105,7 @@ const DELIVERY_BACKEND: &[&str] = &[
 ];
 const CHANNEL: &[&str] = &[
     "declared",
+    "takes_owner_tools",
     "id",
     "type",
     "category",
@@ -317,6 +318,9 @@ const MEMORY: &[&str] = &[
     "summarizing",
     "summarizer",
     "retrieval",
+    "handoff",
+    "records_footprint",
+    "ingest_gate",
 ];
 const MEMORY_MESSAGE: &[&str] = &["role", "text", "parts"];
 const MEMORY_COMPACTION: &[&str] = &["messages", "keep", "fails"];
@@ -331,6 +335,7 @@ const COMPACTING: &[&str] = &[
     "summary_ratio",
     "safety_margin_ratio",
     "min_events",
+    "summary_cache_ttl_ms",
 ];
 const RETRIEVAL: &[&str] = &["sources", "max_results", "min_query_length"];
 const SOURCE: &[&str] = &["name", "results", "fails", "indexes"];
@@ -342,6 +347,7 @@ const SUMMARIZING: &[&str] = &[
     "truncate_chars",
     "summary_max_tokens",
     "min_events",
+    "summary_cache_ttl_ms",
 ];
 const ROOM: &[&str] = &[
     "id",
@@ -460,6 +466,9 @@ const EXPECT: &[&str] = &[
     "tool_events",
     "custom_events",
     "subscribers",
+    "status_subscribers",
+    "custom_conditions",
+    "footprints",
     "text_events",
     "tasks",
     "actions",
@@ -579,6 +588,7 @@ fn base_arguments(call: &str) -> Option<&'static [&'static str]> {
         "set_room_timers" => &["room_id", "timers"],
         "set_agent_response_policy" => &["room_id", "policy"],
         "send_greeting" => &["room_id", "channel_id", "agent_id", "greeting"],
+        "agent.build_identity_block" => &["channel_id", "language"],
         "register_channel" => &["channel"],
         "unregister_channel" | "acp.close" | "release_channel" => &["channel_id"],
         "register_hook" | "kit_executor.hook" | "kit_executor.room_hook" => &["hook"],
@@ -1307,17 +1317,15 @@ fn hook_of(hook: &Value, known: &[&str], path: &str, found: &mut Vec<String>) {
 
 /// A conversation router's members, its rules' and their conditions'.
 fn router(router: &Value, path: &str, found: &mut Vec<String>) {
-    use crate::routing_calls::{CONDITIONS, ROUTER, ROUTING_RULE};
+    use crate::routing_calls::{CONDITIONS, CUSTOM, ROUTER, ROUTING_RULE};
     members(router, ROUTER, path, found);
     for (index, rule) in items(&router["rules"]) {
         let path = format!("{path}.rules[{index}]");
         members(rule, ROUTING_RULE, &path, found);
-        optional(
-            &rule["conditions"],
-            CONDITIONS,
-            &format!("{path}.conditions"),
-            found,
-        );
+        let conditions = format!("{path}.conditions");
+        optional(&rule["conditions"], CONDITIONS, &conditions, found);
+        let custom = &rule["conditions"]["custom"];
+        optional(custom, CUSTOM, &format!("{conditions}.custom"), found);
     }
 }
 

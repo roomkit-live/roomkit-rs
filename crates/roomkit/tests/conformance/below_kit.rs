@@ -37,7 +37,7 @@ fn registration(run: &Arc<Run>, hook: &Value) -> Result<HookRegistration, Unread
     let execution: HookExecution = optional(hook, "execution")?.unwrap_or(HookExecution::Sync);
     let registered = match hook.get("router") {
         Some(router) => {
-            let router = crate::routing_calls::router(router)?;
+            let router = crate::routing_calls::router(run, router)?;
             HookRegistration::new(trigger, execution, router.as_hook())
         }
         None => scripted(run, trigger, execution, hook),
