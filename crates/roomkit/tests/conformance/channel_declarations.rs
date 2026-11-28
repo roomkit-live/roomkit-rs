@@ -30,6 +30,15 @@ pub(crate) fn check(channel: &Value, path: &str, found: &mut Vec<String>) {
     {
         found.push(format!("{path}.default_deliver_stream: true or absent"));
     }
+    if channel.get("default_deliver_stream").is_some() {
+        for member in ["deliver_stream", "reads_usage", "reads_loop_end"] {
+            if channel.get(member).is_some() {
+                found.push(format!(
+                    "{path}.{member}: the default reader reads the stream itself"
+                ));
+            }
+        }
+    }
     let steering = ["steers_room_turns", "serializes_room_turns"]
         .iter()
         .filter(|member| channel.get(**member).is_some())
@@ -132,6 +141,14 @@ mod tests {
                 true,
             ),
             (json!({ "default_deliver_stream": true }), false),
+            (
+                json!({ "streams": true, "default_deliver_stream": true, "reads_usage": true }),
+                false,
+            ),
+            (
+                json!({ "streams": true, "default_deliver_stream": true, "deliver_stream": [] }),
+                false,
+            ),
             (
                 json!({ "streams": true, "default_deliver_stream": false }),
                 false,

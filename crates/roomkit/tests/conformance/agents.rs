@@ -49,6 +49,9 @@ use crate::scripted::{Reactions, perform};
 /// round with a `gate` there, before it writes anything.
 pub(crate) struct Paced {
     whole: WholeModel,
+    /// The provider that streams text alone, for a model that does (README,
+    /// `model.stream_text_only`).
+    text: Option<TextModel>,
     streaming: bool,
     /// Whether the model sees images (README: `model.vision`).
     vision: bool,
@@ -140,6 +143,11 @@ impl AiProvider for Paced {
         if let Err(error) = self.refuse_closed() {
             return Box::pin(Refused(Some(error)));
         }
+        if let Some(text) = &self.text {
+            // AiProvider's real default adapter over a provider that streams
+            // text alone.
+            return text.generate_structured_stream(context);
+        }
         if !self.streaming {
             // Use AiProvider's real default adapter over WholeModel::generate.
             return self.whole.generate_structured_stream(context);
@@ -197,7 +205,9 @@ impl Paced {
 }
 
 /// A whole-response provider. Its inherited structured stream is the real
-/// `AiProvider` adapter, so the non-streaming fixture cannot bypass `generate()`.
+/// `AiProvider` adapter, so the non-streaming fixture cannot bypass `generate()`;
+/// it keeps the contract's `supports_streaming`, false by default.
+#[derive(Clone)]
 struct WholeModel {
     script: ScriptedProvider,
     gates: Vec<Option<String>>,
@@ -209,8 +219,6 @@ struct WholeModel {
     provider_name: String,
     schema: (bool, bool),
     methods: GenerationMethods,
-    /// Whether it streams text alone (README, `model.stream_text_only`).
-    text_stream: bool,
     /// Whether its provider cannot send an author's image (README,
     /// `model.refuses_images`).
     refuses_images: bool,
@@ -222,30 +230,37 @@ const IMAGE_REFUSED: &str = "the model's provider cannot send this image";
 
 pub(crate) type GenerationMethods = Arc<Mutex<Vec<&'static str>>>;
 
-impl AiProvider for WholeModel {
+/// A provider that streams text alone (README, `model.stream_text_only`):
+/// the scripted model's whole answers, and the text of a round through
+/// `generate_stream`, so that the contract's default adapter streams a turn
+/// without tools through it.
+struct TextModel(WholeModel);
+
+impl AiProvider for TextModel {
     fn model_name(&self) -> &str {
-        &self.model_name
+        &self.0.model_name
     }
 
     fn supports_streaming(&self) -> bool {
-        self.text_stream
+        true
     }
 
     /// The round's text in its deltas, the model waiting between two, held
-    /// at its gate first (README, `model.stream_text_only`).
+    /// at its gate first.
     fn generate_stream<'a>(&'a self, context: &'a AiContext) -> TextStream<'a> {
-        if let Err(error) = self.refuse_images(context) {
+        let whole = &self.0;
+        if let Err(error) = whole.refuse_images(context) {
             return Box::pin(Refused(Some(error)).map_text());
         }
         let (inner, gate) = {
-            let mut methods = crate::run::lock(&self.methods);
-            let position = self.script.requests().len();
-            let gate = self.gates.get(position).cloned().flatten();
-            let inner = self.script.generate_structured_stream(context);
+            let mut methods = crate::run::lock(&whole.methods);
+            let position = whole.script.requests().len();
+            let gate = whole.gates.get(position).cloned().flatten();
+            let inner = whole.script.generate_structured_stream(context);
             methods.push("generate_stream");
             (inner, gate)
         };
-        let run = Weak::clone(&self.run);
+        let run = Weak::clone(&whole.run);
         let holding: Option<Pin<Box<dyn Future<Output = ()> + Send>>> = gate.map(|gate| {
             let held: Pin<Box<dyn Future<Output = ()> + Send>> = Box::pin(async move {
                 if let Some(run) = run.upgrade() {
@@ -260,6 +275,16 @@ impl AiProvider for WholeModel {
             held: None,
             after_text: false,
         })
+    }
+
+    async fn generate(&self, context: &AiContext) -> Result<AiResponse, ProviderError> {
+        self.0.generate(context).await
+    }
+}
+
+impl AiProvider for WholeModel {
+    fn model_name(&self) -> &str {
+        &self.model_name
     }
 
     async fn generate(&self, context: &AiContext) -> Result<AiResponse, ProviderError> {
@@ -995,24 +1020,25 @@ pub(crate) fn scripted_model(
     let closed =
         (spec["fails_once_closed"] == true).then(|| closed_flag(run, name, shared.is_some()));
     let model = shared.unwrap_or_else(|| ScriptedProvider::new(rounds));
+    let whole = WholeModel {
+        script: model.clone(),
+        gates,
+        told,
+        served,
+        run: Arc::downgrade(run),
+        model_name: spec["name"].as_str().unwrap_or("scripted").to_owned(),
+        provider_name: spec["provider"].as_str().unwrap_or("scripted").to_owned(),
+        schema: (
+            spec["response_schema"] == true,
+            spec["response_schema_with_tools"] == true,
+        ),
+        methods,
+        refuses_images: spec["refuses_images"] == true,
+    };
     let paced = Paced {
-        whole: WholeModel {
-            script: model.clone(),
-            gates,
-            told,
-            served,
-            run: Arc::downgrade(run),
-            model_name: spec["name"].as_str().unwrap_or("scripted").to_owned(),
-            provider_name: spec["provider"].as_str().unwrap_or("scripted").to_owned(),
-            schema: (
-                spec["response_schema"] == true,
-                spec["response_schema_with_tools"] == true,
-            ),
-            methods,
-            text_stream: spec["stream_text_only"] == true,
-            refuses_images: spec["refuses_images"] == true,
-        },
-        streaming: spec["streaming"] != false && spec["stream_text_only"] != true,
+        text: (spec["stream_text_only"] == true).then(|| TextModel(whole.clone())),
+        whole,
+        streaming: spec["streaming"] != false,
         vision: spec["vision"] == true,
         deferred_tools: spec["deferred_tools"] == true,
         pricing,
