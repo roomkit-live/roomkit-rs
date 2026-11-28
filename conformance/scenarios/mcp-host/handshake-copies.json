@@ -8,7 +8,8 @@
   "requirements": [
     "RK-21.2-004",
     "RK-21.2-034",
-    "RK-21.2-045"
+    "RK-21.2-045",
+    "RK-21.2-056"
   ],
   "notes": "Public MCPToolProvider over a bounded local HTTP peer; operation results and wire requests are both observed. Native stdio and lifecycle assertions are mapped separately in the lot checklist.",
   "steps": [
@@ -119,11 +120,14 @@
           ],
           "requests": [
             {
+              "method": "server/discover"
+            },
+            {
               "method": "initialize"
             }
           ],
           "results_json": "[{\"result\":null},{\"result\":{\"name\":\"host-test\",\"vendor\":{\"revision\":99},\"version\":\"1\"}},{\"result\":{\"name\":\"host-test\",\"vendor\":{\"revision\":7},\"version\":\"1\"}},{\"result\":{\"io.modelcontextprotocol/skills\":{\"directoryRead\":true,\"nested\":{\"unchanged\":false}}}},{\"result\":{\"io.modelcontextprotocol/skills\":{\"directoryRead\":true,\"nested\":{\"unchanged\":true}}}},{\"result\":null}]",
-          "requests_json": "[{\"method\":\"initialize\"}]"
+          "requests_json": "[{\"method\":\"server/discover\"},{\"method\":\"initialize\"}]"
         }
       }
     }
