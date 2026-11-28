@@ -53,6 +53,7 @@ roomkit = ["roomkit"]
 roomkit_ai = ["roomkit.providers.ai", "roomkit", "roomkit.tools", "roomkit.skills", "roomkit.skills.mcp", "roomkit.speaking", "roomkit.classifiers"]
 "roomkit_ai::memory" = ["roomkit.memory", "roomkit"]
 "roomkit_ai::knowledge" = ["roomkit.knowledge"]
+"roomkit_ai::image" = ["roomkit.providers.image", "roomkit"]
 "roomkit_ai::sandbox" = ["roomkit.sandbox"]
 "roomkit_ai::speaking" = ["roomkit.speaking", "roomkit"]
 "roomkit_ai::classifiers" = ["roomkit.classifiers", "roomkit"]
@@ -106,6 +107,11 @@ roomkit_acp = ["roomkit"]
 # An AI channel's and a tool definition's refusal, Python's constructors'
 # `ValueError` (a tool name two tools take, `ToolNameCollisionError`, is one).
 "roomkit_ai::AiError" = { python = "ValueError" }
+# What an image result, a size or a data: URI does not read: Python's
+# validators' and parsers' `ValueError` (RFC §25).
+"roomkit_ai::image::ImageResultError" = { python = "ValueError" }
+"roomkit_ai::image::SizeError" = { python = "ValueError" }
+"roomkit_ai::image::DataUriError" = { python = "ValueError" }
 # Served-entry constructor integers and a missing frontmatter accessor key (HITL 450fa510).
 "roomkit_ai::SkillResourceSize" = { python = "int" }
 "roomkit_ai::SkillEntryKeyError" = { python = "KeyError", members = ["key"] }
@@ -144,6 +150,7 @@ roomkit_acp = ["roomkit"]
 "roomkit_ai::GenerationPurpose" = { field = "roomkit.AIGenerationEvent.__init__(purpose)", values = ["answer", "thought"] }
 "roomkit_ai::ToolDeclarationOrigin" = { field = "roomkit.DeclaredTool.__init__(origin)", values = ["always", "pinned", "sticky", "revealed"] }
 "roomkit_ai::ResponseSchemaFailure" = { field = "roomkit.ResponseSchemaError.__init__(reason)", values = ["unsupported", "refusal", "truncated", "invalid_json"] }
+"roomkit_ai::image::ImageAttemptStatus" = { field = "roomkit.ImageAttempt.__init__(status)", values = ["started", "preview", "succeeded", "failed", "unknown"] }
 
 # The Python exception classes each error enum's variants stand for, by the
 # enum's path, read from the Python source (the snapshot holds no class's
@@ -1218,6 +1225,12 @@ rust = "roomkit_ai::knowledge::MockKnowledgeSource"
 members = ["search_calls", "index_calls", "closed"]
 approved = "2026-11-02"
 reason = "Python's instance attributes search_calls, index_calls and closed, as MockMemoryProvider's (HITL 01cca70d, RMK-1178; architecture: Tools)"
+
+[[exception]]
+rust = "roomkit_ai::image::ImageGenerationError"
+members = ["results"]
+approved = "2026-11-28"
+reason = "Python's instance attribute `results`, every attempt's images, set in __init__, which the snapshot lists no attribute of: a field of the same name (the form of HITL 7a38cb9c)"
 
 [[exception]]
 rust = "roomkit_ai::ThinkingBlocks"

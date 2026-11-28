@@ -254,6 +254,7 @@ the mapping and its tests. The check does not generate or update this document.
 | `roomkit_ai::knowledge::MockKnowledgeSource` | — | `search_calls`, `index_calls`, `closed` |
 | `roomkit_ai::ThinkingBlocks` | — | `last_signature` |
 | `roomkit_ai::RoundTranscript` | — | `thinking` |
+| `roomkit_ai::image::ImageGenerationError` | — | `results` |
 | `roomkit_ai::ToolError` | — | Whole type |
 | `roomkit_ai::SkillFileError` | Exceptions from `Skill` file helpers | Whole type: `Path(SkillPathError)`, `Io(std::io::Error)`, `Encoding(FromUtf8Error)` (HITL 45d6fce8) |
 | `roomkit_ai::ScriptExecutor` | `ScriptExecutor` | Borrowed skill/name and `Option<&Metadata>` (`None` for omitted arguments), boxed futures, `ToolError` for execute failures; `close` follows `Channel::close` (HITL 213974fa) |
@@ -332,6 +333,9 @@ use `..SkillMetadata::new(name, description)` (approved in HITL ed472959).
 | `roomkit::model::ModelError` | `ValueError`; members: none |
 | `roomkit::InvalidCountryCode` | `ValueError`; members: none |
 | `roomkit_ai::AiError` | `ValueError`; members: none |
+| `roomkit_ai::image::ImageResultError` | `ValueError`; members: none |
+| `roomkit_ai::image::SizeError` | `ValueError`; members: none |
+| `roomkit_ai::image::DataUriError` | `ValueError`; members: none |
 | `roomkit::DeliveryStream` | `AsyncIterator`; members: `next`, `cut` |
 | `roomkit::ResponseStream` | `AsyncIterator`; members: none |
 | `roomkit::StreamItem` | `str`; members: none |
@@ -348,6 +352,7 @@ use `..SkillMetadata::new(name, description)` (approved in HITL ed472959).
 | `roomkit_ai::GenerationPurpose` | Values of `roomkit.AIGenerationEvent.__init__(purpose)`: `answer`, `thought` |
 | `roomkit_ai::ToolDeclarationOrigin` | Values of `roomkit.DeclaredTool.__init__(origin)`: `always`, `pinned`, `sticky`, `revealed` |
 | `roomkit_ai::ResponseSchemaFailure` | Values of `roomkit.ResponseSchemaError.__init__(reason)`: `unsupported`, `refusal`, `truncated`, `invalid_json` |
+| `roomkit_ai::image::ImageAttemptStatus` | Values of `roomkit.ImageAttempt.__init__(status)`: `started`, `preview`, `succeeded`, `failed`, `unknown` |
 | `roomkit::RoomKitError` | `roomkit.RoomNotFoundError`, `roomkit.RoomAlreadyExistsError`, `roomkit.RoomClosedError`, `roomkit.TransitionRefusedError`, `roomkit.ProcessTimeoutError`, `roomkit.ChangeRefusedError`, `roomkit.ReentrantCallError`, `roomkit.ReentryLoopCapError`, `roomkit.ChannelNotFoundError`, `roomkit.ChannelNotRegisteredError`, `roomkit.ChannelAlreadyRegisteredError`, `roomkit.ParticipantNotFoundError`, `roomkit.IdentityNotFoundError`, `roomkit.AddressLinkedError`, `roomkit.EventNotFoundError`, `roomkit.HumanInputRejectedError`, `roomkit.ToolNameCollisionError`, `roomkit.VerificationRefusedError`, `roomkit.IdempotencyKeyTakenError`, `roomkit.ProviderDeliveryError`, `roomkit.NoRecipientError`, `roomkit.KitClosedError`, `roomkit.ShutdownCancelledError`, `roomkit.RemoteTurnError`, `roomkit.TurnLinkError` |
 | `roomkit::StoreError` | `roomkit.RoomAlreadyExistsError`, `roomkit.RoomNotFoundError`, `roomkit.ParticipantExistsError`, `roomkit.ParticipantNotFoundError`, `roomkit.IdentityNotFoundError`, `roomkit.AddressLinkedError`, `roomkit.EventNotFoundError`, `roomkit.TaskNotFoundError`, `roomkit.IdempotencyKeyTakenError`, `roomkit.EventIndexTakenError` |
 | `roomkit_ai::SkillError` | `roomkit.skills.SkillDiscoveryError`, `roomkit.skills.SkillParseError`, `roomkit.skills.SkillValidationError`, `roomkit.skills.SkillManifestTooLargeError`, `roomkit.skills.SkillVerificationError` |

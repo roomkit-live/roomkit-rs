@@ -19,6 +19,9 @@
 //! - [`AiRouter`]: what picks each turn's provider, for a channel built with
 //!   [`AiChannel::routed`] (RFC §6.4); [`FallbackRouter`] hands a
 //!   generation whose retries are spent to another provider.
+//! - [`image`]: image generation (RFC §25), Python's
+//!   `roomkit.providers.image`: an [`ImageResult`](image::ImageResult)
+//!   is a `data:` URI an [`AiImagePart`] takes as it is.
 //! - [`knowledge`]: the knowledge sources a retrieval memory searches
 //!   (RFC §20.2), Python's `roomkit.knowledge`.
 //! - [`memory`]: where a turn reads its history (RFC §20), Python's
@@ -80,6 +83,7 @@ mod continuation;
 mod decimal_digits;
 mod error;
 mod human_input;
+pub mod image;
 pub mod knowledge;
 mod loop_events;
 pub mod memory;

@@ -840,3 +840,18 @@ fn a_single_provider_call_is_the_last_by_default() {
         roomkit_ai::CallGarbledOptions::default()
     ));
 }
+
+#[test]
+fn an_image_s_media_type_falls_back_to_png_by_default() {
+    use roomkit_ai::image::{
+        ParseDataUriOptions, PayloadMimeTypeOptions, SniffMimeTypeOptions, parse_data_uri,
+    };
+    // roomkit.providers.image.sniff_mime_type(fallback) = 'image/png'
+    assert_eq!(SniffMimeTypeOptions::default().fallback, "image/png");
+    // roomkit.providers.image.payload_mime_type(fallback) = 'image/png'
+    assert_eq!(PayloadMimeTypeOptions::default().fallback, "image/png");
+    // roomkit.providers.image.parse_data_uri(fallback_mime) = None
+    assert!(ParseDataUriOptions::default().fallback_mime.is_none());
+    let kind = parse_data_uri("data:;base64,QUJD", ParseDataUriOptions::default());
+    assert_eq!(kind.map(|(kind, _)| kind), Ok("image/png".to_owned()));
+}
